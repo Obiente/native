@@ -2,6 +2,7 @@ import { changelog } from "./generated/changelog.js";
 import { docs } from "./generated/docs.js";
 import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
+import { guidePlatformHubForPath } from "./guide-platforms.js";
 
 export const siteUrl = "https://nc-native.obiente.dev";
 
@@ -20,11 +21,20 @@ export function metadataFor(path) {
       imageHeight: guide.imageHeight,
     };
   }
+  const guideHub = guidePlatformHubForPath(path);
+  if (guideHub) {
+    return {
+      title: `${guideHub.title} · Nextcloud Native`,
+      description: guideHub.description,
+      canonical: `${siteUrl}/guides/${guideHub.slug}/`,
+      type: "website",
+    };
+  }
   if (path === "/guides/") {
     return {
-      title: "Guides · Nextcloud Native",
+      title: "Android, Linux and Windows guides · Nextcloud Native",
       description:
-        "Follow illustrated guides for account setup, folder sync, offline files, photo backup, Calendar, and native app switching in Nextcloud Native.",
+        "Choose Android, Linux, or Windows instructions for Nextcloud Native setup, offline files, folder sync, photo backup, Calendar, and desktop integration.",
       canonical: `${siteUrl}/guides/`,
       type: "website",
     };
@@ -84,7 +94,7 @@ export function metadataFor(path) {
   return {
     title: "Nextcloud Native · Obiente",
     description:
-      "One genuinely native client for your complete Nextcloud account, with files, photos, conversations, calendars, installed apps, offline work, sync, and operating-system integration.",
+      "Test the open-source Nextcloud Native alpha on Android, Linux, and Windows with native Files, Photos, Talk history, Calendar, offline, and sync foundations.",
     canonical: `${siteUrl}/`,
     type: "website",
   };

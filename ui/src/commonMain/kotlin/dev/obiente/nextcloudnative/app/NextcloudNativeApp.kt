@@ -1120,6 +1120,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.CalendarWorkspaceDesktopLight,
                     MarketingCaptureScenario.CalendarWorkspaceMobileDark,
                     MarketingCaptureScenario.CalendarWorkspaceMobileLight,
+                    MarketingCaptureScenario.CalendarMonthMobile,
+                    MarketingCaptureScenario.CalendarEventEditorMobile,
+                    MarketingCaptureScenario.CalendarEventEditorDesktop,
                     -> MarketingCalendarWorkspaceScenario(scenario, assets)
                     MarketingCaptureScenario.MailWorkspaceDesktop,
                     MarketingCaptureScenario.MailWorkspaceMobile,
@@ -1143,14 +1146,39 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
                     MarketingCaptureScenario.ActivityWorkspaceDesktop -> MarketingActivityWorkspaceDesktopScenario()
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
-                    MarketingCaptureScenario.GuideFolderSyncChooseFolders ->
+                    MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->
                         MarketingFileSyncSetupDesktopScenario(initialStep = FileSyncSetupStep.Locations)
+                    MarketingCaptureScenario.GuideLinuxFolderSyncRules ->
+                        MarketingFileSyncSetupDesktopScenario(
+                            initialStep = FileSyncSetupStep.Review,
+                            initialAdvancedSettingsVisible = true,
+                        )
+                    MarketingCaptureScenario.GuideAndroidFolderSyncLocations ->
+                        MarketingFileSyncRulesScenario(initialStep = FileSyncSetupStep.Locations)
+                    MarketingCaptureScenario.GuideAndroidFolderSyncRules ->
+                        MarketingFileSyncRulesScenario(
+                            initialStep = FileSyncSetupStep.Review,
+                            initialAdvancedSettingsVisible = true,
+                        )
+                    MarketingCaptureScenario.GuideAndroidCalendarEdit ->
+                        MarketingCalendarRecurringEventDetailCapture()
+                    MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers ->
+                        MarketingOfflineFileTransferScenario()
+                    MarketingCaptureScenario.GuideAndroidOfflineFilesStorage ->
+                        MarketingVirtualFileStorageOverviewMobileScenario()
+                    MarketingCaptureScenario.GuideWindowsCloudFilesSettings ->
+                        MarketingVirtualFileStorageDesktopScenario(scenario)
+                    MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary ->
+                        MarketingMediaTransferScenario(scenario)
                     MarketingCaptureScenario.FileSyncSelectionDesktop,
                     MarketingCaptureScenario.FileSyncSelectionMobile,
                     ->
                         MarketingFileSyncSelectionScenario(assets.services)
                     MarketingCaptureScenario.VirtualFileStorageMobile -> MarketingVirtualFileStorageMobileScenario()
-                    MarketingCaptureScenario.VirtualFileStorageDesktop -> MarketingVirtualFileStorageDesktopScenario()
+                    MarketingCaptureScenario.VirtualFileStorageDesktop,
+                    MarketingCaptureScenario.WindowsCloudFilesStorageDesktop,
+                    MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop,
+                    -> MarketingVirtualFileStorageDesktopScenario(scenario)
                     MarketingCaptureScenario.DesktopStartupSettings ->
                         MarketingDesktopStartupSettingsScenario(fixture, assets)
                     MarketingCaptureScenario.RawPreviewLoadingMobile,
@@ -1179,23 +1207,27 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.HomepagePlanningDesktopDark,
                     MarketingCaptureScenario.HomepagePlanningDesktopLight,
                     -> MarketingDeckBoardScenario()
-                    MarketingCaptureScenario.GuideGetStartedHome,
-                    MarketingCaptureScenario.GuideGetStartedApps,
-                    MarketingCaptureScenario.GuideGetStartedSettings,
-                    MarketingCaptureScenario.GuideFolderSyncWorkspace,
-                    MarketingCaptureScenario.GuideFolderSyncRules,
-                    MarketingCaptureScenario.GuideOfflineFilesBrowse,
-                    MarketingCaptureScenario.GuideOfflineFilesStorage,
-                    MarketingCaptureScenario.GuideOfflineFilesTransfers,
-                    MarketingCaptureScenario.GuidePhotoBackupFolders,
-                    MarketingCaptureScenario.GuidePhotoBackupQueue,
-                    MarketingCaptureScenario.GuidePhotoBackupLibrary,
-                    MarketingCaptureScenario.GuideCalendarMonth,
-                    MarketingCaptureScenario.GuideCalendarMobile,
-                    MarketingCaptureScenario.GuideCalendarPlanning,
-                    MarketingCaptureScenario.GuideSwitchAppsCatalog,
-                    MarketingCaptureScenario.GuideSwitchAppsSidebar,
-                    MarketingCaptureScenario.GuideSwitchAppsNested,
+                    MarketingCaptureScenario.GuideAndroidGettingStartedHome,
+                    MarketingCaptureScenario.GuideAndroidGettingStartedFiles,
+                    MarketingCaptureScenario.GuideAndroidGettingStartedCalendar,
+                    MarketingCaptureScenario.GuideDesktopGettingStartedHome,
+                    MarketingCaptureScenario.GuideDesktopGettingStartedApps,
+                    MarketingCaptureScenario.GuideDesktopGettingStartedSettings,
+                    MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse,
+                    MarketingCaptureScenario.GuideAndroidFolderSyncStatus,
+                    MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace,
+                    MarketingCaptureScenario.GuideWindowsCloudFilesStorage,
+                    MarketingCaptureScenario.GuideWindowsCloudFilesRecovery,
+                    MarketingCaptureScenario.GuideAndroidPhotoBackupFolders,
+                    MarketingCaptureScenario.GuideAndroidPhotoBackupQueue,
+                    MarketingCaptureScenario.GuideAndroidCalendarMonth,
+                    MarketingCaptureScenario.GuideAndroidCalendarAgenda,
+                    MarketingCaptureScenario.GuideDesktopCalendarMonth,
+                    MarketingCaptureScenario.GuideDesktopCalendarSources,
+                    MarketingCaptureScenario.GuideDesktopCalendarEdit,
+                    MarketingCaptureScenario.GuideDesktopSwitchAppsCatalog,
+                    MarketingCaptureScenario.GuideDesktopSwitchAppsSidebar,
+                    MarketingCaptureScenario.GuideDesktopSwitchAppsNested,
                     -> error("Guide capture aliases must resolve before rendering.")
                 }
             }

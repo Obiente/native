@@ -569,7 +569,7 @@ private fun CalendarError(message: String, retry: () -> Unit) {
 }
 
 @Composable
-private fun MonthCalendar(
+internal fun MonthCalendar(
     month: CalendarMonth,
     selectedDate: String,
     events: List<GroupwareCalendarEvent>,
@@ -748,7 +748,7 @@ private fun EventDetailDialog(
                 Text(event.start.take(8).displayCalendarDate())
                 Text(event.displayTimeRange())
                 event.location?.let { Text("Location: $it") }
-                event.recurrenceRule?.let { Text("Repeats: $it") }
+                event.recurrenceRule?.let { Text("Repeats: ${calendarRecurrenceDescription(it)}") }
                 if (event.isGeneratedOccurrence) {
                     Text(
                         "This occurrence is read-only to protect the complete recurring series.",
@@ -807,6 +807,76 @@ private enum class EventRecurrencePreset(
             preset != Custom && preset.rule?.equals(rule, ignoreCase = true) == true
         } ?: if (rule.isNullOrBlank()) None else Custom
     }
+}
+
+@Composable
+internal fun MarketingCalendarEventEditorCapture() {
+    Box(Modifier.fillMaxSize().padding(NextcloudSpacing.Large), contentAlignment = Alignment.Center) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 720.dp),
+            shape = RoundedCornerShape(NextcloudRadii.Large),
+            tonalElevation = 6.dp,
+        ) {
+            Column(Modifier.padding(NextcloudSpacing.Large), verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text("New event", style = MaterialTheme.typography.headlineSmall)
+                OutlinedTextField(value = "Design review", onValueChange = {}, label = { Text("Title") }, modifier = Modifier.fillMaxWidth())
+                Text("Repeats", style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    items(listOf("Does not repeat", "Daily", "Weekly", "Monthly")) { label ->
+                        FilterChip(selected = label == "Weekly", onClick = {}, label = { Text(label) })
+                    }
+                }
+                OutlinedTextField(value = "2026-08-04", onValueChange = {}, label = { Text("Date") }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    OutlinedTextField(value = "13:30", onValueChange = {}, label = { Text("Starts") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = "14:30", onValueChange = {}, label = { Text("Ends") }, modifier = Modifier.weight(1f))
+                }
+                OutlinedTextField(value = "Product room - Talk", onValueChange = {}, label = { Text("Location") }, modifier = Modifier.fillMaxWidth())
+                Text("Calendar: Product team", style = MaterialTheme.typography.bodyMedium)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = {}) { Text("Cancel") }
+                    Button(onClick = {}) { Text("Save") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun MarketingCalendarRecurringEventDetailCapture() {
+    Box(Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(NextcloudRadii.Large), tonalElevation = 6.dp) {
+            Column(Modifier.fillMaxWidth().padding(NextcloudSpacing.XLarge), verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
+                Text("Product stand-up", style = MaterialTheme.typography.headlineSmall)
+                Text("3 August 2026")
+                Text("08:30 - 09:00")
+                Text("Location: Product room - Talk")
+                Text("Repeats: ${calendarRecurrenceDescription("FREQ=WEEKLY;BYDAY=MO")}")
+                Text("Review current work and blockers.")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = {}) { Text("Delete series", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = {}) { Text("Edit series") }
+                }
+            }
+        }
+    }
+}
+
+internal fun calendarRecurrenceDescription(rule: String): String {
+    val parts = rule.uppercase().split(';').mapNotNull { token ->
+        token.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
+    }.toMap()
+    val interval = parts["INTERVAL"]?.toIntOrNull()?.takeIf { it > 1 }
+    val frequency = when (parts["FREQ"]) {
+        "DAILY" -> if (interval == null) "Daily" else "Every $interval days"
+        "WEEKLY" -> if (interval == null) "Weekly" else "Every $interval weeks"
+        "MONTHLY" -> if (interval == null) "Monthly" else "Every $interval months"
+        else -> return "Custom recurrence"
+    }
+    val days = parts["BYDAY"]?.split(',')?.mapNotNull { day ->
+        mapOf("MO" to "Monday", "TU" to "Tuesday", "WE" to "Wednesday", "TH" to "Thursday", "FR" to "Friday", "SA" to "Saturday", "SU" to "Sunday")[day]
+    }.orEmpty()
+    return if (days.isEmpty()) frequency else "$frequency on ${days.joinToString()}"
 }
 
 @Composable

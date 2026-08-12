@@ -2,7 +2,7 @@
   "source": "github-snapshot",
   "syncState": "snapshot",
   "projectUrl": "https://github.com/orgs/Obiente/projects/4",
-  "updatedAt": "2026-08-01T21:34:33Z",
+  "updatedAt": "2026-08-09T14:24:22Z",
   "epics": [
     {
       "number": 10,
@@ -36,9 +36,9 @@
       "status": "In Progress",
       "milestone": "0.2 Safe sync and media",
       "progress": {
-        "total": 23,
-        "completed": 5,
-        "percent_completed": 21
+        "total": 30,
+        "completed": 14,
+        "percent_completed": 46
       },
       "labels": [
         "priority:P0",
@@ -146,9 +146,9 @@
       "status": "In Progress",
       "milestone": "0.6 Platform polish",
       "progress": {
-        "total": 47,
-        "completed": 21,
-        "percent_completed": 44
+        "total": 52,
+        "completed": 26,
+        "percent_completed": 50
       },
       "labels": [
         "priority:P0",
@@ -189,6 +189,249 @@
     }
   ],
   "shipped": [
+    {
+      "number": 315,
+      "taskId": null,
+      "title": "fix(windows): recover Cloud Files placeholder creation collisions",
+      "url": "https://github.com/Obiente/nc-native/issues/315",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "area:platform",
+        "type:reliability",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-09T13:51:16Z",
+      "closedAt": "2026-08-09T13:50:53Z"
+    },
+    {
+      "number": 312,
+      "taskId": null,
+      "title": "fix(windows): remove stale Cloud Files account registrations",
+      "url": "https://github.com/Obiente/nc-native/issues/312",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "area:platform",
+        "type:reliability",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-09T11:14:56Z",
+      "closedAt": "2026-08-09T11:14:56Z"
+    },
+    {
+      "number": 307,
+      "taskId": null,
+      "title": "Retry transient Windows provenance attestation",
+      "url": "https://github.com/Obiente/nc-native/issues/307",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:release",
+        "type:reliability",
+        "type:security",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-03T20:03:14Z",
+      "closedAt": "2026-08-03T20:03:14Z"
+    },
+    {
+      "number": 296,
+      "taskId": null,
+      "title": "fix(windows): recover stale Cloud Files registration state",
+      "url": "https://github.com/Obiente/nc-native/issues/296",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "area:platform",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-02T14:24:24Z",
+      "closedAt": "2026-08-02T14:24:24Z"
+    },
+    {
+      "number": 290,
+      "taskId": null,
+      "title": "feat(windows): brand the Cloud Files root in File Explorer",
+      "url": "https://github.com/Obiente/nc-native/issues/290",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "area:platform",
+        "type:feature",
+        "platform:desktop"
+      ],
+      "updatedAt": "2026-08-02T05:07:59Z",
+      "closedAt": "2026-08-02T05:07:59Z"
+    },
+    {
+      "number": 294,
+      "taskId": null,
+      "title": "fix(ci): fall back to full validation when scope detection fails",
+      "url": "https://github.com/Obiente/nc-native/issues/294",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "github_actions",
+        "priority:P1",
+        "area:release",
+        "type:reliability"
+      ],
+      "updatedAt": "2026-08-02T05:07:59Z",
+      "closedAt": "2026-08-02T05:07:59Z"
+    },
+    {
+      "number": 286,
+      "taskId": null,
+      "title": "fix(desktop): keep sync running with tray and autostart controls",
+      "url": "https://github.com/Obiente/nc-native/issues/286",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "area:platform",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-02T05:07:58Z",
+      "closedAt": "2026-08-02T05:07:58Z"
+    },
+    {
+      "number": 288,
+      "taskId": null,
+      "title": "Use a reliable native installer handoff for RPM updates",
+      "url": "https://github.com/Obiente/nc-native/issues/288",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:platform",
+        "area:release",
+        "type:reliability",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-02T00:37:25Z",
+      "closedAt": "2026-08-02T00:37:25Z"
+    },
+    {
+      "number": 280,
+      "taskId": null,
+      "title": "fix(files): prevent corrupt Windows Cloud Files placeholders",
+      "url": "https://github.com/Obiente/nc-native/issues/280",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "area:platform",
+        "platform:desktop",
+        "in-progress",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-02T00:28:07Z",
+      "closedAt": "2026-08-02T00:28:07Z"
+    },
+    {
+      "number": 285,
+      "taskId": null,
+      "title": "ci(website): automate marketing capture refreshes",
+      "url": "https://github.com/Obiente/nc-native/issues/285",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "1.0 Release readiness",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:ux",
+        "area:release",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-01T23:34:28Z",
+      "closedAt": "2026-08-01T23:34:28Z"
+    },
     {
       "number": 281,
       "taskId": null,
@@ -1182,55 +1425,6 @@
         "needs-design"
       ],
       "updatedAt": "2026-07-29T12:22:20Z",
-      "closedAt": null
-    },
-    {
-      "number": 286,
-      "taskId": null,
-      "title": "fix(desktop): keep sync running with tray and autostart controls",
-      "url": "https://github.com/Obiente/nc-native/issues/286",
-      "priority": "P0",
-      "area": "Files and sync",
-      "status": "In Progress",
-      "milestone": "0.2 Safe sync and media",
-      "progress": {
-        "total": 0,
-        "completed": 0,
-        "percent_completed": 0
-      },
-      "labels": [
-        "priority:P0",
-        "area:files-sync",
-        "area:platform",
-        "platform:desktop",
-        "type:bug"
-      ],
-      "updatedAt": "2026-08-01T20:52:28Z",
-      "closedAt": null
-    },
-    {
-      "number": 280,
-      "taskId": null,
-      "title": "fix(files): prevent corrupt Windows Cloud Files placeholders",
-      "url": "https://github.com/Obiente/nc-native/issues/280",
-      "priority": "P0",
-      "area": "Files and sync",
-      "status": "In Progress",
-      "milestone": "0.2 Safe sync and media",
-      "progress": {
-        "total": 0,
-        "completed": 0,
-        "percent_completed": 0
-      },
-      "labels": [
-        "priority:P0",
-        "area:files-sync",
-        "area:platform",
-        "platform:desktop",
-        "in-progress",
-        "type:bug"
-      ],
-      "updatedAt": "2026-08-01T19:45:45Z",
       "closedAt": null
     },
     {
@@ -3595,14 +3789,14 @@
       "closedAt": null
     },
     {
-      "number": 285,
+      "number": 317,
       "taskId": null,
-      "title": "ci(website): automate marketing capture refreshes",
-      "url": "https://github.com/Obiente/nc-native/issues/285",
+      "title": "feat(platform): export anonymized app diagnostics",
+      "url": "https://github.com/Obiente/nc-native/issues/317",
       "priority": "P1",
-      "area": "Release",
+      "area": "Platform",
       "status": "In Progress",
-      "milestone": "1.0 Release readiness",
+      "milestone": "0.6 Platform polish",
       "progress": {
         "total": 0,
         "completed": 0,
@@ -3611,10 +3805,13 @@
       "labels": [
         "priority:P1",
         "area:ux",
-        "area:release",
-        "type:bug"
+        "area:platform",
+        "type:feature",
+        "type:reliability",
+        "platform:android",
+        "platform:desktop"
       ],
-      "updatedAt": "2026-08-01T20:52:28Z",
+      "updatedAt": "2026-08-09T14:24:22Z",
       "closedAt": null
     },
     {
@@ -4577,9 +4774,9 @@
       "description": "Trustworthy Android media backup, storage reclaim foundation, and advanced files synchronization.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T20:51:00Z",
-      "open": 38,
-      "closed": 23
+      "updatedAt": "2026-08-09T13:50:53Z",
+      "open": 36,
+      "closed": 41
     },
     {
       "number": 2,
@@ -4610,9 +4807,9 @@
       "description": "Fast contract acquisition and useful semantic interfaces for arbitrary Nextcloud apps.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T21:34:33Z",
-      "open": 32,
-      "closed": 5
+      "updatedAt": "2026-08-02T11:46:15Z",
+      "open": 29,
+      "closed": 8
     },
     {
       "number": 5,
@@ -4621,9 +4818,9 @@
       "description": "Responsive mobile and desktop UX, reliability, accessibility, performance, and platform integration.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T21:34:10Z",
+      "updatedAt": "2026-08-09T14:23:52Z",
       "open": 36,
-      "closed": 36
+      "closed": 44
     },
     {
       "number": 6,
@@ -4632,9 +4829,9 @@
       "description": "Security, CI, signed packages, documentation, and contributor-ready stable release work.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T21:19:41Z",
-      "open": 14,
-      "closed": 20
+      "updatedAt": "2026-08-01T23:34:28Z",
+      "open": 12,
+      "closed": 22
     }
   ]
 }

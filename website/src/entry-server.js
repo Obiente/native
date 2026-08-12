@@ -7,6 +7,7 @@ import { guidesContent } from "./generated/guides-content.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
+import { guidePlatformHubs, guidePlatformHubForPath } from "./guide-platforms.js";
 import {
   metadataFor,
   sharingHeadFor,
@@ -59,9 +60,9 @@ export async function render(pathname) {
     "@type": "SoftwareApplication",
     name: "Nextcloud Native",
     applicationCategory: "ProductivityApplication",
-    operatingSystem: "Android, iOS, iPadOS, Linux, Windows, macOS",
+    operatingSystem: "Android, Linux, Windows",
     description:
-      "A genuinely native client for a complete Nextcloud account, with files, photos, conversations, calendars, installed apps, offline work, sync, and operating-system integration.",
+      "An open-source native alpha client for Nextcloud on Android, Linux, and Windows, with verified Files, media, Calendar, app, offline, and sync foundations.",
     url: siteUrl,
     codeRepository: "https://github.com/Obiente/nc-native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -81,12 +82,11 @@ export async function render(pathname) {
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
     softwareHelp: `${siteUrl}/guides/`,
     featureList: [
-      "Native Nextcloud account connection on mobile, tablet, and desktop",
-      "Files, previews, sharing, version history, offline folders, and two-way sync with explicit conflicts",
-      "Photos, Memories, Recognize people, albums, Live Photos, backup, sharing, and non-destructive editing",
-      "Talk messaging and calls, Mail, Contacts, Calendar, Tasks, and system notifications",
-      "Native workflows for Notes, Deck, Tables, Cookbook, Cospend, Music, Office, search, and administration",
-      "Verified installed-app contracts mapped to reusable native components without embedded app websites",
+      "Nextcloud Login Flow on Android, Linux, and Windows with native credential storage",
+      "Native Files browsing, previews, sharing foundations, Android offline storage, and guarded folder sync",
+      "Photos and Memories browsing with media backup state on Android",
+      "Native Talk history, Notes editing, Calendar, Activity, Dashboard, search, and app navigation",
+      "Verified installed-app contracts rendered through reusable native workspaces",
     ],
     screenshot: [
       captureUrl("desktop-home"),
@@ -108,6 +108,7 @@ export async function render(pathname) {
   ];
   if (initialPath !== "/") {
     const guide = guides.find((entry) => entry.path === initialPath);
+    const guideHub = guidePlatformHubForPath(initialPath);
     structuredData.push({
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
@@ -125,7 +126,7 @@ export async function render(pathname) {
               name: "News",
               item: `${siteUrl}/news/`,
             }]
-          : guide
+            : guide || guideHub
             ? [{
                 "@type": "ListItem",
                 position: 2,
@@ -133,9 +134,17 @@ export async function render(pathname) {
                 item: `${siteUrl}/guides/`,
               }]
             : []),
+        ...(guide
+          ? [{
+              "@type": "ListItem",
+              position: 3,
+              name: `${guide.platform} guides`,
+              item: `${siteUrl}/guides/${guide.platformSlug}/`,
+            }]
+          : []),
         {
           "@type": "ListItem",
-          position: metadata.published || guide ? 3 : 2,
+          position: guide ? 4 : metadata.published || guideHub ? 3 : 2,
           name: metadata.title.replace(" · Nextcloud Native", ""),
           item: metadata.canonical,
         },
@@ -146,12 +155,24 @@ export async function render(pathname) {
   if (currentGuide) {
     structuredData.push({
       "@context": "https://schema.org",
-      "@type": "HowTo",
-      name: currentGuide.title,
+      "@type": "TechArticle",
+      headline: currentGuide.title,
       description: currentGuide.description,
-      totalTime: `PT${currentGuide.durationMinutes}M`,
-      supply: currentGuide.prerequisites.map((name) => ({ "@type": "HowToSupply", name })),
-      step: currentGuide.steps.map((step) => ({
+      dateModified: currentGuide.lastUpdated,
+      mainEntityOfPage: `${siteUrl}${currentGuide.path}`,
+      author: { "@type": "Organization", name: "Obiente", url: organizationUrl },
+      publisher: { "@type": "Organization", name: "Obiente", url: organizationUrl },
+      audience: {
+        "@type": "Audience",
+        audienceType: `${currentGuide.platform} ${currentGuide.device} users`,
+      },
+      about: [
+        { "@type": "SoftwareApplication", name: "Nextcloud Native", url: siteUrl },
+        { "@type": "Thing", name: currentGuide.platform },
+      ],
+      timeRequired: `PT${currentGuide.durationMinutes}M`,
+      dependencies: currentGuide.prerequisites.join("; "),
+      hasPart: currentGuide.steps.map((step) => ({
         "@type": "HowToStep",
         position: step.number,
         name: step.title,
@@ -191,30 +212,6 @@ export async function render(pathname) {
       ],
     });
   }
-  if (initialPath === "/") {
-    structuredData.push({
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: [
-        [
-          "Is Nextcloud Native a web wrapper?",
-          "No. It uses Nextcloud server APIs and renders native interfaces for phone and desktop.",
-        ],
-        [
-          "Can Nextcloud Native sync an Obsidian folder?",
-          "Yes. Folder pairs keep a normal device folder and a Nextcloud folder synchronized, remain available offline, and preserve both versions when changes conflict.",
-        ],
-        [
-          "Can Nextcloud Native back up phone photos?",
-          "Yes. Photo backup verifies the exact remote version before storage cleanup and keeps waiting, uploading, changed, failed, and cloud-only states distinct.",
-        ],
-      ].map(([name, text]) => ({
-        "@type": "Question",
-        name,
-        acceptedAnswer: { "@type": "Answer", text },
-      })),
-    });
-  }
   const head = [
     `<title>${escapeHtml(metadata.title)}</title>`,
     `<meta name="description" content="${escapeHtml(metadata.description)}">`,
@@ -235,6 +232,7 @@ export async function render(pathname) {
 export const routes = [
   "/",
   "/guides/",
+  ...guidePlatformHubs.map((hub) => `/guides/${hub.slug}/`),
   "/news/",
   "/visual-qa/",
   changelog.path,
@@ -253,4 +251,10 @@ export const sitemapEntries = [
   ...guides,
   { path: "/news/", lastUpdated: latestModification(news) },
   { path: "/guides/", lastUpdated: latestModification(guides) },
+  ...guidePlatformHubs.map((hub) => ({
+    path: `/guides/${hub.slug}/`,
+    lastUpdated: latestModification(guides.filter((guide) =>
+      hub.slug === "desktop" ? guide.device === "Desktop" : guide.platforms.includes(hub.label)
+    )),
+  })),
 ];

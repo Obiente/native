@@ -3921,6 +3921,59 @@ h1 span {
   gap: 18px;
 }
 
+.guide-platform-nav {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 24px;
+}
+
+.guide-platform-nav a {
+  display: flex;
+  min-height: 58px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 11px 14px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-medium);
+  background: var(--surface-low);
+}
+
+.guide-platform-nav a[aria-current="page"] {
+  border-color: color-mix(in srgb, var(--primary) 56%, var(--outline));
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+}
+
+.guide-platform-nav span {
+  color: var(--text-subtle);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.guide-platform-nav strong {
+  font-size: 13px;
+}
+
+.guide-availability-note {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.25fr) minmax(0, 1fr);
+  gap: 24px;
+  margin-bottom: 30px;
+  padding: 18px 20px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-medium);
+  background: var(--surface-low);
+}
+
+.guide-availability-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .guide-home-card {
   min-width: 0;
   display: grid;
@@ -4730,6 +4783,18 @@ h1 span {
 }
 
 @media (max-width: 760px) {
+  .guide-platform-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .guide-platform-nav a:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .guide-availability-note {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
   .guide-home-section {
     padding-block: 68px;
   }

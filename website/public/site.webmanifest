@@ -1,7 +1,7 @@
 {
   "name": "Nextcloud Native",
   "short_name": "NC Native",
-  "description": "One genuinely native client for your complete Nextcloud account.",
+  "description": "Open-source native Nextcloud alpha for Android, Linux, and Windows.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0D0F13",
