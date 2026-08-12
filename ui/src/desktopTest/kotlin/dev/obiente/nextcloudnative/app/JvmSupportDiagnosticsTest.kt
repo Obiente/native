@@ -338,6 +338,42 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun transportFailureCodeIsVisibleAndSafeContextIsExported() {
+        val root = createTempDirectory("support-diagnostics-network-failure").toFile()
+        val diagnostics = diagnostics(root)
+        val privateHost = "private-cloud.example.test"
+        diagnostics.record(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.Network,
+                operation = "http.request",
+                outcome = "failed",
+                code = "NETWORK_DNS_UNRESOLVED",
+                attempt = 1,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("failure_phase", "dns"),
+                    SupportDiagnosticFieldDraft("retryable", "true"),
+                    SupportDiagnosticFieldDraft("url", "https://$privateHost/remote.php", SupportDiagnosticValuePrivacy.Url),
+                ),
+                exception = java.net.UnknownHostException(privateHost).toSupportDiagnosticExceptionDraft(),
+            ),
+        )
+
+        assertEquals("NETWORK_DNS_UNRESOLVED", diagnostics.summary().recentEvents.single().code)
+        val destination = File(root, "network-report.zip")
+        diagnostics.writeBundle(destination, "", emptyList())
+        ZipFile(destination).use { zip ->
+            val events = zip.getInputStream(assertNotNull(zip.getEntry("events.jsonl")))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue("NETWORK_DNS_UNRESOLVED" in events)
+            assertTrue("failure_phase" in events)
+            assertTrue("dns" in events)
+            assertFalse(privateHost in events)
+        }
+    }
+
+    @Test
     fun exportedArchiveContainsOnlyDeclaredAnonymizedFilesAndValidDigests() {
         val root = createTempDirectory("support-diagnostics-export").toFile()
         val diagnostics = diagnostics(root)
