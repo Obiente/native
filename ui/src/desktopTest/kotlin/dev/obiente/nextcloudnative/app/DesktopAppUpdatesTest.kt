@@ -345,8 +345,11 @@ class DesktopAppUpdatesTest {
             assertTrue(development.support().explanation.contains("development build"))
             assertEquals(AppDistributionChannel.Development, optedOutDevelopment.support().channel)
             assertFalse(optedOutDevelopment.support().canCheckDirectUpdates)
+            assertTrue(optedOutDevelopment.support().explanation.contains("development build"))
+            assertTrue(optedOutDevelopment.support().explanation.contains("cannot check for updates directly"))
             assertEquals(AppDistributionChannel.Development, unversionedDevelopment.support().channel)
             assertFalse(unversionedDevelopment.support().canCheckDirectUpdates)
+            assertTrue(unversionedDevelopment.support().explanation.contains("development build"))
             val distributionManaged = DesktopAppUpdater(
                 preferences = node,
                 buildIdentity = DesktopUpdateBuildIdentity(

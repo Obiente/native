@@ -174,15 +174,19 @@ internal class DesktopAppUpdater(
             currentVersionName = buildIdentity.versionName,
             currentVersionCode = buildIdentity.versionCode,
             canCheckDirectUpdates = canUpdate,
-            explanation = if (canUpdate && !buildIdentity.releaseBuild) {
-                "This development build can update to a newer release from the selected channel. Downloads " +
-                    "are matched to their advertised checksum before using your system installer."
-            } else if (canUpdate) {
-                "This native package checks the selected release channel, matches downloads to its advertised " +
-                    "checksum, and uses your system installer."
-            } else {
-                "Distribution-managed and unsupported desktop packages are updated through their distribution " +
-                    "workflow."
+            explanation = when {
+                canUpdate && !buildIdentity.releaseBuild ->
+                    "This development build can update to a newer release from the selected channel. Downloads " +
+                        "are matched to their advertised checksum before using your system installer."
+                canUpdate ->
+                    "This native package checks the selected release channel, matches downloads to its advertised " +
+                        "checksum, and uses your system installer."
+                !buildIdentity.releaseBuild ->
+                    "This development build cannot check for updates directly. Install a newer development build " +
+                        "or release through the same download or package workflow that provided this build."
+                else ->
+                    "Distribution-managed and unsupported desktop packages are updated through their distribution " +
+                        "workflow."
             },
         )
     }

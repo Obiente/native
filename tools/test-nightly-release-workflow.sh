@@ -4,6 +4,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 nightly="$project_root/.github/workflows/nightly.yml"
 prerelease="$project_root/.github/workflows/prerelease.yml"
+ci="$project_root/.github/workflows/ci.yml"
 nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
 msi_repackager="$project_root/tools/repackage-msi-with-uninstall-cleanup.ps1"
@@ -76,6 +77,7 @@ require_text "$nightly" '-PncMacosPackageVersion="${NIGHTLY_DESKTOP_VERSION}"'
 require_text "$nightly" '-PncDesktopReleaseBuild=true'
 require_text "$nightly" '-PncDirectDesktopPackageUpdates="${{ matrix.direct_updates }}"'
 require_text "$nightly" 'direct_updates: "true"'
+require_count "$ci" '-PncDirectDesktopPackageUpdates=true' 2
 require_text "$nightly" 'name: nextcloud-native-${{ matrix.platform }}'
 require_text "$nightly" 'name: nextcloud-native-android'
 require_text "$nightly" 'tools/stage-nightly-assets.sh artifacts dist'
