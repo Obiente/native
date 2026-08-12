@@ -1474,6 +1474,61 @@ class WindowsCloudFilesProviderTest {
     }
 
     @Test
+    fun `startup preserves and rebuilds a root when placeholder update reports corrupt metadata`() {
+        val root = createTempDirectory("windows-cloud-update-corrupt-root-")
+        val localBytes = "local-only recovery data".encodeToByteArray()
+        root.resolve("local-note.txt").writeBytes(localBytes)
+        val local = root.resolve("Photos").createDirectory()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val failure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x8007016B.toInt(),
+        )
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        val preserved = root.resolveSibling("preserved-update-corrupt-root")
+        val api = FakeApi().apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            updatePlaceholderFailure = failure
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listed = listOf(identity)),
+            api = api,
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { current ->
+                api.updatePlaceholderFailure = null
+                api.seedState(local, WindowsCloudPlaceholderState.Absent)
+                Files.move(current, preserved)
+            },
+        )
+
+        try {
+            provider.start()
+
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertContentEquals(localBytes, preserved.resolve("local-note.txt").toFile().readBytes())
+            assertTrue(Files.isDirectory(root))
+            assertEquals(listOf(local), api.updatedPaths)
+            assertEquals(listOf("Photos"), api.createdPlaceholderBatches.single().map(WindowsCloudPlaceholder::name))
+            assertEquals(listOf(1L), api.disconnectAttempts)
+            assertEquals(
+                listOf(
+                    "corrupt-metadata-detected",
+                    "corrupt-entry-detected",
+                    "corrupt-root-preserved",
+                    "corrupt-root-recovered",
+                ),
+                diagnostics.map(SupportDiagnosticEventDraft::outcome),
+            )
+            assertEquals("HRESULT:0x8007016b", diagnostics.first().code)
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `startup retries a rejected unchanged directory refresh`() {
         val root = createTempDirectory("windows-cloud-unchanged-directory-retry-")
         val local = root.resolve("Photos")

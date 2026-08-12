@@ -1362,14 +1362,19 @@ internal class WindowsCloudFilesProvider(
             )
         } catch (failure: WindowsCloudFilesOperationException) {
             val unchangedDirectoryRefresh = previous == current && current.directory
+            val corruptMetadata = isWindowsCloudFilesPlaceholderMetadataCorruptResult(failure.hResult)
             recordPlaceholderDiagnostic(
-                severity = if (unchangedDirectoryRefresh) {
+                severity = if (unchangedDirectoryRefresh && !corruptMetadata) {
                     SupportDiagnosticSeverity.Warning
                 } else {
                     SupportDiagnosticSeverity.Error
                 },
                 operation = "cloud-files.placeholder-update",
-                outcome = if (unchangedDirectoryRefresh) "unchanged-refresh-skipped" else "failed",
+                outcome = when {
+                    corruptMetadata -> "corrupt-metadata-detected"
+                    unchangedDirectoryRefresh -> "unchanged-refresh-skipped"
+                    else -> "failed"
+                },
                 code = "HRESULT:0x${failure.hResult.toUInt().toString(16)}",
                 localDirectory = localPath.parent ?: root,
                 identity = current,
@@ -1378,6 +1383,17 @@ internal class WindowsCloudFilesProvider(
                     SupportDiagnosticFieldDraft("identity_changed", (previous != current).toString()),
                 ),
             )
+            if (corruptMetadata) {
+                throw corruptPlaceholder(
+                    identity = current,
+                    localDirectory = localPath.parent ?: root,
+                    inspection = WindowsCloudPlaceholderInspection(
+                        state = WindowsCloudPlaceholderEntryState.Corrupt,
+                        win32Error = WINDOWS_ERROR_CLOUD_FILE_METADATA_CORRUPT,
+                    ),
+                    cause = failure,
+                )
+            }
             if (!unchangedDirectoryRefresh) throw failure
             scheduleUnchangedDirectoryRefresh(localPath, current, attempt = 1)
         }
