@@ -1186,6 +1186,11 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.BudgetDashboardMobileDark,
                     MarketingCaptureScenario.BudgetDashboardMobileLight,
                     -> MarketingBudgetDashboardScenario(scenario)
+                    MarketingCaptureScenario.BudgetTransactionsDesktop,
+                    MarketingCaptureScenario.BudgetTransactionsMobile,
+                    MarketingCaptureScenario.BudgetAccountsDesktop,
+                    MarketingCaptureScenario.BudgetAccountsMobile,
+                    -> MarketingBudgetDynamicWorkspaceScenario(scenario)
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
                     MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->
                         MarketingFileSyncSetupDesktopScenario(initialStep = FileSyncSetupStep.Locations)

@@ -344,6 +344,74 @@ class NativeSemanticPresentationsTest {
     }
 
     @Test
+    fun `account balance records retain asset liability and reporting semantics`() {
+        val accounts = resource(
+            "accounts",
+            "Accounts",
+            "name", "balance", "currency", "type", "institution", "convertedBalance",
+            "baseCurrency", "excludedFromReports",
+        )
+        val checking = requireNotNull(
+            nativeFinancialAccountPresentation(
+                accounts,
+                NativeRecord(
+                    "1",
+                    mapOf(
+                        "name" to "Daily banking",
+                        "balance" to "1250.45",
+                        "currency" to "EUR",
+                        "type" to "checking",
+                        "institution" to "Example Bank",
+                        "excludedFromReports" to "false",
+                    ),
+                ),
+            ),
+        )
+        val card = requireNotNull(
+            nativeFinancialAccountPresentation(
+                accounts,
+                NativeRecord(
+                    "2",
+                    mapOf(
+                        "name" to "Credit card",
+                        "balance" to "-320.10",
+                        "currency" to "USD",
+                        "type" to "credit_card",
+                        "convertedBalance" to "-295.80",
+                        "baseCurrency" to "EUR",
+                        "excludedFromReports" to "true",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(NativeFinancialAccountKind.Asset, checking.kind)
+        assertEquals("Example Bank", checking.institution)
+        assertEquals(NativeFinancialAccountKind.Liability, card.kind)
+        assertEquals(-295.8, card.convertedBalance)
+        assertEquals("EUR", card.baseCurrency)
+        assertTrue(card.excludedFromReports)
+    }
+
+    @Test
+    fun `transaction rows referencing an account are not account balance cards`() {
+        assertEquals(
+            null,
+            nativeFinancialAccountPresentation(
+                resource("transactions", "Transactions", "description", "amount", "accountName"),
+                NativeRecord(
+                    "1",
+                    mapOf(
+                        "description" to "Groceries",
+                        "amount" to "42.50",
+                        "accountName" to "Daily banking",
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `finance presentation requires both finance semantics and a numeric amount`() {
         val generic = resource("items", "Items", "title", "amount")
         val bills = resource("bills", "Bills", "what", "amount")

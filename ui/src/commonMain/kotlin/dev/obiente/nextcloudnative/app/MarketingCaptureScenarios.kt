@@ -508,6 +508,30 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
         width = 1_080, height = 1_800, density = 2.625f, darkTheme = false,
     ),
+    BudgetTransactionsDesktop(
+        "budget-transactions-desktop", "budget-transactions-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Transactions", "Synthetic records from GET /apps/budget/api/transactions",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetTransactionsMobile(
+        "budget-transactions-mobile", "budget-transactions-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Transactions", "Synthetic records from GET /apps/budget/api/transactions",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetAccountsDesktop(
+        "budget-accounts-desktop", "budget-accounts-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Accounts", "Synthetic records from GET /apps/budget/api/accounts",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetAccountsMobile(
+        "budget-accounts-mobile", "budget-accounts-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Accounts", "Synthetic records from GET /apps/budget/api/accounts",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
     FileSyncSetupDesktop(
         "file-sync-setup-desktop", "file-sync-setup-desktop.png", NextcloudPresentation.Desktop,
         "File sync", "Folder pair configuration", "Guided RAW-first setup",
