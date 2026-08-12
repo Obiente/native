@@ -630,21 +630,21 @@ private fun NativeBudgetPlanningRow(
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             maxItemsInEachRow = columns,
         ) {
-            if ((model.alertCount ?: 0) > 0 && "alerts" in availableSectionIds) {
+            if ((model.alertCount ?: 0) > 0) {
                 NativeBudgetStatusCard(
                     width, "Budget alerts", "${model.alertCount} need attention",
-                    "alerts", onOpenSection,
+                    "alerts".takeIf { it in availableSectionIds }, onOpenSection,
                 )
             }
-            if (model.upcomingBills.isEmpty() && "bills" in availableSectionIds) {
+            if (model.upcomingBills.isEmpty()) {
                 NativeBudgetStatusCard(
                     width, "Upcoming bills", model.billCount?.let { "$it scheduled" } ?: "No summary available",
-                    "bills", onOpenSection,
+                    "bills".takeIf { it in availableSectionIds }, onOpenSection,
                 )
             }
             val planningDestination = listOf("savings-goals", "budget", "debts", "assets", "trends")
                 .firstOrNull { destination -> destination in availableSectionIds }
-            if (planningDestination != null) NativeBudgetStatusCard(
+            NativeBudgetStatusCard(
                 width, "Planning", listOfNotNull(
                     model.budgetCategoryCount?.let { "$it budget categories" },
                     model.savingsGoalCount?.let { "$it savings goals" },
@@ -663,21 +663,30 @@ private fun NativeBudgetStatusCard(
     width: Dp,
     title: String,
     summary: String,
-    resourceId: String,
+    resourceId: String?,
     onOpenSection: (String) -> Unit,
 ) {
-    Card(
-        onClick = { onOpenSection(resourceId) },
-        modifier = Modifier.width(width).heightIn(min = 72.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val modifier = Modifier.width(width).heightIn(min = 72.dp)
+    val colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    if (resourceId != null) {
+        Card(onClick = { onOpenSection(resourceId) }, modifier = modifier, colors = colors) {
+            NativeBudgetStatusCardContent(title, summary)
         }
+    } else {
+        Card(modifier = modifier, colors = colors) {
+            NativeBudgetStatusCardContent(title, summary)
+        }
+    }
+}
+
+@Composable
+private fun NativeBudgetStatusCardContent(title: String, summary: String) {
+    Column(
+        modifier = Modifier.padding(NextcloudSpacing.Medium),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
