@@ -104,7 +104,7 @@ internal class DesktopStreamingMultipartRequestBody(
     override fun isOneShot(): Boolean = true
 
     override fun writeTo(sink: BufferedSink) {
-        openSource().use { source ->
+        openJvmLocalUploadSource(openSource).use { source ->
             writePreparedMultipartUpload(
                 upload = upload,
                 readFile = source::read,

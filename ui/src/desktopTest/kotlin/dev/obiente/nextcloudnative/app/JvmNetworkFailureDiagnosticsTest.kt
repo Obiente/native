@@ -28,6 +28,19 @@ import okhttp3.internal.http2.StreamResetException
 
 class JvmNetworkFailureDiagnosticsTest {
     @Test
+    fun localUploadFailureProducesAStorageDiagnosticWithoutLocationFields() {
+        val failure = JvmLocalUploadSourceIOException(IOException("/private/path/report.pdf"))
+
+        val event = failure.toJvmLocalUploadSourceDiagnosticEvent("POST", 42L)
+
+        assertEquals(SupportDiagnosticComponent.Storage, event.component)
+        assertEquals("local-upload.read", event.operation)
+        assertEquals("LOCAL_UPLOAD_SOURCE_IO", event.code)
+        assertEquals(listOf("method", "mutation"), event.fields.map { it.name })
+        assertTrue(failure.isJvmLocalUploadSourceFailure())
+    }
+
+    @Test
     fun localOutputFailureIsNotReportedAsANetworkReadFailure() {
         val outputFailure = IOException("local storage unavailable")
         var reportedFailure: IOException? = null

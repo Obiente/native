@@ -105,6 +105,8 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
+import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
+import dev.obiente.nextcloudnative.app.toJvmLocalUploadSourceDiagnosticEvent
 import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
@@ -2914,6 +2916,16 @@ internal class AndroidNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
+            if (failure.isJvmLocalUploadSourceFailure()) {
+                recordRequestDiagnostic(
+                    session,
+                    failure.toJvmLocalUploadSourceDiagnosticEvent(
+                        method = method,
+                        durationMillis = elapsedMillis(started),
+                    ),
+                )
+                throw failure
+            }
             val networkFailure = if (failure is IOException || failure is CancellationException) {
                 failure.toJvmNetworkFailureDiagnostic(
                     attempt = networkAttempt,

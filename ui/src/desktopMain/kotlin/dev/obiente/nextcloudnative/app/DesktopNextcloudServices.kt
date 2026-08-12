@@ -5207,6 +5207,16 @@ class DesktopNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
+            if (failure.isJvmLocalUploadSourceFailure()) {
+                recordDesktopRequestDiagnostic(
+                    session,
+                    failure.toJvmLocalUploadSourceDiagnosticEvent(
+                        method = method,
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    ),
+                )
+                throw failure
+            }
             val networkFailure = if (failure is IOException || failure is CancellationException) {
                 failure.toJvmNetworkFailureDiagnostic(
                     attempt = networkAttempt,
