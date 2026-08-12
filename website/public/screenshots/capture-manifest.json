@@ -454,7 +454,7 @@
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/DesktopBackgroundSettingsVisualQaMain.kt": "7d90dc22854409b9837b82ba739f7221d425554531a962296ff9e75b0a178c2d",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/DynamicBoardInteractionPreviewMain.kt": "7402f5b4bf3bbf3cf20761eaa10eca9131fb6e63da2988d0aa6038942d706c53",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/FileSyncTrayVisualQaMain.kt": "a0533aec3f991b48d57f69ddf7e95124b969631b6a55110f550826ac46ffc1ad",
-        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt": "f6f3dc55fdbae4c3e10e3a00e8ac13d5b1b19e908e5708c73497e94ec00b8f3d",
+        "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/Main.kt": "af3d11fdf3c65f1a8d487562e1692f9346fccc6e0499700ed4a55205dee8a9bf",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureMain.kt": "759783eb557e8f500d623cdd635a67f94c45ebf9197e96ac2d67e4b4691e5fde",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/MarketingCaptureOwnership.kt": "67cf94e6f215167a2384f14086d135532961c7e91cecb69be8f15e4ee6324606",
         "ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeTiffMarketingCapture.kt": "6970352c6e42d09b793c55ea296991d756d232f216d8d152aa00319b2ddb8d20",
