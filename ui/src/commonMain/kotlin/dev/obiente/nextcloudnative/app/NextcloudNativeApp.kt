@@ -1190,6 +1190,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.BudgetTransactionsMobile,
                     MarketingCaptureScenario.BudgetAccountsDesktop,
                     MarketingCaptureScenario.BudgetAccountsMobile,
+                    MarketingCaptureScenario.BudgetCategoriesDesktop,
+                    MarketingCaptureScenario.BudgetCategoriesMobile,
                     -> MarketingBudgetDynamicWorkspaceScenario(scenario)
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
                     MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->

@@ -215,6 +215,19 @@ internal data class NativeFinancialAccountPresentation(
     val excludedFromReports: Boolean,
 )
 
+internal enum class NativeCategoryKind { Expense, Income, Other }
+
+internal data class NativeCategoryPresentation(
+    val name: String,
+    val kind: NativeCategoryKind,
+    val parentId: String?,
+    val transactionCount: Int?,
+    val shared: Boolean,
+    val writable: Boolean,
+    val sharedBy: String?,
+    val mutedFromReports: Boolean,
+)
+
 internal data class NativeFinanceMemberStatistic(
     val name: String,
     val paid: Double,
@@ -592,6 +605,51 @@ internal fun nativeFinancialAccountCollectionPresentations(
     if (records.isEmpty()) return null
     val rows = records.mapNotNull { record ->
         nativeFinancialAccountPresentation(resource, record)?.let { presentation -> record to presentation }
+    }
+    return rows.takeIf { it.size == records.size }
+}
+
+internal fun nativeCategoryPresentation(
+    resource: ResourceSpec,
+    record: NativeRecord,
+): NativeCategoryPresentation? {
+    val resourceWords = semanticTokens(resource.id, resource.name)
+    if (resourceWords.none { word -> word == "category" || word == "categories" }) return null
+    val values = NativeSemanticValues(record)
+    val kind = when (values.string("type", "categorytype")?.lowercase()) {
+        "expense", "expenses" -> NativeCategoryKind.Expense
+        "income", "incomes" -> NativeCategoryKind.Income
+        else -> NativeCategoryKind.Other
+    }
+    val shared = values.boolean("shared", "isshared") == true ||
+        values.hasAny("sharedby", "sharedbyname", "sharedowner")
+    return NativeCategoryPresentation(
+        name = values.string("name", "categoryname", "title", "label")
+            ?: nativeRecordPresentation(resource, record).title,
+        kind = kind,
+        parentId = values.string("parentid", "parent", "parentcategoryid")
+            ?.takeIf { it.isNotBlank() && it != "0" && !it.equals("null", ignoreCase = true) },
+        transactionCount = values.int("transactioncount", "transactions", "count")
+            ?.takeIf { it >= 0 },
+        shared = shared,
+        writable = !shared || values.boolean("canwrite", "writable", "sharedwrite") == true,
+        sharedBy = values.string("sharedbyname", "sharedby", "sharedowner"),
+        mutedFromReports = values.boolean(
+            "muted",
+            "reportmuted",
+            "hiddenfromreports",
+            "excludedfromreports",
+        ) == true,
+    )
+}
+
+internal fun nativeCategoryCollectionPresentations(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+): List<Pair<NativeRecord, NativeCategoryPresentation>>? {
+    if (records.isEmpty()) return null
+    val rows = records.mapNotNull { record ->
+        nativeCategoryPresentation(resource, record)?.let { presentation -> record to presentation }
     }
     return rows.takeIf { it.size == records.size }
 }

@@ -253,8 +253,12 @@ class DynamicDescriptorMapperTest {
             component("projects", fields("id", "name") + field("total_spent", FieldKind.decimal)),
         )
         assertEquals(
-            NativeComponent.dashboard,
-            component("categories", fields("id", "name") + field("budgetAmount", FieldKind.decimal)),
+            NativeComponent.collectionList,
+            component(
+                "categories",
+                fields("id", "name", "type", "parentId", "icon", "color") +
+                    field("budgetAmount", FieldKind.decimal),
+            ),
         )
         assertEquals(
             NativeComponent.dataTable,

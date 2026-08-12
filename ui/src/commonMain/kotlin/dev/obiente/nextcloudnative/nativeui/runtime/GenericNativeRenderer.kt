@@ -3555,6 +3555,20 @@ private fun GenericRecordCollection(
         GenericGroupwareCollection(groupware, onSelectRecord)
         return
     }
+    val categories = remember(resource, records) {
+        nativeCategoryCollectionPresentations(resource, records)
+    }
+    if (categories != null) {
+        GenericCategoryCollection(
+            resource = resource,
+            rows = categories,
+            onSelectRecord = onSelectRecord,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
+        return
+    }
     val financialAccounts = remember(resource, records) {
         nativeFinancialAccountCollectionPresentations(resource, records)
     }
@@ -3800,6 +3814,234 @@ private fun GenericOverviewMetric(label: String, value: String) {
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+private enum class NativeCategoryFilter(val label: String) {
+    All("All"),
+    Expenses("Expenses"),
+    Income("Income"),
+}
+
+private data class NativeCategoryRow(
+    val record: NativeRecord,
+    val presentation: NativeCategoryPresentation,
+    val depth: Int,
+    val hasChildren: Boolean,
+)
+
+private fun flattenNativeCategoryRows(
+    rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    expandedIds: Set<String>,
+): List<NativeCategoryRow> {
+    val ids = rows.map { (record, _) -> record.id }.toSet()
+    val children = rows.groupBy { (_, category) -> category.parentId?.takeIf(ids::contains) }
+    val output = mutableListOf<NativeCategoryRow>()
+    val visited = mutableSetOf<String>()
+    fun append(parentId: String?, depth: Int) {
+        children[parentId].orEmpty()
+            .sortedBy { (_, category) -> category.name.lowercase() }
+            .forEach { (record, category) ->
+                if (!visited.add(record.id)) return@forEach
+                val hasChildren = children[record.id].orEmpty().isNotEmpty()
+                output += NativeCategoryRow(record, category, depth, hasChildren)
+                if (hasChildren && record.id in expandedIds) append(record.id, depth + 1)
+            }
+    }
+    append(null, 0)
+    rows.filterNot { (record, _) -> record.id in visited }.forEach { (record, category) ->
+        output += NativeCategoryRow(record, category, 0, hasChildren = false)
+    }
+    return output
+}
+
+@Composable
+private fun GenericCategoryCollection(
+    resource: ResourceSpec,
+    rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    var filter by rememberSaveable(resource.id) { mutableStateOf(NativeCategoryFilter.All) }
+    val parentIds = remember(rows) {
+        val knownIds = rows.map { (record, _) -> record.id }.toSet()
+        rows.mapNotNull { (_, category) -> category.parentId?.takeIf(knownIds::contains) }.toSet()
+    }
+    var expandedIds by rememberSaveable(resource.id, rows) { mutableStateOf(parentIds.toList()) }
+    val filteredRows = remember(rows, filter) {
+        rows.filter { (_, category) ->
+            when (filter) {
+                NativeCategoryFilter.All -> true
+                NativeCategoryFilter.Expenses -> category.kind == NativeCategoryKind.Expense
+                NativeCategoryFilter.Income -> category.kind == NativeCategoryKind.Income
+            }
+        }
+    }
+    val visibleRows = remember(filteredRows, expandedIds) {
+        flattenNativeCategoryRows(filteredRows, expandedIds.toSet())
+    }
+    val expenseCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Expense }
+    val incomeCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Income }
+    val listState = rememberLazyListState()
+    NativeCollectionAutoPager(listState, visibleRows.size, onLoadMore, loadingMore, loadMoreError)
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                modifier = Modifier.padding(
+                    horizontal = NextcloudSpacing.Large,
+                    vertical = NextcloudSpacing.Small,
+                ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    NativeCategoryFilter.entries.forEach { option ->
+                        val count = when (option) {
+                            NativeCategoryFilter.All -> rows.size
+                            NativeCategoryFilter.Expenses -> expenseCount
+                            NativeCategoryFilter.Income -> incomeCount
+                        }
+                        FilterChip(
+                            selected = filter == option,
+                            onClick = { filter = option },
+                            label = { Text("${option.label} $count") },
+                        )
+                    }
+                    if (parentIds.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                expandedIds = if (expandedIds.isEmpty()) parentIds.toList() else emptyList()
+                            },
+                        ) {
+                            Text(if (expandedIds.isEmpty()) "Expand all" else "Collapse all")
+                        }
+                    }
+                }
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Medium,
+                end = NextcloudSpacing.Large,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            items(visibleRows, key = { row -> row.record.id }) { row ->
+                val recordPresentation = nativeRecordPresentation(resource, row.record)
+                val iconKey = recordPresentation.iconKey
+                    ?.takeIf { key -> NextcloudIcons.semantic(key) != null }
+                    ?: "category"
+                val interaction = onSelectRecord
+                    ?.let { callback -> Modifier.clickable { callback(row.record) } }
+                    ?: Modifier
+                Card(
+                    modifier = interaction.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (row.depth > 0) Box(Modifier.width((row.depth * 18).dp))
+                        if (row.hasChildren) {
+                            Box(
+                                modifier = Modifier.size(40.dp).clickable {
+                                    expandedIds = if (row.record.id in expandedIds) {
+                                        expandedIds - row.record.id
+                                    } else {
+                                        expandedIds + row.record.id
+                                    }
+                                }.semantics {
+                                    contentDescription = if (row.record.id in expandedIds) {
+                                        "Collapse ${row.presentation.name}"
+                                    } else {
+                                        "Expand ${row.presentation.name}"
+                                    }
+                                },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (row.record.id in expandedIds) NextcloudIcons.ExpandMore else NextcloudIcons.ChevronRight,
+                                    contentDescription = null,
+                                )
+                            }
+                        } else {
+                            Box(Modifier.size(40.dp))
+                        }
+                        GenericResourceIcon(
+                            resource,
+                            iconKey,
+                            recordPresentation.colorArgb,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                row.presentation.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val metadata = buildList {
+                                add(
+                                    when (row.presentation.kind) {
+                                        NativeCategoryKind.Expense -> "Expense"
+                                        NativeCategoryKind.Income -> "Income"
+                                        NativeCategoryKind.Other -> "Category"
+                                    },
+                                )
+                                row.presentation.transactionCount?.let { count ->
+                                    add("$count ${if (count == 1) "transaction" else "transactions"}")
+                                }
+                                if (row.presentation.shared) {
+                                    val owner = row.presentation.sharedBy?.let { " by $it" }.orEmpty()
+                                    add(
+                                        if (row.presentation.writable) {
+                                            "Shared$owner, editable"
+                                        } else {
+                                            "Shared$owner, read only"
+                                        },
+                                    )
+                                }
+                            }.joinToString(" · ")
+                            Text(
+                                metadata,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (row.presentation.mutedFromReports) {
+                            Text(
+                                "Hidden",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            NextcloudIcons.ChevronRight,
+                            contentDescription = "Open ${row.presentation.name}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
+        }
     }
 }
 

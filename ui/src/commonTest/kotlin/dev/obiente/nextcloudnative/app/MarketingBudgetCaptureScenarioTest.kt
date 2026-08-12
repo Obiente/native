@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.app
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeFinancialAccountKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCategoryKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeCategoryPresentation
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeFinancePresentation
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeFinancialAccountPresentation
 import kotlin.test.Test
@@ -12,12 +14,14 @@ import kotlin.test.assertTrue
 
 class MarketingBudgetCaptureScenarioTest {
     @Test
-    fun `budget dynamic visual QA covers accounts and transactions on desktop and phone`() {
+    fun `budget dynamic visual QA covers each audited view on desktop and phone`() {
         val scenarios = listOf(
             MarketingCaptureScenario.BudgetTransactionsDesktop,
             MarketingCaptureScenario.BudgetTransactionsMobile,
             MarketingCaptureScenario.BudgetAccountsDesktop,
             MarketingCaptureScenario.BudgetAccountsMobile,
+            MarketingCaptureScenario.BudgetCategoriesDesktop,
+            MarketingCaptureScenario.BudgetCategoriesMobile,
         )
 
         assertEquals(
@@ -36,13 +40,29 @@ class MarketingBudgetCaptureScenarioTest {
     fun `budget fixtures use verified upstream collection routes with synthetic records`() {
         val accounts = assertNotNull(marketingBudgetSchema.action("route-account-index"))
         val transactions = assertNotNull(marketingBudgetSchema.action("route-transaction-index"))
+        val categories = assertNotNull(marketingBudgetSchema.action("route-category-index"))
 
         assertEquals(HttpMethod.GET, accounts.binding.method)
         assertEquals("/apps/budget/api/accounts", accounts.binding.path)
         assertEquals(HttpMethod.GET, transactions.binding.method)
         assertEquals("/apps/budget/api/transactions", transactions.binding.path)
+        assertEquals(HttpMethod.GET, categories.binding.method)
+        assertEquals("/apps/budget/api/categories", categories.binding.path)
+        assertEquals(
+            "/apps/budget/api/categories/tree",
+            assertNotNull(marketingBudgetSchema.action("route-category-tree")).binding.path,
+        )
+        assertEquals(
+            "/apps/budget/api/categories/transaction-counts",
+            assertNotNull(marketingBudgetSchema.action("route-category-transaction-counts")).binding.path,
+        )
+        assertEquals(
+            "/apps/budget/api/categories/report-mutes",
+            assertNotNull(marketingBudgetSchema.action("route-category-report-mutes")).binding.path,
+        )
         assertTrue(marketingBudgetAccountRecords.all { it.actionSafeIdentity.not() })
         assertTrue(marketingBudgetTransactionRecords.all { it.actionSafeIdentity.not() })
+        assertTrue(marketingBudgetCategoryRecords.all { it.actionSafeIdentity.not() })
     }
 
     @Test
@@ -53,11 +73,18 @@ class MarketingBudgetCaptureScenarioTest {
         val transactions = marketingBudgetTransactionRecords.map { record ->
             assertNotNull(nativeFinancePresentation(marketingBudgetTransactions, record))
         }
+        val categories = marketingBudgetCategoryRecords.map { record ->
+            assertNotNull(nativeCategoryPresentation(marketingBudgetCategories, record))
+        }
 
         assertTrue(accounts.any { it.kind == NativeFinancialAccountKind.Asset })
         assertTrue(accounts.any { it.kind == NativeFinancialAccountKind.Liability })
         assertTrue(accounts.any { it.convertedBalance != null })
         assertTrue(transactions.any { it.amount < 0.0 })
         assertTrue(transactions.any { it.amount > 0.0 })
+        assertTrue(categories.any { it.kind == NativeCategoryKind.Expense })
+        assertTrue(categories.any { it.kind == NativeCategoryKind.Income })
+        assertTrue(categories.any { it.parentId != null })
+        assertTrue(categories.any { it.shared && !it.writable && it.mutedFromReports })
     }
 }
