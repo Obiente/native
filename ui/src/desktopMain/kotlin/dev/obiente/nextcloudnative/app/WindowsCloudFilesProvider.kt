@@ -22,6 +22,8 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
@@ -249,6 +251,11 @@ internal class WindowsCloudFilesUnreadableEntryException(
         inspection.win32Error?.let { " (Win32 error $it)." }.orEmpty(),
 )
 
+private data class WindowsCloudFilesDelayedCorruptRootRecovery(
+    val corruption: WindowsCloudFilesCorruptEntryException,
+    val generation: Long,
+)
+
 internal fun windowsCloudFilesRecoveryRoot(root: Path, recoveryId: String): Path {
     require(recoveryId.length in 8..32 && recoveryId.all { it.isLetterOrDigit() || it == '-' })
     val absoluteRoot = root.toAbsolutePath().normalize()
@@ -442,6 +449,7 @@ internal class WindowsCloudFilesProvider(
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit = {},
     private val preserveCorruptRoot: (Path) -> Path = ::preserveWindowsCloudFilesCorruptRoot,
     private val recordPreservedCorruptRoot: (Path) -> Unit = {},
+    private val onRuntimeFailure: (Throwable) -> Unit = {},
 ) : AutoCloseable, WindowsCloudFilesCallbacks {
     private val connection = AtomicLongState()
     private val apiClosed = AtomicBoolean(false)
@@ -454,6 +462,9 @@ internal class WindowsCloudFilesProvider(
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
+    private val corruptRootRecoveryClaimed = AtomicBoolean(false)
+    private val corruptRootRecoveryGeneration = AtomicLong(0L)
+    private val runtimeRecoveryFailure = AtomicReference<Throwable?>(null)
     private val destructiveCallbackOperations = AtomicInteger()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
@@ -462,6 +473,7 @@ internal class WindowsCloudFilesProvider(
     private val initialPopulationStarted = AtomicBoolean(false)
     private val initialPopulationFinished = CountDownLatch(1)
     @Volatile private var initialPopulationSucceeded = false
+    private val runtimeStarted = CountDownLatch(1)
     private val initialRecoveryFinished = CountDownLatch(1)
     @Volatile private var initialRecoveryFailure: WindowsCloudFilesStartupRecoveryException? = null
     @Volatile var preservedRecoveryRoot: Path? = null
@@ -497,9 +509,11 @@ internal class WindowsCloudFilesProvider(
                     initialRecoveryFinished.countDown()
                 }
             }
+            runtimeStarted.countDown()
         } catch (failure: Throwable) {
             callbacksPaused.set(true)
             initialPopulationFinished.countDown()
+            runtimeStarted.countDown()
             val key = connection.get()
             if (key != 0L && runCatching { api.disconnect(key) }.isSuccess) {
                 connection.compareAndSet(key, 0L)
@@ -512,6 +526,43 @@ internal class WindowsCloudFilesProvider(
         syncRootIdentity: ByteArray,
         corruption: WindowsCloudFilesCorruptEntryException,
         quiescenceTimeoutSeconds: Long = DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
+    ) {
+        require(quiescenceTimeoutSeconds > 0L)
+        val observedGeneration = corruptRootRecoveryGeneration.get()
+        val claimDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(quiescenceTimeoutSeconds)
+        while (!corruptRootRecoveryClaimed.compareAndSet(false, true)) {
+            runtimeRecoveryFailure.get()?.let { throw it }
+            if (corruptRootRecoveryGeneration.get() != observedGeneration) return
+            check(System.nanoTime() < claimDeadline) {
+                "Timed out waiting for the active Windows Cloud Files corrupt-root recovery."
+            }
+            try {
+                Thread.sleep(25L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException(
+                    "Interrupted while waiting for Windows Cloud Files corrupt-root recovery.",
+                    interrupted,
+                )
+            }
+        }
+        try {
+            runtimeRecoveryFailure.get()?.let { throw it }
+            if (corruptRootRecoveryGeneration.get() != observedGeneration) return
+            performCorruptRootRecovery(syncRootIdentity, corruption, quiescenceTimeoutSeconds)
+            corruptRootRecoveryGeneration.incrementAndGet()
+        } catch (failure: Throwable) {
+            runtimeRecoveryFailure.compareAndSet(null, failure)
+            throw failure
+        } finally {
+            corruptRootRecoveryClaimed.set(false)
+        }
+    }
+
+    private fun performCorruptRootRecovery(
+        syncRootIdentity: ByteArray,
+        corruption: WindowsCloudFilesCorruptEntryException,
+        quiescenceTimeoutSeconds: Long,
     ) {
         require(quiescenceTimeoutSeconds > 0L)
         val restartWatcher = watchService != null
@@ -601,6 +652,63 @@ internal class WindowsCloudFilesProvider(
         )
     }
 
+    private fun recoverCorruptRootAfterDelayedRefresh(
+        recovery: WindowsCloudFilesDelayedCorruptRootRecovery,
+    ) {
+        var claimed = false
+        try {
+            check(runtimeStarted.await(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                "Timed out waiting for Windows Cloud Files startup before corrupt-root recovery."
+            }
+            check(initialRecoveryFinished.await(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                "Timed out waiting for the initial local-change scan before corrupt-root recovery."
+            }
+            if (runtimeRecoveryFailure.get() != null) return
+            if (recovery.generation != corruptRootRecoveryGeneration.get()) return
+            if (!corruptRootRecoveryClaimed.compareAndSet(false, true)) {
+                recordPlaceholderDiagnostic(
+                    severity = SupportDiagnosticSeverity.Info,
+                    operation = "cloud-files.corrupt-root-recovery",
+                    outcome = "corrupt-root-recovery-coalesced",
+                    localDirectory = root,
+                    identity = null,
+                )
+                return
+            }
+            claimed = true
+            if (recovery.generation != corruptRootRecoveryGeneration.get()) return
+            val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
+            performCorruptRootRecovery(
+                WindowsCloudFileIdentityCodec.encode(rootIdentity),
+                recovery.corruption,
+                DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
+            )
+            corruptRootRecoveryGeneration.incrementAndGet()
+        } catch (failure: Throwable) {
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
+            if (failure.suppressed.none { it === recovery.corruption }) {
+                failure.addSuppressed(recovery.corruption)
+            }
+            callbacksPaused.set(true)
+            runtimeRecoveryFailure.compareAndSet(null, failure)
+            recordPlaceholderDiagnostic(
+                severity = SupportDiagnosticSeverity.Error,
+                operation = "cloud-files.corrupt-root-recovery",
+                outcome = "corrupt-root-recovery-failed",
+                code = windowsCloudFilesDiagnosticCode(failure),
+                localDirectory = root,
+                identity = null,
+            )
+            runCatching { onRuntimeFailure(failure) }
+                .exceptionOrNull()
+                ?.let(failure::addSuppressed)
+        } finally {
+            if (claimed) corruptRootRecoveryClaimed.set(false)
+        }
+    }
+
+    fun runtimeRecoveryFailure(): Throwable? = runtimeRecoveryFailure.get()
+
     private fun connectWithRegistrationRecovery(syncRootIdentity: ByteArray): Long =
         try {
             api.connect(root, this)
@@ -625,6 +733,7 @@ internal class WindowsCloudFilesProvider(
     /** Repairs the legacy namespace and flushes recoverable local writes before changing root generations. */
     fun recoverBeforeRootMigration(timeoutSeconds: Long = 120L) {
         require(timeoutSeconds > 0L)
+        runtimeRecoveryFailure.get()?.let { throw it }
         var deferredCorruption: WindowsCloudFilesCorruptEntryException? = null
         try {
             repairRemotePlaceholderTree()
@@ -642,6 +751,7 @@ internal class WindowsCloudFilesProvider(
         check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
             "Timed out while checking the legacy Windows Cloud Files root for local edits."
         }
+        runtimeRecoveryFailure.get()?.let { throw it }
         when (val failure = initialRecoveryFailure) {
             is WindowsCloudFilesCorruptEntryException -> deferredCorruption = deferredCorruption ?: failure
             null -> Unit
@@ -666,6 +776,7 @@ internal class WindowsCloudFilesProvider(
         check(initialRecoveryFinished.await(timeoutSeconds, TimeUnit.SECONDS)) {
             "Timed out while checking the Windows Cloud Files root for local metadata corruption."
         }
+        runtimeRecoveryFailure.get()?.let { throw it }
         when (val failure = initialRecoveryFailure) {
             is WindowsCloudFilesCorruptEntryException -> {
                 val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
@@ -1420,8 +1531,9 @@ internal class WindowsCloudFilesProvider(
         identity: WindowsCloudFileIdentity,
         attempt: Int,
     ) {
-        val corruption = synchronized(namespaceMutationLock) {
+        val recovery = synchronized(namespaceMutationLock) {
             if (callbacksPaused.get()) return
+            val recoveryGeneration = corruptRootRecoveryGeneration.get()
             val inspection = api.inspectPlaceholder(localPath)
             val currentIdentity = if (
                 inspection.state == WindowsCloudPlaceholderEntryState.InSync &&
@@ -1446,15 +1558,11 @@ internal class WindowsCloudFilesProvider(
                 )
                 return@synchronized null
             }
-            retryVerifiedUnchangedDirectoryRefresh(localPath, identity, attempt)
+            retryVerifiedUnchangedDirectoryRefresh(localPath, identity, attempt)?.let { corruption ->
+                WindowsCloudFilesDelayedCorruptRootRecovery(corruption, recoveryGeneration)
+            }
         }
-        if (corruption != null) {
-            val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
-            recoverCorruptRoot(
-                WindowsCloudFileIdentityCodec.encode(rootIdentity),
-                corruption,
-            )
-        }
+        recovery?.let(::recoverCorruptRootAfterDelayedRefresh)
     }
 
     private fun retryVerifiedUnchangedDirectoryRefresh(

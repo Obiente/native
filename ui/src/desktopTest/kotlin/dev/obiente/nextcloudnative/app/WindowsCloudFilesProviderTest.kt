@@ -9,6 +9,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createDirectory
 import kotlin.io.path.createTempDirectory
@@ -1627,6 +1628,123 @@ class WindowsCloudFilesProviderTest {
             provider.removeSyncRoot()
             root.toFile().deleteRecursively()
             preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `concurrent corrupt directory retries preserve the root only once`() {
+        val root = createTempDirectory("windows-cloud-concurrent-corrupt-root-")
+        root.resolve("local-note.txt").writeBytes("keep me".encodeToByteArray())
+        val photos = root.resolve("Photos").createDirectory()
+        val videos = root.resolve("Videos").createDirectory()
+        val identities = listOf(
+            fixtureIdentity(size = 0L).copy(path = "Photos", directory = true),
+            fixtureIdentity(size = 0L).copy(path = "Videos", directory = true),
+        )
+        val ordinaryFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val corruptFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x8007016B.toInt(),
+        )
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val preserveCount = AtomicInteger()
+        val rejectedUpdates = AtomicInteger()
+        val preserved = root.resolveSibling("preserved-concurrent-corrupt-root")
+        val api = FakeApi(expectedPlaceholderUpdates = 4).apply {
+            seed(photos, WindowsCloudPlaceholderState.InSync, identities[0])
+            seed(videos, WindowsCloudPlaceholderState.InSync, identities[1])
+            updatePlaceholderFailure = ordinaryFailure
+            onUpdatePlaceholderFailure = {
+                if (rejectedUpdates.incrementAndGet() == 2) updatePlaceholderFailure = corruptFailure
+            }
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listed = identities),
+            api = api,
+            directoryRefreshRetryDelayMillis = { 25L },
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { current ->
+                preserveCount.incrementAndGet()
+                api.updatePlaceholderFailure = null
+                api.seedState(photos, WindowsCloudPlaceholderState.Absent)
+                api.seedState(videos, WindowsCloudPlaceholderState.Absent)
+                Files.move(current, preserved)
+            },
+        )
+
+        try {
+            provider.start()
+
+            val recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (
+                diagnostics.none { it.outcome == "corrupt-root-recovered" } &&
+                System.nanoTime() < recoveryDeadline
+            ) {
+                Thread.yield()
+            }
+            assertEquals(1, preserveCount.get())
+            assertEquals(preserved, provider.preservedRecoveryRoot)
+            assertTrue(Files.exists(preserved.resolve("local-note.txt")))
+            assertEquals(1, diagnostics.count { it.outcome == "corrupt-root-preserved" })
+            assertEquals(1, diagnostics.count { it.outcome == "corrupt-root-recovered" })
+        } finally {
+            provider.removeSyncRoot()
+            root.toFile().deleteRecursively()
+            preserved.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `failed delayed corrupt root recovery is retained and reported`() {
+        val root = createTempDirectory("windows-cloud-delayed-recovery-failure-")
+        val local = root.resolve("Photos").createDirectory()
+        val identity = fixtureIdentity(size = 0L).copy(path = "Photos", directory = true)
+        val ordinaryFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x80070179.toInt(),
+        )
+        val corruptFailure = WindowsCloudFilesOperationException(
+            "update a Windows Cloud Files placeholder",
+            0x8007016B.toInt(),
+        )
+        val preservationFailure = IllegalStateException("recovery drive unavailable")
+        val diagnostics = CopyOnWriteArrayList<SupportDiagnosticEventDraft>()
+        val reportedFailure = AtomicReference<Throwable?>()
+        val api = FakeApi(expectedPlaceholderUpdates = 2).apply {
+            seed(local, WindowsCloudPlaceholderState.InSync, identity)
+            updatePlaceholderFailure = ordinaryFailure
+            onUpdatePlaceholderFailure = { updatePlaceholderFailure = corruptFailure }
+        }
+        val provider = WindowsCloudFilesProvider(
+            root = root,
+            backend = FakeBackend(ByteArray(0), listed = listOf(identity)),
+            api = api,
+            directoryRefreshRetryDelayMillis = { 0L },
+            recordDiagnostic = diagnostics::add,
+            preserveCorruptRoot = { throw preservationFailure },
+            onRuntimeFailure = reportedFailure::set,
+        )
+
+        try {
+            provider.start()
+
+            val failureDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (reportedFailure.get() == null && System.nanoTime() < failureDeadline) {
+                Thread.yield()
+            }
+            val retained = provider.runtimeRecoveryFailure()
+            assertTrue(retained is IllegalStateException)
+            assertTrue(retained.message.orEmpty().contains("Could not preserve"))
+            assertEquals(retained, reportedFailure.get())
+            assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovery-failed" })
+            assertFailsWith<IllegalStateException> { provider.recoverAfterStartup(timeoutSeconds = 5L) }
+        } finally {
+            provider.close()
+            root.toFile().deleteRecursively()
         }
     }
 
