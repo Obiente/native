@@ -141,6 +141,10 @@ class DesktopTrayTest {
         val layout = menu.GetLayout(0, -1, emptyList()).layout
 
         assertEquals("submenu", layout.properties.getValue("children-display").value)
+        assertEquals("submenu", menu.GetProperty(0, "children-display").value)
+        val rootProperties = menu.GetGroupProperties(listOf(0), listOf("children-display")).single()
+        assertEquals(0, rootProperties.id)
+        assertEquals("submenu", rootProperties.properties.getValue("children-display").value)
         assertEquals(
             listOf("Show sync activity", "Open Nextcloud Native", "Quit"),
             layout.children.map { child ->

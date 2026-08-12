@@ -47,6 +47,18 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
+    fun `post-unmount fuse abort is best effort`() {
+        var attemptedConnectionId: Int? = null
+
+        abortLinuxFuseConnectionBestEffort(115) { connectionId ->
+            attemptedConnectionId = connectionId
+            error("The detached connection has already disappeared")
+        }
+
+        assertEquals(115, attemptedConnectionId)
+    }
+
+    @Test
     fun largeDirectoryMetadataUsesAnAdaptiveFreshnessWindow() {
         assertEquals(5_000L, linuxVirtualMetadataFreshnessMillis(128, 5_000L))
         assertEquals(30_000L, linuxVirtualMetadataFreshnessMillis(2_000, 5_000L))

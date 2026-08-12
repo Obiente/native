@@ -321,14 +321,20 @@ internal class LinuxDBusMenu(
         }
         return DBusMenuLayout(
             MENU_ROOT_ID,
-            filterMenuProperties(mapOf("children-display" to Variant("submenu")), propertyNames),
+            requireNotNull(menuItemProperties(MENU_ROOT_ID, propertyNames)),
             children,
         )
     }
 
     private fun menuItemProperties(id: Int, propertyNames: List<String>): Map<String, Variant<*>>? =
-        MENU_ITEMS.firstOrNull { it.first == id }?.let { (_, label) ->
-            filterMenuProperties(mapOf("label" to Variant(label)), propertyNames)
+        when (id) {
+            MENU_ROOT_ID -> filterMenuProperties(
+                mapOf("children-display" to Variant("submenu")),
+                propertyNames,
+            )
+            else -> MENU_ITEMS.firstOrNull { it.first == id }?.let { (_, label) ->
+                filterMenuProperties(mapOf("label" to Variant(label)), propertyNames)
+            }
         }
 
     private fun filterMenuProperties(

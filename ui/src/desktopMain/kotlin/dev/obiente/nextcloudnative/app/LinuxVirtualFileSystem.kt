@@ -1375,7 +1375,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         try {
             unmountOperation(this)
             detached = true
-            fuseConnectionId?.let(::abortLinuxFuseConnection)
+            abortLinuxFuseConnectionBestEffort(fuseConnectionId)
         } finally {
             readHandles.values.forEach { runCatching(it::close) }
             writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
@@ -1647,6 +1647,13 @@ private fun abortLinuxFuseConnection(connectionId: Int) {
         Path.of("/sys/fs/fuse/connections", connectionId.toString(), "abort"),
         "1\n",
     )
+}
+
+internal fun abortLinuxFuseConnectionBestEffort(
+    connectionId: Int?,
+    abortOperation: (Int) -> Unit = ::abortLinuxFuseConnection,
+) {
+    connectionId?.let { runCatching { abortOperation(it) } }
 }
 
 private const val MAX_UNSIGNED_UNIX_ID = 0xffff_ffffL
