@@ -457,6 +457,9 @@ internal class WindowsCloudFilesProvider(
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
     }
     private val pendingLocalChanges = ConcurrentHashMap<Path, ScheduledFuture<*>>()
+    private val initialPopulationStarted = AtomicBoolean(false)
+    private val initialPopulationFinished = CountDownLatch(1)
+    @Volatile private var initialPopulationSucceeded = false
     private val initialRecoveryFinished = CountDownLatch(1)
     @Volatile private var initialRecoveryFailure: WindowsCloudFilesStartupRecoveryException? = null
     @Volatile var preservedRecoveryRoot: Path? = null
@@ -466,6 +469,9 @@ internal class WindowsCloudFilesProvider(
 
     fun start() {
         check(connection.get() == 0L) { "The Windows Cloud Files provider is already connected." }
+        check(initialPopulationStarted.compareAndSet(false, true)) {
+            "The Windows Cloud Files provider startup has already been attempted."
+        }
         prepareRootDirectory()
         val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
         val encodedRootIdentity = WindowsCloudFileIdentityCodec.encode(rootIdentity)
@@ -477,6 +483,8 @@ internal class WindowsCloudFilesProvider(
             } catch (corruption: WindowsCloudFilesCorruptEntryException) {
                 recoverCorruptRoot(encodedRootIdentity, corruption)
             }
+            initialPopulationSucceeded = true
+            initialPopulationFinished.countDown()
             startLocalWatcher()
             executor.execute {
                 try {
@@ -489,6 +497,7 @@ internal class WindowsCloudFilesProvider(
             }
         } catch (failure: Throwable) {
             callbacksPaused.set(true)
+            initialPopulationFinished.countDown()
             val key = connection.get()
             if (key != 0L && runCatching { api.disconnect(key) }.isSuccess) {
                 connection.compareAndSet(key, 0L)
@@ -741,6 +750,18 @@ internal class WindowsCloudFilesProvider(
         cancelledRequests[info.requestKey] = cancellation
         executor.execute {
             try {
+                if (initialPopulationStarted.get()) {
+                    check(
+                        initialPopulationFinished.await(
+                            DEFAULT_INITIAL_POPULATION_TIMEOUT_SECONDS,
+                            TimeUnit.SECONDS,
+                        ),
+                    ) { "Timed out while waiting for the initial Windows Cloud Files population." }
+                    check(initialPopulationSucceeded && !callbacksPaused.get()) {
+                        "The initial Windows Cloud Files population did not complete successfully."
+                    }
+                }
+                if (cancellation.get()) return@execute
                 val directory = requireIdentity(info, expectDirectory = true)
                 // CFAPI permits returning entries beyond the requested pattern. Returning the complete
                 // directory lets this transfer safely mark on-demand population as finished.
@@ -1855,6 +1876,7 @@ private fun String.windowsCloudPath(): String {
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
 private const val DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS = 120L
+private const val DEFAULT_INITIAL_POPULATION_TIMEOUT_SECONDS = 120L
 
 private fun windowsWritebackRetryDelayMillis(attempt: Int): Long {
     require(attempt in 1 until MAX_WINDOWS_WRITEBACK_ATTEMPTS)
