@@ -54,7 +54,7 @@ class CospendOpenApiCompatibilityTest {
         )
         assertEquals(
             listOf(
-                "api-create-bill|create|POST|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}/bills",
+                "api-create-bill|create|POST|/ocs/v2.php/apps/cospend/api/v1/projects/{id}/bills",
                 "api-create-project|create|POST|/ocs/v2.php/apps/cospend/api/v1/projects",
                 "api-edit-bill|update|PUT|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}/bills/{billId}",
                 "api-edit-project|update|PUT|/ocs/v2.php/apps/cospend/api/v1/projects/{projectId}",
