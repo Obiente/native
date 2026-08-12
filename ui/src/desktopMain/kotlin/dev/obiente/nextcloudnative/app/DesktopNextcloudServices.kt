@@ -1856,7 +1856,10 @@ class DesktopNextcloudServices(
                 val recordCloudFilesDiagnostic: (SupportDiagnosticEventDraft) -> Unit = { event ->
                     supportDiagnostics.recordForAccountIdentity(accountId, event)
                 }
-                if (windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId) {
+                if (
+                    windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId &&
+                    windowsCloudFilesFailure == null && windowsCloudFilesProvider?.runtimeRecoveryFailure() == null
+                ) {
                     return@withContext VirtualFileStorageActionResult.Completed(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                     )

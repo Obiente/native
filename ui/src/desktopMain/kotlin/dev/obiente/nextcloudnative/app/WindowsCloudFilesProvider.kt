@@ -462,9 +462,11 @@ internal class WindowsCloudFilesProvider(
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
+    private val corruptRootRecoveryLifecycleLock = Any()
     private val corruptRootRecoveryClaimed = AtomicBoolean(false)
     private val corruptRootRecoveryGeneration = AtomicLong(0L)
     private val runtimeRecoveryFailure = AtomicReference<Throwable?>(null)
+    private val runtimeStopping = AtomicBoolean(false)
     private val destructiveCallbackOperations = AtomicInteger()
     private val localChangeScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { work ->
         Thread(work, "nextcloud-windows-local-changes").apply { isDaemon = true }
@@ -530,7 +532,8 @@ internal class WindowsCloudFilesProvider(
         require(quiescenceTimeoutSeconds > 0L)
         val observedGeneration = corruptRootRecoveryGeneration.get()
         val claimDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(quiescenceTimeoutSeconds)
-        while (!corruptRootRecoveryClaimed.compareAndSet(false, true)) {
+        while (!claimCorruptRootRecovery()) {
+            check(!runtimeStopping.get()) { "Windows Cloud Files is stopping." }
             runtimeRecoveryFailure.get()?.let { throw it }
             if (corruptRootRecoveryGeneration.get() != observedGeneration) return
             check(System.nanoTime() < claimDeadline) {
@@ -657,15 +660,10 @@ internal class WindowsCloudFilesProvider(
     ) {
         var claimed = false
         try {
-            check(runtimeStarted.await(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                "Timed out waiting for Windows Cloud Files startup before corrupt-root recovery."
-            }
-            check(initialRecoveryFinished.await(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                "Timed out waiting for the initial local-change scan before corrupt-root recovery."
-            }
+            if (runtimeStopping.get()) return
             if (runtimeRecoveryFailure.get() != null) return
             if (recovery.generation != corruptRootRecoveryGeneration.get()) return
-            if (!corruptRootRecoveryClaimed.compareAndSet(false, true)) {
+            if (!claimCorruptRootRecovery()) {
                 recordPlaceholderDiagnostic(
                     severity = SupportDiagnosticSeverity.Info,
                     operation = "cloud-files.corrupt-root-recovery",
@@ -708,6 +706,32 @@ internal class WindowsCloudFilesProvider(
     }
 
     fun runtimeRecoveryFailure(): Throwable? = runtimeRecoveryFailure.get()
+
+    private fun claimCorruptRootRecovery(): Boolean = synchronized(corruptRootRecoveryLifecycleLock) {
+        !runtimeStopping.get() && corruptRootRecoveryClaimed.compareAndSet(false, true)
+    }
+
+    private fun scheduleCorruptRootRecoveryAfterStartup(
+        recovery: WindowsCloudFilesDelayedCorruptRootRecovery,
+    ) {
+        if (callbacksPaused.get() || runtimeStopping.get() || runtimeRecoveryFailure.get() != null) return
+        runCatching {
+            localChangeScheduler.schedule(
+                {
+                    if (callbacksPaused.get() || runtimeStopping.get()) return@schedule
+                    if (runtimeStarted.count > 0L || initialRecoveryFinished.count > 0L) {
+                        scheduleCorruptRootRecoveryAfterStartup(recovery)
+                        return@schedule
+                    }
+                    runCatching {
+                        executor.execute { recoverCorruptRootAfterDelayedRefresh(recovery) }
+                    }
+                },
+                DELAYED_CORRUPT_ROOT_RECOVERY_POLL_MILLIS,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+    }
 
     private fun connectWithRegistrationRecovery(syncRootIdentity: ByteArray): Long =
         try {
@@ -1104,7 +1128,14 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun stopRuntime() {
-        callbacksPaused.set(true)
+        synchronized(corruptRootRecoveryLifecycleLock) {
+            runtimeStopping.set(true)
+            callbacksPaused.set(true)
+        }
+        localChangeScheduler.shutdownNow()
+        awaitCorruptRootRecoveryCompletion(
+            System.nanoTime() + TimeUnit.SECONDS.toNanos(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS),
+        )
         val key = connection.get()
         if (key != 0L) {
             api.disconnect(key)
@@ -1114,8 +1145,24 @@ internal class WindowsCloudFilesProvider(
         cancelledRequests.clear()
         stopLocalWatcher()
         queuedPathOperations.clear()
-        localChangeScheduler.shutdownNow()
         executor.shutdownNow()
+    }
+
+    private fun awaitCorruptRootRecoveryCompletion(deadline: Long) {
+        while (corruptRootRecoveryClaimed.get() && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(25L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException(
+                    "Interrupted while waiting for Windows Cloud Files recovery to stop.",
+                    interrupted,
+                )
+            }
+        }
+        check(!corruptRootRecoveryClaimed.get()) {
+            "Timed out while waiting for Windows Cloud Files recovery to stop."
+        }
     }
 
     private fun stopLocalWatcher() {
@@ -1562,7 +1609,7 @@ internal class WindowsCloudFilesProvider(
                 WindowsCloudFilesDelayedCorruptRootRecovery(corruption, recoveryGeneration)
             }
         }
-        recovery?.let(::recoverCorruptRootAfterDelayedRefresh)
+        recovery?.let(::scheduleCorruptRootRecoveryAfterStartup)
     }
 
     private fun retryVerifiedUnchangedDirectoryRefresh(
@@ -2161,6 +2208,7 @@ private fun String.windowsCloudPath(): String {
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
 private const val MAX_WINDOWS_WRITEBACK_ATTEMPTS = 5
 private const val MAX_WINDOWS_DIRECTORY_REFRESH_ATTEMPTS = 4
+private const val DELAYED_CORRUPT_ROOT_RECOVERY_POLL_MILLIS = 25L
 private const val DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS = 120L
 private const val DEFAULT_INITIAL_POPULATION_TIMEOUT_SECONDS = 120L
 
