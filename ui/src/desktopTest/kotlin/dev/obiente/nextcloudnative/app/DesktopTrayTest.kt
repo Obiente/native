@@ -3,10 +3,12 @@ package dev.obiente.nextcloudnative.app
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.freedesktop.dbus.annotations.DBusProperty
 import org.freedesktop.dbus.types.UInt32
 import org.freedesktop.dbus.types.Variant
 import org.junit.Assume.assumeTrue
@@ -93,9 +95,11 @@ class DesktopTrayTest {
     fun statusNotifierItemPublishesIdentityAndActivatesTheCustomPanel() {
         var activated = false
         var titleChanges = 0
+        var contextMenuCoordinates: Pair<Int, Int>? = null
         val item = LinuxStatusNotifierItem(
             initialTooltip = "All files are synced",
             onAction = { action -> activated = action == DesktopTrayAction.ShowActivity },
+            onContextMenu = { x, y -> contextMenuCoordinates = x to y },
             onTitleChanged = { titleChanges += 1 },
         )
 
@@ -117,8 +121,10 @@ class DesktopTrayTest {
         item.updateTooltip("Sync needs attention")
 
         item.Activate(0, 0)
+        item.ContextMenu(24, 48)
 
         assertEquals(true, activated)
+        assertEquals(24 to 48, contextMenuCoordinates)
         assertEquals(1, titleChanges)
         assertEquals(
             "Sync needs attention",
@@ -139,12 +145,23 @@ class DesktopTrayTest {
         val menu = LinuxDBusMenu(actions::add)
 
         val layout = menu.GetLayout(0, -1, emptyList()).layout
+        val iconThemeProperty = DBusMenu::class.java.getAnnotationsByType(DBusProperty::class.java)
+            .single { property -> property.name == "IconThemePath" }
 
+        assertEquals(Array<String>::class, iconThemeProperty.type)
+        assertContentEquals(
+            emptyArray(),
+            menu.Get<Array<String>>("com.canonical.dbusmenu", "IconThemePath"),
+        )
         assertEquals("submenu", layout.properties.getValue("children-display").value)
         assertEquals("submenu", menu.GetProperty(0, "children-display").value)
         val rootProperties = menu.GetGroupProperties(listOf(0), listOf("children-display")).single()
         assertEquals(0, rootProperties.id)
         assertEquals("submenu", rootProperties.properties.getValue("children-display").value)
+        assertEquals(
+            listOf(0, 1, 2, 3),
+            menu.GetGroupProperties(emptyList(), emptyList()).map(DBusMenuItemProperties::id),
+        )
         assertEquals(
             listOf("Show sync activity", "Open Nextcloud Native", "Quit"),
             layout.children.map { child ->

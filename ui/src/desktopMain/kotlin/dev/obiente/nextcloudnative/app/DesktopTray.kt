@@ -5,6 +5,12 @@ import java.awt.TrayIcon
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.imageio.ImageIO
+import javax.swing.JMenuItem
+import javax.swing.JPopupMenu
+import javax.swing.JWindow
+import javax.swing.SwingUtilities
+import javax.swing.event.PopupMenuEvent
+import javax.swing.event.PopupMenuListener
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.annotations.DBusProperty
 import org.freedesktop.dbus.annotations.Position
@@ -123,6 +129,7 @@ internal interface StatusNotifierItem : DBusInterface {
 internal class LinuxStatusNotifierItem(
     initialTooltip: String,
     private val onAction: (DesktopTrayAction) -> Unit,
+    private val onContextMenu: (Int, Int) -> Unit = { _, _ -> },
     private val onTitleChanged: () -> Unit = {},
 ) : StatusNotifierItem, Properties {
     @Volatile
@@ -142,7 +149,7 @@ internal class LinuxStatusNotifierItem(
 
     override fun SecondaryActivate(x: Int, y: Int) = onAction(DesktopTrayAction.ShowActivity)
 
-    override fun ContextMenu(x: Int, y: Int) = onAction(DesktopTrayAction.ShowActivity)
+    override fun ContextMenu(x: Int, y: Int) = onContextMenu(x, y)
 
     override fun Scroll(delta: Int, orientation: String) = Unit
 
@@ -176,7 +183,7 @@ internal class LinuxStatusNotifierItem(
 @DBusProperty(name = "Version", type = UInt32::class)
 @DBusProperty(name = "TextDirection", type = String::class)
 @DBusProperty(name = "Status", type = String::class)
-@DBusProperty(name = "IconThemePath", type = List::class)
+@DBusProperty(name = "IconThemePath", type = Array<String>::class)
 internal interface DBusMenu : DBusInterface {
     @Suppress("FunctionName")
     fun GetLayout(
@@ -249,7 +256,7 @@ internal class LinuxDBusMenu(
     override fun GetGroupProperties(
         ids: List<Int>,
         propertyNames: List<String>,
-    ): List<DBusMenuItemProperties> = ids.mapNotNull { id ->
+    ): List<DBusMenuItemProperties> = (ids.ifEmpty { allMenuIds }).mapNotNull { id ->
         menuItemProperties(id, propertyNames)?.let { DBusMenuItemProperties(id, it) }
     }
 
@@ -260,11 +267,7 @@ internal class LinuxDBusMenu(
 
     override fun Event(id: Int, eventId: String, data: Variant<*>, timestamp: UInt32) {
         if (eventId != "clicked") return
-        when (id) {
-            MENU_SHOW_ACTIVITY_ID -> onAction(DesktopTrayAction.ShowActivity)
-            MENU_OPEN_APP_ID -> onAction(DesktopTrayAction.OpenApp)
-            MENU_QUIT_ID -> onAction(DesktopTrayAction.Quit)
-        }
+        menuAction(id)?.let(onAction)
     }
 
     override fun EventGroup(events: List<DBusMenuEvent>): List<Int> {
@@ -299,7 +302,7 @@ internal class LinuxDBusMenu(
             "Version" to Variant(UInt32(3)),
             "TextDirection" to Variant("ltr"),
             "Status" to Variant("normal"),
-            "IconThemePath" to Variant(emptyList<String>(), "as"),
+            "IconThemePath" to Variant(emptyArray<String>()),
         )
     }
 
@@ -355,6 +358,7 @@ private class LinuxStatusNotifierTray private constructor(
     private val connection: DBusConnection,
     private val serviceName: String,
     private val item: LinuxStatusNotifierItem,
+    private val contextMenu: LinuxTrayContextMenu,
     private val watcherOwnerSubscription: AutoCloseable,
 ) : DesktopTrayRegistration {
     override fun updateTooltip(tooltip: String) {
@@ -365,6 +369,7 @@ private class LinuxStatusNotifierTray private constructor(
 
     override fun close() {
         runCatching { watcherOwnerSubscription.close() }
+        runCatching { contextMenu.close() }
         runCatching { connection.releaseBusName(serviceName) }
         runCatching { connection.close() }
     }
@@ -377,9 +382,11 @@ private class LinuxStatusNotifierTray private constructor(
             runCatching {
                 val connection = DBusConnectionBuilder.forSessionBus().withShared(false).build()
                 val serviceName = "org.freedesktop.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
+                val contextMenu = LinuxTrayContextMenu(onAction)
                 val item = LinuxStatusNotifierItem(
                     initialTooltip = tooltip,
                     onAction = onAction,
+                    onContextMenu = contextMenu::show,
                     onTitleChanged = {
                         connection.sendMessage(StatusNotifierItem.NewTitle(STATUS_NOTIFIER_ITEM_PATH))
                     },
@@ -407,9 +414,11 @@ private class LinuxStatusNotifierTray private constructor(
                         connection,
                         serviceName,
                         item,
+                        contextMenu,
                         watcherOwnerSubscription,
                     )
                 } catch (failure: Throwable) {
+                    runCatching { contextMenu.close() }
                     runCatching { connection.close() }
                     throw failure
                 }
@@ -419,6 +428,48 @@ private class LinuxStatusNotifierTray private constructor(
                         "${failure::class.simpleName}: ${failure.message.orEmpty()}",
                 )
             }.getOrNull()
+    }
+}
+
+private class LinuxTrayContextMenu(
+    private val onAction: (DesktopTrayAction) -> Unit,
+) : AutoCloseable {
+    private var owner: JWindow? = null
+
+    fun show(x: Int, y: Int) {
+        SwingUtilities.invokeLater {
+            closeNow()
+            val window = JWindow().apply {
+                isAlwaysOnTop = true
+                setLocation(x.coerceAtLeast(0), y.coerceAtLeast(0))
+                setSize(1, 1)
+                isVisible = true
+            }
+            owner = window
+            val popup = JPopupMenu().apply {
+                MENU_ITEMS.forEach { (id, label) ->
+                    add(JMenuItem(label).apply {
+                        addActionListener { menuAction(id)?.let(onAction) }
+                    })
+                }
+                addPopupMenuListener(object : PopupMenuListener {
+                    override fun popupMenuWillBecomeVisible(event: PopupMenuEvent) = Unit
+                    override fun popupMenuWillBecomeInvisible(event: PopupMenuEvent) = closeNow()
+                    override fun popupMenuCanceled(event: PopupMenuEvent) = closeNow()
+                })
+            }
+            popup.show(window.contentPane, 0, 0)
+        }
+    }
+
+    override fun close() {
+        SwingUtilities.invokeLater(::closeNow)
+    }
+
+    private fun closeNow() {
+        val window = owner
+        owner = null
+        window?.dispose()
     }
 }
 
@@ -451,3 +502,11 @@ private val MENU_ITEMS = listOf(
     MENU_OPEN_APP_ID to "Open Nextcloud Native",
     MENU_QUIT_ID to "Quit",
 )
+private val allMenuIds = listOf(MENU_ROOT_ID) + MENU_ITEMS.map(Pair<Int, String>::first)
+
+private fun menuAction(id: Int): DesktopTrayAction? = when (id) {
+    MENU_SHOW_ACTIVITY_ID -> DesktopTrayAction.ShowActivity
+    MENU_OPEN_APP_ID -> DesktopTrayAction.OpenApp
+    MENU_QUIT_ID -> DesktopTrayAction.Quit
+    else -> null
+}

@@ -47,15 +47,27 @@ class LinuxVirtualFileSystemTest {
     }
 
     @Test
-    fun `post-unmount fuse abort is best effort`() {
-        var attemptedConnectionId: Int? = null
+    fun `fuse abort handle stays pinned when its path is reused`() {
+        val directory = Files.createTempDirectory("nc-native-fuse-abort-")
+        val abortPath = directory.resolve("abort")
+        val originalLink = directory.resolve("original-abort")
+        try {
+            Files.createFile(abortPath)
+            Files.createLink(originalLink, abortPath)
+            val handle = assertNotNull(openLinuxFuseAbortHandle(abortPath))
 
-        abortLinuxFuseConnectionBestEffort(115) { connectionId ->
-            attemptedConnectionId = connectionId
-            error("The detached connection has already disappeared")
+            Files.delete(abortPath)
+            Files.writeString(abortPath, "replacement")
+            handle.use(LinuxFuseAbortHandle::abortBestEffort)
+            handle.abortBestEffort()
+
+            assertEquals("1\n", Files.readString(originalLink))
+            assertEquals("replacement", Files.readString(abortPath))
+        } finally {
+            Files.deleteIfExists(abortPath)
+            Files.deleteIfExists(originalLink)
+            Files.deleteIfExists(directory)
         }
-
-        assertEquals(115, attemptedConnectionId)
     }
 
     @Test

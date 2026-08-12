@@ -1,7 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
+import java.nio.ByteBuffer
+import java.nio.channels.SeekableByteChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -1372,11 +1375,13 @@ internal class LinuxNextcloudVirtualFileSystem(
     fun unmount() {
         var detached = false
         val fuseConnectionId = mountedAt?.let(::linuxFuseConnectionIdForMount)
+        val fuseAbortHandle = fuseConnectionId?.let(::openLinuxFuseAbortHandle)
         try {
             unmountOperation(this)
             detached = true
-            abortLinuxFuseConnectionBestEffort(fuseConnectionId)
+            fuseAbortHandle?.abortBestEffort()
         } finally {
+            runCatching { fuseAbortHandle?.close() }
             readHandles.values.forEach { runCatching(it::close) }
             writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
                 runCatching(shared.delegate::close)
@@ -1641,19 +1646,25 @@ internal fun linuxFuseConnectionIdForMount(
     }
 }
 
-private fun abortLinuxFuseConnection(connectionId: Int) {
+private fun openLinuxFuseAbortHandle(connectionId: Int): LinuxFuseAbortHandle? {
     require(connectionId >= 0)
-    Files.writeString(
+    return openLinuxFuseAbortHandle(
         Path.of("/sys/fs/fuse/connections", connectionId.toString(), "abort"),
-        "1\n",
     )
 }
 
-internal fun abortLinuxFuseConnectionBestEffort(
-    connectionId: Int?,
-    abortOperation: (Int) -> Unit = ::abortLinuxFuseConnection,
-) {
-    connectionId?.let { runCatching { abortOperation(it) } }
+internal fun openLinuxFuseAbortHandle(path: Path): LinuxFuseAbortHandle? = runCatching {
+    LinuxFuseAbortHandle(Files.newByteChannel(path, StandardOpenOption.WRITE))
+}.getOrNull()
+
+internal class LinuxFuseAbortHandle(
+    private val channel: SeekableByteChannel,
+) : AutoCloseable {
+    fun abortBestEffort() {
+        runCatching { channel.write(ByteBuffer.wrap("1\n".encodeToByteArray())) }
+    }
+
+    override fun close() = channel.close()
 }
 
 private const val MAX_UNSIGNED_UNIX_ID = 0xffff_ffffL
