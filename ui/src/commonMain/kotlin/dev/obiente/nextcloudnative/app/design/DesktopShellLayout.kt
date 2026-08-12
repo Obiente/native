@@ -39,11 +39,11 @@ data class NextcloudRootShellLayout(
     val supportsAuxiliaryPane: Boolean,
 )
 
-/** Desktop chrome persists across detail screens; adaptive navigation only wraps root destinations. */
+/** Desktop always keeps its shell; adaptive layouts keep it for root and top-level app workspaces. */
 fun shouldUseNextcloudRootShell(
     presentation: NextcloudPresentation,
-    isRootScreen: Boolean,
-): Boolean = presentation == NextcloudPresentation.Desktop || isRootScreen
+    isRootOrAppWorkspace: Boolean,
+): Boolean = presentation == NextcloudPresentation.Desktop || isRootOrAppWorkspace
 
 /** Pure, platform-neutral layout policy used by the Compose shell and unit tests. */
 fun resolveNextcloudRootShellLayout(

@@ -281,6 +281,18 @@ class DynamicDescriptorMapperTest {
             component("photos", fields("id") + field("preview", FieldKind.image)),
         )
         assertEquals(NativeComponent.recipeList, component("recipes", fields("id", "title", "ingredients")))
+        assertEquals(
+            NativeComponent.timeline,
+            component("activities", fields("id", "actor", "subject", "timestamp")),
+        )
+        assertEquals(
+            NativeComponent.fileBrowser,
+            component("folders", fields("id", "filename", "path", "mimeType", "etag")),
+        )
+        assertEquals(
+            NativeComponent.documentEditor,
+            component("document", fields("id") + field("content", FieldKind.longText), LayoutKind.detail),
+        )
     }
 
     @Test

@@ -230,6 +230,16 @@ cargo test --locked
 bash tools/check-repository.sh
 ```
 
+For a locally signed app that installs alongside release and nightly builds, use the dedicated
+development variant:
+
+```bash
+./tools/deploy-android-dev.sh
+```
+
+It installs as `dev.obiente.nextcloudnative.dev` with the label `Nextcloud Native Dev`, so local
+testing never replaces the signed `dev.obiente.nextcloudnative` package.
+
 The Gradle wrapper pins Gradle itself, and the project build targets JDK 21.
 Build and test jobs are path-filtered where appropriate so documentation-only
 changes do not rebuild unrelated application targets.

@@ -345,7 +345,6 @@ private fun DynamicLayout.toNativeComponent(
     resource: DynamicResource,
     action: DynamicAction?,
 ): NativeComponent {
-    if (kind == LayoutKind.detail) return NativeComponent.detail
     if (kind == LayoutKind.grid) return NativeComponent.mediaGrid
 
     val words = semanticWords(
@@ -414,6 +413,35 @@ private fun DynamicLayout.toNativeComponent(
     val hasSettingsSemantics = words.any {
         it in setOf("setting", "settings", "preference", "preferences", "configuration", "config")
     }
+    val hasDocumentSemantics = words.any {
+        it in setOf(
+            "document", "documents", "editor", "note", "notes", "office", "richdocuments",
+            "collective", "collectives", "markdown", "text",
+        )
+    }
+    val hasDocumentBody = normalizedFields.any { (id, field) ->
+        id in setOf("body", "content", "document", "markdown", "text", "html") &&
+            field.kind in setOf(FieldKind.string, FieldKind.longText)
+    }
+    if (kind == LayoutKind.detail) {
+        return if (hasDocumentSemantics && hasDocumentBody) {
+            NativeComponent.documentEditor
+        } else {
+            NativeComponent.detail
+        }
+    }
+    val hasFileSemantics = words.any {
+        it in setOf("file", "files", "folder", "folders", "directory", "directories")
+    }
+    val hasFileShape = normalizedFields.keys.any {
+        it in setOf("path", "filename", "mimetype", "etag", "filesize", "parentpath")
+    }
+    val hasActivitySemantics = words.any {
+        it in setOf("activity", "activities", "audit", "history", "timeline")
+    }
+    val hasActivityShape = normalizedFields.keys.any {
+        it in setOf("actor", "actorid", "app", "datetime", "message", "objectname", "subject", "timestamp")
+    }
 
     return when {
         hasCellGridShape ||
@@ -430,6 +458,8 @@ private fun DynamicLayout.toNativeComponent(
         hasTitle && hasBoardGrouping && hasBoardOrdering -> NativeComponent.board
         hasMeasure && hasFinancialSemantics -> NativeComponent.dashboard
         hasSettingsSemantics && action?.binding?.method == HttpMethod.GET -> NativeComponent.detail
+        hasActivitySemantics && hasActivityShape -> NativeComponent.timeline
+        hasFileSemantics && hasFileShape -> NativeComponent.fileBrowser
         hasMailboxSemantics &&
             (words.any { it in setOf("account", "accounts", "mailbox", "mailboxes", "message", "messages") } ||
                 hasMessageShape || resource.fields.isEmpty()) -> NativeComponent.mailbox

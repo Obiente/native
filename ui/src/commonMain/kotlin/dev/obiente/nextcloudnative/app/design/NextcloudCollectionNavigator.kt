@@ -27,6 +27,8 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
@@ -62,6 +64,7 @@ import kotlinx.coroutines.launch
 
 enum class NextcloudCollectionNavigationMode {
     Hidden,
+    Tabs,
     Drawer,
     Rail,
     Sidebar,
@@ -204,7 +207,11 @@ fun resolveNextcloudCollectionNavigationMode(
     return when (host) {
         NextcloudCollectionNavigationHost.AdaptiveAndroid ->
             if (availableWidthDp < NextcloudWorkspaceBreakpoints.AdaptiveRailDp) {
-                NextcloudCollectionNavigationMode.Drawer
+                if (destinationCount <= NextcloudCollectionMaximumTabCount) {
+                    NextcloudCollectionNavigationMode.Tabs
+                } else {
+                    NextcloudCollectionNavigationMode.Drawer
+                }
             } else {
                 NextcloudCollectionNavigationMode.Rail
             }
@@ -240,14 +247,16 @@ internal fun resolveNextcloudCollectionDestinationLabelMaxLines(
     NextcloudCollectionNavigationMode.Sidebar -> 2
 
     NextcloudCollectionNavigationMode.Hidden,
+    NextcloudCollectionNavigationMode.Tabs,
     NextcloudCollectionNavigationMode.Rail -> 1
 }
 
 /**
  * Owns collection navigation and the single contextual header for a native app workspace.
  *
- * Compact Android uses a drawer. Large Android and narrow desktop windows use a rail. Wide
- * desktop windows use a persistent 252 dp sidebar.
+ * Compact Android uses top tabs for a small app-local destination set and a drawer when the app
+ * exposes more choices. Large Android and narrow desktop windows use a rail. Wide desktop windows
+ * use a persistent 252 dp sidebar.
  */
 @Composable
 fun NextcloudCollectionWorkspaceScaffold(
@@ -266,6 +275,19 @@ fun NextcloudCollectionWorkspaceScaffold(
     content: @Composable () -> Unit,
 ) {
     when (mode) {
+        NextcloudCollectionNavigationMode.Tabs -> NextcloudCollectionTabbedScaffold(
+            model = model,
+            contentTitle = contentTitle,
+            contentSubtitle = contentSubtitle,
+            onBack = onBack,
+            onDestinationSelected = onDestinationSelected,
+            destinationIcon = destinationIcon,
+            compactHeader = compactHeader,
+            headerActions = headerActions,
+            modifier = modifier,
+            content = content,
+        )
+
         NextcloudCollectionNavigationMode.Drawer -> NextcloudCollectionDrawerScaffold(
             model = model,
             workspaceLabel = workspaceLabel,
@@ -330,6 +352,69 @@ fun NextcloudCollectionWorkspaceScaffold(
                 modifier = Modifier.weight(1f),
                 content = content,
             )
+        }
+    }
+}
+
+@Composable
+private fun NextcloudCollectionTabbedScaffold(
+    model: NextcloudCollectionNavigationModel,
+    contentTitle: String,
+    contentSubtitle: String?,
+    onBack: () -> Unit,
+    onDestinationSelected: (NextcloudCollectionDestination) -> Unit,
+    destinationIcon: (NextcloudCollectionDestination) -> ImageVector?,
+    compactHeader: Boolean,
+    headerActions: @Composable () -> Unit,
+    modifier: Modifier,
+    content: @Composable () -> Unit,
+) {
+    val selectedIndex = model.destinations.indexOfFirst { destination ->
+        destination.id == model.selectedDestinationId
+    }.coerceAtLeast(0)
+    Column(modifier.fillMaxSize()) {
+        NextcloudCollectionHeader(
+            title = contentTitle,
+            subtitle = contentSubtitle,
+            onBack = onBack,
+            leadingControl = NextcloudCollectionLeadingControl.Back,
+            onOpenNavigation = null,
+            showHierarchyBack = false,
+            compact = compactHeader,
+            actions = headerActions,
+        )
+        PrimaryTabRow(selectedTabIndex = selectedIndex) {
+            model.destinations.forEach { destination ->
+                Tab(
+                    selected = destination.id == model.selectedDestinationId,
+                    onClick = { onDestinationSelected(destination) },
+                    modifier = Modifier
+                        .heightIn(min = NextcloudCollectionMinimumTouchTargetDp.dp)
+                        .semantics {
+                            contentDescription = destination.accessibilityDescription()
+                        }
+                        .testTag(destination.automationTestTag()),
+                    icon = destinationIcon(destination)?.let { imageVector ->
+                        {
+                            Icon(
+                                imageVector = imageVector,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    },
+                    text = {
+                        Text(
+                            text = destination.label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                )
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            content()
         }
     }
 }
@@ -815,6 +900,7 @@ private fun Modifier.nextcloudCollectionKeyboardNavigation(
 private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus
 
 private const val NextcloudCollectionMinimumTouchTargetDp = 48
+private const val NextcloudCollectionMaximumTabCount = 4
 private const val NextcloudCollectionDrawerWidthDp = 320
 private const val NextcloudCollectionRailWidthDp = 88
 private const val NextcloudCollectionSidebarWidthDp = 252

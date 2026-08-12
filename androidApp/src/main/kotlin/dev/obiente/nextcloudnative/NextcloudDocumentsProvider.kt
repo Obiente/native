@@ -603,17 +603,19 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     remotePath = path,
                 )
             }
-        val resolver = context?.contentResolver ?: return
+        val providerContext = context ?: return
+        val resolver = providerContext.contentResolver
+        val authority = nextcloudDocumentsAuthority(providerContext.packageName)
         resolver.notifyChange(
             DocumentsContract.buildDocumentUri(
-                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                authority,
                 NextcloudDocumentIds.documentId(session, path),
             ),
             null,
         )
         resolver.notifyChange(
             DocumentsContract.buildChildDocumentsUri(
-                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                authority,
                 NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
             ),
             null,

@@ -96,6 +96,21 @@ class ContractReachabilityAuditTest {
                     "roots=${rootActionIds.size} stranded=${stranded.size} " +
                     "version-placeholders=${embeddedVersions.size} duplicates=${duplicates.size}",
             )
+            if (appId == "budget") {
+                println(
+                    "reachability-roots app=budget resources=" +
+                        descriptor.planDynamicNavigation().rootDestinations
+                            .map(DynamicNavigationDestination::resourceId)
+                            .sorted()
+                            .joinToString(","),
+                )
+                println(
+                    "reachability-intents app=budget values=" +
+                        descriptor.actions.groupingBy(DynamicAction::intent).eachCount()
+                            .entries.sortedBy { it.key.name }
+                            .joinToString(",") { (intent, count) -> "${intent.name}:$count" },
+                )
+            }
             stranded.forEach { action ->
                 println(
                     "reachability-stranded app=$appId action=${action.id} " +

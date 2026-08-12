@@ -107,23 +107,23 @@ class DesktopShellLayoutTest {
         assertTrue(
             shouldUseNextcloudRootShell(
                 presentation = NextcloudPresentation.Desktop,
-                isRootScreen = false,
+                isRootOrAppWorkspace = false,
             ),
         )
     }
 
     @Test
-    fun `adaptive shell remains limited to root destinations`() {
+    fun `adaptive shell persists for root destinations and top-level app workspaces`() {
         assertTrue(
             shouldUseNextcloudRootShell(
                 presentation = NextcloudPresentation.Adaptive,
-                isRootScreen = true,
+                isRootOrAppWorkspace = true,
             ),
         )
         assertFalse(
             shouldUseNextcloudRootShell(
                 presentation = NextcloudPresentation.Adaptive,
-                isRootScreen = false,
+                isRootOrAppWorkspace = false,
             ),
         )
     }

@@ -101,6 +101,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
@@ -270,6 +271,37 @@ internal sealed interface Screen {
     data class DocumentPreview(val file: NextcloudFile, val parentPath: String) : Screen
     @Serializable
     data class TextEditor(val file: NextcloudFile, val parentPath: String) : Screen
+}
+
+/** Top-level destinations retain global navigation; focused editors and detail views stay immersive. */
+internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
+    Screen.Root,
+    Screen.Search,
+    is Screen.Files,
+    Screen.Media,
+    Screen.Talk,
+    Screen.Notes,
+    Screen.Dashboard,
+    Screen.UserStatus,
+    Screen.Calendar,
+    Screen.Contacts,
+    Screen.Deck,
+    Screen.AdminApps,
+    Screen.OfflineCenter,
+    Screen.Transfers,
+    Screen.ProjectNews,
+    is Screen.AppInfo,
+    -> true
+
+    is Screen.PersonMedia,
+    is Screen.ProjectNewsArticleView,
+    is Screen.Chat,
+    is Screen.NoteEditor,
+    is Screen.MediaViewer,
+    is Screen.FileInfo,
+    is Screen.DocumentPreview,
+    is Screen.TextEditor,
+    -> false
 }
 
 internal enum class RootDestinationContent {
@@ -1145,6 +1177,14 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.FileSyncStatusMobile -> MarketingFileSyncStatusMobileScenario()
                     MarketingCaptureScenario.FileSyncStatusDesktop -> MarketingFileSyncStatusDesktopScenario()
                     MarketingCaptureScenario.ActivityWorkspaceDesktop -> MarketingActivityWorkspaceDesktopScenario()
+                    MarketingCaptureScenario.ActivityWorkspaceMobileDark,
+                    MarketingCaptureScenario.ActivityWorkspaceMobileLight,
+                    -> MarketingActivityWorkspaceMobileScenario()
+                    MarketingCaptureScenario.BudgetDashboardDesktopDark,
+                    MarketingCaptureScenario.BudgetDashboardDesktopLight,
+                    MarketingCaptureScenario.BudgetDashboardMobileDark,
+                    MarketingCaptureScenario.BudgetDashboardMobileLight,
+                    -> MarketingBudgetDashboardScenario(scenario)
                     MarketingCaptureScenario.FileSyncSetupDesktop -> MarketingFileSyncSetupDesktopScenario()
                     MarketingCaptureScenario.GuideLinuxFolderSyncLocations ->
                         MarketingFileSyncSetupDesktopScenario(initialStep = FileSyncSetupStep.Locations)
@@ -1791,6 +1831,10 @@ private fun AuthenticatedApp(
                     installedApps = serverInfo?.apps.orEmpty(),
                     onApps = { destination = NextcloudDestination.Apps },
                     onOpenApp = { app -> openApp(app, NextcloudDestination.Activity) },
+                    onOpenFilesPath = { parentPath ->
+                        returnDestination = NextcloudDestination.Activity
+                        screen = Screen.Files(parentPath)
+                    },
                 )
                 RootDestinationContent.Settings -> SettingsScreen(
                     services = services,
@@ -2173,7 +2217,7 @@ private fun AuthenticatedApp(
             )
         }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (shouldUseNextcloudRootShell(presentation, screen == Screen.Root)) {
+            if (shouldUseNextcloudRootShell(presentation, screen.usesPersistentAppNavigation())) {
                 RootShell(
                     presentation = presentation,
                     selected = destination,
@@ -2462,7 +2506,6 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onBack: () -> Unit,
 ) {
-    val fallback = remember(app) { buildGenericNativeFallback(app, nativeFamily(app.id)) }
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
@@ -2480,16 +2523,24 @@ private fun AppInfoScreen(
         serverVersionVerified,
         discoveryAttempt,
     ) {
-        if (cachedDiscovery != null) {
-            discovery = cachedDiscovery
+        val persistedDiscovery = if (cachedDiscovery == null) {
+            services.loadCachedDynamicAppDiscovery(session, app.id)
+        } else {
+            null
+        }
+        val retainedDiscovery = cachedDiscovery ?: persistedDiscovery
+        if (retainedDiscovery != null) {
+            discovery = retainedDiscovery
+            onDiscovery(retainedDiscovery)
+            sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedDiscovery)
         }
         val shouldRetry = discoveryAttempt > 0 || sharedDynamicNativeMemoryCache.shouldRetryDiscovery(session, app.id) ||
             !sharedDynamicNativeMemoryCache.isDiscoveryFresh(session, app.id)
-        if (!shouldRetry && cachedDiscovery != null) {
+        if (!shouldRetry && retainedDiscovery != null) {
             discoveryError = null
             return@LaunchedEffect
         }
-        if (!shouldRetry) discovery = null
+        if (!shouldRetry && retainedDiscovery == null) discovery = null
         discoveryError = null
         runCatching {
             discoverDynamicAppDescriptor(
@@ -2502,11 +2553,14 @@ private fun AppInfoScreen(
             )
         }
             .onSuccess { candidate ->
-                val resolvedDiscovery = resolveDynamicContractRediscovery(cachedDiscovery, candidate)
+                val resolvedDiscovery = resolveDynamicContractRediscovery(retainedDiscovery, candidate)
                 val retainedCachedContract = resolvedDiscovery !== candidate
                 onDiscovery(resolvedDiscovery)
                 discovery = resolvedDiscovery
                 sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, resolvedDiscovery)
+                runCatching {
+                    services.saveCachedDynamicAppDiscovery(session, resolvedDiscovery)
+                }
                 if (retainedCachedContract) {
                     discoveryError =
                         "Could not verify the current server and app versions. " +
@@ -2517,14 +2571,14 @@ private fun AppInfoScreen(
             }
             .onFailure { failure ->
                 if (failure is CancellationException) throw failure
-                val retainedReadOnly = retainedDynamicContractAfterDiscoveryFailure(cachedDiscovery)
+                val retainedReadOnly = retainedDynamicContractAfterDiscoveryFailure(retainedDiscovery)
                 if (retainedReadOnly != null) {
                     onDiscovery(retainedReadOnly)
                     discovery = retainedReadOnly
                     sharedDynamicNativeMemoryCache.storeDiscovery(session, app.id, retainedReadOnly)
                 }
                 sharedDynamicNativeMemoryCache.markDiscoveryFailure(session, app.id)
-                discoveryError = if (cachedDiscovery == null) {
+                discoveryError = if (retainedDiscovery == null) {
                     failure.message ?: "Could not discover this app's native API."
                 } else {
                     "Could not verify the current server and app versions. " +
@@ -2533,75 +2587,35 @@ private fun AppInfoScreen(
             }
     }
 
-    val unavailableExecutor = remember {
-        NativeActionExecutor {
-            NativeActionExecutionResult.Failure("No schema-declared action is available.")
-        }
-    }
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         val resolved = discovery
-        val isDiscovering = resolved == null
-        val discoveryMessage = when {
-            discoveryError != null -> "Using metadata fallback"
-            isDiscovering -> "Preparing your workspace"
-            else -> "Preparing actions"
-        }
         // The discovered screen owns its own contextual header. Keeping the
         // discovery header around would stack two toolbars on every native app
         // (and makes the back action ambiguous). The outer header is only needed
         // while the contract is still being resolved or when using fallback UI.
         if (resolved == null) {
-            ScreenHeader(app.name, discoveryMessage, onBack)
-        }
-        if (isDiscovering && discoveryError == null) {
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .padding(horizontal = NextcloudSpacing.Large)
-                    .padding(top = NextcloudSpacing.Small),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                Text("Discovering this app's native contract", style = MaterialTheme.typography.bodySmall)
-            }
+            ScreenHeader(app.name, null, onBack)
         }
         discoveryError?.let { message ->
             ErrorMessage("Dynamic contract failed: $message", ::retryDiscoveryAndServerInfo)
         }
         if (resolved == null) {
-            GenericNativeAppScreen(
-                schema = fallback.schema,
-                view = fallback.view,
-                state = fallback.state,
-                actionExecutor = unavailableExecutor,
+            DynamicAppOpeningState(
+                appName = app.name,
+                message = if (discoveryError == null) {
+                    "Opening your workspace"
+                } else {
+                    "A native workspace is not available yet"
+                },
                 modifier = Modifier.weight(1f),
             )
         } else {
             if (resolved.versionStatus == DynamicContractVersionStatus.LastKnownReadOnly) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(
-                            horizontal = NextcloudSpacing.Large,
-                            vertical = NextcloudSpacing.Small,
-                        ),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Using the last verified contract. Browsing remains available, but changes require " +
-                                "a fresh server and app version check.",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
-                        TextButton(onClick = ::retryDiscoveryAndServerInfo) {
-                            Text("Retry")
-                        }
-                    }
-                }
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Checking the current app version" },
+                )
             }
             DynamicDiscoveredAppScreen(
                 services = services,
@@ -2612,6 +2626,30 @@ private fun AppInfoScreen(
                 onRetryDiscovery = ::retryDiscoveryAndServerInfo,
                 onExit = onBack,
                 modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DynamicAppOpeningState(
+    appName: String,
+    message: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.XLarge),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            Text(appName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -2630,11 +2668,14 @@ private fun DynamicDiscoveredAppScreen(
 ) {
     val descriptor = discovery.descriptor
     val schema = remember(descriptor, discovery.versionStatus) {
-        descriptor.toNativeAppSchema().forDynamicContractVersion(discovery.versionStatus)
+        descriptor.toNativeAppSchema()
+            .forDynamicContractVersion(discovery.versionStatus)
+            .withNativeBudgetDashboard()
     }
     val initialViewId = remember(descriptor, schema) {
         val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
-        preferredNativeMusicLandingViewId(rootDestinations, schema)
+        schema.views.firstOrNull { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }?.id
+            ?: preferredNativeMusicLandingViewId(rootDestinations, schema)
             ?: rootDestinations.firstOrNull()?.layoutId
             ?: schema.views.firstOrNull { it.component != NativeComponent.form }?.id
             ?: schema.views.firstOrNull()?.id
@@ -2689,6 +2730,9 @@ private fun DynamicDiscoveredAppScreen(
     var refreshingDynamicContent by remember(descriptor) { mutableStateOf(false) }
     var dynamicRefreshError by remember(descriptor) { mutableStateOf<String?>(null) }
     var recordsByResourceId by remember(descriptor) {
+        mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
+    }
+    var budgetDashboardRecordsByActionId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
     var formRelationCache by remember(
@@ -2895,6 +2939,40 @@ private fun DynamicDiscoveredAppScreen(
                 history = saveDynamicNavigationHistory(navigationHistory),
             ),
         )
+    }
+
+    LaunchedEffect(descriptor, selectedView?.id, loadAttempt) {
+        if (selectedView?.id != NATIVE_BUDGET_DASHBOARD_VIEW_ID) return@LaunchedEffect
+        val dashboardReads = nativeBudgetDashboardReads(
+            appId = descriptor.app.id,
+            actions = descriptor.actions,
+        ).filterNot { read -> read.action.id == selectedView.sourceActionId }
+        coroutineScope {
+            dashboardReads.map { read ->
+                async {
+                    runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = read.action.id,
+                            values = read.values,
+                            runtimeContext = read.values,
+                            cachePolicy = dynamicReadCachePolicy,
+                        )
+                    }.onSuccess { records ->
+                        currentCoroutineContext().ensureActive()
+                        budgetDashboardRecordsByActionId = budgetDashboardRecordsByActionId +
+                            (read.action.id to records)
+                    }.onFailure { failure ->
+                        if (failure is CancellationException) throw failure
+                        // The overview is deliberately progressive: a failed secondary card must
+                        // not block verified sections that are already useful. Its full collection
+                        // remains available in navigation with ordinary inline retry handling.
+                    }
+                }
+            }.awaitAll()
+        }
     }
 
     val selectedRecordCacheScope = selectedRecord?.dynamicScreenCacheScope().orEmpty()
@@ -3545,8 +3623,20 @@ private fun DynamicDiscoveredAppScreen(
         selectedRecordResourceId,
     ) {
         if (selectedRecord == null) {
-            navigationPlan.rootDestinations.mapNotNull { destination ->
-                schema.views.firstOrNull { it.id == destination.layoutId }?.let { view -> destination to view }
+            buildList {
+                schema.views.firstOrNull { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }?.let { dashboard ->
+                    add(
+                        DynamicNavigationDestination(
+                            layoutId = dashboard.id,
+                            label = dashboard.title,
+                            resourceId = dashboard.resourceId,
+                            actionId = dashboard.sourceActionId,
+                        ) to dashboard,
+                    )
+                }
+                navigationPlan.rootDestinations.mapNotNullTo(this) { destination ->
+                    schema.views.firstOrNull { it.id == destination.layoutId }?.let { view -> destination to view }
+                }
             }
         } else {
             buildList {
@@ -4099,22 +4189,37 @@ private fun DynamicDiscoveredAppScreen(
                         candidateLabel.equals(baseLabel, ignoreCase = true)
                     } > 1
                     val resourceLabel = schema.resource(view.resourceId)?.name.orEmpty()
+                    val budgetSemantics = nativeBudgetDestinationSemantics(
+                        appId = descriptor.app.id,
+                        resourceId = destination.resourceId,
+                    )
+                    val budgetDashboard = view.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID
                     destination to NextcloudCollectionDestination(
                         id = view.id,
-                        label = dynamicSecondaryDestinationLabel(
-                            destinationLabel = baseLabel,
-                            resourceLabel = resourceLabel.dynamicUiLabel(descriptor.app.name),
-                            duplicate = duplicateLabel,
-                        ),
+                        label = if (budgetDashboard) "Dashboard" else budgetSemantics?.label ?: dynamicSecondaryDestinationLabel(
+                                destinationLabel = baseLabel,
+                                resourceLabel = resourceLabel.dynamicUiLabel(descriptor.app.name),
+                                duplicate = duplicateLabel,
+                            ),
                         accessibilityId = destination.actionId,
-                        supportingText = view.dynamicDestinationSupportingText(
-                            destinationLabel = baseLabel,
-                            resourceLabel = resourceLabel,
-                        ),
-                        section = destination.dynamicDestinationSection(view),
+                        supportingText = if (budgetDashboard) "Net worth and finance overview" else budgetSemantics?.supportingText
+                            ?: view.dynamicDestinationSupportingText(
+                                destinationLabel = baseLabel,
+                                resourceLabel = resourceLabel,
+                            ),
+                        section = budgetSemantics?.section
+                            ?: destination.dynamicDestinationSection(view),
                     )
                 }
-                .sortedBy { (_, destination) -> destination.section.ordinal }
+                .sortedWith(
+                    compareBy<Pair<DynamicNavigationDestination, NextcloudCollectionDestination>> {
+                        nativeBudgetDestinationSemantics(
+                            descriptor.app.id,
+                            it.first.resourceId,
+                        )?.order ?: if (it.second.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID) 0 else Int.MAX_VALUE
+                    }.thenBy { (_, destination) -> destination.section.ordinal }
+                        .thenBy { (_, destination) -> destination.label.lowercase() },
+                )
         }
         val selectedCollectionDestinationId = collectionDestinationEntries
             .firstOrNull { (_, item) -> item.id == selectedView.id }
@@ -4365,7 +4470,23 @@ private fun DynamicDiscoveredAppScreen(
                 )
             } == true
             val dynamicScreenContent: @Composable () -> Unit = {
-                GenericNativeAppScreen(
+                if (selectedView.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID) {
+                    NativeBudgetDashboard(
+                        schema = schema,
+                        state = viewState,
+                        recordsByResourceId = recordsByResourceId,
+                        dashboardReads = nativeBudgetDashboardReads(descriptor.app.id, descriptor.actions),
+                        dashboardRecordsByActionId = budgetDashboardRecordsByActionId,
+                        onOpenSection = { resourceId ->
+                            collectionDestinationEntries.firstOrNull { (destination, _) ->
+                                destination.resourceId == resourceId
+                            }?.let { (destination, item) ->
+                                schema.views.firstOrNull { view -> view.id == item.id }
+                                    ?.let { view -> selectCollectionDestination(destination, view) }
+                            }
+                        },
+                    )
+                } else GenericNativeAppScreen(
                     schema = schema,
                     view = selectedView,
                     state = viewState,
@@ -5728,20 +5849,20 @@ internal fun shouldShowDynamicRecordFallbackDetail(
 private object ActivityWorkspaceMemoryCache {
     private val entries = linkedMapOf<String, ActivityTimelineState>()
 
-    fun get(session: NextcloudSession): ActivityTimelineState? {
-        val key = key(session)
+    fun get(session: NextcloudSession, filterId: String): ActivityTimelineState? {
+        val key = key(session, filterId)
         return entries.remove(key)?.also { entries[key] = it }
     }
 
-    fun store(session: NextcloudSession, value: ActivityTimelineState) {
-        val key = key(session)
+    fun store(session: NextcloudSession, filterId: String, value: ActivityTimelineState) {
+        val key = key(session, filterId)
         entries.remove(key)
         entries[key] = value
         while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
     }
 
-    private fun key(session: NextcloudSession): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+    private fun key(session: NextcloudSession, filterId: String): String =
+        "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$filterId"
 }
 
 @Composable
@@ -5752,9 +5873,14 @@ private fun ActivityScreen(
     installedApps: List<NextcloudAppEntry>,
     onApps: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
+    onOpenFilesPath: (String) -> Unit,
 ) {
+    var selectedServerFilterId by rememberSaveable(session.serverUrl, session.loginName) { mutableStateOf("all") }
+    var serverFilters by remember(session, activityInstalled) {
+        mutableStateOf(listOf(NextcloudActivityFilterOption("all", "All activities", 0)))
+    }
     var timeline by remember(session, activityInstalled) {
-        mutableStateOf(ActivityWorkspaceMemoryCache.get(session) ?: ActivityTimelineState())
+        mutableStateOf(ActivityWorkspaceMemoryCache.get(session, selectedServerFilterId) ?: ActivityTimelineState())
     }
     var loadAttempt by remember(session, activityInstalled) { mutableStateOf(0) }
     var olderPageAttempt by remember(session, activityInstalled) { mutableStateOf(0) }
@@ -5777,11 +5903,19 @@ private fun ActivityScreen(
     val installedAppIds = installedApps.mapTo(linkedSetOf(), NextcloudAppEntry::id)
     val desktopWorkspace = LocalNextcloudWorkspaceCapabilities.current.isDesktop
 
+    fun selectServerFilter(filterId: String) {
+        if (filterId == selectedServerFilterId) return
+        selectedServerFilterId = filterId
+        timeline = ActivityWorkspaceMemoryCache.get(session, filterId) ?: ActivityTimelineState()
+        loadAttempt += 1
+    }
+
     fun clearFilters() {
         query = ""
         selectedApp = null
         selectedType = null
         selectedSemanticName = null
+        if (selectedServerFilterId != "all") selectServerFilter("all")
     }
 
     fun openActivityAction(action: ActivityOpenAction) {
@@ -5789,20 +5923,33 @@ private fun ActivityScreen(
             installedApps.firstOrNull { installed -> installed.id == appId }
         }
         when {
+            action.filesParentPath != null -> onOpenFilesPath(action.filesParentPath)
             app != null -> onOpenApp(app)
             action.sameOriginUrl != null -> services.openExternalUrl(action.sameOriginUrl)
         }
     }
 
-    LaunchedEffect(session, activityInstalled, loadAttempt) {
+    LaunchedEffect(session, activityInstalled) {
+        if (!activityInstalled) return@LaunchedEffect
+        runCatching {
+            loadNextcloudActivityFilters { request -> services.executeNextcloudApi(session, request) }
+        }.onSuccess { filters ->
+            serverFilters = filters
+            if (filters.none { it.id == selectedServerFilterId }) selectServerFilter("all")
+        }
+    }
+
+    LaunchedEffect(session, activityInstalled, selectedServerFilterId, loadAttempt) {
         if (!activityInstalled) return@LaunchedEffect
         timeline = timeline.beginActivityRefresh()
         runCatching {
-            loadNextcloudActivityPage { request -> services.executeNextcloudApi(session, request) }
+            loadNextcloudActivityPage(filterId = selectedServerFilterId) { request ->
+                services.executeNextcloudApi(session, request)
+            }
         }
             .onSuccess { page ->
                 timeline = timeline.applyActivityRefresh(page)
-                ActivityWorkspaceMemoryCache.store(session, timeline)
+                ActivityWorkspaceMemoryCache.store(session, selectedServerFilterId, timeline)
             }
             .onFailure { failure ->
                 timeline = timeline.failActivityLoad(failure.message ?: "Could not load your activity.")
@@ -5814,13 +5961,13 @@ private fun ActivityScreen(
         val cursor = timeline.nextSince ?: return@LaunchedEffect
         timeline = timeline.beginNextActivityPage()
         runCatching {
-            loadNextcloudActivityPage(since = cursor) { request ->
+            loadNextcloudActivityPage(since = cursor, filterId = selectedServerFilterId) { request ->
                 services.executeNextcloudApi(session, request)
             }
         }
             .onSuccess { page ->
                 timeline = timeline.applyNextActivityPage(page)
-                ActivityWorkspaceMemoryCache.store(session, timeline)
+                ActivityWorkspaceMemoryCache.store(session, selectedServerFilterId, timeline)
             }
             .onFailure { failure ->
                 timeline = timeline.failActivityLoad(failure.message ?: "Could not load more activity.")
@@ -5828,7 +5975,9 @@ private fun ActivityScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (!desktopWorkspace) ProductHeader(title = "Activity")
+        if (!desktopWorkspace && (!activityInstalled || !timeline.initialized || timeline.activities.isEmpty())) {
+            ProductHeader(title = "Activity")
+        }
         when {
             !activityInstalled -> Box(
                 modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
@@ -5858,7 +6007,6 @@ private fun ActivityScreen(
             !timeline.initialized && timeline.error != null ->
                 ErrorMessage(requireNotNull(timeline.error)) { loadAttempt += 1 }
             !timeline.initialized -> LoadingMessage("Loading activity...")
-            timeline.activities.isEmpty() -> EmptyMessage("There is no recent activity.")
             else -> if (desktopWorkspace) {
                 ActivityDesktopWorkspace(
                     timeline = timeline,
@@ -5867,10 +6015,13 @@ private fun ActivityScreen(
                     selectedSemantic = selectedSemantic,
                     selectedApp = selectedApp,
                     selectedType = selectedType,
+                    serverFilters = serverFilters,
+                    selectedServerFilterId = selectedServerFilterId,
                     onQueryChanged = { query = it },
                     onSemanticSelected = { selectedSemanticName = it?.name },
                     onAppSelected = { selectedApp = it },
                     onTypeSelected = { selectedType = it },
+                    onServerFilterSelected = ::selectServerFilter,
                     onClearFilters = ::clearFilters,
                     onRefresh = { loadAttempt += 1 },
                     onLoadMore = { olderPageAttempt += 1 },
@@ -5878,173 +6029,39 @@ private fun ActivityScreen(
                         activity.activityOpenAction(installedAppIds, session.serverUrl)
                     },
                     onOpenAction = ::openActivityAction,
+                    loadPreview = { preview ->
+                        services.loadPreview(session, preview.fileId, width = 160, height = 160)
+                    },
+                    onOpenSettings = { settings ->
+                        services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
+                    },
                 )
-            } else LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = NextcloudSpacing.XLarge,
-                    end = NextcloudSpacing.XLarge,
-                    top = NextcloudSpacing.Medium,
-                    bottom = NextcloudSpacing.XXLarge,
-                ),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Recent", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                        TextButton(
-                            enabled = !timeline.refreshing && !timeline.loadingMore,
-                            onClick = { loadAttempt += 1 },
-                        ) {
-                            Icon(NextcloudIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text(
-                                if (timeline.refreshing) "Refreshing..." else "Refresh",
-                                modifier = Modifier.padding(start = NextcloudSpacing.Small),
-                            )
-                        }
-                    }
-                }
-                item {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Search activity") },
-                        placeholder = { Text("People, files, messages, or apps") },
-                        singleLine = true,
-                    )
-                }
-                item {
-                    Text(
-                        "Type",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        contentPadding = PaddingValues(top = NextcloudSpacing.Small),
-                    ) {
-                        NextcloudActivitySemantic.entries.forEach { semantic ->
-                            val count = feed.semanticCounts[semantic] ?: 0
-                            if (count > 0) {
-                                item(semantic.name) {
-                                    FilterChip(
-                                        selected = selectedSemantic == semantic,
-                                        onClick = {
-                                            selectedSemanticName =
-                                                if (selectedSemantic == semantic) null else semantic.name
-                                        },
-                                        label = { Text("${readableActivitySemantic(semantic)} $count") },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                if (feed.appFacets.size > 1) {
-                    item {
-                        Text(
-                            "App",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            contentPadding = PaddingValues(top = NextcloudSpacing.Small),
-                        ) {
-                            feed.appFacets.forEach { facet ->
-                                item(facet.key) {
-                                    FilterChip(
-                                        selected = selectedApp == facet.key,
-                                        onClick = {
-                                            selectedApp = facet.key.takeUnless { selectedApp == facet.key }
-                                        },
-                                        label = { Text("${facet.label} ${facet.count}") },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                if (feed.typeFacets.size > 1) {
-                    item {
-                        Text(
-                            "Event",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            contentPadding = PaddingValues(top = NextcloudSpacing.Small),
-                        ) {
-                            feed.typeFacets.forEach { facet ->
-                                item(facet.key) {
-                                    FilterChip(
-                                        selected = selectedType == facet.key,
-                                        onClick = {
-                                            selectedType = facet.key.takeUnless { selectedType == facet.key }
-                                        },
-                                        label = { Text("${facet.label} ${facet.count}") },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                timeline.error?.let { message ->
-                    item {
-                        Text(
-                            message,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-                if (feed.groups.isEmpty()) {
-                    item {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = NextcloudSpacing.XLarge),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        ) {
-                            Text("No activity matches these filters.", style = MaterialTheme.typography.titleMedium)
-                            TextButton(onClick = ::clearFilters) { Text("Clear filters") }
-                        }
-                    }
-                }
-                feed.groups.forEach { group ->
-                    item("day:${group.dateKey}") {
-                        Text(
-                            group.label,
-                            modifier = Modifier.padding(top = NextcloudSpacing.Large),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    listItems(group.activities, key = NextcloudActivity::id) { activity ->
-                        ActivityRow(
-                            activity = activity,
-                            action = activity.activityOpenAction(installedAppIds, session.serverUrl),
-                            onOpenAction = ::openActivityAction,
-                        )
-                    }
-                }
-                if (timeline.hasMore || timeline.loadingMore) {
-                    item {
-                        TextButton(
-                            enabled = !timeline.loadingMore && !timeline.refreshing,
-                            onClick = { olderPageAttempt += 1 },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (timeline.loadingMore) "Loading..." else "Load older activity")
-                        }
-                    }
-                }
-            }
+            } else ActivityMobileWorkspace(
+                timeline = timeline,
+                feed = feed,
+                query = query,
+                selectedSemantic = selectedSemantic,
+                selectedApp = selectedApp,
+                selectedType = selectedType,
+                serverFilters = serverFilters,
+                selectedServerFilterId = selectedServerFilterId,
+                onQueryChanged = { query = it },
+                onSemanticSelected = { selectedSemanticName = it?.name },
+                onAppSelected = { selectedApp = it },
+                onTypeSelected = { selectedType = it },
+                onServerFilterSelected = ::selectServerFilter,
+                onClearFilters = ::clearFilters,
+                onRefresh = { loadAttempt += 1 },
+                onLoadMore = { olderPageAttempt += 1 },
+                actionFor = { activity -> activity.activityOpenAction(installedAppIds, session.serverUrl) },
+                onOpenAction = ::openActivityAction,
+                loadPreview = { preview ->
+                    services.loadPreview(session, preview.fileId, width = 160, height = 160)
+                },
+                onOpenSettings = { settings ->
+                    services.openExternalUrl(activitySettingsUrl(session.serverUrl, settings))
+                },
+            )
         }
     }
 }

@@ -6,8 +6,8 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRelationOptionWindow
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRelationOptions
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeFormDisplayFields
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeDatasetInsights
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordActions
-import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordPresentation
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeScalarRelationClearChoice
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
 
 class MarketingDynamicUiCaptureScenarioTest {
     @Test
-    fun `synthetic dynamic visual QA is paired across desktop and phone`() {
+    fun `Tables visual evidence is paired across desktop and phone`() {
         val desktop = MarketingCaptureScenario.AdaptiveApp
         val phone = MarketingCaptureScenario.AdaptiveAppMobile
         val phoneCollection = MarketingCaptureScenario.AdaptiveAppCollectionMobile
@@ -25,19 +25,20 @@ class MarketingDynamicUiCaptureScenarioTest {
 
         assertEquals(NextcloudPresentation.Desktop, desktop.presentation)
         assertEquals(NextcloudPresentation.Adaptive, phone.presentation)
-        assertEquals("Nested collection and semantic form", desktop.surface)
-        assertEquals(desktop.surface, phone.surface)
-        assertEquals("Synthetic visual QA", desktop.state)
+        assertEquals("Inventory insights and rows", desktop.surface)
+        assertEquals("Add inventory row", phone.surface)
+        assertEquals("Synthetic Tables data", desktop.state)
         assertEquals(desktop.state, phone.state)
         assertEquals(MarketingCapturePurpose.Showcase, desktop.purpose)
         assertEquals(MarketingCapturePurpose.StateCoverage, phone.purpose)
         assertEquals(1_440 to 900, desktop.width to desktop.height)
-        assertEquals(1_080 to 1_800, phone.width to phone.height)
+        assertEquals(1_024 to 2_216, phone.width to phone.height)
         assertEquals(NextcloudPresentation.Adaptive, phoneCollection.presentation)
-        assertEquals("Nested collection actions", phoneCollection.surface)
-        assertEquals(1_080 to 1_800, phoneCollection.width to phoneCollection.height)
+        assertEquals("Inventory rows and actions", phoneCollection.surface)
+        assertEquals(1_024 to 2_216, phoneCollection.width to phoneCollection.height)
         assertEquals(NextcloudPresentation.Adaptive, phoneContextMenu.presentation)
-        assertEquals("Context workspace menu", phoneContextMenu.surface)
+        assertEquals("Inventory overview and category chart", phoneContextMenu.surface)
+        assertEquals(1_024 to 2_216, phoneContextMenu.width to phoneContextMenu.height)
     }
 
     @Test
@@ -51,7 +52,7 @@ class MarketingDynamicUiCaptureScenarioTest {
                 MarketingDynamicUiFeature.OptionalRelationClear,
                 MarketingDynamicUiFeature.LargeRelationSearch,
                 MarketingDynamicUiFeature.BooleanControl,
-                MarketingDynamicUiFeature.RecurrenceControl,
+                MarketingDynamicUiFeature.DatasetInsights,
                 MarketingDynamicUiFeature.SemanticForm,
                 MarketingDynamicUiFeature.StaleMutationSuppression,
                 MarketingDynamicUiFeature.RelationRetry,
@@ -68,7 +69,7 @@ class MarketingDynamicUiCaptureScenarioTest {
     @Test
     fun `fixture drives real generic field and relationship semantics`() {
         val resource = marketingDynamicWorkItemsResource
-        val relationField = resource.fields.single { it.id == "groupId" }
+        val relationField = resource.fields.single { it.id == "locationId" }
         val options = nativeRelationOptions(
             field = relationField,
             formResource = resource,
@@ -76,7 +77,7 @@ class MarketingDynamicUiCaptureScenarioTest {
             context = marketingDynamicDatasetContext,
         )
         val window = nativeRelationOptionWindow(options, query = "")
-        val create = assertNotNull(marketingDynamicUiSchema.action("work-items.create"))
+        val create = assertNotNull(marketingDynamicUiSchema.action("rows.create"))
         val collectionCreate = assertNotNull(
             nativeRecordActions(
                 schema = marketingDynamicUiSchema,
@@ -89,50 +90,30 @@ class MarketingDynamicUiCaptureScenarioTest {
         assertEquals(
             listOf(
                 FieldKind.string,
-                FieldKind.string,
-                FieldKind.string,
-                FieldKind.string,
                 FieldKind.enumeration,
+                FieldKind.integer,
+                FieldKind.integer,
                 FieldKind.string,
                 FieldKind.boolean,
-                FieldKind.string,
             ),
             resource.fields.map { it.kind },
         )
         assertEquals(
-            listOf("planned", "in-progress", "ready"),
-            resource.fields.single { it.id == "status" }.enumValues,
+            listOf("tools", "materials", "safety"),
+            resource.fields.single { it.id == "category" }.enumValues,
         )
         assertFalse(relationField.required)
         assertEquals("None", nativeScalarRelationClearChoice(relationField)?.label)
         assertEquals(marketingDynamicUiFixture.relationOptionCount, options.size)
         assertEquals(40, window.options.size)
         assertTrue(window.hasMore)
-        assertEquals("Garden team", options.first().label)
-        assertTrue(resource.fields.any { it.id == "rrule" })
-        assertEquals(
-            listOf("garden", "calendar", "tools", "truck", "notes", "water", "checklist"),
-            marketingDynamicWorkItemRecords.map { record ->
-                nativeRecordPresentation(resource, record).iconKey
-            },
-        )
-        assertEquals(
-            listOf(
-                "Prepare a clear layout for volunteers.",
-                "Check availability for the next work day.",
-                "Verify the shared tools and supplies list.",
-                "Coordinate the shared trailer and delivery window.",
-                "Share arrival details, safety notes, and contacts.",
-                "Verify the outdoor tap and backup water containers.",
-                "Collect the final setup and cleanup responsibilities.",
-            ),
-            marketingDynamicWorkItemRecords.map { record ->
-                nativeRecordPresentation(resource, record).subtitle
-            },
-        )
+        assertTrue(options.any { option -> option.label == "Workshop" })
         assertTrue(marketingDynamicWorkItemRecords.all { record ->
-            nativeRecordPresentation(resource, record).colorArgb != null
+            record.values.getValue("quantity")?.toIntOrNull() != null
         })
+        val insights = assertNotNull(nativeDatasetInsights(resource, marketingDynamicWorkItemRecords))
+        assertEquals("quantity", insights.measure.id)
+        assertEquals("category", insights.dimension?.id)
     }
 
     @Test
@@ -140,10 +121,10 @@ class MarketingDynamicUiCaptureScenarioTest {
         val editableFields = marketingDynamicWorkItemsResource.fields.filterNot { it.readOnly }
 
         assertEquals(
-            listOf("title", "status", "groupId", "sendReminders", "rrule"),
+            listOf("item", "quantity", "reorderLevel", "category", "locationId", "active"),
             nativeFormDisplayFields(
                 fields = editableFields,
-                relationFieldIds = setOf("groupId"),
+                relationFieldIds = setOf("locationId"),
             ).map { field -> field.id },
         )
     }
@@ -174,7 +155,8 @@ class MarketingDynamicUiCaptureScenarioTest {
         forbidden.forEach { token ->
             assertFalse(token in fixtureText, "Synthetic fixture must not contain '$token'.")
         }
-        assertTrue(marketingDynamicUiSchema.app.id.startsWith("synthetic-"))
+        assertEquals("tables", marketingDynamicUiSchema.app.id)
+        assertEquals("Tables", marketingDynamicUiSchema.app.name)
         assertTrue(marketingDynamicUiSchema.actions.all { action ->
             "://" !in action.binding.path
         })

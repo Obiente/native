@@ -825,7 +825,7 @@ private fun JSONArray?.toStringSet(): Set<String> = buildSet {
 }
 
 private fun desktopContractCacheDirectory(name: String): File {
-    require(name.matches(Regex("[a-z]+"))) { "The contract cache name is invalid." }
+    require(name.matches(Regex("[a-z][a-z0-9-]{0,63}"))) { "The contract cache name is invalid." }
     val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
     val cacheRoot = xdgCache?.let(::File)
         ?: File(System.getProperty("user.home"), ".cache")
@@ -957,6 +957,7 @@ class DesktopNextcloudServices(
         catalogCache = FileAppStoreCatalogCache(desktopContractCacheDirectory("catalogs")),
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
+    private val dynamicDiscoveryCacheDirectory = desktopContractCacheDirectory("discoveries-v1")
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
@@ -3379,6 +3380,54 @@ class DesktopNextcloudServices(
 
     override fun saveLastOpenedAppId(appId: String) {
         preferences.put(KEY_LAST_OPENED_APP, appId)
+    }
+
+    override suspend fun loadCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        appId: String,
+    ): DynamicDescriptorDiscovery? = withContext(Dispatchers.IO) {
+        val target = dynamicDiscoveryCacheFile(session, appId) ?: return@withContext null
+        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES.toLong()) {
+            return@withContext null
+        }
+        runCatching { target.readText() }
+            .getOrNull()
+            ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId) }
+    }
+
+    override suspend fun saveCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        discovery: DynamicDescriptorDiscovery,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = encodePersistedDynamicDiscovery(discovery) ?: return@withContext
+        val target = dynamicDiscoveryCacheFile(session, discovery.descriptor.app.id) ?: return@withContext
+        check(dynamicDiscoveryCacheDirectory.mkdirs() || dynamicDiscoveryCacheDirectory.isDirectory) {
+            "Could not create the dynamic contract cache."
+        }
+        val temporary = File(dynamicDiscoveryCacheDirectory, "${target.name}.part")
+        temporary.outputStream().buffered().use { output ->
+            output.write(encoded.encodeToByteArray())
+            output.flush()
+        }
+        try {
+            Files.move(
+                temporary.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                temporary.toPath(),
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+    }
+
+    private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
+        if (!appId.matches(Regex("[a-z0-9_]{1,128}"))) return null
+        return File(dynamicDiscoveryCacheDirectory, "${desktopFileCacheAccountId(session)}-$appId.json")
     }
 
     override fun loadSession(): NextcloudSession? {

@@ -791,6 +791,76 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
+    fun `categorical summaries count declared status values in schema order`() {
+        val resource = ResourceSpec(
+            id = "cards",
+            name = "Cards",
+            confidence = Confidence.verified,
+            fields = listOf(
+                field("title", FieldKind.string),
+                field("status", FieldKind.enumeration).copy(
+                    enumValues = listOf("planned", "in-progress", "complete"),
+                ),
+            ),
+        )
+        val records = listOf(
+            NativeRecord("one", mapOf("title" to "First", "status" to "complete")),
+            NativeRecord("two", mapOf("title" to "Second", "status" to "planned")),
+            NativeRecord("three", mapOf("title" to "Third", "status" to "complete")),
+            NativeRecord("four", mapOf("title" to "Fourth", "status" to "in-progress")),
+        )
+
+        val summary = requireNotNull(nativeCategoricalSummary(resource, records))
+
+        assertEquals("status", summary.dimension.id)
+        assertEquals(4, summary.recordCount)
+        assertEquals(
+            listOf("Planned" to 1.0, "In progress" to 1.0, "Complete" to 2.0),
+            summary.points.map { point -> point.label to point.value },
+        )
+    }
+
+    @Test
+    fun `categorical summaries reject arbitrary strings and high cardinality fields`() {
+        val resource = ResourceSpec(
+            id = "notes",
+            name = "Notes",
+            confidence = Confidence.high,
+            fields = listOf(
+                field("title", FieldKind.string),
+                field("status", FieldKind.string),
+            ),
+        )
+        val records = (1..7).map { index ->
+            NativeRecord(index.toString(), mapOf("title" to "Note $index", "status" to "state-$index"))
+        }
+
+        assertNull(nativeCategoricalSummary(resource, records))
+    }
+
+    @Test
+    fun `categorical summaries retain missing values visibly`() {
+        val resource = ResourceSpec(
+            id = "tasks",
+            name = "Tasks",
+            confidence = Confidence.high,
+            fields = listOf(field("completed", FieldKind.boolean)),
+        )
+        val records = listOf(
+            NativeRecord("one", mapOf("completed" to "true")),
+            NativeRecord("two", mapOf("completed" to "false")),
+            NativeRecord("three", emptyMap()),
+        )
+
+        val summary = requireNotNull(nativeCategoricalSummary(resource, records))
+
+        assertEquals(
+            listOf("False" to 1.0, "Not set" to 1.0, "True" to 1.0),
+            summary.points.map { point -> point.label to point.value },
+        )
+    }
+
+    @Test
     fun `dataset insights reject unrecognized numeric metadata and timestamps`() {
         val resource = ResourceSpec(
             id = "houses",

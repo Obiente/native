@@ -13,6 +13,19 @@ data class NextcloudActivityPage(
     val hasMore: Boolean,
 )
 
+data class NextcloudActivityFilterOption(
+    val id: String,
+    val name: String,
+    val priority: Int,
+) {
+    init {
+        require(id.isValidActivityFilterId()) { "The activity filter identifier is invalid." }
+        require(name.isNotBlank() && name.length <= MAX_ACTIVITY_FILTER_NAME_CHARS) {
+            "The activity filter name is invalid."
+        }
+    }
+}
+
 enum class NextcloudActivitySemantic {
     Message,
     Media,
@@ -25,6 +38,11 @@ enum class ActivityNotificationDestination {
     Media,
     Files,
     Activity,
+}
+
+enum class ActivitySettingsDestination {
+    Notifications,
+    RssFeed,
 }
 
 data class DynamicActivityNotificationPlan(
@@ -80,10 +98,13 @@ data class ActivityOpenAction(
     val label: String,
     val appId: String? = null,
     val sameOriginUrl: String? = null,
+    val filesParentPath: String? = null,
 ) {
     init {
         require(label.isNotBlank() && label.length <= 80) { "The activity action label is invalid." }
-        require((appId == null) != (sameOriginUrl == null)) { "An activity action must have exactly one destination." }
+        require(listOfNotNull(appId, sameOriginUrl, filesParentPath).size == 1) {
+            "An activity action must have exactly one destination."
+        }
     }
 }
 
@@ -137,6 +158,11 @@ fun NextcloudActivity.activityOpenAction(
     installedAppIds: Set<String>,
     serverUrl: String,
 ): ActivityOpenAction? {
+    if (semantic() == NextcloudActivitySemantic.File && installedAppIds.any { it.equals("files", true) }) {
+        safeActivityFilesParentPath(objectName)?.let { parentPath ->
+            return ActivityOpenAction(label = "Show in Files", filesParentPath = parentPath)
+        }
+    }
     val normalizedInstalled = installedAppIds.associateBy(String::lowercase)
     val candidates = buildList {
         val context = listOf(app, type, objectType.orEmpty())
@@ -175,17 +201,47 @@ fun NextcloudActivity.activityOpenAction(
     return ActivityOpenAction(label = "Open", sameOriginUrl = sameOriginUrl)
 }
 
+private fun safeActivityFilesParentPath(objectName: String?): String? {
+    val value = objectName?.trim()?.removePrefix("/") ?: return null
+    if (value.isBlank() || value.length > MAX_ACTIVITY_URL_CHARS) return null
+    val segments = value.split('/')
+    if (
+        segments.any { segment ->
+            segment.isBlank() || segment == "." || segment == ".." ||
+                segment.any { it.isISOControl() || it == '\\' }
+        }
+    ) return null
+    return segments.dropLast(1).joinToString("/")
+}
+
+fun activitySettingsUrl(serverUrl: String, destination: ActivitySettingsDestination): String {
+    val path = when (destination) {
+        ActivitySettingsDestination.Notifications -> "/index.php/settings/user/notifications"
+        ActivitySettingsDestination.RssFeed -> "/index.php/apps/activity"
+    }
+    return requireNotNull(sameOriginActivityUrl(serverUrl, path)) {
+        "The Activity settings URL is invalid."
+    }
+}
+
 fun buildNextcloudActivityPageRequest(
     since: Long? = null,
     limit: Int = DEFAULT_ACTIVITY_LIMIT,
+    filterId: String = DEFAULT_ACTIVITY_FILTER_ID,
 ): NextcloudApiRequest {
     require(since == null || since >= 0L) { "The activity cursor is invalid." }
+    require(filterId.isValidActivityFilterId()) { "The activity filter identifier is invalid." }
     return NextcloudApiRequest(
         method = NextcloudApiMethod.GET,
-        relativePath = ACTIVITY_API_PATH,
+        relativePath = if (filterId == DEFAULT_ACTIVITY_FILTER_ID) {
+            ACTIVITY_API_PATH
+        } else {
+            "$ACTIVITY_API_PATH/$filterId"
+        },
         queryParameters = buildMap {
             put("limit", boundedActivityLimit(limit).toString())
             put("sort", "desc")
+            put("previews", "true")
             since?.let { put("since", it.toString()) }
         },
         ocsApiRequest = true,
@@ -196,11 +252,57 @@ fun buildNextcloudActivityPageRequest(
 suspend fun loadNextcloudActivityPage(
     since: Long? = null,
     limit: Int = DEFAULT_ACTIVITY_LIMIT,
+    filterId: String = DEFAULT_ACTIVITY_FILTER_ID,
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
 ): NextcloudActivityPage {
     val boundedLimit = boundedActivityLimit(limit)
-    val response = execute(buildNextcloudActivityPageRequest(since, boundedLimit))
+    val response = execute(buildNextcloudActivityPageRequest(since, boundedLimit, filterId))
     return parseNextcloudActivityPage(response, boundedLimit)
+}
+
+fun buildNextcloudActivityFiltersRequest(): NextcloudApiRequest = NextcloudApiRequest(
+    method = NextcloudApiMethod.GET,
+    relativePath = "$ACTIVITY_API_PATH/filters",
+    ocsApiRequest = true,
+    maximumResponseBytes = MAX_ACTIVITY_FILTER_RESPONSE_BYTES,
+)
+
+suspend fun loadNextcloudActivityFilters(
+    execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
+): List<NextcloudActivityFilterOption> = parseNextcloudActivityFilters(
+    execute(buildNextcloudActivityFiltersRequest()),
+)
+
+fun parseNextcloudActivityFilters(response: NextcloudApiResponse): List<NextcloudActivityFilterOption> {
+    require(response.status in 200..299) { "Loading activity filters failed (HTTP ${response.status})." }
+    require(response.contentType?.substringBefore(';')?.trim() == "application/json") {
+        "The Activity filter API did not return JSON."
+    }
+    val root = runCatching { Json.parseToJsonElement(response.body.decodeToString()) as? JsonObject }
+        .getOrNull()
+        ?: error("The Activity filter response is malformed.")
+    val ocs = root["ocs"] as? JsonObject ?: error("The Activity filter response has no OCS envelope.")
+    val data = ocs["data"] as? JsonArray ?: error("The Activity filter data is not an array.")
+    val parsed = data.mapNotNull { element ->
+        val item = element as? JsonObject ?: return@mapNotNull null
+        val id = item.activityString("id")?.takeIf(String::isValidActivityFilterId)
+            ?: return@mapNotNull null
+        val name = item.activityString("name")
+            ?.take(MAX_ACTIVITY_FILTER_NAME_CHARS)
+            ?.takeIf(String::isNotBlank)
+            ?: return@mapNotNull null
+        val priority = (item["priority"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+            ?.coerceIn(MIN_ACTIVITY_FILTER_PRIORITY, MAX_ACTIVITY_FILTER_PRIORITY)
+            ?: DEFAULT_ACTIVITY_FILTER_PRIORITY
+        NextcloudActivityFilterOption(id = id, name = name, priority = priority)
+    }
+        .distinctBy(NextcloudActivityFilterOption::id)
+        .sortedWith(compareBy(NextcloudActivityFilterOption::priority, NextcloudActivityFilterOption::name))
+    return if (parsed.any { it.id == DEFAULT_ACTIVITY_FILTER_ID }) {
+        parsed
+    } else {
+        listOf(DEFAULT_ACTIVITY_FILTER) + parsed
+    }
 }
 
 fun parseNextcloudActivityPage(
@@ -338,7 +440,26 @@ private fun parseNextcloudActivity(element: kotlinx.serialization.json.JsonEleme
         link = item.activityString("link"),
         icon = item.activityString("icon"),
         dateTime = item.activityString("datetime"),
+        preview = item.activityPreview(),
     )
+}
+
+private fun JsonObject.activityPreview(): NextcloudActivityPreview? {
+    val previews = this["previews"] as? JsonArray ?: return null
+    return previews.firstNotNullOfOrNull { element ->
+        val preview = element as? JsonObject ?: return@firstNotNullOfOrNull null
+        val fileId = (preview["fileId"] as? JsonPrimitive)?.longOrNull?.takeIf { it > 0L }
+            ?: return@firstNotNullOfOrNull null
+        val filename = preview.activityString("filename") ?: activityString("object_name")
+            ?: return@firstNotNullOfOrNull null
+        NextcloudActivityPreview(
+            fileId = fileId,
+            filename = filename,
+            mimeType = preview.activityString("mimeType"),
+            isMimeTypeIcon = (preview["isMimeTypeIcon"] as? JsonPrimitive)?.contentOrNull
+                ?.toBooleanStrictOrNull() ?: false,
+        )
+    }
 }
 
 private fun JsonObject.activityString(name: String): String? =
@@ -363,6 +484,11 @@ private fun String.boundedActivityText(fallback: String): String {
 
 private fun String.normalizedActivityToken(): String =
     lowercase().filter(Char::isLetterOrDigit)
+
+private fun String.isValidActivityFilterId(): Boolean =
+    length in 1..MAX_ACTIVITY_FILTER_ID_CHARS && all { character ->
+        character in 'a'..'z' || character == '_'
+    }
 
 private fun NextcloudActivity.searchableActivityText(): List<String> = listOfNotNull(
     subject,
@@ -453,6 +579,18 @@ private val MEDIA_FILE_EXTENSIONS = setOf(
     ".avif", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".mkv", ".mov", ".mp4", ".png", ".raw", ".webm", ".webp",
 )
 private const val ACTIVITY_API_PATH = "/ocs/v2.php/apps/activity/api/v2/activity"
+private const val DEFAULT_ACTIVITY_FILTER_ID = "all"
+private val DEFAULT_ACTIVITY_FILTER = NextcloudActivityFilterOption(
+    id = DEFAULT_ACTIVITY_FILTER_ID,
+    name = "All activities",
+    priority = 0,
+)
 private const val MAX_ACTIVITY_FIELD_CHARS = 4_096
+private const val MAX_ACTIVITY_FILTER_ID_CHARS = 64
+private const val MAX_ACTIVITY_FILTER_NAME_CHARS = 80
+private const val MIN_ACTIVITY_FILTER_PRIORITY = 0
+private const val MAX_ACTIVITY_FILTER_PRIORITY = 100
+private const val DEFAULT_ACTIVITY_FILTER_PRIORITY = 70
 private const val MAX_ACTIVITY_URL_CHARS = 2_048
+private const val MAX_ACTIVITY_FILTER_RESPONSE_BYTES = 256L * 1_024L
 private const val MAX_ACTIVITY_RESPONSE_BYTES = 4L * 1_024L * 1_024L

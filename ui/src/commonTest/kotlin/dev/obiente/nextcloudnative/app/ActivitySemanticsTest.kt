@@ -73,14 +73,67 @@ class ActivitySemanticsTest {
 
         assertEquals(NextcloudApiMethod.GET, observed?.method)
         assertEquals(
-            mapOf("since" to "80", "limit" to "2", "sort" to "desc"),
+            mapOf("since" to "80", "limit" to "2", "sort" to "desc", "previews" to "true"),
             observed?.queryParameters,
         )
+        assertEquals("/ocs/v2.php/apps/activity/api/v2/activity", observed?.relativePath)
         assertTrue(observed?.ocsApiRequest == true)
         assertEquals(78L, page.nextSince)
         assertTrue(page.hasMore)
         assertFailsWith<IllegalArgumentException> { buildNextcloudActivityPageRequest(since = -1) }
+        assertEquals(
+            "/ocs/v2.php/apps/activity/api/v2/activity/self",
+            buildNextcloudActivityPageRequest(filterId = "self").relativePath,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            buildNextcloudActivityPageRequest(filterId = "../../admin")
+        }
         Unit
+    }
+
+    @Test
+    fun `file previews retain only bounded file identities needed by the native preview loader`() {
+        val page = parseNextcloudActivityPage(
+            response(
+                """
+                {"ocs":{"meta":{"status":"ok","statuscode":200},"data":[{
+                  "activity_id":42,"app":"files","type":"file_changed","subject":"Changed photo.jpg",
+                  "object_type":"files","object_id":73,"object_name":"/Photos/photo.jpg",
+                  "previews":[
+                    {"fileId":-1,"filename":"invalid.jpg"},
+                    {"fileId":73,"filename":"photo.jpg","mimeType":"image/jpeg","isMimeTypeIcon":false,"source":"https://ignored.invalid/secret"}
+                  ]
+                }]}}
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals(73L, page.activities.single().preview?.fileId)
+        assertEquals("photo.jpg", page.activities.single().preview?.filename)
+        assertFalse(page.activities.single().preview?.isMimeTypeIcon == true)
+    }
+
+    @Test
+    fun `server contributed filters are validated de duplicated and ordered`() {
+        val filters = parseNextcloudActivityFilters(
+            response(
+                """
+                {"ocs":{"meta":{"status":"ok","statuscode":200},"data":[
+                  {"id":"calendar","name":"Calendar","priority":70,"icon":"https://fixture.invalid/calendar.svg"},
+                  {"id":"all","name":"All activities","priority":0},
+                  {"id":"../../admin","name":"Unsafe","priority":1},
+                  {"id":"calendar","name":"Duplicate","priority":2},
+                  {"id":"by","name":"By others","priority":2}
+                ]}}
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals(listOf("all", "by", "calendar"), filters.map(NextcloudActivityFilterOption::id))
+        assertEquals(
+            "/ocs/v2.php/apps/activity/api/v2/activity/filters",
+            buildNextcloudActivityFiltersRequest().relativePath,
+        )
     }
 
     @Test
@@ -130,6 +183,18 @@ class ActivitySemanticsTest {
         assertEquals(NextcloudActivitySemantic.General, general.semantic())
         assertEquals(ActivityNotificationDestination.Activity, general.dynamicNotificationPlan("account").destination)
         assertTrue(message.dynamicNotificationPlan("account").groupKey.startsWith("activity:talk:"))
+    }
+
+    @Test
+    fun `activity settings handoffs remain on the account origin`() {
+        assertEquals(
+            "https://cloud.example.test/index.php/settings/user/notifications",
+            activitySettingsUrl("https://cloud.example.test/", ActivitySettingsDestination.Notifications),
+        )
+        assertEquals(
+            "https://cloud.example.test/index.php/apps/activity",
+            activitySettingsUrl("https://cloud.example.test", ActivitySettingsDestination.RssFeed),
+        )
     }
 
     @Test
