@@ -48,16 +48,29 @@ class NextcloudLinkRoutingTest {
     }
 
     @Test
-    fun installedAppRoutesRemainNativeHints() {
+    fun installedAppRootsRemainNativeHintsWithoutDiscardingItemRoutes() {
         assertEquals(
             "calendar",
             assertIs<NextcloudLinkDestination.App>(
-                nextcloudLinkDestination(session, "/index.php/apps/calendar/dayGridMonth/now"),
+                nextcloudLinkDestination(session, "/index.php/apps/calendar/"),
             ).appId,
         )
         assertIs<NextcloudLinkDestination.Home>(
             nextcloudLinkDestination(session, "/index.php/apps/dashboard/"),
         )
+        listOf(
+            "/index.php/apps/calendar/dayGridMonth/now",
+            "/index.php/apps/deck/board/42",
+            "/index.php/apps/spreed/?callToken=private-room",
+            "/index.php/apps/notes/#/note/42",
+            "/index.php/apps/dashboard/?item=42",
+        ).forEach { link ->
+            val destination = assertIs<NextcloudLinkDestination.Browser>(
+                nextcloudLinkDestination(session, link),
+                link,
+            )
+            assertEquals(true, destination.sameAccount, link)
+        }
     }
 
     @Test

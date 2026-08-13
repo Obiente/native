@@ -86,6 +86,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
@@ -981,10 +982,46 @@ private enum class NextcloudLinkSource {
     OperatingSystem,
 }
 
+private enum class NextcloudLinkNavigationResult {
+    Completed,
+    NeedsUserDecision,
+    Superseded,
+}
+
 private data class NextcloudLinkNavigationFailure(
     val message: String,
     val retryLink: String? = null,
     val browserUrl: String? = null,
+    val incomingRequestSequence: Long? = null,
+)
+
+private val nextcloudLinkNavigationFailureSaver = listSaver<NextcloudLinkNavigationFailure?, Any>(
+    save = { failure ->
+        if (failure == null) {
+            emptyList()
+        } else {
+            listOf(
+                failure.message,
+                failure.retryLink.orEmpty(),
+                failure.retryLink != null,
+                failure.browserUrl.orEmpty(),
+                failure.browserUrl != null,
+                failure.incomingRequestSequence ?: 0L,
+            )
+        }
+    },
+    restore = { saved ->
+        if (saved.isEmpty()) {
+            null
+        } else {
+            NextcloudLinkNavigationFailure(
+                message = saved[0] as String,
+                retryLink = (saved[1] as String).takeIf { saved[2] as Boolean },
+                browserUrl = (saved[3] as String).takeIf { saved[4] as Boolean },
+                incomingRequestSequence = (saved[5] as Long).takeIf { it > 0L },
+            )
+        }
+    },
 )
 
 @Composable
@@ -1602,7 +1639,11 @@ private fun AuthenticatedApp(
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
-    var linkNavigationFailure by remember(session) {
+    var linkNavigationFailure by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        stateSaver = nextcloudLinkNavigationFailureSaver,
+    ) {
         mutableStateOf<NextcloudLinkNavigationFailure?>(null)
     }
     val linkNavigationScope = rememberCoroutineScope()
@@ -1814,11 +1855,13 @@ private fun AuthenticatedApp(
         message: String,
         retryLink: String? = null,
         browserUrl: String? = null,
+        incomingRequestSequence: Long? = null,
     ) {
         linkNavigationFailure = NextcloudLinkNavigationFailure(
             message = message,
             retryLink = retryLink,
             browserUrl = browserUrl,
+            incomingRequestSequence = incomingRequestSequence,
         )
     }
 
@@ -1844,19 +1887,22 @@ private fun AuthenticatedApp(
     suspend fun navigateNextcloudLink(
         rawLink: String,
         source: NextcloudLinkSource,
+        incomingRequestSequence: Long? = null,
         isCurrent: () -> Boolean = { true },
-    ) {
-        if (!isCurrent()) return
+    ): NextcloudLinkNavigationResult {
+        if (!isCurrent()) return NextcloudLinkNavigationResult.Superseded
         when (val target = nextcloudLinkDestination(session, rawLink)) {
             is NextcloudLinkDestination.Home -> {
                 leaveAppWorkspace()
                 screen = Screen.Root
                 destination = NextcloudDestination.Home
+                return NextcloudLinkNavigationResult.Completed
             }
             is NextcloudLinkDestination.FilesPath -> {
                 returnDestination = destination
                 leaveAppWorkspace()
                 screen = Screen.Files(target.value)
+                return NextcloudLinkNavigationResult.Completed
             }
             is NextcloudLinkDestination.FileId -> {
                 val userId = serverInfo?.userId
@@ -1865,8 +1911,9 @@ private fun AuthenticatedApp(
                         message = "Your Nextcloud account is still loading. Try this link again.",
                         retryLink = rawLink,
                         browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
                     )
-                    return
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
                 }
                 var resolutionFailed = false
                 val resolved = try {
@@ -1877,7 +1924,7 @@ private fun AuthenticatedApp(
                     resolutionFailed = true
                     null
                 }
-                if (!isCurrent()) return
+                if (!isCurrent()) return NextcloudLinkNavigationResult.Superseded
                 if (resolved == null) {
                     services.recordSupportDiagnostic(
                         SupportDiagnosticEventDraft(
@@ -1910,26 +1957,34 @@ private fun AuthenticatedApp(
                         },
                         retryLink = rawLink,
                         browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
                     )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
                 } else {
                     navigateToResolvedFile(resolved)
+                    return NextcloudLinkNavigationResult.Completed
                 }
             }
             is NextcloudLinkDestination.App -> {
                 val app = serverInfo?.apps?.firstOrNull { installed -> installed.id == target.appId }
                 if (app != null) {
                     openApp(app, destination)
+                    return NextcloudLinkNavigationResult.Completed
                 } else if (source == NextcloudLinkSource.InApp) {
                     services.openExternalUrl(target.browserUrl)
+                    return NextcloudLinkNavigationResult.Completed
                 } else {
                     showLinkFailure(
                         message = "This link does not have a native destination in the current account.",
                         browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
                     )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
                 }
             }
             is NextcloudLinkDestination.Browser -> if (source == NextcloudLinkSource.InApp) {
                 services.openExternalUrl(target.browserUrl)
+                return NextcloudLinkNavigationResult.Completed
             } else {
                 showLinkFailure(
                     message = if (target.sameAccount) {
@@ -1938,15 +1993,24 @@ private fun AuthenticatedApp(
                         "This link does not belong to the current Nextcloud account."
                     },
                     browserUrl = target.browserUrl,
+                    incomingRequestSequence = incomingRequestSequence,
                 )
+                return NextcloudLinkNavigationResult.NeedsUserDecision
             }
-            is NextcloudLinkDestination.Rejected -> showLinkFailure(target.message)
+            is NextcloudLinkDestination.Rejected -> {
+                showLinkFailure(
+                    message = target.message,
+                    incomingRequestSequence = incomingRequestSequence,
+                )
+                return NextcloudLinkNavigationResult.NeedsUserDecision
+            }
         }
     }
 
     fun launchNextcloudLinkNavigation(
         rawLink: String,
         source: NextcloudLinkSource,
+        incomingRequestSequence: Long? = null,
         onFinished: () -> Unit = {},
     ) {
         val originScreen = screen
@@ -1958,13 +2022,13 @@ private fun AuthenticatedApp(
         linkNavigationFailure = null
         linkNavigationJob = linkNavigationScope.launch {
             try {
-                navigateNextcloudLink(rawLink, source) {
+                val result = navigateNextcloudLink(rawLink, source, incomingRequestSequence) {
                     linkNavigationGeneration == generation &&
                         screen == originScreen &&
                         destination == originDestination
                 }
+                if (result != NextcloudLinkNavigationResult.NeedsUserDecision) onFinished()
             } finally {
-                onFinished()
                 if (linkNavigationGeneration == generation) linkNavigationJob = null
             }
         }
@@ -1978,6 +2042,7 @@ private fun AuthenticatedApp(
                 launchNextcloudLinkNavigation(
                     rawLink = request.request.url,
                     source = NextcloudLinkSource.OperatingSystem,
+                    incomingRequestSequence = request.request.sequence,
                     onFinished = { onLinkRequestHandled(request.request.sequence) },
                 )
             }
@@ -1997,6 +2062,9 @@ private fun AuthenticatedApp(
     LaunchedEffect(linkRequest?.sequence, serverInfo?.userId) {
         val request = linkRequest ?: return@LaunchedEffect
         if (serverInfo == null) return@LaunchedEffect
+        if (linkNavigationFailure?.incomingRequestSequence == request.sequence) {
+            return@LaunchedEffect
+        }
         if (
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
@@ -2009,6 +2077,7 @@ private fun AuthenticatedApp(
             launchNextcloudLinkNavigation(
                 rawLink = request.url,
                 source = NextcloudLinkSource.OperatingSystem,
+                incomingRequestSequence = request.sequence,
                 onFinished = { onLinkRequestHandled(request.sequence) },
             )
         }
@@ -2081,8 +2150,15 @@ private fun AuthenticatedApp(
     )
 
     linkNavigationFailure?.let { failure ->
+        fun acknowledgeFailedIncomingLink() {
+            failure.incomingRequestSequence?.let(onLinkRequestHandled)
+        }
+
         AlertDialog(
-            onDismissRequest = { linkNavigationFailure = null },
+            onDismissRequest = {
+                acknowledgeFailedIncomingLink()
+                linkNavigationFailure = null
+            },
             title = { Text("Could not open link") },
             text = { Text(failure.message) },
             confirmButton = {
@@ -2094,13 +2170,20 @@ private fun AuthenticatedApp(
                             launchNextcloudLinkNavigation(
                                 retryLink,
                                 NextcloudLinkSource.OperatingSystem,
+                                incomingRequestSequence = failure.incomingRequestSequence,
+                                onFinished = {
+                                    failure.incomingRequestSequence?.let(onLinkRequestHandled)
+                                },
                             )
                         },
                     ) {
                         Text("Try again")
                     }
                 } else {
-                    TextButton(onClick = { linkNavigationFailure = null }) {
+                    TextButton(onClick = {
+                        acknowledgeFailedIncomingLink()
+                        linkNavigationFailure = null
+                    }) {
                         Text("OK")
                     }
                 }
@@ -2109,6 +2192,7 @@ private fun AuthenticatedApp(
                 {
                     TextButton(
                         onClick = {
+                            acknowledgeFailedIncomingLink()
                             linkNavigationFailure = null
                             services.openExternalUrl(browserUrl)
                         },

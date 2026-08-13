@@ -112,8 +112,16 @@ internal fun nextcloudLinkDestination(
         }
         return NextcloudLinkDestination.FilesPath(path, resolved.browserUrl)
     }
-    if (appId == "dashboard") return NextcloudLinkDestination.Home(resolved.browserUrl)
-    if (appId != null) return NextcloudLinkDestination.App(appId, resolved.browserUrl)
+    val isAppRoot = appId != null &&
+        segments.size == appsIndex + 2 &&
+        parsed.queryParameters.isEmpty() &&
+        !parsed.hasFragment
+    if (appId == "dashboard" && isAppRoot) {
+        return NextcloudLinkDestination.Home(resolved.browserUrl)
+    }
+    if (appId != null && isAppRoot) {
+        return NextcloudLinkDestination.App(appId, resolved.browserUrl)
+    }
 
     return NextcloudLinkDestination.Browser(resolved.browserUrl, sameAccount = true)
 }
@@ -145,6 +153,7 @@ private data class ParsedWebUrl(
 private data class ParsedRelativeAccountLink(
     val pathSegments: List<String>,
     val queryParameters: Map<String, List<String>>,
+    val hasFragment: Boolean,
 )
 
 private fun unwrapNextcloudNativeLink(rawLink: String): String? {
@@ -244,7 +253,11 @@ private fun parseRelativeAccountLink(value: String): ParsedRelativeAccountLink? 
     }
     val query = beforeFragment.substringAfter('?', "")
     val parameters = parseQueryParameters(query) ?: return null
-    return ParsedRelativeAccountLink(pathSegments, parameters)
+    return ParsedRelativeAccountLink(
+        pathSegments = pathSegments,
+        queryParameters = parameters,
+        hasFragment = '#' in value,
+    )
 }
 
 private fun parseQueryParameters(query: String): Map<String, List<String>>? {
