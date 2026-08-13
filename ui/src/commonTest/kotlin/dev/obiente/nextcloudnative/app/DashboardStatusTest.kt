@@ -85,6 +85,10 @@ class DashboardStatusTest {
         assertEquals(0L, budget.remainingBytes)
         budget.releaseUnused(reservedBytes = first, responseBytes = 250L)
         assertEquals(350L, budget.remainingBytes)
+        val failedReservation = budget.reserve(maximumBytes = 600L)
+        assertEquals(350L, failedReservation)
+        budget.releaseFailed(failedReservation)
+        assertEquals(350L, budget.remainingBytes)
         assertEquals(350L, budget.reserve(maximumBytes = 600L))
         assertEquals(0L, budget.reserve(maximumBytes = 600L))
         assertFailsWith<IllegalArgumentException> {

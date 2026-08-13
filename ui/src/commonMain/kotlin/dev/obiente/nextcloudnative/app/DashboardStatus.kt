@@ -291,6 +291,11 @@ internal class DashboardResponseBudget(
         }
         remainingBytes += reservedBytes - responseBytes
     }
+
+    fun releaseFailed(reservedBytes: Long) {
+        require(reservedBytes >= 0L) { "The Dashboard response reservation is invalid." }
+        remainingBytes += reservedBytes
+    }
 }
 
 fun currentUserStatusRequest(): NextcloudApiRequest = NextcloudApiRequest(

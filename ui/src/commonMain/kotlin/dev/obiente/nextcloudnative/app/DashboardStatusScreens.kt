@@ -384,6 +384,7 @@ internal fun rememberNativeDashboardState(
                                 completedResults.send(DashboardItemsFetchResult.Failed(plan.widgetIds))
                                 return@withPermit
                             }
+                            var reservationSettled = false
                             val result = runCatching {
                                 val response = services.executeNextcloudApi(
                                     session,
@@ -392,6 +393,7 @@ internal fun rememberNativeDashboardState(
                                 responseBudgetMutex.withLock {
                                     responseBudget.releaseUnused(reservedBytes, response.body.size.toLong())
                                 }
+                                reservationSettled = true
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
                                 val payload = when (plan.apiVersion) {
                                     DashboardItemApiVersion.V1 -> DashboardItemsPayload(
@@ -412,6 +414,11 @@ internal fun rememberNativeDashboardState(
                                     }
                                 }
                             }.getOrElse { failure ->
+                                if (!reservationSettled) {
+                                    responseBudgetMutex.withLock {
+                                        responseBudget.releaseFailed(reservedBytes)
+                                    }
+                                }
                                 if (failure is CancellationException) throw failure
                                 services.recordSupportDiagnostic(
                                     dashboardLoadFailureDiagnostic(
