@@ -52,6 +52,25 @@ fn registered_path_state(
 }
 
 #[cfg(any(windows, test))]
+fn owned_registration_path_is_safe_to_unregister<Missing, SameEntry>(
+    exact_registered_path: bool,
+    registered_path_is_missing: Missing,
+    registered_path_is_same_entry: SameEntry,
+) -> std::io::Result<bool>
+where
+    Missing: FnOnce() -> std::io::Result<bool>,
+    SameEntry: FnOnce() -> std::io::Result<bool>,
+{
+    if exact_registered_path {
+        return Ok(true);
+    }
+    if registered_path_is_missing()? {
+        return Ok(true);
+    }
+    registered_path_is_same_entry()
+}
+
+#[cfg(any(windows, test))]
 #[derive(Debug, PartialEq, Eq)]
 enum ExistingRegistrationAction {
     KeepCurrent,
@@ -252,8 +271,9 @@ mod platform {
         OwnedPathConflict, PROVIDER_ID, RECOVERABLE_ROOT_ARGUMENT, RegisteredPathState,
         RegistrationNotFound, UnsafeRegistrationConflict, account_id_from_sync_root_id,
         decode_identity_hex, existing_registration_action, is_windows_absence_hresult,
-        paths_refer_to_same_existing_entry, recoverable_root_matches, registered_path_state,
-        sid_string, valid_account_id, valid_display_name,
+        owned_registration_path_is_safe_to_unregister, paths_refer_to_same_existing_entry,
+        recoverable_root_matches, registered_path_state, sid_string, valid_account_id,
+        valid_display_name,
     };
     use std::collections::HashMap;
     use std::ffi::{OsStr, OsString};
@@ -614,8 +634,12 @@ mod platform {
             return Err(Box::new(UnsafeRegistrationConflict));
         }
         match existing.Path().and_then(|folder| folder.Path()) {
-            Ok(registered_path) if registered_path_is_missing(&registered_path)? => {}
-            Ok(registered_path) if registered_path_matches(&registered_path, &root)? => {}
+            Ok(registered_path)
+                if owned_registration_path_is_safe_to_unregister(
+                    registered_path == HSTRING::from(root.as_path()),
+                    || registered_path_is_missing(&registered_path),
+                    || registered_path_matches(&registered_path, &root),
+                )? => {}
             Ok(_) => return Err(Box::new(UnsafeRegistrationConflict)),
             Err(failure) if is_windows_absence_hresult(failure.code().0) => {}
             Err(failure) => return Err(failure.into()),
@@ -906,6 +930,40 @@ mod tests {
         ));
 
         std::fs::remove_dir_all(&base).expect("remove registration path fixture");
+    }
+
+    #[test]
+    fn exact_registration_path_bypasses_unavailable_filesystem_probes() {
+        assert!(
+            owned_registration_path_is_safe_to_unregister(
+                true,
+                || Err(std::io::Error::other("cloud provider is unavailable")),
+                || panic!("an exact registered path must not be canonicalized"),
+            )
+            .expect("accept exact registered path")
+        );
+    }
+
+    #[test]
+    fn non_exact_registration_paths_retain_fail_closed_checks() {
+        let unavailable = owned_registration_path_is_safe_to_unregister(
+            false,
+            || Err(std::io::Error::other("cloud provider is unavailable")),
+            || Ok(true),
+        );
+        assert!(unavailable.is_err());
+        assert!(
+            owned_registration_path_is_safe_to_unregister(
+                false,
+                || Ok(true),
+                || { panic!("a missing registered path needs no canonical comparison") }
+            )
+            .expect("accept missing registration path")
+        );
+        assert!(
+            !owned_registration_path_is_safe_to_unregister(false, || Ok(false), || Ok(false))
+                .expect("reject a different existing registration path")
+        );
     }
 
     #[test]
