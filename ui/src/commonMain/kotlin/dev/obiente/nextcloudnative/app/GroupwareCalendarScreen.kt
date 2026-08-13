@@ -703,10 +703,12 @@ internal fun MonthCalendar(
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val byDay = remember(events) {
+    val byDay = remember(events, month) {
+        val firstMonthDate = "${month.isoPrefix}01"
+        val lastMonthDate = "${month.isoPrefix}${month.days().toString().padStart(2, '0')}"
         buildMap {
             events.forEach { event ->
-                event.occupiedCalendarDates().forEach { date ->
+                event.occupiedCalendarDates(firstMonthDate, lastMonthDate).forEach { date ->
                     getOrPut(date) { mutableListOf() }.add(event)
                 }
             }
@@ -847,15 +849,21 @@ internal fun GroupwareCalendarEvent.overlapsCalendarDateRange(
     return eventStart <= rangeEnd && reachesRange
 }
 
-internal fun GroupwareCalendarEvent.occupiedCalendarDates(): List<String> {
+internal fun GroupwareCalendarEvent.occupiedCalendarDates(
+    windowStart: String? = null,
+    windowEnd: String? = null,
+): List<String> {
     val first = start.take(8).takeIf { it.length == 8 } ?: return emptyList()
     val explicitEnd = end?.take(8)?.takeIf { it.length == 8 }
     val last = explicitEnd ?: first
     if (last < first) return listOf(first)
+    val boundedFirst = windowStart?.takeIf { it.length == 8 && it > first } ?: first
+    val boundedLast = windowEnd?.takeIf { it.length == 8 && it < last } ?: last
+    if (boundedLast < boundedFirst) return emptyList()
     return buildList {
-        var current: String? = first
+        var current: String? = boundedFirst
         while (
-            current != null && size < 370 && current <= last &&
+            current != null && current <= boundedLast &&
             !(allDay && explicitEnd != null && current == last)
         ) {
             add(current)

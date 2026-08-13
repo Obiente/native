@@ -29,9 +29,7 @@ fun encodePersistedDynamicDiscovery(discovery: DynamicDescriptorDiscovery): Stri
                 serverOrigin = PERSISTED_DYNAMIC_DISCOVERY_ORIGIN,
             ),
         ),
-        diagnostics = discovery.diagnostics
-            .map { diagnostic -> diagnostic.take(MAX_PERSISTED_DYNAMIC_DIAGNOSTIC_LENGTH) }
-            .take(MAX_PERSISTED_DYNAMIC_DIAGNOSTICS),
+        diagnostics = emptyList(),
     )
     val encoded = persistedDynamicDiscoveryJson.encodeToString(bounded)
     return encoded.takeIf { value -> value.encodeToByteArray().size <= MAX_PERSISTED_DYNAMIC_DISCOVERY_BYTES }
@@ -85,6 +83,4 @@ internal fun cachedDynamicDiscoveryMatchesInstalledVersion(
 fun String.isSafeDynamicDiscoveryCacheAppId(): Boolean =
     matches(Regex("[A-Za-z0-9_.-]{1,128}"))
 
-private const val MAX_PERSISTED_DYNAMIC_DIAGNOSTICS = 24
-private const val MAX_PERSISTED_DYNAMIC_DIAGNOSTIC_LENGTH = 1_024
 private const val PERSISTED_DYNAMIC_DISCOVERY_ORIGIN = "https://persisted.invalid"

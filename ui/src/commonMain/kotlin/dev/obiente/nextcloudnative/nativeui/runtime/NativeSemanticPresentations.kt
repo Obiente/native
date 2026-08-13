@@ -762,7 +762,6 @@ internal fun nativeBudgetPlanPresentation(record: NativeRecord): NativeBudgetPla
             color = row.semanticText("color"),
         )
     }
-    if (categories.isEmpty()) return null
     val period = structured["period"]?.value?.semanticObjectEntries()
     val budgeted = totals.semanticNumber("budgeted") ?: return null
     val spent = totals.semanticNumber("spent") ?: return null

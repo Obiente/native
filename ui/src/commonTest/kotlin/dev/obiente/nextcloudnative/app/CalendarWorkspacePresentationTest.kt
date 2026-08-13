@@ -123,6 +123,22 @@ class CalendarWorkspacePresentationTest {
     }
 
     @Test
+    fun `long spanning event is clamped to the requested calendar window`() {
+        val event = event(
+            calendarId = "team",
+            start = "20240101",
+            title = "Long project",
+            end = "20260805",
+            allDay = true,
+        )
+
+        assertEquals(
+            listOf("20260801", "20260802", "20260803", "20260804"),
+            event.occupiedCalendarDates("20260801", "20260831"),
+        )
+    }
+
+    @Test
     fun `timed event ending on the first range date remains visible`() {
         val mondayMorning = event(
             calendarId = "team",

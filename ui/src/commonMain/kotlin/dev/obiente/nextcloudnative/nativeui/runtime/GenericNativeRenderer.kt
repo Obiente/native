@@ -3890,7 +3890,10 @@ private fun GenericCategoryCollection(
         val knownIds = rows.map { (record, _) -> record.id }.toSet()
         rows.mapNotNull { (_, category) -> category.parentId?.takeIf(knownIds::contains) }.toSet()
     }
-    var expandedIds by rememberSaveable(resource.id, rows) { mutableStateOf(parentIds.toList()) }
+    var expandedIds by rememberSaveable(resource.id) { mutableStateOf(parentIds.toList()) }
+    LaunchedEffect(parentIds) {
+        expandedIds = expandedIds.filter(parentIds::contains)
+    }
     val filteredRows = remember(rows, filter) {
         rows.filter { (_, category) ->
             when (filter) {
@@ -7484,7 +7487,7 @@ private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
                 NativeBudgetProgressFilter.All -> true
                 NativeBudgetProgressFilter.OverBudget -> category.isOverBudget()
                 NativeBudgetProgressFilter.Watch -> !category.isOverBudget() && category.percentage >= 75.0
-                NativeBudgetProgressFilter.OnTrack -> category.percentage < 75.0
+                NativeBudgetProgressFilter.OnTrack -> !category.isOverBudget() && category.percentage < 75.0
             }
         }
     }
@@ -7577,7 +7580,7 @@ private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
                         NativeBudgetProgressFilter.All -> true
                         NativeBudgetProgressFilter.OverBudget -> category.isOverBudget()
                         NativeBudgetProgressFilter.Watch -> !category.isOverBudget() && category.percentage >= 75.0
-                        NativeBudgetProgressFilter.OnTrack -> category.percentage < 75.0
+                        NativeBudgetProgressFilter.OnTrack -> !category.isOverBudget() && category.percentage < 75.0
                     }
                 }
                 FilterChip(
@@ -7606,12 +7609,20 @@ private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
                     ) {
                         Text(
-                            "No ${filter.label.lowercase()} categories",
+                            if (plan.categories.isEmpty()) {
+                                "No category budgets yet"
+                            } else {
+                                "No ${filter.label.lowercase()} categories"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            "Choose another progress filter to review category budgets.",
+                            if (plan.categories.isEmpty()) {
+                                "Add a recurring budget to start planning this period."
+                            } else {
+                                "Choose another progress filter to review category budgets."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
