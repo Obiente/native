@@ -33,6 +33,17 @@ class DesktopStreamingMultipartRequestBodyTest {
     }
 
     @Test
+    fun changedSourceOpenFailureIsTypedAsLocalUploadIo() {
+        val sourceFailure = IllegalArgumentException("local selection metadata changed")
+
+        val thrown = assertFailsWith<JvmLocalUploadSourceIOException> {
+            DesktopStreamingMultipartRequestBody(upload()) { throw sourceFailure }.writeTo(Buffer())
+        }
+
+        assertSame(sourceFailure, thrown.cause)
+    }
+
+    @Test
     fun sinkFailureIsNotTypedAsLocalUploadIo() {
         val sinkFailure = IOException("network sink failed")
         val sink = object : ForwardingSink(blackholeSink()) {

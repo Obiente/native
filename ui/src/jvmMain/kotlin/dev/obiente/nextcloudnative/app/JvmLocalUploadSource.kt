@@ -14,6 +14,10 @@ fun openJvmLocalUploadSource(openSource: () -> InputStream): InputStream {
         throw JvmLocalUploadSourceIOException(failure)
     } catch (failure: SecurityException) {
         throw JvmLocalUploadSourceIOException(failure)
+    } catch (failure: IllegalStateException) {
+        throw JvmLocalUploadSourceIOException(failure)
+    } catch (failure: IllegalArgumentException) {
+        throw JvmLocalUploadSourceIOException(failure)
     }
     return JvmLocalUploadInputStream(source)
 }

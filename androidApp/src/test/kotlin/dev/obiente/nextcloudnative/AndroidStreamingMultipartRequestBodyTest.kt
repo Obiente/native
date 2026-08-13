@@ -34,6 +34,17 @@ class AndroidStreamingMultipartRequestBodyTest {
     }
 
     @Test
+    fun staleSourceOpenFailureIsTypedAsLocalUploadIo() {
+        val sourceFailure = IllegalStateException("local selection expired")
+
+        val thrown = assertFailsWith<JvmLocalUploadSourceIOException> {
+            AndroidStreamingMultipartRequestBody(upload()) { throw sourceFailure }.writeTo(Buffer())
+        }
+
+        assertSame(sourceFailure, thrown.cause)
+    }
+
+    @Test
     fun sinkFailureIsNotTypedAsLocalUploadIo() {
         val sinkFailure = IOException("network sink failed")
         val sink = object : ForwardingSink(blackholeSink()) {
