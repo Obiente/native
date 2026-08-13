@@ -29,6 +29,43 @@ import kotlin.test.assertTrue
  */
 class DynamicDatasetAppsLiveReadAuditTest {
     @Test
+    fun `live Budget datasets retain native finance semantics`() = runBlocking {
+        if (System.getenv("RUN_LIVE_NEXTCLOUD_BUDGET_AUDIT") != "1") return@runBlocking
+        val delegate = DesktopNextcloudServices()
+        val session = assertNotNull(delegate.loadSession())
+        val requests = mutableListOf<NextcloudApiRequest>()
+        val services = GetOnlyAuditServices(delegate, requests)
+        val server = services.loadServerInfo(session)
+
+        auditFinance(services, session, server, "budget")
+        val descriptor = discover(services, session, server, "budget")
+        val dashboardReads = nativeBudgetDashboardReads("budget", descriptor.actions)
+        val recordsByActionId = mutableMapOf<String, List<NativeRecord>>()
+        val outcomes = dashboardReads.associate { read ->
+            val result = runCatching {
+                loadDynamicRecords(services, session, descriptor, read.action.id)
+            }
+            result.getOrNull()?.let { records -> recordsByActionId[read.action.id] = records }
+            read.kind to result.isSuccess
+        }
+        assertTrue(dashboardReads.size >= 8, "Budget did not expose its expected signed summary reads.")
+        assertTrue(outcomes[NativeBudgetDashboardDataKind.Accounts] == true)
+
+        assertTrue(requests.isNotEmpty())
+        assertTrue(requests.all { request -> request.method == NextcloudApiMethod.GET && request.body == null })
+        val dashboard = buildNativeBudgetDashboardModel(dashboardReads, recordsByActionId)
+        println(
+            "budget-dataset-audit outcome=success methods=get-only finance=totals-breakdowns " +
+                "dashboard-reads=${dashboardReads.size} dashboard-success=${outcomes.values.count { it }} " +
+                "dashboard-ready=${outcomes.filterValues { it }.keys.sortedBy { it.name }.joinToString(",") { it.name }} " +
+                "metrics=net-worth:${dashboard.netWorth != null},income:${dashboard.income != null}," +
+                "expenses:${dashboard.expenses != null},savings:${dashboard.savings != null}," +
+                "accounts:${dashboard.accounts.isNotEmpty()} " +
+                "content=redacted",
+        )
+    }
+
+    @Test
     fun `live Cospend bill envelope becomes individual native records`() = runBlocking {
         if (System.getenv("RUN_LIVE_NEXTCLOUD_COSPEND_AUDIT") != "1") return@runBlocking
         val delegate = DesktopNextcloudServices()

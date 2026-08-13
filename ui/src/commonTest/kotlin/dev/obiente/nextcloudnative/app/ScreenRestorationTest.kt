@@ -11,6 +11,29 @@ import kotlin.test.assertTrue
 
 class ScreenRestorationTest {
     @Test
+    fun `top-level app workspaces keep navigation while focused screens stay immersive`() {
+        assertTrue(Screen.Calendar.usesPersistentAppNavigation())
+        assertTrue(Screen.Files("/").usesPersistentAppNavigation())
+        assertTrue(Screen.AppInfo(NextcloudAppEntry("tables", "Tables", null)).usesPersistentAppNavigation())
+        assertFalse(Screen.Chat(TalkRoom("room", "Room", null, 0)).usesPersistentAppNavigation())
+        assertFalse(
+            Screen.TextEditor(
+                NextcloudFile(
+                    path = "/note.md",
+                    name = "note.md",
+                    isDirectory = false,
+                    mimeType = "text/markdown",
+                    size = 0,
+                    lastModified = null,
+                    fileId = 1,
+                    hasPreview = false,
+                ),
+                "/",
+            ).usesPersistentAppNavigation(),
+        )
+    }
+
+    @Test
     fun `chat restoration keeps only bounded conversation identity`() {
         val saved = Screen.Chat(
             TalkRoom(

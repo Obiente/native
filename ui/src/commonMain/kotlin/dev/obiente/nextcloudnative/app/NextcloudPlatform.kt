@@ -325,7 +325,22 @@ data class NextcloudActivity(
     val link: String?,
     val icon: String?,
     val dateTime: String?,
+    val preview: NextcloudActivityPreview? = null,
 )
+
+data class NextcloudActivityPreview(
+    val fileId: Long,
+    val filename: String,
+    val mimeType: String?,
+    val isMimeTypeIcon: Boolean,
+) {
+    init {
+        require(fileId > 0L) { "The activity preview file identifier is invalid." }
+        require(filename.isNotBlank() && filename.length <= 4_096) {
+            "The activity preview filename is invalid."
+        }
+    }
+}
 
 @Serializable
 data class NextcloudNote(
@@ -506,6 +521,18 @@ interface NextcloudPlatformServices {
     fun loadLastOpenedAppId(): String
 
     fun saveLastOpenedAppId(appId: String)
+
+    /** Loads an account-scoped verified app contract without any cached user records. */
+    suspend fun loadCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        appId: String,
+    ): DynamicDescriptorDiscovery? = null
+
+    /** Persists a verified app contract so its adaptive workspace can paint before revalidation. */
+    suspend fun saveCachedDynamicAppDiscovery(
+        session: NextcloudSession,
+        discovery: DynamicDescriptorDiscovery,
+    ) = Unit
 
     fun loadSession(): NextcloudSession?
 

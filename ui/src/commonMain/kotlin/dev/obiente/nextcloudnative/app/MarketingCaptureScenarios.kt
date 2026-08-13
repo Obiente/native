@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
@@ -471,6 +472,90 @@ enum class MarketingCaptureScenario(
         MarketingCapturePurpose.Showcase, "desktop", "wide",
         width = 1_721, height = 914, density = 1f,
     ),
+    ActivityWorkspaceMobileDark(
+        "activity-workspace-mobile-dark", "activity-workspace-mobile-dark.png", NextcloudPresentation.Adaptive,
+        "Activity", "Attention-first activity workspace", "Actionable events and compact filters",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    ActivityWorkspaceMobileLight(
+        "activity-workspace-mobile-light", "activity-workspace-mobile-light.png", NextcloudPresentation.Adaptive,
+        "Activity", "Attention-first activity workspace", "Actionable events and compact filters",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f, darkTheme = false,
+    ),
+    BudgetDashboardDesktopDark(
+        "budget-dashboard-desktop-dark", "budget-dashboard-desktop-dark.png", NextcloudPresentation.Desktop,
+        "Budget", "Finance dashboard", "Verified account, transaction, budget, bill, and goal data",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetDashboardDesktopLight(
+        "budget-dashboard-desktop-light", "budget-dashboard-desktop-light.png", NextcloudPresentation.Desktop,
+        "Budget", "Finance dashboard", "Verified account, transaction, budget, bill, and goal data",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f, darkTheme = false,
+    ),
+    BudgetDashboardMobileDark(
+        "budget-dashboard-mobile-dark", "budget-dashboard-mobile-dark.png", NextcloudPresentation.Adaptive,
+        "Budget", "Finance dashboard", "Progressive compact finance overview",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetDashboardMobileLight(
+        "budget-dashboard-mobile-light", "budget-dashboard-mobile-light.png", NextcloudPresentation.Adaptive,
+        "Budget", "Finance dashboard", "Progressive compact finance overview",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f, darkTheme = false,
+    ),
+    BudgetTransactionsDesktop(
+        "budget-transactions-desktop", "budget-transactions-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Transactions", "Synthetic records from GET /apps/budget/api/transactions",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetTransactionsMobile(
+        "budget-transactions-mobile", "budget-transactions-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Transactions", "Synthetic records from GET /apps/budget/api/transactions",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetAccountsDesktop(
+        "budget-accounts-desktop", "budget-accounts-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Accounts", "Synthetic records from GET /apps/budget/api/accounts",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetAccountsMobile(
+        "budget-accounts-mobile", "budget-accounts-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Accounts", "Synthetic records from GET /apps/budget/api/accounts",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetCategoriesDesktop(
+        "budget-categories-desktop", "budget-categories-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Categories", "Synthetic data from verified Budget category API routes",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetCategoriesMobile(
+        "budget-categories-mobile", "budget-categories-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Categories", "Synthetic data from verified Budget category API routes",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    BudgetPlanDesktop(
+        "budget-plan-desktop", "budget-plan-desktop.png", NextcloudPresentation.Desktop,
+        "Budget", "Budget plan", "Synthetic report from GET /apps/budget/api/reports/budget",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    BudgetPlanMobile(
+        "budget-plan-mobile", "budget-plan-mobile.png", NextcloudPresentation.Adaptive,
+        "Budget", "Budget plan", "Synthetic report from GET /apps/budget/api/reports/budget",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
     FileSyncSetupDesktop(
         "file-sync-setup-desktop", "file-sync-setup-desktop.png", NextcloudPresentation.Desktop,
         "File sync", "Folder pair configuration", "Guided RAW-first setup",
@@ -520,44 +605,92 @@ enum class MarketingCaptureScenario(
         width = 1_440, height = 900, density = 1f,
     ),
     AdaptiveApp(
-        "adaptive-dynamic-data", "adaptive-dynamic-data.png", NextcloudPresentation.Desktop,
-        "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
+        "tables-insights-desktop", "tables-insights-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Inventory overview and category chart", "Synthetic Tables data",
         MarketingCapturePurpose.Showcase,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
     ),
-    AdaptiveAppMobile(
-        "adaptive-dynamic-data-mobile", "adaptive-dynamic-data-mobile.png", NextcloudPresentation.Adaptive,
-        "Dynamic apps", "Nested collection and semantic form", "Synthetic visual QA",
+    TablesRowsDesktop(
+        "tables-rows-desktop", "tables-rows-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Inventory rows and actions", "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
-        "mobile", "phone-portrait", width = 1_080, height = 1_800, density = 2.625f,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesRowFormDesktop(
+        "tables-row-form-desktop", "tables-row-form-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Add inventory row", "Synthetic Tables data",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesColumnsDesktop(
+        "tables-columns-desktop", "tables-columns-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Typed table columns", "Synthetic data on the upstream Tables columns route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesViewsDesktop(
+        "tables-views-desktop", "tables-views-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Saved views", "Synthetic data on the upstream Tables views route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    TablesSharesDesktop(
+        "tables-shares-desktop", "tables-shares-desktop.png", NextcloudPresentation.Desktop,
+        "Tables", "Table sharing and permissions", "Synthetic data on the upstream Tables shares route",
+        MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    AdaptiveAppMobile(
+        "tables-row-form-mobile", "tables-row-form-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Add inventory row", "Synthetic Tables data",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
     ),
     AdaptiveAppCollectionMobile(
-        "adaptive-dynamic-collection-mobile",
-        "adaptive-dynamic-collection-mobile.png",
+        "tables-rows-mobile",
+        "tables-rows-mobile.png",
         NextcloudPresentation.Adaptive,
-        "Dynamic apps",
-        "Nested collection actions",
-        "Synthetic visual QA",
+        "Tables",
+        "Inventory rows and actions",
+        "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
         "mobile",
         "phone-portrait",
-        width = 1_080,
-        height = 1_800,
+        width = 1_024,
+        height = 2_216,
         density = 2.625f,
     ),
     AdaptiveAppContextMenuMobile(
-        "adaptive-dynamic-context-menu-mobile",
-        "adaptive-dynamic-context-menu-mobile.png",
+        "tables-overview-mobile",
+        "tables-overview-mobile.png",
         NextcloudPresentation.Adaptive,
-        "Dynamic apps",
-        "Context workspace menu",
-        "Synthetic visual QA",
+        "Tables",
+        "Inventory overview and category chart",
+        "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
         "mobile",
         "phone-portrait",
-        width = 1_080,
-        height = 1_800,
+        width = 1_024,
+        height = 2_216,
         density = 2.625f,
+    ),
+    TablesColumnsMobile(
+        "tables-columns-mobile", "tables-columns-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Typed table columns", "Synthetic data on the upstream Tables columns route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    TablesViewsMobile(
+        "tables-views-mobile", "tables-views-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Saved views", "Synthetic data on the upstream Tables views route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
+    ),
+    TablesSharesMobile(
+        "tables-shares-mobile", "tables-shares-mobile.png", NextcloudPresentation.Adaptive,
+        "Tables", "Table sharing and permissions", "Synthetic data on the upstream Tables shares route",
+        MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", width = 1_024, height = 2_216, density = 2.625f,
     ),
     MailWorkspaceDesktop(
         "mail-workspace-desktop", "mail-workspace-desktop.png", NextcloudPresentation.Desktop,
@@ -1552,10 +1685,13 @@ internal fun MarketingActivityWorkspaceDesktopScenario() {
             selectedSemantic = null,
             selectedApp = null,
             selectedType = null,
+            serverFilters = marketingActivityFilters(),
+            selectedServerFilterId = "all",
             onQueryChanged = {},
             onSemanticSelected = {},
             onAppSelected = {},
             onTypeSelected = {},
+            onServerFilterSelected = {},
             onClearFilters = {},
             onRefresh = {},
             onLoadMore = {},
@@ -1571,9 +1707,70 @@ internal fun MarketingActivityWorkspaceDesktopScenario() {
                 }
             },
             onOpenAction = {},
+            loadPreview = { null },
+            onOpenSettings = {},
         )
     }
 }
+
+@Composable
+internal fun MarketingActivityWorkspaceMobileScenario() {
+    val activities = remember { marketingActivityFixture() }
+    val timeline = remember(activities) {
+        ActivityTimelineState(
+            activities = activities,
+            initialized = true,
+            nextSince = 120,
+            hasMore = true,
+        )
+    }
+    val feed = remember(activities) { buildActivityFeedPresentation(activities) }
+    Column(Modifier.fillMaxSize()) {
+        ActivityMobileWorkspace(
+            timeline = timeline,
+            feed = feed,
+            query = "",
+            selectedSemantic = null,
+            selectedApp = null,
+            selectedType = null,
+            serverFilters = marketingActivityFilters(),
+            selectedServerFilterId = "all",
+            onQueryChanged = {},
+            onSemanticSelected = {},
+            onAppSelected = {},
+            onTypeSelected = {},
+            onServerFilterSelected = {},
+            onClearFilters = {},
+            onRefresh = {},
+            onLoadMore = {},
+            actionFor = { activity ->
+                when {
+                    activity.subject.contains("conflict", ignoreCase = true) ->
+                        ActivityOpenAction("Review conflict", appId = "files")
+                    activity.subject.contains("expir", ignoreCase = true) ->
+                        ActivityOpenAction("Extend link", appId = "files")
+                    activity.subject.contains("failed", ignoreCase = true) ->
+                        ActivityOpenAction("Retry upload", appId = "files")
+                    else -> null
+                }
+            },
+            onOpenAction = {},
+            loadPreview = { null },
+            onOpenSettings = {},
+            modifier = Modifier.weight(1f),
+        )
+        NextcloudBottomNavigation(selected = NextcloudDestination.Activity, onSelected = {})
+    }
+}
+
+private fun marketingActivityFilters(): List<NextcloudActivityFilterOption> = listOf(
+    NextcloudActivityFilterOption("all", "All activities", 0),
+    NextcloudActivityFilterOption("self", "By you", 1),
+    NextcloudActivityFilterOption("by", "By others", 2),
+    NextcloudActivityFilterOption("files", "File changes", 10),
+    NextcloudActivityFilterOption("calendar", "Calendar", 70),
+    NextcloudActivityFilterOption("comments", "Comments", 70),
+)
 
 private fun marketingActivityFixture(): List<NextcloudActivity> = listOf(
     marketingActivity(150, "files", "sync_conflict", "Sync conflict in Project plan 2026.docx", "Both copies changed", "2026-08-02T09:46:00Z"),
@@ -2005,9 +2202,17 @@ internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
         scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
             scenario == MarketingCaptureScenario.HomepageAppsDesktopLight ||
             scenario == MarketingCaptureScenario.AdaptiveApp ||
+            scenario == MarketingCaptureScenario.TablesRowsDesktop ||
+            scenario == MarketingCaptureScenario.TablesRowFormDesktop ||
+            scenario == MarketingCaptureScenario.TablesColumnsDesktop ||
+            scenario == MarketingCaptureScenario.TablesViewsDesktop ||
+            scenario == MarketingCaptureScenario.TablesSharesDesktop ||
             scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
+            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile ||
+            scenario == MarketingCaptureScenario.TablesColumnsMobile ||
+            scenario == MarketingCaptureScenario.TablesViewsMobile ||
+            scenario == MarketingCaptureScenario.TablesSharesMobile,
     ) {
         "${scenario.id} is not an adaptive data capture."
     }

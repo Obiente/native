@@ -534,14 +534,14 @@ internal class AndroidFileOfflineRepository(context: Context) {
     private fun notifyOfflineChanged(session: NextcloudSession, path: String) {
         appContext.contentResolver.notifyChange(
             android.provider.DocumentsContract.buildDocumentUri(
-                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                nextcloudDocumentsAuthority(appContext.packageName),
                 NextcloudDocumentIds.documentId(session, path),
             ),
             null,
         )
         appContext.contentResolver.notifyChange(
             android.provider.DocumentsContract.buildChildDocumentsUri(
-                NEXTCLOUD_DOCUMENTS_AUTHORITY,
+                nextcloudDocumentsAuthority(appContext.packageName),
                 NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
             ),
             null,

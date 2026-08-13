@@ -258,7 +258,8 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals("lists", list.resourceId)
         assertEquals(list.resourceId, create.resourceId)
         assertEquals(ActionIntent.create, create.intent)
-        assertEquals(listOf("houseId"), create.binding.pathParameters.map { it.name })
+        assertEquals("/ocs/v2.php/apps/example/api/houses/{id}/lists", create.binding.path)
+        assertEquals(listOf("id"), create.binding.pathParameters.map { it.name })
         assertEquals("lists", descriptor.forms.single { it.actionId == create.id }.resourceId)
         assertTrue(descriptor.validationErrors().isEmpty())
     }
@@ -971,8 +972,8 @@ class DynamicAppDescriptorCompilerTest {
                     "tags":["lists"],
                     "requestBody":{"required":true,"content":{"application/json":{"schema":{
                       "type":"object",
-                      "required":["name"],
-                      "properties":{"name":{"type":"string"},"color":{"type":"string"}}
+                      "required":["id","name"],
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"},"color":{"type":"string"}}
                     }}}},
                     "responses":{"201":{"description":"Created"}}
                   }
@@ -984,6 +985,7 @@ class DynamicAppDescriptorCompilerTest {
         val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
         val house = descriptor.actions.single { action -> action.id == "house-index" }
         val lists = descriptor.actions.single { action -> action.id == "list-index" }
+        val createList = descriptor.actions.single { action -> action.id == "list-create" }
         val listResource = descriptor.resources.single { resource -> resource.id == lists.resourceId }
 
         assertEquals(house.resourceId, descriptor.actions.single { it.id == "house-show" }.resourceId)
@@ -995,6 +997,66 @@ class DynamicAppDescriptorCompilerTest {
             },
             "links=${descriptor.links}",
         )
+        assertEquals("/apps/example/api/houses/{houseId}/lists", createList.binding.path)
+        assertEquals(listOf("houseId"), createList.binding.pathParameters.map(HttpParameter::name))
+        assertEquals(
+            listOf("color", "id", "name"),
+            descriptor.forms.single { it.actionId == createList.id }.fields.map(FormField::fieldId),
+        )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `nested collections prefer the exact plural parent over a singular sibling resource`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Inventory","version":"1"},
+              "paths":{
+                "/apps/example/api/config/table/{id}":{
+                  "parameters":[
+                    {"name":"id","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"config-get-table",
+                    "tags":["table"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"object","properties":{"displayMode":{"type":"string"}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tables":{
+                  "get":{
+                    "operationId":"tables-index",
+                    "tags":["tables"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/tables/{tableId}/columns":{
+                  "parameters":[
+                    {"name":"tableId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"columns-index",
+                    "tags":["columns"],
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
+        val columnsLink = descriptor.links.single { link ->
+            (link.target as? DynamicLinkTarget.Action)?.actionId == "columns-index"
+        }
+
+        assertEquals("tables", columnsLink.resourceId)
+        assertEquals("id", columnsLink.sourceFieldId)
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,10 +24,14 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionDestinationSection
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationModel
+import dev.obiente.nextcloudnative.app.design.NextcloudCollectionNavigationHost
 import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffold
+import dev.obiente.nextcloudnative.app.design.NextcloudBottomNavigation
+import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
@@ -40,7 +43,6 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
-import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
@@ -50,14 +52,12 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
-import dev.obiente.nextcloudnative.nativeui.runtime.nativeRelationOptionWindow
-import dev.obiente.nextcloudnative.nativeui.runtime.nativeRelationOptions
-import dev.obiente.nextcloudnative.nativeui.runtime.nativeScalarRelationClearChoice
 
 /**
- * Inventory of the production-generic behavior exercised by this capture-only fixture.
+ * Inventory of production-generic behavior exercised by the capture-only Tables fixture.
  *
- * The fixture deliberately contains no installed app identity, endpoint, account, or server data.
+ * The app identity is explicit so public evidence looks like the product people use. All rows,
+ * paths, identities, and actions remain deterministic synthetic data and never contact a server.
  */
 internal enum class MarketingDynamicUiFeature {
     ContractIdentity,
@@ -67,7 +67,7 @@ internal enum class MarketingDynamicUiFeature {
     OptionalRelationClear,
     LargeRelationSearch,
     BooleanControl,
-    RecurrenceControl,
+    DatasetInsights,
     SemanticForm,
     StaleMutationSuppression,
     RelationRetry,
@@ -84,18 +84,18 @@ internal data class MarketingDynamicUiFixture(
 )
 
 internal val marketingDynamicUiFixture = MarketingDynamicUiFixture(
-    appName = "Community workspace",
-    description = "A contract-driven nested collection with reusable native controls.",
-    iconText = "CW",
-    accentArgb = 0xFF5B5BD6,
-    breadcrumbs = listOf("Projects", "Garden renewal", "Work items"),
+    appName = "Tables",
+    description = "Community inventory",
+    iconText = "T",
+    accentArgb = 0xFF00679E,
+    breadcrumbs = listOf("Tables", "Community inventory", "Rows"),
     relationOptionCount = 240,
     features = MarketingDynamicUiFeature.entries.toSet(),
 )
 
 private val marketingDynamicGroupsResource = ResourceSpec(
-    id = "groups",
-    name = "Groups",
+    id = "locations",
+    name = "Locations",
     confidence = Confidence.verified,
     fields = listOf(
         FieldSpec("id", "ID", FieldKind.string, required = true, readOnly = true),
@@ -104,56 +104,170 @@ private val marketingDynamicGroupsResource = ResourceSpec(
 )
 
 internal val marketingDynamicWorkItemsResource = ResourceSpec(
-    id = "work-items",
-    name = "Work items",
+    id = "rows",
+    name = "Inventory rows",
     confidence = Confidence.verified,
     fields = listOf(
-        FieldSpec("title", "Title", FieldKind.string, required = true, readOnly = false),
-        FieldSpec("description", "Description", FieldKind.string, required = false, readOnly = true),
-        FieldSpec("icon", "Icon", FieldKind.string, required = false, readOnly = true),
-        FieldSpec("color", "Color", FieldKind.string, required = false, readOnly = true),
+        FieldSpec("item", "Item", FieldKind.string, required = true, readOnly = false),
         FieldSpec(
-            id = "status",
-            label = "Status",
+            id = "category",
+            label = "Category",
             kind = FieldKind.enumeration,
             required = true,
             readOnly = false,
-            enumValues = listOf("planned", "in-progress", "ready"),
+            enumValues = listOf("tools", "materials", "safety"),
         ),
-        FieldSpec("groupId", "Parent group", FieldKind.string, required = false, readOnly = false),
-        FieldSpec("sendReminders", "Send reminders", FieldKind.boolean, required = false, readOnly = false),
-        FieldSpec("rrule", "Repeat", FieldKind.string, required = false, readOnly = false),
+        FieldSpec("quantity", "Quantity", FieldKind.integer, required = true, readOnly = false),
+        FieldSpec("reorderLevel", "Reorder level", FieldKind.integer, required = false, readOnly = false),
+        FieldSpec("locationId", "Location", FieldKind.string, required = false, readOnly = false),
+        FieldSpec("active", "Active item", FieldKind.boolean, required = false, readOnly = false),
+    ),
+)
+
+private val marketingTablesColumnsResource = ResourceSpec(
+    id = "columns",
+    name = "Columns",
+    confidence = Confidence.verified,
+    fields = listOf(
+        FieldSpec("id", "ID", FieldKind.integer, required = true, readOnly = true),
+        FieldSpec("title", "Column", FieldKind.string, required = true, readOnly = false),
+        FieldSpec("type", "Type", FieldKind.enumeration, required = true, readOnly = true),
+        FieldSpec("description", "Description", FieldKind.string, required = false, readOnly = false),
+        FieldSpec("mandatory", "Required", FieldKind.boolean, required = true, readOnly = false),
+        FieldSpec("orderWeight", "Order", FieldKind.integer, required = true, readOnly = false),
+    ),
+)
+
+private val marketingTablesViewsResource = ResourceSpec(
+    id = "views",
+    name = "Views",
+    confidence = Confidence.verified,
+    fields = listOf(
+        FieldSpec("id", "ID", FieldKind.integer, required = true, readOnly = true),
+        FieldSpec("title", "View", FieldKind.string, required = true, readOnly = false),
+        FieldSpec("rows", "Rows", FieldKind.integer, required = false, readOnly = true),
+        FieldSpec("columns", "Columns", FieldKind.integer, required = false, readOnly = true),
+        FieldSpec("lastEdit", "Last edited", FieldKind.dateTime, required = false, readOnly = true),
+        FieldSpec("shareCount", "Shares", FieldKind.integer, required = false, readOnly = true),
+    ),
+)
+
+private val marketingTablesSharesResource = ResourceSpec(
+    id = "shares",
+    name = "Shares",
+    confidence = Confidence.verified,
+    fields = listOf(
+        FieldSpec("id", "ID", FieldKind.integer, required = true, readOnly = true),
+        FieldSpec("receiverDisplayName", "Person or group", FieldKind.string, required = true, readOnly = true),
+        FieldSpec("receiverType", "Type", FieldKind.enumeration, required = true, readOnly = true),
+        FieldSpec("permissionRead", "Read", FieldKind.boolean, required = true, readOnly = false),
+        FieldSpec("permissionCreate", "Create", FieldKind.boolean, required = true, readOnly = false),
+        FieldSpec("permissionUpdate", "Update", FieldKind.boolean, required = true, readOnly = false),
+        FieldSpec("permissionDelete", "Delete", FieldKind.boolean, required = true, readOnly = false),
+        FieldSpec("permissionManage", "Manage", FieldKind.boolean, required = true, readOnly = false),
+        FieldSpec("displayMode", "Display mode", FieldKind.enumeration, required = false, readOnly = false),
     ),
 )
 
 private val marketingDynamicListView = ViewSpec(
-    id = "work-items.collection",
-    title = "Work items",
+    id = "rows.collection",
+    title = "Rows",
     resourceId = marketingDynamicWorkItemsResource.id,
-    component = NativeComponent.collectionList,
-    sourceActionId = "work-items.list",
+    component = NativeComponent.dataTable,
+    sourceActionId = "rows.list",
+    confidence = Confidence.verified,
+)
+
+private val marketingDynamicInsightsView = ViewSpec(
+    id = "rows.insights",
+    title = "Insights",
+    resourceId = marketingDynamicWorkItemsResource.id,
+    component = NativeComponent.dashboard,
+    sourceActionId = marketingDynamicListView.sourceActionId,
     confidence = Confidence.verified,
 )
 
 private val marketingDynamicFormView = ViewSpec(
-    id = "work-items.create",
-    title = "Create work item",
+    id = "rows.create",
+    title = "Add inventory row",
     resourceId = marketingDynamicWorkItemsResource.id,
     component = NativeComponent.form,
-    sourceActionId = "work-items.create",
+    sourceActionId = "rows.create",
+    confidence = Confidence.verified,
+)
+
+private val marketingTablesColumnsView = ViewSpec(
+    id = "columns.collection",
+    title = "Columns",
+    resourceId = marketingTablesColumnsResource.id,
+    component = NativeComponent.dataTable,
+    sourceActionId = "api1-index-table-columns",
+    confidence = Confidence.verified,
+)
+
+private val marketingTablesViewsView = ViewSpec(
+    id = "views.collection",
+    title = "Views",
+    resourceId = marketingTablesViewsResource.id,
+    component = NativeComponent.dataTable,
+    sourceActionId = "api1-index-views",
+    confidence = Confidence.verified,
+)
+
+private val marketingTablesSharesView = ViewSpec(
+    id = "shares.collection",
+    title = "Share",
+    resourceId = marketingTablesSharesResource.id,
+    component = NativeComponent.dataTable,
+    sourceActionId = "api1-index-table-shares",
+    confidence = Confidence.verified,
+)
+
+private val marketingTablesShareDetailView = ViewSpec(
+    id = "shares.detail",
+    title = "Workshop team permissions",
+    resourceId = marketingTablesSharesResource.id,
+    component = NativeComponent.detail,
+    sourceActionId = "api1-get-share",
+    confidence = Confidence.verified,
+)
+
+private fun marketingTablesReadAction(
+    id: String,
+    label: String,
+    resourceId: String,
+    path: String,
+    pathParameterName: String = "id",
+    intent: ActionIntent = ActionIntent.list,
+) = ActionSpec(
+    id = id,
+    label = label,
+    resourceId = resourceId,
+    binding = ApiBinding(
+        method = HttpMethod.GET,
+        path = path,
+        operationId = id,
+        pathParameterNames = listOf(pathParameterName),
+        requiredPathParameterNames = listOf(pathParameterName),
+    ),
+    intent = intent,
+    risk = ActionRisk.readOnly,
+    requiresConfirmation = false,
     confidence = Confidence.verified,
 )
 
 private val marketingDynamicCreateAction = ActionSpec(
     id = marketingDynamicFormView.sourceActionId,
-    label = "Create work item",
+    label = "Add inventory row",
     resourceId = marketingDynamicWorkItemsResource.id,
     binding = ApiBinding(
         method = HttpMethod.POST,
-        path = "/synthetic/work-items",
-        operationId = "createSyntheticWorkItem",
-        bodyFieldNames = listOf("title", "status", "groupId", "sendReminders", "rrule"),
-        requiredBodyFieldNames = listOf("title", "status"),
+        path = "/index.php/apps/tables/api/1/tables/{id}/rows",
+        operationId = "api1-create-row-in-table",
+        pathParameterNames = listOf("id"),
+        requiredPathParameterNames = listOf("id"),
+        bodyFieldNames = listOf("item", "category", "quantity", "reorderLevel", "locationId", "active"),
+        requiredBodyFieldNames = listOf("item", "category", "quantity"),
         bodyContentType = "application/json",
     ),
     intent = ActionIntent.create,
@@ -164,17 +278,65 @@ private val marketingDynamicCreateAction = ActionSpec(
 
 internal val marketingDynamicUiSchema = NativeAppSchema(
     schemaVersion = "visual-qa",
-    app = AppIdentity("synthetic-dynamic-ui", "Synthetic dynamic UI", "fixture"),
+    app = AppIdentity("tables", "Tables", "fixture"),
     confidence = Confidence.verified,
-    resources = listOf(marketingDynamicGroupsResource, marketingDynamicWorkItemsResource),
-    views = listOf(marketingDynamicListView, marketingDynamicFormView),
-    actions = listOf(marketingDynamicCreateAction),
+    resources = listOf(
+        marketingDynamicGroupsResource,
+        marketingDynamicWorkItemsResource,
+        marketingTablesColumnsResource,
+        marketingTablesViewsResource,
+        marketingTablesSharesResource,
+    ),
+    views = listOf(
+        marketingDynamicInsightsView,
+        marketingDynamicListView,
+        marketingDynamicFormView,
+        marketingTablesColumnsView,
+        marketingTablesViewsView,
+        marketingTablesSharesView,
+        marketingTablesShareDetailView,
+    ),
+    actions = listOf(
+        marketingTablesReadAction(
+            id = marketingDynamicListView.sourceActionId,
+            label = "List rows",
+            resourceId = marketingDynamicWorkItemsResource.id,
+            path = "/index.php/apps/tables/api/1/tables/{id}/rows",
+        ),
+        marketingTablesReadAction(
+            id = marketingTablesColumnsView.sourceActionId,
+            label = "List columns",
+            resourceId = marketingTablesColumnsResource.id,
+            path = "/index.php/apps/tables/api/1/tables/{id}/columns",
+        ),
+        marketingTablesReadAction(
+            id = marketingTablesViewsView.sourceActionId,
+            label = "List views",
+            resourceId = marketingTablesViewsResource.id,
+            path = "/index.php/apps/tables/api/1/tables/{id}/views",
+        ),
+        marketingTablesReadAction(
+            id = marketingTablesSharesView.sourceActionId,
+            label = "List shares",
+            resourceId = marketingTablesSharesResource.id,
+            path = "/index.php/apps/tables/api/1/tables/{id}/shares",
+        ),
+        marketingTablesReadAction(
+            id = marketingTablesShareDetailView.sourceActionId,
+            label = "Get share",
+            resourceId = marketingTablesSharesResource.id,
+            path = "/index.php/apps/tables/api/1/shares/{shareId}",
+            pathParameterName = "shareId",
+            intent = ActionIntent.read,
+        ),
+        marketingDynamicCreateAction,
+    ),
     relationships = listOf(
         ResourceRelationshipSpec(
             parentResourceId = marketingDynamicGroupsResource.id,
             childResourceId = marketingDynamicWorkItemsResource.id,
             parentFieldId = "id",
-            childFieldId = "groupId",
+            childFieldId = "locationId",
             confidence = Confidence.verified,
         ),
     ),
@@ -182,114 +344,189 @@ internal val marketingDynamicUiSchema = NativeAppSchema(
 
 internal val marketingDynamicWorkItemRecords = listOf(
     NativeRecord(
-        id = "work-item-1",
+        id = "row-1",
         values = mapOf(
-            "title" to "Map planting beds",
-            "description" to "Prepare a clear layout for volunteers.",
-            "icon" to "garden",
-            "color" to "5B5BD6",
-            "status" to "in-progress",
-            "groupId" to "group-1",
-            "sendReminders" to "true",
-            "rrule" to "FREQ=WEEKLY;INTERVAL=2",
+            "item" to "Cordless drills",
+            "category" to "tools",
+            "quantity" to "6",
+            "reorderLevel" to "3",
+            "locationId" to "location-1",
+            "active" to "true",
         ),
     ),
     NativeRecord(
-        id = "work-item-2",
+        id = "row-2",
         values = mapOf(
-            "title" to "Confirm volunteer schedule",
-            "description" to "Check availability for the next work day.",
-            "icon" to "calendar",
-            "color" to "2F9E44",
-            "status" to "planned",
-            "groupId" to "group-2",
-            "sendReminders" to "false",
-            "rrule" to "",
+            "item" to "Safety glasses",
+            "category" to "safety",
+            "quantity" to "18",
+            "reorderLevel" to "10",
+            "locationId" to "location-2",
+            "active" to "true",
         ),
     ),
     NativeRecord(
-        id = "work-item-3",
+        id = "row-3",
         values = mapOf(
-            "title" to "Review materials",
-            "description" to "Verify the shared tools and supplies list.",
-            "icon" to "tools",
-            "color" to "D97706",
-            "status" to "ready",
-            "groupId" to null,
-            "sendReminders" to "true",
-            "rrule" to "FREQ=MONTHLY",
+            "item" to "Timber boards",
+            "category" to "materials",
+            "quantity" to "24",
+            "reorderLevel" to "12",
+            "locationId" to "location-1",
+            "active" to "true",
         ),
     ),
     NativeRecord(
-        id = "work-item-4",
+        id = "row-4",
         values = mapOf(
-            "title" to "Book tool delivery",
-            "description" to "Coordinate the shared trailer and delivery window.",
-            "icon" to "truck",
-            "color" to "2563EB",
-            "status" to "planned",
-            "groupId" to "group-1",
-            "sendReminders" to "true",
-            "rrule" to "",
+            "item" to "Work gloves",
+            "category" to "safety",
+            "quantity" to "14",
+            "reorderLevel" to "8",
+            "locationId" to "location-2",
+            "active" to "true",
         ),
     ),
     NativeRecord(
-        id = "work-item-5",
+        id = "row-5",
         values = mapOf(
-            "title" to "Publish volunteer briefing",
-            "description" to "Share arrival details, safety notes, and contacts.",
-            "icon" to "notes",
-            "color" to "7C3AED",
-            "status" to "in-progress",
-            "groupId" to "group-2",
-            "sendReminders" to "false",
-            "rrule" to "",
+            "item" to "Paint rollers",
+            "category" to "tools",
+            "quantity" to "9",
+            "reorderLevel" to "4",
+            "locationId" to "location-1",
+            "active" to "true",
         ),
     ),
     NativeRecord(
-        id = "work-item-6",
+        id = "row-6",
         values = mapOf(
-            "title" to "Confirm water access",
-            "description" to "Verify the outdoor tap and backup water containers.",
-            "icon" to "water",
-            "color" to "0284C7",
-            "status" to "ready",
-            "groupId" to "group-1",
-            "sendReminders" to "true",
-            "rrule" to "",
+            "item" to "Drop cloths",
+            "category" to "materials",
+            "quantity" to "11",
+            "reorderLevel" to "6",
+            "locationId" to "location-2",
+            "active" to "true",
         ),
     ),
     NativeRecord(
-        id = "work-item-7",
+        id = "row-7",
         values = mapOf(
-            "title" to "Prepare day-of checklist",
-            "description" to "Collect the final setup and cleanup responsibilities.",
-            "icon" to "checklist",
-            "color" to "059669",
-            "status" to "planned",
-            "groupId" to "group-2",
-            "sendReminders" to "true",
-            "rrule" to "FREQ=WEEKLY",
+            "item" to "Extension leads",
+            "category" to "tools",
+            "quantity" to "5",
+            "reorderLevel" to "3",
+            "locationId" to "location-1",
+            "active" to "false",
         ),
+    ),
+)
+
+private val marketingTablesColumnRecords = listOf(
+    marketingTablesColumnRecord("column-1", "1", "Item", "text", "Inventory item name", true, "10"),
+    marketingTablesColumnRecord(
+        "column-2", "2", "Category", "selection", "Tools, materials, or safety", true, "20",
+    ),
+    marketingTablesColumnRecord("column-3", "3", "Quantity", "number", "Current stock", true, "30"),
+    marketingTablesColumnRecord(
+        "column-4", "4", "Reorder level", "number", "Low-stock threshold", false, "40",
+    ),
+    marketingTablesColumnRecord("column-5", "5", "Location", "selection", "Storage location", false, "50"),
+    marketingTablesColumnRecord("column-6", "6", "Active item", "selection", "Available for use", false, "60"),
+)
+
+private val marketingTablesViewRecords = listOf(
+    marketingTablesViewRecord("view-1", "1", "All inventory", "7", "6", "2026-08-12T20:14:00Z", "2"),
+    marketingTablesViewRecord("view-2", "2", "Needs reorder", "2", "5", "2026-08-11T09:42:00Z", "1"),
+    marketingTablesViewRecord("view-3", "3", "Safety equipment", "2", "4", "2026-08-08T16:05:00Z", "0"),
+)
+
+private val marketingTablesShareRecords = listOf(
+    marketingTablesShareRecord("share-1", "1", "Workshop team", "group", true, true, true, "editor"),
+    marketingTablesShareRecord("share-2", "2", "Maya Chen", "user", true, false, false, "viewer"),
+)
+
+private fun marketingTablesColumnRecord(
+    recordId: String,
+    id: String,
+    title: String,
+    type: String,
+    description: String,
+    mandatory: Boolean,
+    orderWeight: String,
+) = NativeRecord(
+    recordId,
+    mapOf(
+        "id" to id,
+        "title" to title,
+        "type" to type,
+        "description" to description,
+        "mandatory" to mandatory.toString(),
+        "orderWeight" to orderWeight,
+    ),
+)
+
+private fun marketingTablesViewRecord(
+    recordId: String,
+    id: String,
+    title: String,
+    rows: String,
+    columns: String,
+    lastEdit: String,
+    shareCount: String,
+) = NativeRecord(
+    recordId,
+    mapOf(
+        "id" to id,
+        "title" to title,
+        "rows" to rows,
+        "columns" to columns,
+        "lastEdit" to lastEdit,
+        "shareCount" to shareCount,
+    ),
+)
+
+private fun marketingTablesShareRecord(
+    recordId: String,
+    id: String,
+    receiverDisplayName: String,
+    receiverType: String,
+    permissionRead: Boolean,
+    permissionCreate: Boolean,
+    permissionUpdate: Boolean,
+    displayMode: String,
+) = NativeRecord(
+    recordId,
+    mapOf(
+        "id" to id,
+        "receiverDisplayName" to receiverDisplayName,
+        "receiverType" to receiverType,
+        "permissionRead" to permissionRead.toString(),
+        "permissionCreate" to permissionCreate.toString(),
+        "permissionUpdate" to permissionUpdate.toString(),
+        "permissionDelete" to "false",
+        "permissionManage" to "false",
+        "displayMode" to displayMode,
     ),
 )
 
 internal val marketingDynamicRelatedGroupRecords = List(marketingDynamicUiFixture.relationOptionCount) { index ->
     val number = index + 1
     NativeRecord(
-        id = "group-$number",
+        id = "location-$number",
         values = mapOf(
-            "id" to "group-$number",
+            "id" to "location-$number",
             "title" to when (number) {
-                1 -> "Garden team"
-                2 -> "Planning group"
-                else -> "Workspace group ${number.toString().padStart(3, '0')}"
+                1 -> "Workshop"
+                2 -> "Storage room"
+                else -> "Location ${number.toString().padStart(3, '0')}"
             },
         ),
     )
 }
 
 internal val marketingDynamicDatasetContext = NativeDatasetContext(
+    bindingValues = mapOf("id" to "42", "shareId" to "1"),
     relatedRecords = mapOf(marketingDynamicGroupsResource.id to marketingDynamicRelatedGroupRecords),
 )
 
@@ -306,20 +543,40 @@ internal fun MarketingDynamicUiScenario(
         scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
             scenario == MarketingCaptureScenario.HomepageAppsDesktopLight ||
             scenario == MarketingCaptureScenario.AdaptiveApp ||
+            scenario == MarketingCaptureScenario.TablesRowsDesktop ||
+            scenario == MarketingCaptureScenario.TablesRowFormDesktop ||
+            scenario == MarketingCaptureScenario.TablesColumnsDesktop ||
+            scenario == MarketingCaptureScenario.TablesViewsDesktop ||
+            scenario == MarketingCaptureScenario.TablesSharesDesktop ||
             scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
             scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile,
+            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile ||
+            scenario == MarketingCaptureScenario.TablesColumnsMobile ||
+            scenario == MarketingCaptureScenario.TablesViewsMobile ||
+            scenario == MarketingCaptureScenario.TablesSharesMobile,
     ) {
-        "${scenario.id} is not a synthetic dynamic UI capture."
+        "${scenario.id} is not a Tables capture."
     }
     val desktop = scenario.presentation == NextcloudPresentation.Desktop
     Column(modifier = Modifier.fillMaxSize()) {
         MarketingDynamicContractHeader(fixture, compact = !desktop)
         if (scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile) {
-            MarketingDynamicContextMenuCapture(
+            MarketingTablesMobileScaffold(
                 fixture = fixture,
+                selectedDestinationId = marketingDynamicInsightsView.id,
+                contentTitle = "Community inventory",
+                contentSubtitle = "Overview",
                 modifier = Modifier.weight(1f),
-            )
+            ) {
+                GenericNativeAppScreen(
+                    schema = marketingDynamicUiSchema,
+                    view = marketingDynamicInsightsView,
+                    state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+                    actionExecutor = marketingCaptureActionExecutor,
+                    modifier = Modifier.fillMaxSize(),
+                    datasetContext = marketingDynamicDatasetContext,
+                )
+            }
         } else if (
             scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
             scenario == MarketingCaptureScenario.HomepageAppsDesktopLight
@@ -334,212 +591,228 @@ internal fun MarketingDynamicUiScenario(
                 showCollectionCreateAction = true,
             )
         } else if (desktop) {
-            MarketingDynamicDesktopCapture(fixture, Modifier.weight(1f))
-        } else if (scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile) {
-            GenericNativeAppScreen(
-                schema = marketingDynamicUiSchema,
-                view = marketingDynamicListView,
-                state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
-                actionExecutor = marketingCaptureActionExecutor,
+            val view = when (scenario) {
+                MarketingCaptureScenario.TablesRowsDesktop -> marketingDynamicListView
+                MarketingCaptureScenario.TablesRowFormDesktop -> marketingDynamicFormView
+                MarketingCaptureScenario.TablesColumnsDesktop -> marketingTablesColumnsView
+                MarketingCaptureScenario.TablesViewsDesktop -> marketingTablesViewsView
+                MarketingCaptureScenario.TablesSharesDesktop -> marketingTablesShareDetailView
+                else -> marketingDynamicInsightsView
+            }
+            MarketingDynamicDesktopCapture(
+                fixture = fixture,
+                view = view,
+                contentTitle = if (view == marketingDynamicFormView) {
+                    "Add inventory row"
+                } else {
+                    "Community inventory"
+                },
+                contentSubtitle = marketingTablesViewSubtitle(view),
                 modifier = Modifier.weight(1f),
-                datasetContext = marketingDynamicDatasetContext,
-                showCollectionCreateAction = true,
             )
-        } else {
-            GenericNativeAppScreen(
-                schema = marketingDynamicUiSchema,
-                view = marketingDynamicFormView,
-                state = NativeScreenState.Ready(emptyList()),
-                actionExecutor = marketingCaptureActionExecutor,
+        } else if (scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile) {
+            MarketingTablesMobileScaffold(
+                fixture = fixture,
+                selectedDestinationId = marketingDynamicListView.id,
+                contentTitle = "Community inventory",
+                contentSubtitle = "Rows",
                 modifier = Modifier.weight(1f),
-                datasetContext = marketingDynamicDatasetContext,
+            ) {
+                GenericNativeAppScreen(
+                    schema = marketingDynamicUiSchema,
+                    view = marketingDynamicListView,
+                    state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+                    actionExecutor = marketingCaptureActionExecutor,
+                    modifier = Modifier.fillMaxSize(),
+                    datasetContext = marketingDynamicDatasetContext,
+                    showCollectionCreateAction = true,
+                )
+            }
+        } else if (scenario == MarketingCaptureScenario.AdaptiveAppMobile) {
+            MarketingTablesMobileScaffold(
+                fixture = fixture,
+                selectedDestinationId = marketingDynamicListView.id,
+                contentTitle = "Add inventory row",
+                contentSubtitle = "Community inventory",
+                modifier = Modifier.weight(1f),
+            ) {
+                GenericNativeAppScreen(
+                    schema = marketingDynamicUiSchema,
+                    view = marketingDynamicFormView,
+                    state = NativeScreenState.Ready(emptyList()),
+                    actionExecutor = marketingCaptureActionExecutor,
+                    modifier = Modifier.fillMaxSize(),
+                    datasetContext = marketingDynamicDatasetContext,
+                )
+            }
+        } else {
+            val view = when (scenario) {
+                MarketingCaptureScenario.TablesColumnsMobile -> marketingTablesColumnsView
+                MarketingCaptureScenario.TablesViewsMobile -> marketingTablesViewsView
+                MarketingCaptureScenario.TablesSharesMobile -> marketingTablesShareDetailView
+                else -> error("Unsupported Tables mobile capture: ${scenario.id}")
+            }
+            MarketingTablesMobileScaffold(
+                fixture = fixture,
+                selectedDestinationId = if (view == marketingTablesShareDetailView) {
+                    marketingTablesSharesView.id
+                } else {
+                    view.id
+                },
+                contentTitle = "Community inventory",
+                contentSubtitle = marketingTablesViewSubtitle(view),
+                modifier = Modifier.weight(1f),
+            ) {
+                GenericNativeAppScreen(
+                    schema = marketingDynamicUiSchema,
+                    view = view,
+                    state = NativeScreenState.Ready(marketingTablesRecords(view)),
+                    actionExecutor = marketingCaptureActionExecutor,
+                    modifier = Modifier.fillMaxSize(),
+                    datasetContext = marketingDynamicDatasetContext,
+                    showCollectionCreateAction = false,
+                )
+            }
+        }
+        if (!desktop) {
+            NextcloudBottomNavigation(
+                selected = NextcloudDestination.Apps,
+                onSelected = {},
             )
         }
     }
 }
 
-private val marketingContextMenuViews = listOf(
-    ViewSpec(
-        id = "context.tasks",
-        title = "Tasks",
-        resourceId = "context-tasks",
-        component = NativeComponent.taskList,
-        sourceActionId = "context.tasks.list",
-        confidence = Confidence.verified,
-    ),
-    ViewSpec(
-        id = "context.notes",
-        title = "Notes",
-        resourceId = "context-notes",
-        component = NativeComponent.collectionList,
-        sourceActionId = "context.notes.list",
-        confidence = Confidence.verified,
-    ),
-    ViewSpec(
-        id = "context.media",
-        title = "Media",
-        resourceId = "context-media",
-        component = NativeComponent.mediaGrid,
-        sourceActionId = "context.media.list",
-        confidence = Confidence.verified,
-    ),
-    ViewSpec(
-        id = "context.members",
-        title = "Members",
-        resourceId = "context-members",
-        component = NativeComponent.contactList,
-        sourceActionId = "context.members.list",
-        confidence = Confidence.verified,
-    ),
-    ViewSpec(
-        id = "context.activity",
-        title = "Activity",
-        resourceId = "context-activity",
-        component = NativeComponent.timeline,
-        sourceActionId = "context.activity.list",
-        confidence = Confidence.verified,
-    ),
-    ViewSpec(
-        id = "context.preferences",
-        title = "Preferences",
-        resourceId = "context-preferences",
-        component = NativeComponent.dataTable,
-        sourceActionId = "context.preferences.read",
-        confidence = Confidence.verified,
-    ),
-)
-
-private val marketingContextMenuSchema = marketingDynamicUiSchema.copy(
-    resources = marketingContextMenuViews.map { view ->
-        ResourceSpec(
-            id = view.resourceId,
-            name = view.title,
-            confidence = Confidence.verified,
-            fields = emptyList(),
-        )
-    },
-    views = marketingContextMenuViews,
-    actions = emptyList(),
-    relationships = emptyList(),
-)
-
-private val marketingContextMenuDestinations = marketingContextMenuViews.map { view ->
-    DynamicNavigationDestination(
-        layoutId = view.id,
-        label = view.title,
-        resourceId = view.resourceId,
-        actionId = view.sourceActionId,
-        pathParameterValues = mapOf("workspaceId" to "synthetic-workspace"),
-    ) to NextcloudCollectionDestination(
-        id = view.id,
-        label = view.title,
-        accessibilityId = view.sourceActionId,
-        supportingText = when (view.component) {
-            NativeComponent.taskList -> "Track and complete shared work"
-            NativeComponent.mediaGrid -> "Browse workspace photos and media"
-            NativeComponent.contactList -> "Manage workspace members"
-            NativeComponent.timeline -> "Review recent workspace activity"
-            NativeComponent.dataTable -> "Adjust workspace preferences"
-            else -> "Browse and manage ${view.title.lowercase()}"
-        },
-        section = if (
-            view.component == NativeComponent.contactList ||
-            view.component == NativeComponent.dataTable
-        ) {
-            NextcloudCollectionDestinationSection.Manage
-        } else {
-            NextcloudCollectionDestinationSection.Primary
-        },
-    )
-}
-
 @Composable
-private fun MarketingDynamicContextMenuCapture(
+private fun MarketingTablesMobileScaffold(
     fixture: MarketingDynamicUiFixture,
+    selectedDestinationId: String,
+    contentTitle: String,
+    contentSubtitle: String,
     modifier: Modifier,
+    content: @Composable () -> Unit,
 ) {
-    val navigationModel = NextcloudCollectionNavigationModel.create(
-        destinations = marketingContextMenuDestinations.map { (_, destination) -> destination },
-        selectedDestinationId = null,
+    val destinations = listOf(
+        NextcloudCollectionDestination(
+            id = marketingDynamicInsightsView.id,
+            label = "Overview",
+            accessibilityId = marketingDynamicInsightsView.sourceActionId,
+        ),
+        NextcloudCollectionDestination(
+            id = marketingDynamicListView.id,
+            label = "Rows",
+            accessibilityId = marketingDynamicListView.sourceActionId,
+        ),
+        NextcloudCollectionDestination(
+            id = marketingTablesColumnsView.id,
+            label = "Columns",
+            accessibilityId = marketingTablesColumnsView.sourceActionId,
+        ),
+        NextcloudCollectionDestination(
+            id = marketingTablesViewsView.id,
+            label = "Views",
+            accessibilityId = marketingTablesViewsView.sourceActionId,
+        ),
+        NextcloudCollectionDestination(
+            id = marketingTablesSharesView.id,
+            label = "Share",
+            accessibilityId = marketingTablesSharesView.sourceActionId,
+        ),
+    )
+    val navigationMode = resolveNextcloudCollectionNavigationMode(
+        host = NextcloudCollectionNavigationHost.AdaptiveAndroid,
+        availableWidthDp = 390,
+        destinationCount = destinations.size,
     )
     NextcloudCollectionWorkspaceScaffold(
-        model = navigationModel,
-        mode = NextcloudCollectionNavigationMode.Drawer,
+        model = NextcloudCollectionNavigationModel.create(
+            destinations = destinations,
+            selectedDestinationId = selectedDestinationId,
+        ),
+        mode = navigationMode,
         workspaceLabel = fixture.appName,
-        contentTitle = "Garden renewal",
-        contentSubtitle = "Overview",
+        contentTitle = contentTitle,
+        contentSubtitle = contentSubtitle,
         onBack = {},
-        hasHierarchyBack = true,
+        hasHierarchyBack = false,
         onDestinationSelected = {},
-        destinationIcon = { NextcloudIcons.Apps },
+        destinationIcon = { destination ->
+            when (destination.id) {
+                marketingDynamicInsightsView.id -> NextcloudIcons.Activity
+                marketingDynamicListView.id -> NextcloudIcons.Table
+                else -> NextcloudIcons.ListView
+            }
+        },
         modifier = modifier,
-    ) {
-        DynamicContextDestinationMenu(
-            recordLabel = "Garden renewal",
-            destinations = marketingContextMenuDestinations,
-            schema = marketingContextMenuSchema,
-            onDestinationSelected = { _, _ -> },
-        )
-    }
+        compactHeader = true,
+        content = content,
+    )
 }
 
 @Composable
 private fun MarketingDynamicDesktopCapture(
     fixture: MarketingDynamicUiFixture,
+    view: ViewSpec,
+    contentTitle: String,
+    contentSubtitle: String,
     modifier: Modifier,
 ) {
     val destinations = listOf(
         NextcloudCollectionDestination(
+            id = marketingDynamicInsightsView.id,
+            label = "Insights",
+            supportingText = "Inventory totals and categories",
+            accessibilityId = marketingDynamicInsightsView.sourceActionId,
+        ),
+        NextcloudCollectionDestination(
             id = marketingDynamicListView.id,
-            label = "Work items",
-            supportingText = "3 active items",
+            label = "Rows",
+            supportingText = "7 inventory items",
             accessibilityId = marketingDynamicListView.sourceActionId,
         ),
         NextcloudCollectionDestination(
-            id = "notes",
-            label = "Notes",
-            supportingText = "Shared project notes",
-            accessibilityId = "notes.list",
+            id = marketingTablesColumnsView.id,
+            label = "Columns",
+            supportingText = "Typed table structure",
+            accessibilityId = marketingTablesColumnsView.sourceActionId,
         ),
         NextcloudCollectionDestination(
-            id = "media",
-            label = "Photos",
-            supportingText = "Project photos and files",
-            accessibilityId = "media.list",
+            id = marketingTablesViewsView.id,
+            label = "Views",
+            supportingText = "Saved filters and layouts",
+            accessibilityId = marketingTablesViewsView.sourceActionId,
         ),
         NextcloudCollectionDestination(
-            id = "members",
-            label = "Members",
-            supportingText = "People with workspace access",
-            accessibilityId = "members.list",
-            section = NextcloudCollectionDestinationSection.Manage,
-        ),
-        NextcloudCollectionDestination(
-            id = "preferences",
-            label = "Preferences",
-            supportingText = "Workspace behavior and defaults",
-            accessibilityId = "preferences.read",
+            id = marketingTablesSharesView.id,
+            label = "Share",
+            supportingText = "Table access",
+            accessibilityId = marketingTablesSharesView.sourceActionId,
             section = NextcloudCollectionDestinationSection.Manage,
         ),
     )
     NextcloudCollectionWorkspaceScaffold(
         model = NextcloudCollectionNavigationModel.create(
             destinations = destinations,
-            selectedDestinationId = marketingDynamicListView.id,
+            selectedDestinationId = when (view) {
+                marketingDynamicFormView -> marketingDynamicListView.id
+                marketingTablesShareDetailView -> marketingTablesSharesView.id
+                else -> view.id
+            },
         ),
         mode = NextcloudCollectionNavigationMode.Sidebar,
         workspaceLabel = fixture.appName,
-        contentTitle = "Work items",
-        contentSubtitle = "Garden renewal",
+        contentTitle = contentTitle,
+        contentSubtitle = contentSubtitle,
         onBack = {},
         hasHierarchyBack = true,
         onDestinationSelected = {},
         destinationIcon = { destination ->
             when (destination.id) {
-                marketingDynamicListView.id -> NextcloudIcons.Task
-                "notes" -> NextcloudIcons.File
-                "media" -> NextcloudIcons.Photo
-                "members" -> NextcloudIcons.People
+                marketingDynamicInsightsView.id -> NextcloudIcons.Activity
+                marketingDynamicListView.id -> NextcloudIcons.Table
+                marketingTablesColumnsView.id -> NextcloudIcons.ListView
+                marketingTablesViewsView.id -> NextcloudIcons.Apps
+                marketingTablesSharesView.id -> NextcloudIcons.People
                 else -> NextcloudIcons.Settings
             }
         },
@@ -547,14 +820,35 @@ private fun MarketingDynamicDesktopCapture(
     ) {
         GenericNativeAppScreen(
             schema = marketingDynamicUiSchema,
-            view = marketingDynamicListView,
-            state = NativeScreenState.Ready(marketingDynamicWorkItemRecords),
+            view = view,
+            state = NativeScreenState.Ready(
+                marketingTablesRecords(view),
+            ),
             actionExecutor = marketingCaptureActionExecutor,
             modifier = Modifier.fillMaxSize(),
             datasetContext = marketingDynamicDatasetContext,
-            showCollectionCreateAction = true,
+            showCollectionCreateAction = view != marketingDynamicFormView,
         )
     }
+}
+
+private fun marketingTablesViewSubtitle(view: ViewSpec): String = when (view) {
+    marketingDynamicListView -> "Rows"
+    marketingDynamicFormView -> "Community inventory"
+    marketingTablesColumnsView -> "Columns"
+    marketingTablesViewsView -> "Views"
+    marketingTablesSharesView -> "Share"
+    marketingTablesShareDetailView -> "Share permissions"
+    else -> "Overview"
+}
+
+private fun marketingTablesRecords(view: ViewSpec): List<NativeRecord> = when (view) {
+    marketingDynamicFormView -> emptyList()
+    marketingTablesColumnsView -> marketingTablesColumnRecords
+    marketingTablesViewsView -> marketingTablesViewRecords
+    marketingTablesSharesView -> marketingTablesShareRecords
+    marketingTablesShareDetailView -> marketingTablesShareRecords.take(1)
+    else -> marketingDynamicWorkItemRecords
 }
 
 @Composable
@@ -610,72 +904,6 @@ private fun MarketingDynamicContractHeader(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = if (compact) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Surface(
-                color = accent.copy(alpha = 0.18f),
-                contentColor = accent,
-                shape = MaterialTheme.shapes.large,
-            ) {
-                Text(
-                    "Verified contract",
-                    modifier = Modifier.padding(
-                        horizontal = NextcloudSpacing.Small,
-                        vertical = NextcloudSpacing.XSmall,
-                    ),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-        }
-    }
-}
-
-/**
- * The production relation picker owns its expanded state privately. This capture-only companion
- * uses the same schema relationship resolution, clear choice, search filtering, and bounded
- * option-window functions so that those otherwise pointer-driven states remain visible in a
- * deterministic screenshot.
- */
-@Composable
-private fun MarketingExpandedRelationCaptureState() {
-    val field = marketingDynamicWorkItemsResource.fields.single { it.id == "groupId" }
-    val options = nativeRelationOptions(
-        field = field,
-        formResource = marketingDynamicWorkItemsResource,
-        schema = marketingDynamicUiSchema,
-        context = marketingDynamicDatasetContext,
-    )
-    val clearChoice = nativeScalarRelationClearChoice(field)
-    val window = nativeRelationOptionWindow(options, query = "")
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.medium,
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-        ) {
-            Text("Expanded relation menu (capture state)", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "Search parent group",
-                modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = NextcloudSpacing.Medium,
-                    vertical = NextcloudSpacing.Small,
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            HorizontalDivider()
-            Text("${clearChoice?.label} - ${clearChoice?.supportingText}")
-            window.options.take(2).forEach { option ->
-                Text("${option.label} - ${option.supportingText}")
-            }
-            if (window.hasMore) {
-                Text(
-                    "Showing the first ${window.options.size} of ${options.size} choices. Search to narrow the list.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

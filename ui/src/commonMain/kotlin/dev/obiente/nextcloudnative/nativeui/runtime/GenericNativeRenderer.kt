@@ -49,6 +49,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -61,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -140,6 +142,8 @@ import kotlin.math.roundToInt
 fun interface NativeFileFieldPicker {
     fun requestFile(field: FieldSpec, onSelected: (String) -> Unit)
 }
+
+internal val LocalNativeFinanceCurrency = compositionLocalOf<String?> { null }
 
 fun interface NativeImageLoader {
     suspend fun load(relativePath: String): ImageBitmap?
@@ -3551,11 +3555,60 @@ private fun GenericRecordCollection(
         GenericGroupwareCollection(groupware, onSelectRecord)
         return
     }
+    val categories = remember(resource, records) {
+        nativeCategoryCollectionPresentations(resource, records)
+    }
+    if (categories != null) {
+        GenericCategoryCollection(
+            schema = schema,
+            resource = resource,
+            rows = categories,
+            navigationContext = datasetContext.bindingValues,
+            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+            onSelectRecord = onSelectRecord,
+            onEditRecord = onEditRecord,
+            onDeleteRecord = onDeleteRecord,
+            onCommandRecord = onCommandRecord,
+            onCommandFormRecord = onCommandFormRecord,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
+        return
+    }
+    val financialAccounts = remember(resource, records) {
+        nativeFinancialAccountCollectionPresentations(resource, records)
+    }
+    if (financialAccounts != null) {
+        GenericFinancialAccountCollection(
+            schema = schema,
+            resource = resource,
+            rows = financialAccounts,
+            navigationContext = datasetContext.bindingValues,
+            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+            onSelectRecord = onSelectRecord,
+            onEditRecord = onEditRecord,
+            onDeleteRecord = onDeleteRecord,
+            onCommandRecord = onCommandRecord,
+            onCommandFormRecord = onCommandFormRecord,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
+        return
+    }
     val finance = remember(resource, records) {
         nativeFinanceCollectionPresentations(resource, records)
     }
     if (finance != null) {
-        GenericFinanceCollection(resource, finance, onSelectRecord)
+        GenericFinanceCollection(
+            resource = resource,
+            rows = finance,
+            onSelectRecord = onSelectRecord,
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
         return
     }
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
@@ -3778,26 +3831,745 @@ private fun GenericOverviewMetric(label: String, value: String) {
     }
 }
 
+private enum class NativeCategoryFilter(val label: String) {
+    All("All"),
+    Expenses("Expenses"),
+    Income("Income"),
+}
+
+private data class NativeCategoryRow(
+    val record: NativeRecord,
+    val presentation: NativeCategoryPresentation,
+    val depth: Int,
+    val hasChildren: Boolean,
+)
+
+private fun flattenNativeCategoryRows(
+    rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    expandedIds: Set<String>,
+): List<NativeCategoryRow> {
+    val ids = rows.map { (record, _) -> record.id }.toSet()
+    val children = rows.groupBy { (_, category) -> category.parentId?.takeIf(ids::contains) }
+    val output = mutableListOf<NativeCategoryRow>()
+    val visited = mutableSetOf<String>()
+    fun append(parentId: String?, depth: Int) {
+        children[parentId].orEmpty()
+            .sortedBy { (_, category) -> category.name.lowercase() }
+            .forEach { (record, category) ->
+                if (!visited.add(record.id)) return@forEach
+                val hasChildren = children[record.id].orEmpty().isNotEmpty()
+                output += NativeCategoryRow(record, category, depth, hasChildren)
+                if (hasChildren && record.id in expandedIds) append(record.id, depth + 1)
+            }
+    }
+    append(null, 0)
+    rows.filterNot { (record, _) -> record.id in visited }.forEach { (record, category) ->
+        output += NativeCategoryRow(record, category, 0, hasChildren = false)
+    }
+    return output
+}
+
+@Composable
+private fun GenericCategoryCollection(
+    schema: NativeAppSchema,
+    resource: ResourceSpec,
+    rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    navigationContext: Map<String, String>,
+    authorityContext: NativeRecordAuthorityContext?,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    var filter by rememberSaveable(resource.id) { mutableStateOf(NativeCategoryFilter.All) }
+    val parentIds = remember(rows) {
+        val knownIds = rows.map { (record, _) -> record.id }.toSet()
+        rows.mapNotNull { (_, category) -> category.parentId?.takeIf(knownIds::contains) }.toSet()
+    }
+    var expandedIds by rememberSaveable(resource.id) { mutableStateOf(parentIds.toList()) }
+    LaunchedEffect(parentIds) {
+        expandedIds = expandedIds.filter(parentIds::contains)
+    }
+    val filteredRows = remember(rows, filter) {
+        rows.filter { (_, category) ->
+            when (filter) {
+                NativeCategoryFilter.All -> true
+                NativeCategoryFilter.Expenses -> category.kind == NativeCategoryKind.Expense
+                NativeCategoryFilter.Income -> category.kind == NativeCategoryKind.Income
+            }
+        }
+    }
+    val visibleRows = remember(filteredRows, expandedIds) {
+        flattenNativeCategoryRows(filteredRows, expandedIds.toSet())
+    }
+    val expenseCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Expense }
+    val incomeCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Income }
+    val listState = rememberLazyListState()
+    NativeCollectionAutoPager(
+        listState,
+        visibleRows.size,
+        onLoadMore.takeIf { filter == NativeCategoryFilter.All },
+        loadingMore,
+        loadMoreError,
+    )
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                modifier = Modifier.padding(
+                    horizontal = NextcloudSpacing.Large,
+                    vertical = NextcloudSpacing.Small,
+                ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    NativeCategoryFilter.entries.forEach { option ->
+                        val count = when (option) {
+                            NativeCategoryFilter.All -> rows.size
+                            NativeCategoryFilter.Expenses -> expenseCount
+                            NativeCategoryFilter.Income -> incomeCount
+                        }
+                        FilterChip(
+                            selected = filter == option,
+                            onClick = { filter = option },
+                            label = { Text("${option.label} $count") },
+                        )
+                    }
+                    if (parentIds.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                expandedIds = if (expandedIds.isEmpty()) parentIds.toList() else emptyList()
+                            },
+                        ) {
+                            Text(if (expandedIds.isEmpty()) "Expand all" else "Collapse all")
+                        }
+                    }
+                }
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Medium,
+                end = NextcloudSpacing.Large,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            items(visibleRows, key = { row -> row.record.id }) { row ->
+                val recordPresentation = nativeRecordPresentation(resource, row.record)
+                val iconKey = recordPresentation.iconKey
+                    ?.takeIf { key -> NextcloudIcons.semantic(key) != null }
+                    ?: "category"
+                val actions = remember(schema, resource, row.record, navigationContext, authorityContext) {
+                    nativeRecordActions(
+                        schema = schema,
+                        resource = resource,
+                        record = row.record,
+                        navigationContext = navigationContext,
+                        authorityContext = authorityContext,
+                    )
+                }
+                val secondaryActions = nativeRecordCardActions(
+                    capabilities = actions,
+                    record = row.record,
+                    onEditRecord = onEditRecord,
+                    onDeleteRecord = onDeleteRecord,
+                    onCommandRecord = onCommandRecord,
+                    onCommandFormRecord = onCommandFormRecord,
+                )
+                var actionsExpanded by rememberSaveable(row.record.id) { mutableStateOf(false) }
+                Card(
+                    modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                        onOpen = onSelectRecord?.let { callback -> { callback(row.record) } },
+                        onShowActions = if (secondaryActions.isNotEmpty()) {
+                            { actionsExpanded = true }
+                        } else {
+                            null
+                        },
+                        openLabel = "Open ${row.presentation.name}",
+                        actionsLabel = "Show actions for ${row.presentation.name}",
+                    ),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (row.depth > 0) Box(Modifier.width((row.depth * 18).dp))
+                        if (row.hasChildren) {
+                            Box(
+                                modifier = Modifier.size(40.dp).clickable {
+                                    expandedIds = if (row.record.id in expandedIds) {
+                                        expandedIds - row.record.id
+                                    } else {
+                                        expandedIds + row.record.id
+                                    }
+                                }.semantics {
+                                    contentDescription = if (row.record.id in expandedIds) {
+                                        "Collapse ${row.presentation.name}"
+                                    } else {
+                                        "Expand ${row.presentation.name}"
+                                    }
+                                },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (row.record.id in expandedIds) NextcloudIcons.ExpandMore else NextcloudIcons.ChevronRight,
+                                    contentDescription = null,
+                                )
+                            }
+                        } else {
+                            Box(Modifier.size(40.dp))
+                        }
+                        GenericResourceIcon(
+                            resource,
+                            iconKey,
+                            recordPresentation.colorArgb,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                row.presentation.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val metadata = buildList {
+                                add(
+                                    when (row.presentation.kind) {
+                                        NativeCategoryKind.Expense -> "Expense"
+                                        NativeCategoryKind.Income -> "Income"
+                                        NativeCategoryKind.Other -> "Category"
+                                    },
+                                )
+                                row.presentation.transactionCount?.let { count ->
+                                    add("$count ${if (count == 1) "transaction" else "transactions"}")
+                                }
+                                if (row.presentation.shared) {
+                                    val owner = row.presentation.sharedBy?.let { " by $it" }.orEmpty()
+                                    add(
+                                        if (row.presentation.writable) {
+                                            "Shared$owner, editable"
+                                        } else {
+                                            "Shared$owner, read only"
+                                        },
+                                    )
+                                }
+                            }.joinToString(" · ")
+                            Text(
+                                metadata,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (row.presentation.mutedFromReports) {
+                            Text(
+                                "Hidden",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (secondaryActions.isNotEmpty()) {
+                            NextcloudCardOverflow(
+                                itemLabel = row.presentation.name,
+                                actions = secondaryActions,
+                                expanded = actionsExpanded,
+                                onExpandedChange = { actionsExpanded = it },
+                            )
+                        } else if (onSelectRecord != null) {
+                            Icon(
+                                NextcloudIcons.ChevronRight,
+                                contentDescription = "Open ${row.presentation.name}",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
+        }
+    }
+}
+
+@Composable
+private fun GenericFinancialAccountCollection(
+    schema: NativeAppSchema,
+    resource: ResourceSpec,
+    rows: List<Pair<NativeRecord, NativeFinancialAccountPresentation>>,
+    navigationContext: Map<String, String>,
+    authorityContext: NativeRecordAuthorityContext?,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    val contextualCurrency = LocalNativeFinanceCurrency.current
+    val accounts = remember(rows) { rows.map { (_, account) -> account } }
+    val currency = remember(accounts, contextualCurrency) {
+        accounts.mapNotNull(NativeFinancialAccountPresentation::baseCurrency).distinct().singleOrNull()
+            ?: accounts.mapNotNull(NativeFinancialAccountPresentation::currency).distinct().singleOrNull()
+            ?: contextualCurrency
+    }
+    fun convertedBalance(account: NativeFinancialAccountPresentation): Double? =
+        account.convertedBalance
+            ?: account.balance.takeIf {
+                currency == null || account.currency == null || account.currency == currency
+            }
+    val assets = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Asset } }
+    val liabilities = remember(rows) {
+        rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Liability }
+    }
+    val other = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Other } }
+    val includedAccounts = accounts.filterNot(NativeFinancialAccountPresentation::excludedFromReports)
+    val assetTotal = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Asset }
+        .mapNotNull(::convertedBalance).sum()
+    val liabilityBalance = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Liability }
+        .mapNotNull(::convertedBalance).sum()
+    val liabilityTotal = nativeFinanceLiabilityTotal(liabilityBalance)
+    val netWorth = assetTotal + liabilityBalance
+    val unconvertedCount = accounts.count { convertedBalance(it) == null }
+    val totalsQualifier = if (onLoadMore != null || loadingMore || loadMoreError != null) " (loaded)" else ""
+    val listState = rememberLazyListState()
+    NativeCollectionAutoPager(listState, rows.size, onLoadMore, loadingMore, loadMoreError)
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ) {
+            Column(
+                modifier = Modifier.padding(
+                    horizontal = NextcloudSpacing.Large,
+                    vertical = NextcloudSpacing.Medium,
+                ),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    if (maxWidth < 600.dp) {
+                        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                FinancialAccountMetric(
+                                    label = "Assets$totalsQualifier",
+                                    value = formatNativeFinanceAmount(assetTotal, currency),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                FinancialAccountMetric(
+                                    label = "Liabilities$totalsQualifier",
+                                    value = formatNativeFinanceAmount(liabilityTotal, currency),
+                                    negative = liabilityTotal > 0.0,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            FinancialAccountMetric(
+                                label = "Net worth$totalsQualifier",
+                                value = formatNativeFinanceAmount(netWorth, currency),
+                                negative = netWorth < 0.0,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            FinancialAccountMetric(
+                                label = "Assets$totalsQualifier",
+                                value = formatNativeFinanceAmount(assetTotal, currency),
+                                modifier = Modifier.weight(1f),
+                            )
+                            FinancialAccountMetric(
+                                label = "Liabilities$totalsQualifier",
+                                value = formatNativeFinanceAmount(liabilityTotal, currency),
+                                negative = liabilityTotal > 0.0,
+                                modifier = Modifier.weight(1f),
+                            )
+                            FinancialAccountMetric(
+                                label = "Net worth$totalsQualifier",
+                                value = formatNativeFinanceAmount(netWorth, currency),
+                                negative = netWorth < 0.0,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+                if (unconvertedCount > 0) {
+                    Text(
+                        "$unconvertedCount ${if (unconvertedCount == 1) "account is" else "accounts are"} excluded from totals because no exchange rate is available.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Medium,
+                end = NextcloudSpacing.Large,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            fun section(
+                key: String,
+                label: String,
+                sectionRows: List<Pair<NativeRecord, NativeFinancialAccountPresentation>>,
+            ) {
+                if (sectionRows.isEmpty()) return
+                item(key = "$key-header") {
+                    val subtotal = sectionRows.filterNot { (_, account) -> account.excludedFromReports }
+                        .mapNotNull { (_, account) -> convertedBalance(account) }
+                        .sum()
+                        .let { amount -> if (key == "liabilities") nativeFinanceLiabilityTotal(amount) else amount }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.XSmall),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            formatNativeFinanceAmount(subtotal, currency),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(sectionRows, key = { (record, _) -> record.id }) { (record, account) ->
+                    val actions = remember(schema, resource, record, navigationContext, authorityContext) {
+                        nativeRecordActions(schema, resource, record, navigationContext, authorityContext)
+                    }
+                    FinancialAccountCard(
+                        resource = resource,
+                        account = account,
+                        onClick = onSelectRecord?.let { callback -> { callback(record) } },
+                        secondaryActions = nativeRecordCardActions(
+                            capabilities = actions,
+                            record = record,
+                            onEditRecord = onEditRecord,
+                            onDeleteRecord = onDeleteRecord,
+                            onCommandRecord = onCommandRecord,
+                            onCommandFormRecord = onCommandFormRecord,
+                        ),
+                    )
+                }
+            }
+            section("assets", "Assets", assets)
+            section("liabilities", "Liabilities", liabilities)
+            section("other", "Other accounts", other)
+            NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
+        }
+    }
+}
+
+internal fun nativeFinanceLiabilityTotal(signedLiabilityBalance: Double): Double =
+    (-signedLiabilityBalance).coerceAtLeast(0.0)
+
+@Composable
+private fun FinancialAccountMetric(
+    label: String,
+    value: String,
+    negative: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (negative) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FinancialAccountCard(
+    resource: ResourceSpec,
+    account: NativeFinancialAccountPresentation,
+    onClick: (() -> Unit)?,
+    secondaryActions: List<NextcloudCardAction>,
+) {
+    var actionsExpanded by rememberSaveable(account.name) { mutableStateOf(false) }
+    val liability = account.kind == NativeFinancialAccountKind.Liability
+    val displayedBalance = if (liability) kotlin.math.abs(account.balance) else account.balance
+    val balanceLabel = when {
+        liability && account.balance < 0.0 -> "Owed"
+        liability && account.balance > 0.0 -> "Credit"
+        else -> "Balance"
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+            onOpen = onClick,
+            onShowActions = if (secondaryActions.isNotEmpty()) ({ actionsExpanded = true }) else null,
+            openLabel = "Open ${account.name}",
+            actionsLabel = "Show actions for ${account.name}",
+        ),
+        colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GenericResourceIcon(resource, account.type?.replace('_', '-'))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        account.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val metadata = listOfNotNull(
+                        account.type?.replace('_', ' ')?.replaceFirstChar(Char::uppercase),
+                        account.institution,
+                    ).distinct().joinToString(" · ")
+                    if (metadata.isNotBlank()) {
+                        Text(
+                            metadata,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        balanceLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        formatNativeFinanceAmount(displayedBalance, account.currency),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if ((liability && account.balance < 0.0) || (!liability && account.balance < 0.0)) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            Color(0xFF3F8F50)
+                        },
+                        maxLines = 1,
+                    )
+                }
+                if (secondaryActions.isNotEmpty()) {
+                    NextcloudCardOverflow(
+                        itemLabel = account.name,
+                        actions = secondaryActions,
+                        expanded = actionsExpanded,
+                        onExpandedChange = { actionsExpanded = it },
+                    )
+                }
+            }
+            val footer = listOfNotNull(
+                account.accountNumber,
+                account.lastReconciled?.let { "Reconciled $it" },
+            ).joinToString(" · ")
+            if (footer.isNotBlank() || account.excludedFromReports || account.convertedBalance != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        footer,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val trailing = when {
+                        account.excludedFromReports -> "Excluded"
+                        account.convertedBalance != null -> "≈ ${formatNativeFinanceAmount(account.convertedBalance, account.baseCurrency)}"
+                        else -> null
+                    }
+                    trailing?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun GenericFinanceCollection(
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeFinancePresentation?>>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
 ) {
-    val records = remember(rows) { rows.map { (record, _) -> record } }
-    val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val compactViewport = !datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
-        Column(modifier = Modifier.fillMaxSize()) {
-            insights?.let {
-                DatasetInsightsDisclosure(
-                    insights = it,
-                    compact = compactViewport,
-                    initiallyExpanded = !compactViewport,
-                    stateKey = "finance:${resource.id}",
-                )
+    val contextualCurrency = LocalNativeFinanceCurrency.current
+    var filter by rememberSaveable(resource.id) { mutableStateOf(NativeFinanceLedgerFilter.All) }
+    var categoryFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
+    var accountFilter by rememberSaveable(resource.id) { mutableStateOf<String?>(null) }
+    var filtersExpanded by rememberSaveable(resource.id) { mutableStateOf(false) }
+    val presentations = remember(rows) { rows.mapNotNull { (_, transaction) -> transaction } }
+    val categories = remember(presentations) {
+        presentations.mapNotNull(NativeFinancePresentation::category).distinct().sorted().take(12)
+    }
+    val accounts = remember(presentations) {
+        presentations.mapNotNull(NativeFinancePresentation::paymentMethod).distinct().sorted().take(12)
+    }
+    val presentedRows = remember(rows, filter, categoryFilter, accountFilter) {
+        rows.filter { (_, transaction) ->
+            val directionMatches = when (filter) {
+                NativeFinanceLedgerFilter.All -> true
+                NativeFinanceLedgerFilter.Income -> transaction?.direction == NativeFinanceDirection.Credit
+                NativeFinanceLedgerFilter.Expenses -> transaction?.direction == NativeFinanceDirection.Debit
             }
+            directionMatches &&
+                (categoryFilter == null || transaction?.category == categoryFilter) &&
+                (accountFilter == null || transaction?.paymentMethod == accountFilter)
+        }
+    }
+    val loadedCurrencies = remember(presentations) {
+        presentations.mapNotNull(NativeFinancePresentation::currency).distinct()
+    }
+    val currency = remember(loadedCurrencies, contextualCurrency) {
+        loadedCurrencies.singleOrNull() ?: contextualCurrency.takeIf { loadedCurrencies.isEmpty() }
+    }
+    val netFlow = remember(presentations, loadedCurrencies) {
+        presentations.sumOf(NativeFinancePresentation::amount).takeIf { loadedCurrencies.size <= 1 }
+    }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${presentations.size} loaded",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            netFlow?.let { "Loaded net ${formatNativeFinanceAmount(it, currency)}" }
+                                ?: "Multiple currencies",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = when {
+                                netFlow == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                                netFlow < 0 -> MaterialTheme.colorScheme.error
+                                else -> Color(0xFF3F8F50)
+                            },
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        val representedDirections = presentations.mapTo(hashSetOf(), NativeFinancePresentation::direction)
+                        NativeFinanceLedgerFilter.entries.filter { option ->
+                            option == NativeFinanceLedgerFilter.All ||
+                                option == NativeFinanceLedgerFilter.Income && NativeFinanceDirection.Credit in representedDirections ||
+                                option == NativeFinanceLedgerFilter.Expenses && NativeFinanceDirection.Debit in representedDirections
+                        }.forEach { option ->
+                            FilterChip(
+                                selected = filter == option,
+                                onClick = { filter = option },
+                                label = { Text(option.label) },
+                            )
+                        }
+                        if (categories.size > 1 || accounts.size > 1) {
+                            TextButton(onClick = { filtersExpanded = !filtersExpanded }) {
+                                val activeCount = listOfNotNull(categoryFilter, accountFilter).size
+                                Text(if (activeCount == 0) "Filters" else "Filters ($activeCount)")
+                            }
+                        }
+                    }
+                    if (filtersExpanded && (categories.size > 1 || accounts.size > 1)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            categories.forEach { category ->
+                                FilterChip(
+                                    selected = categoryFilter == category,
+                                    onClick = { categoryFilter = category.takeUnless { it == categoryFilter } },
+                                    label = { Text(category, maxLines = 1) },
+                                )
+                            }
+                            accounts.forEach { account ->
+                                FilterChip(
+                                    selected = accountFilter == account,
+                                    onClick = { accountFilter = account.takeUnless { it == accountFilter } },
+                                    label = { Text(account, maxLines = 1) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            val listState = rememberLazyListState()
+            val localFiltersActive = filter != NativeFinanceLedgerFilter.All ||
+                categoryFilter != null || accountFilter != null
+            NativeCollectionAutoPager(
+                listState,
+                presentedRows.size,
+                onLoadMore.takeUnless { localFiltersActive },
+                loadingMore,
+                loadMoreError,
+            )
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(
                     start = NextcloudSpacing.Large,
@@ -3807,7 +4579,7 @@ private fun GenericFinanceCollection(
                 ),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
-                items(rows, key = { (record, _) -> record.id }) { (record, transaction) ->
+                items(presentedRows, key = { (record, _) -> record.id }) { (record, transaction) ->
                     if (transaction == null) {
                         GenericCollectionCard(resource, record, onSelectRecord)
                         return@items
@@ -3816,13 +4588,13 @@ private fun GenericFinanceCollection(
                         ?.let { callback -> Modifier.clickable { callback(record) } }
                         ?: Modifier
                     Card(
-                        modifier = interaction.fillMaxWidth().heightIn(min = 148.dp),
+                        modifier = interaction.fillMaxWidth().heightIn(min = 92.dp),
                         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                         shape = RoundedCornerShape(NextcloudRadii.Card),
                     ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
-                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -3838,14 +4610,14 @@ private fun GenericFinanceCollection(
                                 Text(
                                     transaction.title,
                                     modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleLarge,
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    maxLines = 2,
+                                    maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    formatNativeFinanceAmount(transaction.amount, transaction.currency),
-                                    style = MaterialTheme.typography.titleLarge,
+                                    formatNativeFinanceLedgerAmount(transaction, transaction.currency ?: currency),
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = if (transaction.amount < 0) {
                                         MaterialTheme.colorScheme.error
@@ -3866,26 +4638,54 @@ private fun GenericFinanceCollection(
                                     }
                                 }
                             }
-                            val footer = listOfNotNull(
-                                transaction.category,
-                                transaction.paymentMethod,
-                                transaction.date,
-                            ).distinct().joinToString(" · ")
-                            if (footer.isNotBlank()) {
-                                Text(
-                                    footer,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                            val context = listOfNotNull(transaction.category, transaction.paymentMethod)
+                                .distinct().joinToString(" · ")
+                            if (context.isNotBlank() || transaction.date != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                ) {
+                                    Text(
+                                        context,
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    transaction.date?.let { date ->
+                                        Text(
+                                            date,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
             }
         }
     }
+}
+
+private enum class NativeFinanceLedgerFilter(val label: String) {
+    All("All"),
+    Income("Income"),
+    Expenses("Expenses"),
+}
+
+private fun formatNativeFinanceLedgerAmount(
+    transaction: NativeFinancePresentation,
+    currency: String?,
+): String {
+    val formatted = formatNativeFinanceAmount(transaction.amount, currency)
+    return if (transaction.direction == NativeFinanceDirection.Credit && transaction.amount > 0.0) {
+        "+$formatted"
+    } else formatted
 }
 
 @Composable
@@ -3919,6 +4719,17 @@ private fun GenericFinanceDetailHeader(
     resource: ResourceSpec,
     transaction: NativeFinancePresentation,
 ) {
+    val contextualCurrency = LocalNativeFinanceCurrency.current
+    val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
+    val amount = formatNativeFinanceLedgerAmount(
+        transaction,
+        transaction.currency ?: contextualCurrency,
+    )
+    val amountColor = if (transaction.amount < 0) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
@@ -3928,35 +4739,66 @@ private fun GenericFinanceDetailHeader(
             modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                GenericResourceIcon(resource, large = true)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        transaction.title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    transaction.date?.let { date ->
+            if (desktop) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GenericResourceIcon(resource, large = true)
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            date,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            transaction.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        transaction.date?.let { date ->
+                            Text(
+                                date,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Text(
+                        amount,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = amountColor,
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GenericResourceIcon(resource, large = true)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            transaction.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        transaction.date?.let { date ->
+                            Text(
+                                date,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 Text(
-                    formatNativeFinanceAmount(transaction.amount, transaction.currency),
+                    amount,
+                    modifier = Modifier.align(Alignment.End),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = if (transaction.amount < 0) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
+                    color = amountColor,
                 )
             }
             transaction.participant?.let { payer ->
@@ -5101,19 +5943,115 @@ private fun GenericInsightCollection(
     onSelectRecord: ((NativeRecord) -> Unit)?,
 ) {
     val insights = remember(resource, records) { nativeDatasetInsights(resource, records) }
+    val categoricalSummary = remember(resource, records) {
+        nativeCategoricalSummary(resource, records)
+    }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val compactViewport = !datasetInsightsDefaultExpanded(maxWidth.value, maxHeight.value)
         Column(modifier = Modifier.fillMaxSize()) {
-            insights?.let {
+            if (insights != null) {
                 DatasetInsightsDisclosure(
-                    insights = it,
+                    insights = insights,
                     compact = compactViewport,
-                    initiallyExpanded = !compactViewport,
+                    initiallyExpanded = true,
                     stateKey = "insights:${resource.id}",
+                )
+            } else if (categoricalSummary != null) {
+                CategoricalSummaryDisclosure(
+                    summary = categoricalSummary,
+                    initiallyExpanded = true,
+                    stateKey = "summary:${resource.id}:${categoricalSummary.dimension.id}",
                 )
             }
             GenericRecordList(resource, records, onSelectRecord, Modifier.weight(1f))
         }
+    }
+}
+
+@Composable
+private fun CategoricalSummaryDisclosure(
+    summary: NativeCategoricalSummary,
+    initiallyExpanded: Boolean,
+    stateKey: String,
+) {
+    var expanded by rememberSaveable(stateKey) { mutableStateOf(initiallyExpanded) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Small,
+                end = NextcloudSpacing.Small,
+                bottom = NextcloudSpacing.XSmall,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    summary.dimension.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "${summary.recordCount} items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Hide" else "Show")
+            }
+        }
+        if (expanded) {
+            GenericCategoricalSummary(summary)
+        } else {
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = NextcloudSpacing.Large),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GenericCategoricalSummary(summary: NativeCategoricalSummary) {
+    val maximum = summary.points.maxOfOrNull(NativeChartPoint::value)?.takeIf { it > 0.0 } ?: 1.0
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(
+            start = NextcloudSpacing.Large,
+            top = NextcloudSpacing.Small,
+            end = NextcloudSpacing.Large,
+            bottom = NextcloudSpacing.Medium,
+        ),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        summary.points.forEach { point ->
+            val count = point.value.roundToInt()
+            val percentage = ((point.value / summary.recordCount) * 100.0).roundToInt()
+            Column(
+                modifier = Modifier.semantics {
+                    contentDescription = "${point.label}, $count of ${summary.recordCount}, $percentage percent"
+                },
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(point.label, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "$count ($percentage%)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { (point.value / maximum).toFloat() },
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -5181,19 +6119,45 @@ private fun GenericDatasetInsights(insights: NativeDatasetInsights, compact: Boo
         ),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            DatasetMetricCard(
-                label = "Total ${insights.measure.label.lowercase()}",
-                value = formatNativeMetric(insights.measure, insights.total),
-            )
-            DatasetMetricCard(
-                label = "Average",
-                value = formatNativeMetric(insights.measure, insights.average),
-            )
-            DatasetMetricCard(label = "Items", value = insights.recordCount.toString())
+        if (compact) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column {
+                    Text(
+                        "Total ${insights.measure.label.lowercase()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        formatNativeMetric(insights.measure, insights.total),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Text(
+                    "${insights.recordCount} items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                DatasetMetricCard(
+                    label = "Total ${insights.measure.label.lowercase()}",
+                    value = formatNativeMetric(insights.measure, insights.total),
+                )
+                DatasetMetricCard(
+                    label = "Average",
+                    value = formatNativeMetric(insights.measure, insights.average),
+                )
+                DatasetMetricCard(label = "Items", value = insights.recordCount.toString())
+            }
         }
         val displayedPoints = if (compact) insights.points.take(3) else insights.points
         if (displayedPoints.isNotEmpty()) {
@@ -5229,13 +6193,18 @@ private fun GenericDatasetInsights(insights: NativeDatasetInsights, compact: Boo
 }
 
 @Composable
-private fun DatasetMetricCard(label: String, value: String) {
+private fun DatasetMetricCard(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier.width(148.dp),
+) {
     Surface(
+        modifier = modifier,
         color = NextcloudTheme.colors.appTile,
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
         Column(
-            modifier = Modifier.width(148.dp).padding(NextcloudSpacing.Medium),
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
         ) {
             Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -6377,6 +7346,11 @@ private fun GenericRecordDetail(
         GenericFinanceStatisticsDashboard(financeDashboard)
         return
     }
+    val budgetPlan = remember(record) { nativeBudgetPlanPresentation(record) }
+    if (budgetPlan != null) {
+        GenericBudgetPlanDashboard(budgetPlan)
+        return
+    }
     val groupware = remember(resource, record) { nativeGroupwarePresentation(resource, record) }
     if (groupware != null && groupware.kind != NativeGroupwareItemKind.Task) {
         GenericGroupwareDetail(groupware, onOpenLink)
@@ -6483,6 +7457,222 @@ private fun GenericRecordDetail(
                 GenericRecipeStructuredSection(record.id, section, ingredientMultiplier)
             } else {
                 GenericStructuredDetailSection(section)
+            }
+        }
+    }
+}
+
+private enum class NativeBudgetProgressFilter(val label: String) {
+    All("All"),
+    OverBudget("Over budget"),
+    Watch("Watch"),
+    OnTrack("On track"),
+}
+
+private fun NativeBudgetCategoryProgress.isOverBudget(): Boolean {
+    val normalizedStatus = status?.lowercase()?.filter(Char::isLetterOrDigit)
+    return when (normalizedStatus) {
+        "over", "overbudget", "overspent", "exceeded" -> true
+        "watch", "warning", "ontrack", "fullyspent", "spent", "complete", "completed" -> false
+        else -> percentage > 100.0
+    }
+}
+
+@Composable
+private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
+    var filter by rememberSaveable { mutableStateOf(NativeBudgetProgressFilter.All) }
+    val visibleCategories = remember(plan.categories, filter) {
+        plan.categories.filter { category ->
+            when (filter) {
+                NativeBudgetProgressFilter.All -> true
+                NativeBudgetProgressFilter.OverBudget -> category.isOverBudget()
+                NativeBudgetProgressFilter.Watch -> !category.isOverBudget() && category.percentage >= 75.0
+                NativeBudgetProgressFilter.OnTrack -> !category.isOverBudget() && category.percentage < 75.0
+            }
+        }
+    }
+    val period = listOfNotNull(plan.startDate, plan.endDate).joinToString(" - ")
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.Large,
+                top = NextcloudSpacing.Large,
+                end = NextcloudSpacing.Large,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+        ) {
+            Text("Budget progress", style = MaterialTheme.typography.headlineSmall)
+            if (period.isNotBlank()) {
+                Text(
+                    period,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        val currency = LocalNativeFinanceCurrency.current
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large)) {
+            if (maxWidth < 600.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                        DatasetMetricCard(
+                            "Budgeted",
+                            formatNativeFinanceAmount(plan.budgeted, currency),
+                            Modifier.weight(1f),
+                        )
+                        DatasetMetricCard(
+                            "Spent",
+                            formatNativeFinanceAmount(plan.spent, currency),
+                            Modifier.weight(1f),
+                        )
+                    }
+                    DatasetMetricCard(
+                        "Remaining",
+                        formatNativeFinanceAmount(plan.remaining, currency),
+                        Modifier.fillMaxWidth(),
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    DatasetMetricCard("Budgeted", formatNativeFinanceAmount(plan.budgeted, currency))
+                    DatasetMetricCard("Spent", formatNativeFinanceAmount(plan.spent, currency))
+                    DatasetMetricCard("Remaining", formatNativeFinanceAmount(plan.remaining, currency))
+                }
+            }
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Large),
+            colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+            shape = RoundedCornerShape(NextcloudRadii.Card),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Overall", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("${plan.percentage.roundToInt()}%", style = MaterialTheme.typography.titleMedium)
+                }
+                LinearProgressIndicator(
+                    progress = { (plan.percentage / 100.0).coerceIn(0.0, 1.0).toFloat() },
+                    modifier = Modifier.fillMaxWidth().height(9.dp),
+                )
+                plan.overallStatus?.takeIf(String::isNotBlank)?.let { status ->
+                    Text(
+                        status.replaceFirstChar { character -> character.uppercase() },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = NextcloudSpacing.Large),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            NativeBudgetProgressFilter.entries.forEach { option ->
+                val count = plan.categories.count { category ->
+                    when (option) {
+                        NativeBudgetProgressFilter.All -> true
+                        NativeBudgetProgressFilter.OverBudget -> category.isOverBudget()
+                        NativeBudgetProgressFilter.Watch -> !category.isOverBudget() && category.percentage >= 75.0
+                        NativeBudgetProgressFilter.OnTrack -> !category.isOverBudget() && category.percentage < 75.0
+                    }
+                }
+                FilterChip(
+                    selected = filter == option,
+                    onClick = { filter = option },
+                    label = { Text("${option.label} $count") },
+                )
+            }
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = NextcloudSpacing.Large,
+                end = NextcloudSpacing.Large,
+                bottom = NextcloudSpacing.XXLarge,
+            ),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            if (visibleCategories.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                    ) {
+                        Text(
+                            if (plan.categories.isEmpty()) {
+                                "No category budgets yet"
+                            } else {
+                                "No ${filter.label.lowercase()} categories"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            if (plan.categories.isEmpty()) {
+                                "Add a recurring budget to start planning this period."
+                            } else {
+                                "Choose another progress filter to review category budgets."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            visibleCategories.forEach { category ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                category.name,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text("${category.percentage.roundToInt()}%", style = MaterialTheme.typography.labelLarge)
+                        }
+                        LinearProgressIndicator(
+                            progress = { (category.percentage / 100.0).coerceIn(0.0, 1.0).toFloat() },
+                            modifier = Modifier.fillMaxWidth().height(7.dp),
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                "${formatNativeFinanceAmount(category.spent, currency)} spent",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                "${formatNativeFinanceAmount(category.remaining, currency)} left",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (kotlin.math.abs(category.carried) >= 0.005) {
+                            Text(
+                                "Includes ${formatNativeFinanceAmount(category.carried, currency)} carryover",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

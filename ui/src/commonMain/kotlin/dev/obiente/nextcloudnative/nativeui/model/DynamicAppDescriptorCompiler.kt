@@ -847,7 +847,10 @@ private class KotlinCompilerState(
         val (boundPath, pathParameters) = normalizeCollectionParentIdentifier(
             defaultBoundPath,
             defaultPathParameters,
-            collection && method == HttpMethod.GET,
+            collection,
+            identifierUsedOutsidePath = queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
+                (declaredBody?.schema as? JsonObject)?.let(::fieldsFromSchema).orEmpty()
+                    .any { it.id.equals("id", ignoreCase = true) },
         )
         val body = declaredBody
         (body?.schema as? JsonObject)?.let { bodySchema ->
@@ -1573,8 +1576,9 @@ private class KotlinCompilerState(
         path: String,
         parameters: List<HttpParameter>,
         collection: Boolean,
+        identifierUsedOutsidePath: Boolean = false,
     ): Pair<String, List<HttpParameter>> {
-        if (!collection || parameters.size != 1) return path to parameters
+        if (!collection || parameters.size != 1 || identifierUsedOutsidePath) return path to parameters
         val parameter = parameters.single()
         if (parameter.name.equals("id", ignoreCase = true) || !parameter.name.endsWith("Id", ignoreCase = true)) {
             return path to parameters
@@ -2231,10 +2235,19 @@ private fun String.hierarchyParent(
     val parentSegment = segments.take(parameterIndex).asReversed().firstOrNull { segment ->
         !segment.startsWith('{') && segment.stableId() !in NON_RESOURCE_PATH_SEGMENTS
     } ?: return null
-    val parentVariants = parentSegment.semanticBaseVariants()
-    return resources.firstOrNull { resource ->
-        resource.id.semanticBaseVariants().intersect(parentVariants).isNotEmpty()
-    }
+    val normalizedParent = parentSegment.stableId()
+    val parentVariants = normalizedParent.semanticBaseVariants()
+    return resources
+        .asSequence()
+        .filter { resource ->
+            resource.id.semanticBaseVariants().intersect(parentVariants).isNotEmpty()
+        }
+        .sortedWith(
+            compareByDescending<DynamicResource> { resource -> resource.id == normalizedParent }
+                .thenByDescending(DynamicResource::collection)
+                .thenBy(DynamicResource::id),
+        )
+        .firstOrNull()
 }
 
 private fun layoutPreference(

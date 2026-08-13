@@ -194,7 +194,64 @@ internal data class NativeFinancePresentation(
     val category: String?,
     val paymentMethod: String?,
     val note: String?,
+    val direction: NativeFinanceDirection,
 )
+
+internal enum class NativeFinanceDirection { Credit, Debit, Unspecified }
+
+internal enum class NativeFinancialAccountKind { Asset, Liability, Other }
+
+internal data class NativeFinancialAccountPresentation(
+    val name: String,
+    val balance: Double,
+    val currency: String?,
+    val type: String?,
+    val kind: NativeFinancialAccountKind,
+    val institution: String?,
+    val accountNumber: String?,
+    val lastReconciled: String?,
+    val convertedBalance: Double?,
+    val baseCurrency: String?,
+    val excludedFromReports: Boolean,
+)
+
+internal enum class NativeCategoryKind { Expense, Income, Other }
+
+internal data class NativeCategoryPresentation(
+    val name: String,
+    val kind: NativeCategoryKind,
+    val parentId: String?,
+    val transactionCount: Int?,
+    val shared: Boolean,
+    val writable: Boolean,
+    val sharedBy: String?,
+    val mutedFromReports: Boolean,
+)
+
+internal data class NativeBudgetCategoryProgress(
+    val id: String?,
+    val name: String,
+    val budgeted: Double,
+    val baseBudget: Double,
+    val carried: Double,
+    val spent: Double,
+    val remaining: Double,
+    val percentage: Double,
+    val status: String?,
+    val color: String?,
+)
+
+internal data class NativeBudgetPlanPresentation(
+    val startDate: String?,
+    val endDate: String?,
+    val budgeted: Double,
+    val spent: Double,
+    val remaining: Double,
+    val overallStatus: String?,
+    val categories: List<NativeBudgetCategoryProgress>,
+) {
+    val percentage: Double = if (budgeted > 0.0) spent / budgeted * 100.0 else 0.0
+}
 
 internal data class NativeFinanceMemberStatistic(
     val name: String,
@@ -487,9 +544,19 @@ internal fun nativeFinancePresentation(
         "paymentmode", "paymentmethod", "categoryid", "owers",
     )
     if (!hasFinanceResourceSemantics && !hasTransactionRecordShape) return null
-    val amount = values.number(
+    val rawAmount = values.number(
         "amount", "value", "total", "cost", "price", "expense", "income", "balance",
     ) ?: return null
+    val direction = when (values.string("type", "transactiontype", "direction")?.lowercase()) {
+        "credit", "income", "deposit" -> NativeFinanceDirection.Credit
+        "debit", "expense", "withdrawal", "payment" -> NativeFinanceDirection.Debit
+        else -> NativeFinanceDirection.Unspecified
+    }
+    val amount = when (direction) {
+        NativeFinanceDirection.Credit -> kotlin.math.abs(rawAmount)
+        NativeFinanceDirection.Debit -> -kotlin.math.abs(rawAmount)
+        NativeFinanceDirection.Unspecified -> rawAmount
+    }
     val title = values.string(
         "what", "title", "name", "description", "label", "subject", "merchant",
     ) ?: "Transaction"
@@ -501,7 +568,11 @@ internal fun nativeFinancePresentation(
     return NativeFinancePresentation(
         title = title,
         amount = amount,
-        currency = values.string("currency", "currencycode", "currencyname", "unit"),
+        currency = values.string("currency", "currencycode", "currencyname", "unit")
+            ?: resource.fields.firstOrNull { field ->
+                field.id.semanticKey() in setOf("amount", "value", "total") &&
+                    field.kind == FieldKind.currency
+            }?.format,
         date = values.formattedTimestamp()?.compactSemanticDateTime(),
         participant = payer,
         splitParticipants = participants.map(NativeSemanticReference::label).distinct(),
@@ -511,7 +582,101 @@ internal fun nativeFinancePresentation(
         )?.takeIf { it.length > 1 },
         note = values.string("comment", "note", "notes", "memo")
             ?.takeUnless { it.equals(title, ignoreCase = true) },
+        direction = direction,
     )
+}
+
+/**
+ * Recognizes an account balance record without confusing transaction rows that merely reference an
+ * account. Account collections need asset/liability semantics, not ledger income/expense filters.
+ */
+internal fun nativeFinancialAccountPresentation(
+    resource: ResourceSpec,
+    record: NativeRecord,
+): NativeFinancialAccountPresentation? {
+    val resourceWords = semanticTokens(resource.id, resource.name)
+    if (resourceWords.none { word -> word == "account" || word == "accounts" }) return null
+    val values = NativeSemanticValues(record)
+    val balance = values.number("balance", "currentbalance") ?: return null
+    val type = values.string("type", "accounttype")?.trim()?.lowercase()?.takeIf(String::isNotBlank)
+    val kind = when (type) {
+        "checking", "savings", "investment", "cash", "cryptocurrency", "money_market" ->
+            NativeFinancialAccountKind.Asset
+        "credit_card", "loan", "mortgage", "line_of_credit" ->
+            NativeFinancialAccountKind.Liability
+        else -> NativeFinancialAccountKind.Other
+    }
+    return NativeFinancialAccountPresentation(
+        name = values.string("name", "accountname", "title", "label")
+            ?: nativeRecordPresentation(resource, record).title,
+        balance = balance,
+        currency = values.string("currency", "currencycode", "currencyname", "unit"),
+        type = type,
+        kind = kind,
+        institution = values.string("institution", "bank", "provider"),
+        accountNumber = values.string("ibanmasked", "maskednumber"),
+        lastReconciled = values.string("lastreconciled", "lastreconciledat")
+            ?.compactSemanticDateTime(),
+        convertedBalance = values.number("convertedbalance", "basebalance"),
+        baseCurrency = values.string("basecurrency", "reportingcurrency"),
+        excludedFromReports = values.boolean("excludedfromreports", "excluded", "isexcluded") == true,
+    )
+}
+
+internal fun nativeFinancialAccountCollectionPresentations(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+): List<Pair<NativeRecord, NativeFinancialAccountPresentation>>? {
+    if (records.isEmpty()) return null
+    val rows = records.mapNotNull { record ->
+        nativeFinancialAccountPresentation(resource, record)?.let { presentation -> record to presentation }
+    }
+    return rows.takeIf { it.size == records.size }
+}
+
+internal fun nativeCategoryPresentation(
+    resource: ResourceSpec,
+    record: NativeRecord,
+): NativeCategoryPresentation? {
+    val resourceWords = semanticTokens(resource.id, resource.name)
+    if (resourceWords.none { word -> word == "category" || word == "categories" }) return null
+    val values = NativeSemanticValues(record)
+    val kind = when (values.string("type", "categorytype")?.lowercase()) {
+        "expense", "expenses" -> NativeCategoryKind.Expense
+        "income", "incomes" -> NativeCategoryKind.Income
+        else -> NativeCategoryKind.Other
+    }
+    val shared = values.boolean("shared", "isshared") == true ||
+        values.hasAny("sharedby", "sharedbyname", "sharedowner")
+    return NativeCategoryPresentation(
+        name = values.string("name", "categoryname", "title", "label")
+            ?: nativeRecordPresentation(resource, record).title,
+        kind = kind,
+        parentId = values.string("parentid", "parent", "parentcategoryid")
+            ?.takeIf { it.isNotBlank() && it != "0" && !it.equals("null", ignoreCase = true) },
+        transactionCount = values.int("transactioncount", "transactions", "count")
+            ?.takeIf { it >= 0 },
+        shared = shared,
+        writable = !shared || values.boolean("canwrite", "writable", "sharedwrite") == true,
+        sharedBy = values.string("sharedbyname", "sharedby", "sharedowner"),
+        mutedFromReports = values.boolean(
+            "muted",
+            "reportmuted",
+            "hiddenfromreports",
+            "excludedfromreports",
+        ) == true,
+    )
+}
+
+internal fun nativeCategoryCollectionPresentations(
+    resource: ResourceSpec,
+    records: List<NativeRecord>,
+): List<Pair<NativeRecord, NativeCategoryPresentation>>? {
+    if (records.isEmpty()) return null
+    val rows = records.mapNotNull { record ->
+        nativeCategoryPresentation(resource, record)?.let { presentation -> record to presentation }
+    }
+    return rows.takeIf { it.size == records.size }
 }
 
 internal fun nativeFinanceCollectionPresentations(
@@ -526,7 +691,11 @@ internal fun nativeFinanceCollectionPresentations(
 internal fun formatNativeFinanceAmount(amount: Double, currency: String?): String {
     val rounded = kotlin.math.round(amount * 100.0) / 100.0
     val stableAmount = if (kotlin.math.abs(amount) < 0.0051) 0.0 else rounded
-    val normalized = if (stableAmount == stableAmount.toLong().toDouble()) {
+    val normalized = if (!currency.isNullOrBlank()) {
+        val absoluteCents = kotlin.math.round(kotlin.math.abs(stableAmount) * 100.0).toLong()
+        val sign = if (stableAmount < 0.0) "-" else ""
+        "$sign${absoluteCents / 100}.${(absoluteCents % 100).toString().padStart(2, '0')}"
+    } else if (stableAmount == stableAmount.toLong().toDouble()) {
         stableAmount.toLong().toString()
     } else {
         stableAmount.toString().trimEnd('0').trimEnd('.')
@@ -565,6 +734,45 @@ internal fun nativeFinanceDashboardPresentation(
             .filter { point -> point.label.matches(Regex("\\d{4}-\\d{2}")) },
         categories = structured["categorystats"]?.value.semanticNamedSeries("Category"),
         paymentMethods = structured["paymentmodestats"]?.value.semanticNamedSeries("Payment method"),
+    )
+}
+
+/** Recognizes category-by-category budget reports by their nested totals and progress shape. */
+internal fun nativeBudgetPlanPresentation(record: NativeRecord): NativeBudgetPlanPresentation? {
+    val structured = record.structuredValues.entries.associateBy { (key, _) -> key.semanticKey() }
+    val totals = structured["totals"]?.value?.semanticObjectEntries() ?: return null
+    val categoryItems = (structured["categories"]?.value as? NativeStructuredValue.ListValue)?.items
+        ?: return null
+    val categories = categoryItems.map { item ->
+        val row = item.semanticObjectEntries() ?: return null
+        val name = row.semanticText("categoryname", "name", "label") ?: return null
+        val budgeted = row.semanticNumber("budgeted", "budget", "limit") ?: return null
+        val spent = row.semanticNumber("spent") ?: return null
+        NativeBudgetCategoryProgress(
+            id = row.semanticText("categoryid", "id"),
+            name = name,
+            budgeted = budgeted,
+            baseBudget = row.semanticNumber("basebudget") ?: budgeted,
+            carried = row.semanticNumber("carried", "carryover") ?: 0.0,
+            spent = spent,
+            remaining = row.semanticNumber("remaining") ?: budgeted - spent,
+            percentage = row.semanticNumber("percentage", "percent")
+                ?: if (budgeted > 0.0) spent / budgeted * 100.0 else 0.0,
+            status = row.semanticText("status"),
+            color = row.semanticText("color"),
+        )
+    }
+    val period = structured["period"]?.value?.semanticObjectEntries()
+    val budgeted = totals.semanticNumber("budgeted") ?: return null
+    val spent = totals.semanticNumber("spent") ?: return null
+    return NativeBudgetPlanPresentation(
+        startDate = period?.semanticText("startdate", "start"),
+        endDate = period?.semanticText("enddate", "end"),
+        budgeted = budgeted,
+        spent = spent,
+        remaining = totals.semanticNumber("remaining") ?: budgeted - spent,
+        overallStatus = structured["overallstatus"]?.value?.semanticString(),
+        categories = categories.sortedByDescending(NativeBudgetCategoryProgress::percentage),
     )
 }
 

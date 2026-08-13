@@ -13,6 +13,33 @@ class ActivityLiveReadAuditTest {
         val services = DesktopNextcloudServices()
         val session = assertNotNull(services.loadSession())
         val observed = mutableListOf<NextcloudApiRequest>()
+        val filters = loadNextcloudActivityFilters { request ->
+            assertEquals(NextcloudApiMethod.GET, request.method)
+            assertTrue(request.body == null)
+            observed += request
+            services.executeNextcloudApi(session, request)
+        }
+        assertTrue(filters.isNotEmpty())
+        val histogramResponse = services.executeNextcloudApi(
+            session,
+            NextcloudApiRequest(
+                method = NextcloudApiMethod.GET,
+                relativePath = "/ocs/v2.php/apps/activity/api/v2/activity/all/histogram",
+                queryParameters = mapOf("days" to "7"),
+                ocsApiRequest = true,
+                maximumResponseBytes = 64L * 1_024L,
+            ),
+        )
+        assertTrue(histogramResponse.status in setOf(200, 404))
+        val histogramSupported = histogramResponse.status == 200
+        filters.firstOrNull { filter -> filter.id != "all" }?.let { filter ->
+            loadNextcloudActivityPage(filterId = filter.id, limit = 5) { request ->
+                assertEquals(NextcloudApiMethod.GET, request.method)
+                assertTrue(request.body == null)
+                observed += request
+                services.executeNextcloudApi(session, request)
+            }
+        }
 
         suspend fun load(cursor: Long?): NextcloudActivityPage =
             loadNextcloudActivityPage(since = cursor, limit = 5) { request ->
@@ -42,9 +69,12 @@ class ActivityLiveReadAuditTest {
         }
         assertTrue(observed.all { request ->
             request.method == NextcloudApiMethod.GET &&
-                request.relativePath == "/ocs/v2.php/apps/activity/api/v2/activity" &&
+                request.relativePath.startsWith("/ocs/v2.php/apps/activity/api/v2/activity") &&
                 request.body == null
         })
-        println("activity-audit outcome=success requests=get-only refresh=verified paging=verified content=redacted")
+        println(
+            "activity-audit outcome=success requests=get-only filters=verified " +
+                "refresh=verified paging=verified histogram=$histogramSupported content=redacted",
+        )
     }
 }

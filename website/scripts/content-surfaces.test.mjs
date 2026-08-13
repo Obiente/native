@@ -136,8 +136,8 @@ test("marketing screenshots are rendered offscreen without an Android device", a
     "mobile-home",
     "obsidian-vault-sync",
     "media-backup-queue",
-    "adaptive-dynamic-data",
-    "adaptive-dynamic-data-mobile",
+    "tables-insights-desktop",
+    "tables-row-form-mobile",
   ]) {
     assert.ok(captureScenarios.has(requiredScenario));
   }

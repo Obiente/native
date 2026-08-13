@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CalendarWorkspacePresentationTest {
     @Test
@@ -70,6 +71,103 @@ class CalendarWorkspacePresentationTest {
         )
     }
 
+    @Test
+    fun `week includes events that started before the displayed range`() {
+        val ongoing = event(
+            calendarId = "team",
+            start = "20260725T090000Z",
+            title = "Conference",
+            end = "20260729T170000Z",
+        )
+
+        assertTrue(ongoing.overlapsCalendarDateRange("20260727", "20260802"))
+        assertFalse(ongoing.overlapsCalendarDateRange("20260803", "20260809"))
+    }
+
+    @Test
+    fun `all day event end is exclusive when testing week overlap`() {
+        val sundayOnly = event(
+            calendarId = "team",
+            start = "20260802",
+            title = "Sunday event",
+            end = "20260803",
+            allDay = true,
+        )
+
+        assertFalse(sundayOnly.overlapsCalendarDateRange("20260803", "20260809"))
+    }
+
+    @Test
+    fun `all day event without explicit end occupies its start date`() {
+        val event = event(
+            calendarId = "team",
+            start = "20260803",
+            title = "Release day",
+            allDay = true,
+        ).copy(end = null)
+
+        assertEquals(listOf("20260803"), event.occupiedCalendarDates())
+    }
+
+    @Test
+    fun `all day event with explicit end excludes that end date`() {
+        val event = event(
+            calendarId = "team",
+            start = "20260803",
+            title = "Conference",
+            end = "20260805",
+            allDay = true,
+        )
+
+        assertEquals(listOf("20260803", "20260804"), event.occupiedCalendarDates())
+    }
+
+    @Test
+    fun `long spanning event is clamped to the requested calendar window`() {
+        val event = event(
+            calendarId = "team",
+            start = "20240101",
+            title = "Long project",
+            end = "20260805",
+            allDay = true,
+        )
+
+        assertEquals(
+            listOf("20260801", "20260802", "20260803", "20260804"),
+            event.occupiedCalendarDates("20260801", "20260831"),
+        )
+    }
+
+    @Test
+    fun `timed event ending on the first range date remains visible`() {
+        val mondayMorning = event(
+            calendarId = "team",
+            start = "20260803T090000Z",
+            title = "Monday event",
+            end = "20260803T100000Z",
+        )
+
+        assertTrue(mondayMorning.overlapsCalendarDateRange("20260803", "20260809"))
+    }
+
+    @Test
+    fun `padded calendar weeks always have unique positional keys`() {
+        val month = CalendarMonth(2026, 2)
+        assertEquals(6, (0 until 6).map { calendarMonthWeekKey(month, it) }.distinct().size)
+    }
+
+    @Test
+    fun `agenda capture scenarios select the agenda presentation`() {
+        assertEquals(
+            CalendarWorkspaceView.Agenda,
+            MarketingCaptureScenario.CalendarWorkspaceMobileDark.marketingCalendarView(),
+        )
+        assertEquals(
+            CalendarWorkspaceView.Month,
+            MarketingCaptureScenario.CalendarMonthMobile.marketingCalendarView(),
+        )
+    }
+
     private fun calendar(id: String, name: String) = GroupwareCalendar(
         href = "/remote.php/dav/calendars/synthetic/$id/",
         displayName = name,
@@ -80,6 +178,8 @@ class CalendarWorkspacePresentationTest {
         calendarId: String,
         start: String,
         title: String,
+        end: String? = null,
+        allDay: Boolean = false,
         location: String? = null,
         description: String? = null,
     ) = GroupwareCalendarEvent(
@@ -89,8 +189,8 @@ class CalendarWorkspacePresentationTest {
         uid = "synthetic-$calendarId-$start",
         title = title,
         start = start,
-        end = start.take(8) + "T100000Z",
-        allDay = false,
+        end = end ?: start.take(8) + "T100000Z",
+        allDay = allDay,
         location = location,
         description = description,
         rawCalendar = "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",

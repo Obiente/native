@@ -374,7 +374,7 @@ const appFamilies = [
     body: "Installed apps are interpreted through verified contracts and reusable native components. Specialized adapters improve workflows where generic semantics are not enough.",
     captureDark: "homepage-apps-desktop-dark",
     captureLight: "homepage-apps-desktop-light",
-    captureFallback: "adaptive-dynamic-data",
+    captureFallback: "tables-insights-desktop",
   },
 ];
 const activeAppFamily = ref(0);

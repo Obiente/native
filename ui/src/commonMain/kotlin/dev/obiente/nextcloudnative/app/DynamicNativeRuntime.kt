@@ -37,6 +37,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import dev.obiente.nextcloudnative.nativeui.runtime.safeActionBindingValues
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -58,6 +59,7 @@ private val dynamicJson = Json {
     explicitNulls = false
 }
 
+@Serializable
 data class DynamicDescriptorDiscovery(
     val descriptor: DynamicAppDescriptor,
     val sourcePath: String?,
@@ -66,6 +68,7 @@ data class DynamicDescriptorDiscovery(
     val versionStatus: DynamicContractVersionStatus = DynamicContractVersionStatus.VerifiedCurrent,
 )
 
+@Serializable
 enum class DynamicContractVersionStatus {
     VerifiedCurrent,
     LastKnownReadOnly,
@@ -74,6 +77,7 @@ enum class DynamicContractVersionStatus {
 internal fun DynamicContractVersionStatus.allows(risk: ActionRisk): Boolean =
     this == DynamicContractVersionStatus.VerifiedCurrent || risk == ActionRisk.readOnly
 
+@Serializable
 enum class DynamicDescriptorAcquisition {
     OcsApiViewer,
     StaticAppAsset,
@@ -2117,7 +2121,7 @@ private fun String.matchesApiPrefix(prefix: String): Boolean {
     return this == normalized || startsWith("$normalized/")
 }
 
-private fun String.httpOrigin(): String {
+internal fun String.httpOrigin(): String {
     val match = Regex("^(https?://[^/?#]+)").find(this.trim())
         ?: error("The Nextcloud server URL is invalid.")
     return match.groupValues[1]

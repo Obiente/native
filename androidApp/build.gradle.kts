@@ -54,6 +54,12 @@ android {
     }
 
     buildTypes {
+        create("dev") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            matchingFallbacks += listOf("debug")
+        }
         release {
             signingConfig = signingConfigs.findByName("release")
         }
@@ -64,6 +70,8 @@ android {
             buildConfigField("boolean", "DIRECT_APK_UPDATES", "true")
         }
     }
+
+    sourceSets.getByName("dev").java.srcDir("src/debug/kotlin")
 
     buildFeatures {
         compose = true

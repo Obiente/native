@@ -11,6 +11,12 @@ import kotlin.test.assertTrue
 
 class NativeSemanticPresentationsTest {
     @Test
+    fun `liability credits offset debt before the owed total is derived`() {
+        assertEquals(80.0, nativeFinanceLiabilityTotal(-100.0 + 20.0))
+        assertEquals(0.0, nativeFinanceLiabilityTotal(20.0))
+    }
+
+    @Test
     fun `mail message fields become a native mailbox row`() {
         val resource = resource(
             "messages",
@@ -317,7 +323,101 @@ class NativeSemanticPresentationsTest {
         assertEquals("Card", presentation.paymentMethod)
         assertEquals("2026-07-23 18:30", presentation.date)
         assertEquals("Dinner ingredients", presentation.note)
-        assertEquals("EUR 42.5", formatNativeFinanceAmount(presentation.amount, presentation.currency))
+        assertEquals("EUR 42.50", formatNativeFinanceAmount(presentation.amount, presentation.currency))
+        assertEquals("EUR -3.10", formatNativeFinanceAmount(-3.1, "EUR"))
+    }
+
+    @Test
+    fun `transaction direction supplies the sign when the server amount is absolute`() {
+        val transactions = resource("transactions", "Transactions", "description", "amount", "type")
+        val debit = requireNotNull(
+            nativeFinancePresentation(
+                transactions,
+                NativeRecord("1", mapOf("description" to "Groceries", "amount" to "38.40", "type" to "debit")),
+            ),
+        )
+        val credit = requireNotNull(
+            nativeFinancePresentation(
+                transactions,
+                NativeRecord("2", mapOf("description" to "Refund", "amount" to "12", "type" to "credit")),
+            ),
+        )
+
+        assertEquals(-38.4, debit.amount)
+        assertEquals(NativeFinanceDirection.Debit, debit.direction)
+        assertEquals(12.0, credit.amount)
+        assertEquals(NativeFinanceDirection.Credit, credit.direction)
+    }
+
+    @Test
+    fun `account balance records retain asset liability and reporting semantics`() {
+        val accounts = resource(
+            "accounts",
+            "Accounts",
+            "name", "balance", "currency", "type", "institution", "convertedBalance",
+            "baseCurrency", "excludedFromReports",
+        )
+        val checking = requireNotNull(
+            nativeFinancialAccountPresentation(
+                accounts,
+                NativeRecord(
+                    "1",
+                    mapOf(
+                        "name" to "Daily banking",
+                        "balance" to "1250.45",
+                        "currency" to "EUR",
+                        "type" to "checking",
+                        "institution" to "Example Bank",
+                        "accountNumber" to "NL91ABNA0417164300",
+                        "ibanMasked" to "NL91 **** 4300",
+                        "excludedFromReports" to "false",
+                    ),
+                ),
+            ),
+        )
+        val card = requireNotNull(
+            nativeFinancialAccountPresentation(
+                accounts,
+                NativeRecord(
+                    "2",
+                    mapOf(
+                        "name" to "Credit card",
+                        "balance" to "-320.10",
+                        "currency" to "USD",
+                        "type" to "credit_card",
+                        "convertedBalance" to "-295.80",
+                        "baseCurrency" to "EUR",
+                        "excludedFromReports" to "true",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(NativeFinancialAccountKind.Asset, checking.kind)
+        assertEquals("Example Bank", checking.institution)
+        assertEquals("NL91 **** 4300", checking.accountNumber)
+        assertEquals(NativeFinancialAccountKind.Liability, card.kind)
+        assertEquals(-295.8, card.convertedBalance)
+        assertEquals("EUR", card.baseCurrency)
+        assertTrue(card.excludedFromReports)
+    }
+
+    @Test
+    fun `transaction rows referencing an account are not account balance cards`() {
+        assertEquals(
+            null,
+            nativeFinancialAccountPresentation(
+                resource("transactions", "Transactions", "description", "amount", "accountName"),
+                NativeRecord(
+                    "1",
+                    mapOf(
+                        "description" to "Groceries",
+                        "amount" to "42.50",
+                        "accountName" to "Daily banking",
+                    ),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -897,6 +997,67 @@ class NativeSemanticPresentationsTest {
         )
 
         assertEquals(null, presentation)
+    }
+
+    @Test
+    fun `category fields preserve hierarchy counts and shared report state`() {
+        val categories = resource(
+            "categories",
+            "Categories",
+            "name", "type", "parentId", "transactionCount", "_shared", "_canWrite",
+            "_sharedByName", "excludedFromReports",
+        )
+        val presentation = requireNotNull(
+            nativeCategoryPresentation(
+                categories,
+                NativeRecord(
+                    "child-1",
+                    mapOf(
+                        "name" to "Shared groceries",
+                        "type" to "expense",
+                        "parentId" to "food",
+                        "transactionCount" to "14",
+                        "_shared" to "true",
+                        "_canWrite" to "false",
+                        "_sharedByName" to "Morgan",
+                        "excludedFromReports" to "true",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("Shared groceries", presentation.name)
+        assertEquals(NativeCategoryKind.Expense, presentation.kind)
+        assertEquals("food", presentation.parentId)
+        assertEquals(14, presentation.transactionCount)
+        assertTrue(presentation.shared)
+        assertFalse(presentation.writable)
+        assertEquals("Morgan", presentation.sharedBy)
+        assertTrue(presentation.mutedFromReports)
+    }
+
+    @Test
+    fun `category renderer does not claim transaction resources with category labels`() {
+        val transactions = resource(
+            "transactions",
+            "Transactions",
+            "description", "categoryName", "type",
+        )
+
+        assertEquals(
+            null,
+            nativeCategoryPresentation(
+                transactions,
+                NativeRecord(
+                    "transaction-1",
+                    mapOf(
+                        "description" to "Weekly groceries",
+                        "categoryName" to "Groceries",
+                        "type" to "debit",
+                    ),
+                ),
+            ),
+        )
     }
 
     private fun resource(id: String, name: String, vararg fields: String): ResourceSpec = ResourceSpec(

@@ -21,9 +21,9 @@ class NextcloudCollectionNavigatorTest {
     }
 
     @Test
-    fun `adaptive Android switches from drawer to rail at shared breakpoint`() {
+    fun `adaptive Android uses tabs for a small compact destination set`() {
         assertEquals(
-            NextcloudCollectionNavigationMode.Drawer,
+            NextcloudCollectionNavigationMode.Tabs,
             resolveNextcloudCollectionNavigationMode(
                 NextcloudCollectionNavigationHost.AdaptiveAndroid,
                 NextcloudWorkspaceBreakpoints.AdaptiveRailDp - 1,
@@ -36,6 +36,18 @@ class NextcloudCollectionNavigatorTest {
                 NextcloudCollectionNavigationHost.AdaptiveAndroid,
                 NextcloudWorkspaceBreakpoints.AdaptiveRailDp,
                 2,
+            ),
+        )
+    }
+
+    @Test
+    fun `adaptive Android uses a drawer when compact apps expose many destinations`() {
+        assertEquals(
+            NextcloudCollectionNavigationMode.Drawer,
+            resolveNextcloudCollectionNavigationMode(
+                NextcloudCollectionNavigationHost.AdaptiveAndroid,
+                NextcloudWorkspaceBreakpoints.AdaptiveRailDp - 1,
+                5,
             ),
         )
     }
@@ -78,6 +90,7 @@ class NextcloudCollectionNavigatorTest {
         )
         listOf(
             NextcloudCollectionNavigationMode.Hidden,
+            NextcloudCollectionNavigationMode.Tabs,
             NextcloudCollectionNavigationMode.Rail,
             NextcloudCollectionNavigationMode.Sidebar,
         ).forEach { mode ->
@@ -137,6 +150,12 @@ class NextcloudCollectionNavigatorTest {
         assertEquals(
             1,
             resolveNextcloudCollectionDestinationLabelMaxLines(
+                NextcloudCollectionNavigationMode.Tabs,
+            ),
+        )
+        assertEquals(
+            1,
+            resolveNextcloudCollectionDestinationLabelMaxLines(
                 NextcloudCollectionNavigationMode.Rail,
             ),
         )
@@ -181,6 +200,7 @@ class NextcloudCollectionNavigatorTest {
 
         assertNull(model.selectedDestinationId)
         assertNull(model.selectedDestination)
+        assertEquals(-1, resolveNextcloudCollectionSelectedIndex(model))
     }
 
     @Test
