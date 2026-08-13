@@ -1484,7 +1484,7 @@ private fun LoginScreen(
                     scope.launch {
                         runCatching {
                             val challenge = services.beginLogin(serverUrl)
-                            services.openExternalUrl(challenge.loginUrl)
+                            services.openLoginUrl(challenge.loginUrl)
                             status = "Finish signing in in your browser, then return here."
                             val started = TimeSource.Monotonic.markNow()
                             try {
