@@ -136,10 +136,10 @@ class ActivitySemanticsTest {
             response(
                 """
                 {"ocs":{"meta":{"status":"ok","statuscode":200},"data":[
-                  {"id":"calendar","name":"Calendar","priority":70,"icon":"https://fixture.invalid/calendar.svg"},
-                  {"id":"all","name":"All activities","priority":0},
-                  {"id":"../../admin","name":"Unsafe","priority":1},
-                  {"id":"calendar","name":"Duplicate","priority":2},
+                  {"filter_id":"calendar","name":"Calendar","priority":70,"icon":"https://fixture.invalid/calendar.svg"},
+                  {"filter_id":"all","name":"All activities","priority":0},
+                  {"filter_id":"../../admin","name":"Unsafe","priority":1},
+                  {"filter_id":"calendar","name":"Duplicate","priority":2},
                   {"id":"by","name":"By others","priority":2}
                 ]}}
                 """.trimIndent(),
@@ -151,6 +151,19 @@ class ActivitySemanticsTest {
             "/ocs/v2.php/apps/activity/api/v2/activity/filters",
             buildNextcloudActivityFiltersRequest().relativePath,
         )
+    }
+
+    @Test
+    fun `file-like activity without an authoritative path does not target the files root`() {
+        val action = activity(
+            id = 44,
+            app = "custom_app",
+            type = "file_changed",
+            objectName = "report.pdf",
+        ).activityOpenAction(setOf("files", "custom_app"), "https://cloud.example.test")
+
+        assertEquals("custom_app", action?.appId)
+        assertNull(action?.filesParentPath)
     }
 
     @Test

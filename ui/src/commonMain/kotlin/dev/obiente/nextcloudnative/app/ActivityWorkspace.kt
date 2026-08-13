@@ -448,7 +448,7 @@ private fun ActivityMobileHeader(
         Column(modifier = Modifier.weight(1f)) {
             Text("Activity", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                "$eventCount events across your cloud",
+                "$eventCount loaded events in this view",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

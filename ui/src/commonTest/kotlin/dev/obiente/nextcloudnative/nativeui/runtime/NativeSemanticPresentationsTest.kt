@@ -11,6 +11,12 @@ import kotlin.test.assertTrue
 
 class NativeSemanticPresentationsTest {
     @Test
+    fun `liability credits offset debt before the owed total is derived`() {
+        assertEquals(80.0, nativeFinanceLiabilityTotal(-100.0 + 20.0))
+        assertEquals(0.0, nativeFinanceLiabilityTotal(20.0))
+    }
+
+    @Test
     fun `mail message fields become a native mailbox row`() {
         val resource = resource(
             "messages",

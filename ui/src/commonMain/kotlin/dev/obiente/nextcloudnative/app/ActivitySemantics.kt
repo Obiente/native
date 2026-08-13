@@ -206,7 +206,8 @@ fun NextcloudActivity.activityOpenAction(
 }
 
 private fun safeActivityFilesParentPath(objectName: String?): String? {
-    val value = objectName?.trim()?.removePrefix("/") ?: return null
+    val declaredPath = objectName?.trim()?.takeIf { it.startsWith('/') } ?: return null
+    val value = declaredPath.removePrefix("/")
     if (value.isBlank() || value.length > MAX_ACTIVITY_URL_CHARS) return null
     val segments = value.split('/')
     if (
@@ -289,7 +290,8 @@ fun parseNextcloudActivityFilters(response: NextcloudApiResponse): List<Nextclou
     val data = ocs["data"] as? JsonArray ?: error("The Activity filter data is not an array.")
     val parsed = data.mapNotNull { element ->
         val item = element as? JsonObject ?: return@mapNotNull null
-        val id = item.activityString("id")?.takeIf(String::isValidActivityFilterId)
+        val id = (item.activityString("filter_id") ?: item.activityString("id"))
+            ?.takeIf(String::isValidActivityFilterId)
             ?: return@mapNotNull null
         val name = item.activityString("name")
             ?.take(MAX_ACTIVITY_FILTER_NAME_CHARS)

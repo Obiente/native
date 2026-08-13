@@ -3560,9 +3560,16 @@ private fun GenericRecordCollection(
     }
     if (categories != null) {
         GenericCategoryCollection(
+            schema = schema,
             resource = resource,
             rows = categories,
+            navigationContext = datasetContext.bindingValues,
+            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
             onSelectRecord = onSelectRecord,
+            onEditRecord = onEditRecord,
+            onDeleteRecord = onDeleteRecord,
+            onCommandRecord = onCommandRecord,
+            onCommandFormRecord = onCommandFormRecord,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -3857,9 +3864,16 @@ private fun flattenNativeCategoryRows(
 
 @Composable
 private fun GenericCategoryCollection(
+    schema: NativeAppSchema,
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    navigationContext: Map<String, String>,
+    authorityContext: NativeRecordAuthorityContext?,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
@@ -3949,11 +3963,35 @@ private fun GenericCategoryCollection(
                 val iconKey = recordPresentation.iconKey
                     ?.takeIf { key -> NextcloudIcons.semantic(key) != null }
                     ?: "category"
-                val interaction = onSelectRecord
-                    ?.let { callback -> Modifier.clickable { callback(row.record) } }
-                    ?: Modifier
+                val actions = remember(schema, resource, row.record, navigationContext, authorityContext) {
+                    nativeRecordActions(
+                        schema = schema,
+                        resource = resource,
+                        record = row.record,
+                        navigationContext = navigationContext,
+                        authorityContext = authorityContext,
+                    )
+                }
+                val secondaryActions = nativeRecordCardActions(
+                    capabilities = actions,
+                    record = row.record,
+                    onEditRecord = onEditRecord,
+                    onDeleteRecord = onDeleteRecord,
+                    onCommandRecord = onCommandRecord,
+                    onCommandFormRecord = onCommandFormRecord,
+                )
+                var actionsExpanded by rememberSaveable(row.record.id) { mutableStateOf(false) }
                 Card(
-                    modifier = interaction.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                        onOpen = onSelectRecord?.let { callback -> { callback(row.record) } },
+                        onShowActions = if (secondaryActions.isNotEmpty()) {
+                            { actionsExpanded = true }
+                        } else {
+                            null
+                        },
+                        openLabel = "Open ${row.presentation.name}",
+                        actionsLabel = "Show actions for ${row.presentation.name}",
+                    ),
                     colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                     shape = RoundedCornerShape(NextcloudRadii.Card),
                 ) {
@@ -4038,11 +4076,20 @@ private fun GenericCategoryCollection(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Icon(
-                            NextcloudIcons.ChevronRight,
-                            contentDescription = "Open ${row.presentation.name}",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        if (secondaryActions.isNotEmpty()) {
+                            NextcloudCardOverflow(
+                                itemLabel = row.presentation.name,
+                                actions = secondaryActions,
+                                expanded = actionsExpanded,
+                                onExpandedChange = { actionsExpanded = it },
+                            )
+                        } else if (onSelectRecord != null) {
+                            Icon(
+                                NextcloudIcons.ChevronRight,
+                                contentDescription = "Open ${row.presentation.name}",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -4080,9 +4127,10 @@ private fun GenericFinancialAccountCollection(
     val includedAccounts = accounts.filterNot(NativeFinancialAccountPresentation::excludedFromReports)
     val assetTotal = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Asset }
         .mapNotNull(::convertedBalance).sum()
-    val liabilityTotal = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Liability }
-        .mapNotNull(::convertedBalance).sumOf { amount -> kotlin.math.abs(amount) }
-    val netWorth = assetTotal - liabilityTotal
+    val liabilityBalance = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Liability }
+        .mapNotNull(::convertedBalance).sum()
+    val liabilityTotal = nativeFinanceLiabilityTotal(liabilityBalance)
+    val netWorth = assetTotal + liabilityBalance
     val unconvertedCount = accounts.count { convertedBalance(it) == null }
     val totalsQualifier = if (onLoadMore != null || loadingMore || loadMoreError != null) " (loaded)" else ""
     val listState = rememberLazyListState()
@@ -4205,6 +4253,9 @@ private fun GenericFinancialAccountCollection(
         }
     }
 }
+
+internal fun nativeFinanceLiabilityTotal(signedLiabilityBalance: Double): Double =
+    (-signedLiabilityBalance).coerceAtLeast(0.0)
 
 @Composable
 private fun FinancialAccountMetric(
