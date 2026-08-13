@@ -21,8 +21,10 @@ class DashboardStatusTest {
         assertEquals(NextcloudApiMethod.GET, widgets.method)
         assertEquals("/ocs/v2.php/apps/dashboard/api/v1/widgets", widgets.relativePath)
         assertTrue(widgets.ocsApiRequest)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, widgets.cachePolicy)
         assertTrue(widgets.maximumResponseBytes <= 4L * 1024L * 1024L)
         assertEquals(NextcloudApiMethod.GET, items.method)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, items.cachePolicy)
         assertNull(items.contentType)
         assertNull(items.body)
         assertEquals("2026-07-23T12:00:00Z", items.queryParameters["sinceIds[calendar]"])
@@ -278,6 +280,37 @@ class DashboardStatusTest {
         assertEquals("New activity", merged.itemsByWidget.getValue("activity").single().title)
         assertEquals(setOf("calendar"), merged.failedWidgetIds)
         assertEquals("No saved events", merged.emptyContentMessagesByWidget["calendar"])
+    }
+
+    @Test
+    fun `pending widgets retain cached content while completed peers publish`() {
+        val calendar = widget("calendar", setOf(2))
+        val activity = widget("activity", setOf(2))
+        val previous = NativeDashboardSnapshot(
+            widgets = listOf(calendar, activity),
+            itemsByWidget = mapOf(
+                "calendar" to listOf(item("calendar", "Saved event", "calendar-old")),
+                "activity" to listOf(item("activity", "Old activity", "activity-old")),
+            ),
+        )
+        val partial = mergeDashboardItemFetchResults(
+            widgets = listOf(calendar, activity),
+            previousSnapshot = previous,
+            results = listOf(
+                DashboardItemsFetchResult.Loaded(
+                    widgetIds = setOf("activity"),
+                    payload = DashboardItemsPayload(
+                        mapOf("activity" to listOf(item("activity", "New activity", "activity-new"))),
+                    ),
+                ),
+            ),
+            loadingWidgetIds = setOf("calendar"),
+        )
+
+        assertEquals("Saved event", partial.itemsByWidget.getValue("calendar").single().title)
+        assertEquals("New activity", partial.itemsByWidget.getValue("activity").single().title)
+        assertEquals(setOf("calendar"), partial.loadingWidgetIds)
+        assertTrue(partial.failedWidgetIds.isEmpty())
     }
 
     @Test

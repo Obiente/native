@@ -63,6 +63,8 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -270,6 +272,7 @@ internal fun NativeDashboardPresentation(
                                     .halfEmptyContentMessagesByWidget[binding.widget.id],
                                 refreshFailed = binding.widget.id in current.snapshot.failedWidgetIds,
                                 apiUnsupported = binding.widget.id in current.snapshot.unsupportedWidgetIds,
+                                loading = binding.widget.id in current.snapshot.loadingWidgetIds,
                                 size = section.size,
                                 onOpenLink = onOpenLink,
                             )
@@ -338,10 +341,23 @@ internal fun rememberNativeDashboardState(
                         ),
                     )
                 }
-                val itemResults = dashboardItemsRequestWorkers(dashboardItemsRequestPlans(widgets)).map { worker ->
+                val plans = dashboardItemsRequestPlans(widgets)
+                val pendingWidgetIds = plans.flatMapTo(mutableSetOf(), DashboardItemsRequestPlan::widgetIds)
+                val itemResults = mutableListOf<DashboardItemsFetchResult>()
+                var snapshot = mergeDashboardItemFetchResults(
+                    widgets = widgets,
+                    previousSnapshot = cached?.dashboard,
+                    results = emptyList(),
+                    unsupportedWidgetIds = unsupportedWidgetIds,
+                    loadingWidgetIds = pendingWidgetIds,
+                )
+                state = DashboardSurfaceState.Available(snapshot, cached?.status)
+
+                val completedResults = Channel<DashboardItemsFetchResult>(capacity = plans.size)
+                val workers = dashboardItemsRequestWorkers(plans).map { worker ->
                     async {
-                        worker.map { plan ->
-                            runCatching {
+                        worker.forEach { plan ->
+                            val result = runCatching {
                                 val response = services.executeNextcloudApi(session, plan.request)
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
                                 val payload = when (plan.apiVersion) {
@@ -374,15 +390,26 @@ internal fun rememberNativeDashboardState(
                                 )
                                 DashboardItemsFetchResult.Failed(plan.widgetIds)
                             }
+                            completedResults.send(result)
                         }
                     }
-                }.flatMap { it.await() }
-                mergeDashboardItemFetchResults(
-                    widgets = widgets,
-                    previousSnapshot = cached?.dashboard,
-                    results = itemResults,
-                    unsupportedWidgetIds = unsupportedWidgetIds,
-                ) to statusDeferred.await()
+                }
+                repeat(plans.size) {
+                    val result = completedResults.receive()
+                    itemResults += result
+                    pendingWidgetIds.removeAll(result.widgetIds)
+                    snapshot = mergeDashboardItemFetchResults(
+                        widgets = widgets,
+                        previousSnapshot = cached?.dashboard,
+                        results = itemResults,
+                        unsupportedWidgetIds = unsupportedWidgetIds,
+                        loadingWidgetIds = pendingWidgetIds,
+                    )
+                    state = DashboardSurfaceState.Available(snapshot, cached?.status)
+                }
+                workers.awaitAll()
+                completedResults.close()
+                snapshot to statusDeferred.await()
             }
         }.onSuccess { (snapshot, status) ->
             sharedDashboardStatusMemoryCache.store(
@@ -854,6 +881,7 @@ private fun DashboardWidgetCard(
     halfEmptyContentMessage: String?,
     refreshFailed: Boolean,
     apiUnsupported: Boolean,
+    loading: Boolean,
     size: HomeSectionSize,
     onOpenLink: (String) -> Unit,
 ) {
@@ -897,6 +925,18 @@ private fun DashboardWidgetCard(
                 )
             }
             when {
+                loading && items.isEmpty() -> Text(
+                    "Loading this section...",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                loading -> Text(
+                    "Refreshing. Showing recently loaded items.",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 apiUnsupported -> Text(
                     "This section requires a newer Dashboard API than this app supports.",
                     modifier = Modifier.padding(top = NextcloudSpacing.Large),

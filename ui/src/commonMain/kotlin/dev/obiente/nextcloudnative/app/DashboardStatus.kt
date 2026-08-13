@@ -50,6 +50,7 @@ data class NativeDashboardSnapshot(
     val halfEmptyContentMessagesByWidget: Map<String, String> = emptyMap(),
     val failedWidgetIds: Set<String> = emptySet(),
     val unsupportedWidgetIds: Set<String> = emptySet(),
+    val loadingWidgetIds: Set<String> = emptySet(),
 ) {
     init {
         val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
@@ -71,8 +72,12 @@ data class NativeDashboardSnapshot(
         require(unsupportedWidgetIds.all(widgetIds::contains)) {
             "Unsupported Dashboard widgets reference an unknown widget."
         }
-        require(failedWidgetIds.intersect(unsupportedWidgetIds).isEmpty()) {
-            "A Dashboard widget cannot be failed and unsupported."
+        require(loadingWidgetIds.all(widgetIds::contains)) {
+            "Loading Dashboard widgets reference an unknown widget."
+        }
+        require((failedWidgetIds + unsupportedWidgetIds + loadingWidgetIds).size ==
+            failedWidgetIds.size + unsupportedWidgetIds.size + loadingWidgetIds.size) {
+            "A Dashboard widget cannot have conflicting load states."
         }
     }
 
@@ -175,6 +180,7 @@ fun dashboardWidgetsRequest(): NextcloudApiRequest = NextcloudApiRequest(
     queryParameters = mapOf("format" to "json"),
     ocsApiRequest = true,
     maximumResponseBytes = DASHBOARD_RESPONSE_LIMIT_BYTES,
+    cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
 ).requireSafe()
 
 fun dashboardItemsRequest(sinceIds: Map<String, String> = emptyMap()): NextcloudApiRequest {
@@ -220,6 +226,7 @@ internal fun dashboardItemsRequest(
         },
         ocsApiRequest = true,
         maximumResponseBytes = DASHBOARD_RESPONSE_LIMIT_BYTES,
+        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
     ).requireSafe()
 }
 
@@ -375,6 +382,7 @@ internal fun mergeDashboardItemFetchResults(
     previousSnapshot: NativeDashboardSnapshot?,
     results: List<DashboardItemsFetchResult>,
     unsupportedWidgetIds: Set<String> = emptySet(),
+    loadingWidgetIds: Set<String> = emptySet(),
 ): NativeDashboardSnapshot {
     val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
     val resolvedWidgetIds = results.flatMap(DashboardItemsFetchResult::widgetIds)
@@ -389,6 +397,15 @@ internal fun mergeDashboardItemFetchResults(
     }
     require(resolvedWidgetIds.none(unsupportedWidgetIds::contains)) {
         "An unsupported Dashboard widget cannot have an item result."
+    }
+    require(loadingWidgetIds.all(widgetIds::contains)) {
+        "A loading Dashboard widget result references an unknown widget."
+    }
+    require(resolvedWidgetIds.none(loadingWidgetIds::contains)) {
+        "A resolved Dashboard widget cannot still be loading."
+    }
+    require(unsupportedWidgetIds.intersect(loadingWidgetIds).isEmpty()) {
+        "An unsupported Dashboard widget cannot still be loading."
     }
 
     val loaded = results.filterIsInstance<DashboardItemsFetchResult.Loaded>()
@@ -406,7 +423,7 @@ internal fun mergeDashboardItemFetchResults(
         widgets = widgets,
         itemsByWidget = buildMap {
             widgets.forEach { widget ->
-                val items = if (widget.id in failedWidgetIds) {
+                val items = if (widget.id in failedWidgetIds || widget.id in loadingWidgetIds) {
                     previousSnapshot?.itemsByWidget?.get(widget.id).orEmpty()
                 } else {
                     loadedItems[widget.id].orEmpty()
@@ -416,7 +433,7 @@ internal fun mergeDashboardItemFetchResults(
         },
         emptyContentMessagesByWidget = buildMap {
             widgets.forEach { widget ->
-                val message = if (widget.id in failedWidgetIds) {
+                val message = if (widget.id in failedWidgetIds || widget.id in loadingWidgetIds) {
                     previousSnapshot?.emptyContentMessagesByWidget?.get(widget.id)
                 } else {
                     loadedEmptyMessages[widget.id]
@@ -426,7 +443,7 @@ internal fun mergeDashboardItemFetchResults(
         },
         halfEmptyContentMessagesByWidget = buildMap {
             widgets.forEach { widget ->
-                val message = if (widget.id in failedWidgetIds) {
+                val message = if (widget.id in failedWidgetIds || widget.id in loadingWidgetIds) {
                     previousSnapshot?.halfEmptyContentMessagesByWidget?.get(widget.id)
                 } else {
                     loadedHalfEmptyMessages[widget.id]
@@ -434,8 +451,9 @@ internal fun mergeDashboardItemFetchResults(
                 message?.let { put(widget.id, it) }
             }
         },
-        failedWidgetIds = failedWidgetIds,
-        unsupportedWidgetIds = unsupportedWidgetIds,
+        failedWidgetIds = failedWidgetIds.toSet(),
+        unsupportedWidgetIds = unsupportedWidgetIds.toSet(),
+        loadingWidgetIds = loadingWidgetIds.toSet(),
     )
 }
 
