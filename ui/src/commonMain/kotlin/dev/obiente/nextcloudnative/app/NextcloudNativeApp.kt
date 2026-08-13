@@ -206,6 +206,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.TimeSource
 
 internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nc-native.obiente.dev/guides/"
 
@@ -1416,7 +1418,28 @@ private fun LoginScreen(
     var connecting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    if (showDiagnostics) {
+        AlertDialog(
+            onDismissRequest = { showDiagnostics = false },
+            title = { Text("Login diagnostics") },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 560.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    SupportDiagnosticsSettingsCard(services)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDiagnostics = false }) { Text("Close") }
+            },
+        )
+    }
 
     Box(modifier = Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
         Column(
@@ -1463,12 +1486,22 @@ private fun LoginScreen(
                             val challenge = services.beginLogin(serverUrl)
                             services.openExternalUrl(challenge.loginUrl)
                             status = "Finish signing in in your browser, then return here."
-                            repeat(150) {
-                                services.pollLogin(challenge)?.let { return@runCatching it }
-                                delay(2_000)
+                            val started = TimeSource.Monotonic.markNow()
+                            try {
+                                pollLoginUntilApproved(
+                                    poll = { services.pollLogin(challenge) },
+                                    waitBeforeNextPoll = { delayMillis, awaitNetwork ->
+                                        if (awaitNetwork) services.awaitLoginNetworkAvailability()
+                                        delay(delayMillis)
+                                    },
+                                    hasTimedOut = { started.elapsedNow() >= 5.minutes },
+                                    onStatus = { status = it },
+                                )
+                            } finally {
+                                services.finishLoginPolling(challenge)
                             }
-                            error("Login approval timed out. Please try again.")
                         }.onSuccess(onLoggedIn).onFailure { failure ->
+                            if (failure is CancellationException) throw failure
                             error = failure.message ?: "Could not connect to this server."
                             connecting = false
                             status = null
@@ -1480,6 +1513,12 @@ private fun LoginScreen(
                     CircularProgressIndicator(modifier = Modifier.size(20.dp).padding(end = 4.dp))
                 }
                 Text(if (connecting) "Waiting for approval" else "Connect")
+            }
+            TextButton(
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                onClick = { showDiagnostics = true },
+            ) {
+                Text("Export login diagnostics")
             }
         }
     }
