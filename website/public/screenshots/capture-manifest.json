@@ -275,11 +275,11 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicApiRequestCoalescer.kt": "2744c7ce9f156ad7a6f9064e8d04e8790b7b66b599e33925f0288fbef73ecc1d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicArtworkMemoryCache.kt": "c313daea9465087ab1862814bc5a772bdcc1f087bc673eb80f417db73668ea1c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicContractInfo.kt": "cff6ba11283705120375452d6d539c20581f4dd0115dd3d07049eb965242b019",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicDiscoveryPersistence.kt": "ff9ebc2294f46037a2a31ee5925c884cb05155eb62af95bccbbe59561f13ea1c",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicDiscoveryPersistence.kt": "257d25bad49496f73370769ae59aeb0bb49fc5b7e29156883cfdbb45a7c0ca04",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicFormRelations.kt": "468f9bf41ea353dab6f816d333c3a6179d8d8e1f01f98f8eaf0890d5c0d381d6",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicMutationRefresh.kt": "3e345cd7126e1270ef568afda401f317d9b6b9b9f5425cd61053230324a61872",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeMemoryCache.kt": "0cd94f93c0b5fcaa21d33a71e43e651eb56c75771a7f0c86a3a3be90f65c256f",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt": "1409c946926fa358ffb6e174240c940a8db7f54d3df77c16b01a49e2b6dded93",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt": "982ae6a0cda33d618fc8af8dd5100a0019d12a173cc4b7307c98cde4391404f5",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicRecordImagePreview.kt": "7ca77fe7c8424d7058502ac09b5f305ee551a101847776044b3aef84530e4633",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExifOrientation.kt": "028cb9c99b0b64b690c705935e4ec4ae263078340f4af77978f4d8cdd461698d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareEditDraft.kt": "df5c2b3ef90a8a7d0ea02d6587b563ebde8e84d471073f718a7d901f2c0a65fb",
@@ -343,7 +343,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MemoriesTimelinePlaceholderGeometry.kt": "7492d1b49c6bcdf9954aeeeae0e43ee250007f058bcad7ad57145460e612b812",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeAppCatalogSurface.kt": "faccc930eb077fb38b594b7a5209c36494167fdddb2d2cc2611c8e7ca3e2614a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeAudioPlayback.kt": "98ac777faf37e87fed23ffa67a3fb6b4b9684ca2cf199efb5079ff9914b95e94",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeBudgetSemantics.kt": "9343ddf6945205d47fbf49940ec2b454115996ea283b5fc479219db2bc8f987a",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeBudgetSemantics.kt": "db66d772d0ed2d29fa706c2dcef71f47bc4f421049606a422383580b559f1d94",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeBudgetWorkspace.kt": "060a1ce7cdfc6f609667f077583d0fe19a0530060a9a32ccb18e5a9b81d61a2d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.kt": "5d553bc7a00abda7e3347bb230ba2c215813eab29aadc469602a9ef29da67883",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckDragPlacement.kt": "842636b41f1dce22c43e60e16ee2fd7f2a2f541519e87f77d219d7541239419d",
@@ -360,7 +360,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudFileListing.kt": "1f3de4f31d44d3ead139686d3fbcfbd27ccb520a9dab06ccc1d3e582ee25fb71",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "53cc22fed51fe03ef0aaab6a3f849222b0dbfb04fac9c4e3a73057b85c524290",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "a79f635ade69cca0299d88e3cc3564538bed66b8f8b863974150bf7af94848d0",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "5738d7ebff2cb34e469b5d4a5166ce8b4de80936490d4c9da454c61aa9799af7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "944103dba7d35abd17d21cb2bf5818c19b8148abf6b8d37fcdafdab029abe56b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
@@ -435,7 +435,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/SemanticConceptTokens.kt": "14bf3d4fcdf65ebc1c6cd8071ccacde698b68415adb3132a27a51b9c56bf89b8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeRuntimePreviewApp.kt": "5c578985b0651f665c29900a68d8582c852f8ab2862dc9d533604e16653c7a0f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/AdaptiveNativeScreen.kt": "7be3f023a4e75e097b26d57232b48b917bd279b717bd18eb68ae29a9afc1400d",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt": "b97b868eb65b6db3db3759116988b521d11ebb607d8099d6911ed1a0bc0abfd6",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt": "d791c8c9c2216b55978fab73e4df36f0908038d3e7e04b86aae899c2e3177b53",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt": "3e9aeffec25a4c007a2aac7e9e2d95dba78c5c1ae4fc6fa6d7ab23b8324ef119",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericRecipeSurface.kt": "4361de556a4ac05c50b8ca5999548ad750c6774927917e2aea9453ce0aa9550b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeAudioLibrary.kt": "9beb05d3fd9321ebd0d6e4da79aac29975489cbc11d812ed7a6e30001c4756ac",
@@ -454,7 +454,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipeScaling.kt": "97cc41b9c332897e0607867ef1244485917255acb842766ca9249569ef0dc6e6",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecordActions.kt": "363db66f8e8be26c336b9f45fd756f8ff1a9a0a18142960c2c1e7cd4075752a4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRepeatableObjectUiState.kt": "fc024b7f123116dc699157eec41468f7a634b05d4556a819a554a639818b81b1",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSemanticPresentations.kt": "988127c8bbf54ff062fae0a58a0cef1801a8d99a66051cc85b27e0f26dc5ea95",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSemanticPresentations.kt": "308ce7a2f2cf9aaabf3fb72982780877f6d41cf73ce38dcb7d9ed538294cf55c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeTaskSemantics.kt": "6d00fdf7e87a3dd2404d64ce857390fee3a1e5937a6672e12563a041434e074f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/RuntimeState.kt": "d4c6c5ca2c6ce304486aaab4c2fe2a625890f37d3436f4f3ed1f5bf8164c6409",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/template/BracedTemplate.kt": "3178d751b6849c4567af76e7ddba392ddbabab27a3b0237c35b285e67c89be67",
@@ -1366,7 +1366,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5d81c5cc2a2e3ad97afdc61af9ee3c9d53bd606032cc14548bff0dc6e6153954"
+            "sha256": "fb78c8f097726a340488a71213ba2be0b28990eeb8847b6309640ce2ab6cbe0b"
         },
         {
             "scenario": "budget-accounts-desktop-light",
@@ -1382,7 +1382,7 @@
             "purpose": "state-coverage",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "184d511a9ca4f461c812d4b6db3337e2854f1451737bd139421435435e7d352f"
+            "sha256": "6b7135af75d900d96629c2324fca8c273eb611bdf90695b3ae747165f9e870cf"
         },
         {
             "scenario": "budget-accounts-mobile",
@@ -1398,7 +1398,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "777a2cc56024d9a20eeb6cb5906ba5b17ba08b74d7b4e9b9f7bcecae2e92e929"
+            "sha256": "6ce08931b0cf54e262c7eb4ef92e2a8c92c2b36f6aa867081f65cd5c3fff990c"
         },
         {
             "scenario": "budget-accounts-mobile-light",
@@ -1414,7 +1414,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "4c95fef57e10624f972f2ff8ccf19fe77d3f439d3ab74540ddd9929706e472a8"
+            "sha256": "6b45cfd3c3b544ed7df00df5f43e0eee1a05e277a812ac74f9441b87c5d41009"
         },
         {
             "scenario": "budget-categories-desktop",
