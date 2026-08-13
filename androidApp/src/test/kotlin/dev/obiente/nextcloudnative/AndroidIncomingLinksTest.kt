@@ -58,4 +58,19 @@ class AndroidIncomingLinksTest {
             assertNull(state.request)
         }
     }
+
+    @Test
+    fun restoredIntentDeliveriesAreSkippedButNewLaunchesAreProcessed() {
+        val restoredId = "44ab77da-4d31-4b81-8d60-78f983683d45"
+
+        assertEquals(false, isNewAndroidIncomingLinkDelivery(restoredId, restoredId))
+        assertEquals(
+            true,
+            isNewAndroidIncomingLinkDelivery(
+                restoredId,
+                "57444e66-73ff-4123-9cb7-d2690d46112a",
+            ),
+        )
+        assertEquals(true, isNewAndroidIncomingLinkDelivery(restoredId, null))
+    }
 }

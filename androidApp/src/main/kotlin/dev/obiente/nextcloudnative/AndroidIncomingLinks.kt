@@ -28,6 +28,11 @@ internal fun nextAndroidIncomingLinkState(
     )
 }
 
+internal fun isNewAndroidIncomingLinkDelivery(
+    lastDeliveryId: String?,
+    currentDeliveryId: String?,
+): Boolean = currentDeliveryId == null || currentDeliveryId != lastDeliveryId
+
 private fun String.isSupportedAndroidIncomingLink(): Boolean {
     if (length !in 1..MAX_ANDROID_INCOMING_LINK_LENGTH) return false
     if (any { it.isWhitespace() || it.isISOControl() } || '\\' in this) return false

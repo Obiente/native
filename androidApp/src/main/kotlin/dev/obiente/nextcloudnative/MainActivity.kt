@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
 import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
 import dev.obiente.nextcloudnative.app.ThemePreference
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private var appUpdateReviewRequest by mutableLongStateOf(0L)
@@ -27,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
     private var incomingLinkSequence = 0L
     private var incomingLinkRequest by mutableStateOf<NextcloudNativeLinkRequest?>(null)
+    private var lastIncomingLinkDeliveryId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,12 +45,13 @@ class MainActivity : ComponentActivity() {
             intentEventId = intent.appUpdateReviewEventId(),
         ))
         incomingLinkSequence = savedInstanceState?.getLong(KEY_INCOMING_LINK_SEQUENCE) ?: 0L
+        lastIncomingLinkDeliveryId = savedInstanceState?.getString(KEY_INCOMING_LINK_DELIVERY_ID)
         incomingLinkRequest = savedInstanceState
             ?.getString(KEY_PENDING_INCOMING_LINK)
             ?.let { savedUrl ->
                 runCatching { NextcloudNativeLinkRequest(incomingLinkSequence, savedUrl) }.getOrNull()
             }
-        if (savedInstanceState == null) receiveIncomingLinkIntent(intent)
+        receiveIncomingLinkIntent(intent)
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         AndroidAppUpdateWork.schedule(
@@ -147,6 +150,9 @@ class MainActivity : ComponentActivity() {
         incomingLinkRequest?.url?.let { url ->
             outState.putString(KEY_PENDING_INCOMING_LINK, url)
         }
+        lastIncomingLinkDeliveryId?.let { deliveryId ->
+            outState.putString(KEY_INCOMING_LINK_DELIVERY_ID, deliveryId)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -160,6 +166,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun receiveIncomingLinkIntent(intent: Intent?) {
+        val existingDeliveryId = intent.incomingLinkDeliveryId()
+        if (!isNewAndroidIncomingLinkDelivery(lastIncomingLinkDeliveryId, existingDeliveryId)) return
         val state = nextAndroidIncomingLinkState(
             previousSequence = incomingLinkSequence,
             action = intent?.action,
@@ -167,7 +175,14 @@ class MainActivity : ComponentActivity() {
             sharedText = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString(),
         )
         incomingLinkSequence = state.sequence
-        if (state.request != null) incomingLinkRequest = state.request
+        if (state.request != null) {
+            val deliveryId = existingDeliveryId ?: UUID.randomUUID().toString().also { generated ->
+                intent?.putExtra(EXTRA_INCOMING_LINK_DELIVERY_ID, generated)
+                if (intent === this.intent) setIntent(intent)
+            }
+            lastIncomingLinkDeliveryId = deliveryId
+            incomingLinkRequest = state.request
+        }
     }
 
     private fun applyAppUpdateReviewState(state: AppUpdateReviewState) {
@@ -180,10 +195,18 @@ class MainActivity : ComponentActivity() {
         const val KEY_APP_UPDATE_REVIEW_EVENT_ID = "app-update-review-event-id"
         const val KEY_INCOMING_LINK_SEQUENCE = "incoming-link-sequence"
         const val KEY_PENDING_INCOMING_LINK = "pending-incoming-link"
+        const val KEY_INCOMING_LINK_DELIVERY_ID = "incoming-link-delivery-id"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)
     }
 }
+
+private fun Intent?.incomingLinkDeliveryId(): String? =
+    this?.getStringExtra(EXTRA_INCOMING_LINK_DELIVERY_ID)
+        ?.takeIf { value -> runCatching { UUID.fromString(value) }.isSuccess }
+
+private const val EXTRA_INCOMING_LINK_DELIVERY_ID =
+    "dev.obiente.nextcloudnative.extra.INCOMING_LINK_DELIVERY_ID"
 
 internal fun isAppUpdateReviewIntentAction(action: String?): Boolean =
     action == "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"

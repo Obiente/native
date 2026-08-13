@@ -36,6 +36,15 @@ class NextcloudLinkRoutingTest {
             "Projects/Design work",
             assertIs<NextcloudLinkDestination.FilesPath>(folder).value,
         )
+        assertEquals(
+            42L,
+            assertIs<NextcloudLinkDestination.FileId>(
+                nextcloudLinkDestination(
+                    session,
+                    "/index.php/apps/files/files/42?openfile=42&fileid=42",
+                ),
+            ).value,
+        )
     }
 
     @Test
@@ -133,6 +142,8 @@ class NextcloudLinkRoutingTest {
             "/f/not-a-number",
             "/index.php/apps/files/?openfile=42&openfile=43",
             "/index.php/apps/files/?openfile=bad&fileid=42",
+            "/index.php/apps/files/?openfile=42&fileid=43",
+            "/index.php/apps/files/files/42?openfile=43",
             "/index.php/apps/files/?dir=%2FPhotos&dir=%2FProjects",
             "/index.php/apps/files/files/not-a-number",
             "https://person@cloud.example.test/nextcloud/f/42",
@@ -140,5 +151,15 @@ class NextcloudLinkRoutingTest {
         ).forEach { link ->
             assertIs<NextcloudLinkDestination.Rejected>(nextcloudLinkDestination(session, link), link)
         }
+    }
+
+    @Test
+    fun fragmentContentCannotSupplyQueryParameters() {
+        val destination = nextcloudLinkDestination(
+            session,
+            "/index.php/apps/files/#view?openfile=42",
+        )
+
+        assertEquals("", assertIs<NextcloudLinkDestination.FilesPath>(destination).value)
     }
 }

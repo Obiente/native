@@ -624,9 +624,9 @@ internal fun NextcloudNoteEditor(
     session: NextcloudSession,
     note: NextcloudNote,
     onBack: () -> Unit,
-    navigationRequest: NextcloudNativeNavigationRequest? = null,
-    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
-    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
 ) {
     val accountKey = remember(session.serverUrl, session.loginName) {
         session.serverUrl.trimEnd('/').lowercase() + '\u0000' + session.loginName
@@ -725,7 +725,7 @@ internal fun NextcloudNoteEditor(
         if (saving) return
         if (dirty) showDiscardConfirmation = true else onBack()
     }
-    LaunchedEffect(navigationRequest?.sequence, saving) {
+    LaunchedEffect(navigationRequest?.identity, saving) {
         navigationRequest?.let { request ->
             if (!saving) {
                 if (dirty) showDiscardConfirmation = true else onNavigationConfirmed(request)

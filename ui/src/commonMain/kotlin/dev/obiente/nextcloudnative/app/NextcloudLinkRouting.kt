@@ -85,9 +85,15 @@ internal fun nextcloudLinkDestination(
         if (routeFileIdValue != null && routeFileIdValue.toPositiveFileId() == null) {
             return NextcloudLinkDestination.Rejected("This Files link has an invalid file ID.")
         }
-        val explicitFileId = parsed.queryParameters["openfile"]?.singleOrNull()?.toPositiveFileId()
-            ?: parsed.queryParameters["fileid"]?.singleOrNull()?.toPositiveFileId()
-            ?: routeFileIdValue?.toPositiveFileId()
+        val suppliedFileIds = listOfNotNull(
+            parsed.queryParameters["openfile"]?.singleOrNull()?.toPositiveFileId(),
+            parsed.queryParameters["fileid"]?.singleOrNull()?.toPositiveFileId(),
+            routeFileIdValue?.toPositiveFileId(),
+        )
+        if (suppliedFileIds.distinct().size > 1) {
+            return NextcloudLinkDestination.Rejected("This Files link has conflicting file IDs.")
+        }
+        val explicitFileId = suppliedFileIds.firstOrNull()
         if (explicitFileId != null) {
             return NextcloudLinkDestination.FileId(explicitFileId, resolved.browserUrl)
         }
@@ -227,7 +233,8 @@ private fun normalizedAuthority(scheme: String, authority: String): String {
 
 private fun parseRelativeAccountLink(value: String): ParsedRelativeAccountLink? {
     if (!value.startsWith('/') || value.startsWith("//") || value.length > MAX_NEXTCLOUD_LINK_LENGTH) return null
-    val path = value.substringBefore('?').substringBefore('#')
+    val beforeFragment = value.substringBefore('#')
+    val path = beforeFragment.substringBefore('?')
     val pathSegments = path.split('/').filter(String::isNotEmpty).map { rawSegment ->
         decodeUrlComponent(rawSegment, plusAsSpace = false)?.takeIf { segment ->
             segment.isNotBlank() && segment != "." && segment != ".." &&
@@ -235,7 +242,7 @@ private fun parseRelativeAccountLink(value: String): ParsedRelativeAccountLink? 
                 segment.none { it.isISOControl() }
         } ?: return null
     }
-    val query = value.substringAfter('?', "").substringBefore('#')
+    val query = beforeFragment.substringAfter('?', "")
     val parameters = parseQueryParameters(query) ?: return null
     return ParsedRelativeAccountLink(pathSegments, parameters)
 }
