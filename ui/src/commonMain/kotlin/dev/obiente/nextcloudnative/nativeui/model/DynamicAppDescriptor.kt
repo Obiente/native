@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonElement
 
 const val DYNAMIC_APP_DESCRIPTOR_VERSION: String = "1.0"
+internal const val MAX_DYNAMIC_ENUM_LABEL_LENGTH: Int = 128
 
 @Serializable
 data class DynamicAppDescriptor(
@@ -178,6 +179,7 @@ data class FormField(
     val required: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val enumLabels: Map<String, String>? = null,
     val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 

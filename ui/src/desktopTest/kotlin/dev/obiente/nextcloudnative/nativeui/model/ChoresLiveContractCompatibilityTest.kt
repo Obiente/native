@@ -107,6 +107,38 @@ class ChoresLiveContractCompatibilityTest {
         assertEquals("Does not repeat", repeatInput.enumLabels?.get("s:1:-"))
         assertEquals("Every week", repeatInput.enumLabels?.get("w:1"))
         assertEquals("Every year", repeatInput.enumLabels?.get("m:12"))
+        val authorizedChores = nativeChores.copy(
+            fields = nativeChores.fields + FieldSpec(
+                id = "canEdit",
+                label = "Can edit",
+                kind = FieldKind.boolean,
+                required = false,
+                readOnly = true,
+            ),
+        )
+        val authorizedSchema = nativeSchema.copy(
+            resources = nativeSchema.resources.map { resource ->
+                if (resource.id == authorizedChores.id) authorizedChores else resource
+            },
+        )
+        val editPlan = assertNotNull(
+            nativeRecordActions(
+                schema = authorizedSchema,
+                resource = authorizedChores,
+                record = dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord(
+                    id = "7",
+                    values = mapOf(
+                        "name" to "Clean the kitchen",
+                        "repeat" to "w:1",
+                        "canEdit" to "true",
+                    ),
+                ),
+                navigationContext = mapOf("teamId" to "opaque-team"),
+            ).edit,
+        )
+        val editRepeatInput = editPlan.fields.single { field -> field.id == "repeat" }
+        assertEquals("Every week", editRepeatInput.enumLabels?.get("w:1"))
+        assertEquals("Every year", editRepeatInput.enumLabels?.get("m:12"))
 
         val root = descriptor.planDynamicNavigation().rootDestinations
         assertTrue(

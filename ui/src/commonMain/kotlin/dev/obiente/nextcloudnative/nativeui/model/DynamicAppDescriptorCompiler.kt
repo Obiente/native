@@ -1634,6 +1634,9 @@ private class KotlinCompilerState(
             if (field.boolean("readOnly") == true) return@mapNotNull null
             if (field.string("type") == "array" && !supportsTypedArrays) return@mapNotNull null
             val repeatableObjectInput = field.repeatableObjectInputSpec()
+            val enumValues = field.stringArray("enum")
+            val enumLabels = field.nativeEnumLabels(enumValues)
+            if (ENUM_LABELS_EXTENSION in field && enumLabels == null) return@mapNotNull null
             FormField(
                 fieldId = id,
                 label = field.string("title") ?: id.humanize(),
@@ -1642,7 +1645,8 @@ private class KotlinCompilerState(
                 format = repeatableObjectInput
                     ?.let { DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT }
                     ?: field.dynamicEditorFormat(),
-                enumValues = field.stringArray("enum"),
+                enumValues = enumValues,
+                enumLabels = enumLabels,
                 repeatableObjectInput = repeatableObjectInput,
             )
         }
@@ -1650,13 +1654,17 @@ private class KotlinCompilerState(
 
     private fun formField(parameter: HttpParameter): FormField? {
         val schema = resolveFieldSchema(parameter.schema) as? JsonObject ?: return null
+        val enumValues = schema.stringArray("enum")
+        val enumLabels = schema.nativeEnumLabels(enumValues)
+        if (ENUM_LABELS_EXTENSION in schema && enumLabels == null) return null
         return FormField(
             fieldId = parameter.name,
             label = schema.string("title") ?: parameter.name.humanize(),
             kind = fieldKind(parameter.name, schema),
             required = parameter.required,
             format = schema.string("format"),
-            enumValues = schema.stringArray("enum"),
+            enumValues = enumValues,
+            enumLabels = enumLabels,
         )
     }
 
@@ -2664,3 +2672,15 @@ private fun JsonObject.objectValue(key: String): JsonObject? = get(key) as? Json
 private fun JsonObject.stringArray(key: String): List<String>? = (get(key) as? JsonArray)?.mapNotNull {
     (it as? JsonPrimitive)?.contentOrNull
 }
+
+private fun JsonObject.nativeEnumLabels(enumValues: List<String>?): Map<String, String>? =
+    (get(ENUM_LABELS_EXTENSION) as? JsonObject)?.entries
+        ?.mapNotNull { (wireValue, labelElement) ->
+            (labelElement as? JsonPrimitive)
+                ?.takeIf(JsonPrimitive::isString)
+                ?.contentOrNull
+                ?.takeIf { label -> label.isNotBlank() && label.length <= MAX_DYNAMIC_ENUM_LABEL_LENGTH }
+                ?.let { label -> wireValue to label }
+        }
+        ?.toMap()
+        ?.takeIf { labels -> enumValues != null && labels.keys == enumValues.toSet() }

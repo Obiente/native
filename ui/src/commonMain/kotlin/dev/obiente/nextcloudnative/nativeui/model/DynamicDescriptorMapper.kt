@@ -28,6 +28,7 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     readOnly = false,
                     format = input.format ?: existing.format,
                     enumValues = input.enumValues ?: existing.enumValues,
+                    enumLabels = input.enumLabels ?: existing.enumLabels,
                     repeatableObjectInput = input.repeatableObjectInput ?: existing.repeatableObjectInput,
                 )
             }
@@ -345,6 +346,7 @@ private fun FormField.toNativeField(): FieldSpec = FieldSpec(
     readOnly = false,
     format = format,
     enumValues = enumValues,
+    enumLabels = enumLabels,
     repeatableObjectInput = repeatableObjectInput,
 )
 

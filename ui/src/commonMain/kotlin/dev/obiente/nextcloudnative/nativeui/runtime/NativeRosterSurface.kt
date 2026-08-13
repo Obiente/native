@@ -39,6 +39,21 @@ internal fun NativeRosterSurface(roster: NativeRosterPresentation) {
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
         item { Text(roster.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
+        if (roster.omittedPeople > 0 || roster.omittedInvitations > 0) {
+            item {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = RoundedCornerShape(NextcloudRadii.Card),
+                ) {
+                    Text(
+                        "Some team information could not be shown. Refresh to try again.",
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
         item { Text("Members", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         items(roster.people, key = NativeRosterPerson::userId) { person ->
             NativeRosterPersonRow(
@@ -55,7 +70,7 @@ internal fun NativeRosterSurface(roster: NativeRosterPresentation) {
         item {
             Text("Pending invitations", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         }
-        if (roster.invitations.isEmpty()) {
+        if (roster.invitations.isEmpty() && roster.omittedInvitations == 0) {
             item { Text("No pending invitations", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         } else {
             items(roster.invitations, key = NativeRosterInvitation::userId) { invitation ->

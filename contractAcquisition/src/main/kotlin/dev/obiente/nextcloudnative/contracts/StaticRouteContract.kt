@@ -709,7 +709,7 @@ private fun verifiedChoresWrite(
                     "assignee" to stringSchema(title = "Assignee"),
                     "points" to JSONObject().put("type", "integer").put("minimum", 0).put("title", "Points"),
                     "due" to stringSchema(title = "Due", format = "date-time"),
-                    "repeat" to stringSchema(title = "Repeat schedule"),
+                    "repeat" to choresRepeatScheduleSchema(),
                 ),
                 required = emptyList(),
             ),

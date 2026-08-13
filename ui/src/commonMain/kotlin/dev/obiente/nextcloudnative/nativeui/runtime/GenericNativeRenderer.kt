@@ -753,8 +753,6 @@ fun GenericNativeAppScreen(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
-            rosterPresentation != null && !showSelectedRecordDetail ->
-                NativeRosterSurface(rosterPresentation)
             choresWorkspace != null && !showSelectedRecordDetail -> NativeChoresWorkspaceSurface(
                 presentation = choresWorkspace,
                 onSelectRecord = onSelectRecord,
@@ -778,6 +776,7 @@ fun GenericNativeAppScreen(
                 onNavigate = onWorkspaceNavigate,
                 createLabel = collectionCreatePlan?.action?.label,
                 onCreate = openCollectionCreate,
+                roster = rosterPresentation,
             )
             mailWorkspacePlan != null && state is NativeScreenState.Loading ->
                 NativeMailWorkspace(
@@ -10688,16 +10687,8 @@ private fun GenericEnumField(
     var expanded by remember { mutableStateOf(false) }
     var query by rememberSaveable(field.id) { mutableStateOf("") }
     val options = field.enumValues.orEmpty()
-    val visibleOptions = remember(options, query) {
-        val normalizedQuery = query.trim().lowercase()
-        if (normalizedQuery.isBlank()) {
-            options
-        } else {
-            options.filter { option ->
-                normalizedQuery in option.lowercase() ||
-                    normalizedQuery in option.dynamicSettingLabel().lowercase()
-            }
-        }
+    val visibleOptions = remember(field.enumLabels, options, query) {
+        nativeEnumOptionsMatchingQuery(field, query)
     }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
@@ -10803,6 +10794,17 @@ private fun GenericEnumField(
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+internal fun nativeEnumOptionsMatchingQuery(field: FieldSpec, query: String): List<String> {
+    val options = field.enumValues.orEmpty()
+    val normalizedQuery = query.trim().lowercase()
+    if (normalizedQuery.isBlank()) return options
+    return options.filter { option ->
+        normalizedQuery in option.lowercase() ||
+            normalizedQuery in option.dynamicSettingLabel().lowercase() ||
+            normalizedQuery in field.enumLabels?.get(option).orEmpty().lowercase()
     }
 }
 

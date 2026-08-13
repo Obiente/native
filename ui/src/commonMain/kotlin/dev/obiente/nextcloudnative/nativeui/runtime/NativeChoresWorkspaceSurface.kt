@@ -57,6 +57,7 @@ internal fun NativeChoresWorkspaceSurface(
     onNavigate: ((String) -> Unit)?,
     createLabel: String?,
     onCreate: (() -> Unit)?,
+    roster: NativeRosterPresentation? = null,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
@@ -71,6 +72,7 @@ internal fun NativeChoresWorkspaceSurface(
                     showHeader = true,
                     createLabel = createLabel,
                     onCreate = onCreate,
+                    roster = roster,
                 )
             }
         } else {
@@ -86,6 +88,7 @@ internal fun NativeChoresWorkspaceSurface(
                     showHeader = true,
                     createLabel = createLabel,
                     onCreate = onCreate,
+                    roster = roster,
                 )
             }
         }
@@ -189,6 +192,7 @@ private fun ChoresContent(
     showHeader: Boolean,
     createLabel: String?,
     onCreate: (() -> Unit)?,
+    roster: NativeRosterPresentation?,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         if (showHeader) {
@@ -237,7 +241,13 @@ private fun ChoresContent(
                     Button(onClick = onCreate) { Text(createLabel) }
                 }
             }
-            is NativeChoresContent.Ready -> ChoresList(content.items, onSelectRecord, recordActions)
+            is NativeChoresContent.Ready -> if (
+                presentation.kind == NativeChoresWorkspaceKind.Team && roster != null
+            ) {
+                NativeRosterSurface(roster)
+            } else {
+                ChoresList(content.items, onSelectRecord, recordActions)
+            }
         }
     }
 }

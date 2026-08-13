@@ -33,6 +33,27 @@ import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
     @Test
+    fun enumSearchMatchesTheLabelsShownToUsers() {
+        val field = FieldSpec(
+            id = "repeat",
+            label = "Repeat",
+            kind = FieldKind.enumeration,
+            required = true,
+            readOnly = false,
+            enumValues = listOf("d:1", "w:1", "m:1"),
+            enumLabels = mapOf(
+                "d:1" to "Every day",
+                "w:1" to "Every week",
+                "m:1" to "Every month",
+            ),
+        )
+
+        assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "week"))
+        assertEquals(listOf("d:1", "w:1", "m:1"), nativeEnumOptionsMatchingQuery(field, "every"))
+        assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "w:1"))
+    }
+
+    @Test
     fun collectionSearchMatchesMeaningfulRecordContentAndIgnoresTechnicalFields() {
         val resource = ResourceSpec(
             id = "entries",

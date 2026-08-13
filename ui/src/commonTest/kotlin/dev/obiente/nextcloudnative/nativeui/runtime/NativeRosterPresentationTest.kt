@@ -60,6 +60,32 @@ class NativeRosterPresentationTest {
         assertTrue(roster.people.single().owner)
     }
 
+    @Test
+    fun `roster projection preserves bounded parser omissions`() {
+        val roster = requireNotNull(
+            nativeRosterPresentation(
+                NativeRecord(
+                    id = "team-1",
+                    values = mapOf("name" to "Shared home"),
+                    structuredValues = mapOf(
+                        "members" to NativeStructuredValue.ListValue(
+                            items = listOf(objectValue("member" to "alex")),
+                            omittedItems = 4,
+                        ),
+                        "invites" to NativeStructuredValue.ListValue(
+                            items = emptyList(),
+                            omittedItems = 2,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(4, roster.omittedPeople)
+        assertEquals(2, roster.omittedInvitations)
+        assertTrue(roster.invitations.isEmpty())
+    }
+
     private fun listValue(vararg values: NativeStructuredValue): NativeStructuredValue.ListValue =
         NativeStructuredValue.ListValue(values.toList())
 
