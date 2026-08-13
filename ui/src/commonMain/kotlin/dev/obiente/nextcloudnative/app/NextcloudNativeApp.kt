@@ -12515,10 +12515,15 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     var showPreview by rememberSaveable { mutableStateOf(false) }
     val submissionState by remember(services) {
         services.supportDiagnosticsSubmissionStates()
-    }.collectAsState(SupportDiagnosticsSubmissionState.Idle)
-    val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Packaging ||
+    }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
+    val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Initializing ||
+        submissionState is SupportDiagnosticsSubmissionState.Packaging ||
         submissionState is SupportDiagnosticsSubmissionState.Uploading
     val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure
+
+    LaunchedEffect(submissionBusy, submissionPending) {
+        if (submissionBusy || submissionPending) confirmClear = false
+    }
 
     if (confirmClear) {
         AlertDialog(
@@ -12532,6 +12537,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             confirmButton = {
                 TextButton(
+                    enabled = !submissionBusy && !submissionPending,
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     onClick = {
                         confirmClear = false
@@ -12779,7 +12785,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 }
                 if (summary.eventCount > 0) {
                     OutlinedButton(
-                        enabled = !exporting && !submissionBusy,
+                        enabled = !exporting && !submissionBusy && !submissionPending,
                         onClick = { confirmClear = true },
                     ) { Text("Clear history") }
                 }
@@ -12790,6 +12796,10 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 },
             ) {
                 when (val current = submissionState) {
+                    SupportDiagnosticsSubmissionState.Initializing -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Restoring any pending private report...", style = MaterialTheme.typography.bodySmall)
+                    }
                     SupportDiagnosticsSubmissionState.Idle -> Unit
                     SupportDiagnosticsSubmissionState.Packaging -> {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

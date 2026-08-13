@@ -111,6 +111,43 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun hidesPendingSubmissionFromAnotherLocalAccount() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            fixture.intake.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+
+            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+            fixture.intake.retry()
+            assertFalse(fixture.intake.cancel())
+            assertEquals(1, fixture.server.requestCount)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+
+            fixture.intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            Unit
+        }
+    }
+
+    @Test
+    fun doesNotAcceptCancellationAfterReceiptCompletion() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertFalse(fixture.intake.cancel())
+            assertEquals(1, fixture.server.requestCount)
+        }
+    }
+
+    @Test
     fun cancellingAmbiguousSubmissionRequiresDeletionReconciliation() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
@@ -652,7 +689,10 @@ class JvmSupportIntakeTest {
             environment = environment,
             client = OkHttpClient.Builder().retryOnConnectionFailure(false).build(),
             supportBaseUrl = server.url("/").toString(),
-        )
+        ).also { intake ->
+            intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
+            runBlocking { intake.awaitInitialization() }
+        }
 
         override fun close() {
             intake.close()
@@ -660,5 +700,10 @@ class JvmSupportIntakeTest {
             server.close()
             root.deleteRecursively()
         }
+    }
+
+    private companion object {
+        const val TEST_ACCOUNT_IDENTITY = "0123456789abcdef0123456789abcdef"
+        const val OTHER_ACCOUNT_IDENTITY = "fedcba9876543210fedcba9876543210"
     }
 }

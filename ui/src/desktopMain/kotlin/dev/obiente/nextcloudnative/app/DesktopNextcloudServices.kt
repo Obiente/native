@@ -3472,7 +3472,9 @@ class DesktopNextcloudServices(
             ?: return null
         listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
         return NextcloudSession(server, login, password).also { session ->
-            supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
+            val accountIdentity = desktopFileCacheAccountId(session)
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
         }
     }
 
@@ -3486,7 +3488,9 @@ class DesktopNextcloudServices(
         )
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
-        supportDiagnostics.setActiveAccountIdentity(desktopFileCacheAccountId(session))
+        val accountIdentity = desktopFileCacheAccountId(session)
+        supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+        supportIntake.setActiveAccountIdentity(accountIdentity)
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
@@ -3623,6 +3627,7 @@ class DesktopNextcloudServices(
             preferences.remove(KEY_SERVER)
             preferences.remove(KEY_LOGIN)
             supportDiagnostics.setActiveAccountIdentity(null)
+            supportIntake.setActiveAccountIdentity(null)
             cleared = true
         } finally {
             if (!cleared) {

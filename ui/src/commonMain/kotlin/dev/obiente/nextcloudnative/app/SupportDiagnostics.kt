@@ -185,6 +185,7 @@ sealed interface SupportDiagnosticsExportResult {
 }
 
 sealed interface SupportDiagnosticsSubmissionState {
+    data object Initializing : SupportDiagnosticsSubmissionState
     data object Idle : SupportDiagnosticsSubmissionState
     data object Packaging : SupportDiagnosticsSubmissionState
     data class Uploading(val progress: Float?) : SupportDiagnosticsSubmissionState {

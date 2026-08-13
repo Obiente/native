@@ -746,7 +746,9 @@ internal class AndroidNextcloudServices(
             accountIdOf = NextcloudDocumentIds::accountKey,
         )?.also { session ->
             registerSessionPrivateValues(session)
-            supportDiagnostics.setActiveAccountIdentity(NextcloudDocumentIds.accountKey(session))
+            val accountIdentity = NextcloudDocumentIds.accountKey(session)
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
         }
     }
 
@@ -786,7 +788,9 @@ internal class AndroidNextcloudServices(
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
-        supportDiagnostics.setActiveAccountIdentity(NextcloudDocumentIds.accountKey(session))
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
+        supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+        supportIntake.setActiveAccountIdentity(accountIdentity)
         notifyDocumentsRootsChanged()
     }
 
@@ -827,6 +831,7 @@ internal class AndroidNextcloudServices(
             accountId?.let(nativeMediaPreviewCache::clearAccount)
             notifyDocumentsRootsChanged()
             supportDiagnostics.setActiveAccountIdentity(null)
+            supportIntake.setActiveAccountIdentity(null)
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
                 SupportDiagnosticEventDraft(
