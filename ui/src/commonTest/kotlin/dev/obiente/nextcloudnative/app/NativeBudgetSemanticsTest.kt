@@ -12,11 +12,14 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
+import dev.obiente.nextcloudnative.nativeui.model.HttpParameter
+import dev.obiente.nextcloudnative.nativeui.model.ParameterSource
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -277,6 +280,24 @@ class NativeBudgetSemanticsTest {
             .copy(fallbackOnly = true)
 
         assertTrue(nativeBudgetDashboardReads("budget", listOf(fallback)).isEmpty())
+    }
+
+    @Test
+    fun dashboardReadsSupplyRequiredQueryParametersWhenTheDashboardDeclaresValues() {
+        val transactions = budgetRead("transactions", "transactions", "/apps/budget/api/transactions")
+            .copy(
+                binding = DynamicHttpBinding(
+                    method = HttpMethod.GET,
+                    path = "/apps/budget/api/transactions",
+                    queryParameters = listOf(
+                        HttpParameter("limit", true, JsonPrimitive("integer"), ParameterSource.userInput),
+                    ),
+                ),
+            )
+
+        val read = nativeBudgetDashboardReads("budget", listOf(transactions)).single()
+        assertEquals(NativeBudgetDashboardDataKind.RecentTransactions, read.kind)
+        assertEquals(mapOf("limit" to "5"), read.values)
     }
 
     private fun budgetRead(id: String, resourceId: String, path: String) = DynamicAction(

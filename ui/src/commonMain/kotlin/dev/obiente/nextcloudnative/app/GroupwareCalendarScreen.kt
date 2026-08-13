@@ -823,8 +823,13 @@ internal fun GroupwareCalendarEvent.overlapsCalendarDateRange(
     val rangeStart = firstDate ?: return false
     val rangeEnd = lastDate ?: return false
     val eventStart = start.take(8)
-    val eventEnd = end?.take(8)?.takeIf { it.length == 8 } ?: eventStart
-    return eventStart <= rangeEnd && eventEnd >= rangeStart
+    val eventEnd = end?.take(8)?.takeIf { it.length == 8 }
+    val reachesRange = when {
+        eventEnd == null -> true
+        allDay -> eventEnd > rangeStart
+        else -> eventEnd >= rangeStart
+    }
+    return eventStart <= rangeEnd && reachesRange
 }
 
 @Composable

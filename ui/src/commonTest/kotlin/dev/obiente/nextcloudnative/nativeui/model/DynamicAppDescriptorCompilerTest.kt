@@ -972,8 +972,8 @@ class DynamicAppDescriptorCompilerTest {
                     "tags":["lists"],
                     "requestBody":{"required":true,"content":{"application/json":{"schema":{
                       "type":"object",
-                      "required":["name"],
-                      "properties":{"name":{"type":"string"},"color":{"type":"string"}}
+                      "required":["id","name"],
+                      "properties":{"id":{"type":"integer"},"name":{"type":"string"},"color":{"type":"string"}}
                     }}}},
                     "responses":{"201":{"description":"Created"}}
                   }
@@ -997,8 +997,12 @@ class DynamicAppDescriptorCompilerTest {
             },
             "links=${descriptor.links}",
         )
-        assertEquals("/apps/example/api/houses/{id}/lists", createList.binding.path)
-        assertEquals(listOf("id"), createList.binding.pathParameters.map(HttpParameter::name))
+        assertEquals("/apps/example/api/houses/{houseId}/lists", createList.binding.path)
+        assertEquals(listOf("houseId"), createList.binding.pathParameters.map(HttpParameter::name))
+        assertEquals(
+            listOf("color", "id", "name"),
+            descriptor.forms.single { it.actionId == createList.id }.fields.map(FormField::fieldId),
+        )
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 
