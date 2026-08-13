@@ -1492,6 +1492,18 @@ private fun NativeRecordAuthorityContext.authorityEvidence(
     resource: ResourceSpec,
 ): NativeAuthorityEvidence {
     if (!parentRecord.actionBindingProvenanceValid) return NativeAuthorityEvidence.Denied
+    val roleFields = parentResource.fields.filter { field ->
+        field.id.recordSemanticId() in setOf("role", "membershiprole", "accessrole") &&
+            field.kind in setOf(FieldKind.string, FieldKind.enumeration)
+    }
+    if (roleFields.size > 1) return NativeAuthorityEvidence.Ambiguous
+    val ownerRoleEvidence = roleFields.singleOrNull()?.let { field ->
+        when (parentRecord.values[field.id]?.trim()?.lowercase()) {
+            "owner", "admin", "administrator" -> NativeAuthorityEvidence.Allowed
+            null -> NativeAuthorityEvidence.Absent
+            else -> NativeAuthorityEvidence.Unscoped
+        }
+    } ?: NativeAuthorityEvidence.Absent
     val adminFields = parentResource.fields.filter { field ->
         field.id.recordSemanticId() == "isadmin" && field.kind == FieldKind.boolean
     }
@@ -1500,7 +1512,9 @@ private fun NativeRecordAuthorityContext.authorityEvidence(
         when (parentRecord.values[field.id]?.nativeCapabilityBooleanOrNull()) {
             true -> return NativeAuthorityEvidence.Allowed
             false -> Unit
-            null -> return NativeAuthorityEvidence.Denied
+            null -> if (ownerRoleEvidence != NativeAuthorityEvidence.Allowed) {
+                return NativeAuthorityEvidence.Denied
+            }
         }
     }
 
@@ -1508,7 +1522,9 @@ private fun NativeRecordAuthorityContext.authorityEvidence(
         field.id.recordSemanticId() == "permissions" && field.kind == FieldKind.objectValue
     }
     if (permissionFields.isEmpty()) {
-        return if (adminFields.isEmpty()) {
+        return if (ownerRoleEvidence == NativeAuthorityEvidence.Allowed) {
+            NativeAuthorityEvidence.Allowed
+        } else if (adminFields.isEmpty() && roleFields.isEmpty()) {
             NativeAuthorityEvidence.Unscoped
         } else {
             NativeAuthorityEvidence.Absent
@@ -1517,14 +1533,24 @@ private fun NativeRecordAuthorityContext.authorityEvidence(
     if (permissionFields.size != 1) return NativeAuthorityEvidence.Ambiguous
     val permissionField = permissionFields.single()
     val permissions = parentRecord.structuredValues[permissionField.id] as? NativeStructuredValue.ObjectValue
-        ?: return NativeAuthorityEvidence.Denied
+        ?: return if (ownerRoleEvidence == NativeAuthorityEvidence.Allowed) {
+            NativeAuthorityEvidence.Allowed
+        } else {
+            NativeAuthorityEvidence.Denied
+        }
     if (permissions.omittedEntries > 0) return NativeAuthorityEvidence.Ambiguous
     val capabilityIds = action.authorityCapabilityIds(resource)
     if (capabilityIds.isEmpty()) return NativeAuthorityEvidence.Denied
     val matches = permissions.entries.filter { entry ->
         entry.key.recordSemanticId() in capabilityIds
     }
-    if (matches.isEmpty()) return NativeAuthorityEvidence.Absent
+    if (matches.isEmpty()) {
+        return if (ownerRoleEvidence == NativeAuthorityEvidence.Allowed) {
+            NativeAuthorityEvidence.Allowed
+        } else {
+            NativeAuthorityEvidence.Absent
+        }
+    }
     if (matches.size != 1) return NativeAuthorityEvidence.Ambiguous
     val scalar = matches.single().value as? NativeStructuredValue.Scalar
         ?: return NativeAuthorityEvidence.Denied

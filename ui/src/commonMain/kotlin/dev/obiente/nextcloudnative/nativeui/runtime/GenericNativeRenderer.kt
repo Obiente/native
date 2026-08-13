@@ -3600,13 +3600,17 @@ private fun GenericRecordCollection(
             schema = schema,
             resource = resource,
             rows = categories,
+            authoritativeRecordsKey = authoritativeRecordsKey,
             navigationContext = datasetContext.bindingValues,
             authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+            actionExecutor = actionExecutor,
+            onActionSucceeded = onInlineActionSucceeded,
             onSelectRecord = onSelectRecord,
             onEditRecord = onEditRecord,
             onDeleteRecord = onDeleteRecord,
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
+            reorder = reorder,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -3874,7 +3878,7 @@ private enum class NativeCategoryFilter(val label: String) {
     Income("Income"),
 }
 
-private data class NativeCategoryRow(
+internal data class NativeCategoryRow(
     val record: NativeRecord,
     val presentation: NativeCategoryPresentation,
     val depth: Int,
@@ -3906,33 +3910,114 @@ private fun flattenNativeCategoryRows(
     return output
 }
 
+/**
+ * Keeps a verified flat collection in its authoritative order while a reorder draft is active.
+ *
+ * Category hierarchy presentation normally sorts siblings by name. Applying that projection to a
+ * reorderable flat collection hides every drag-state update by immediately sorting the rows back
+ * into their previous visual positions. Hierarchical collections remain projected and sorted;
+ * their partial tree traversal is not eligible for the complete-order mutation in the first place.
+ */
+internal fun nativeCategoryRowsForDisplay(
+    rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    expandedIds: Set<String>,
+    preserveAuthoritativeOrder: Boolean,
+): List<NativeCategoryRow> {
+    val knownIds = rows.mapTo(hashSetOf()) { (record, _) -> record.id }
+    val hasHierarchy = rows.any { (_, category) -> category.parentId in knownIds }
+    return if (preserveAuthoritativeOrder && !hasHierarchy) {
+        rows.map { (record, category) ->
+            NativeCategoryRow(record, category, depth = 0, hasChildren = false)
+        }
+    } else {
+        flattenNativeCategoryRows(rows, expandedIds)
+    }
+}
+
 @Composable
 private fun GenericCategoryCollection(
     schema: NativeAppSchema,
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     navigationContext: Map<String, String>,
     authorityContext: NativeRecordAuthorityContext?,
+    actionExecutor: NativeActionExecutor,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
     onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
+    reorder: NativeCollectionReorderActionPlan?,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
 ) {
+    val scope = rememberCoroutineScope()
     var filter by rememberSaveable(resource.id) { mutableStateOf(NativeCategoryFilter.All) }
     val parentIds = remember(rows) {
         val knownIds = rows.map { (record, _) -> record.id }.toSet()
         rows.mapNotNull { (_, category) -> category.parentId?.takeIf(knownIds::contains) }.toSet()
     }
+    // A collection reorder payload must describe the complete authoritative order. Filtered and
+    // hierarchical category projections are intentionally excluded because their visible order is
+    // only a subset or a tree traversal, not the server's declared flat collection order.
+    val activeReorder = reorder.takeIf {
+        parentIds.isEmpty() && filter == NativeCategoryFilter.All
+    }
+    val authoritativeOrder = remember(authoritativeRecordsKey) { rows.map { (record, _) -> record.id } }
+    val rowsById = remember(rows) { rows.associateBy { (record, _) -> record.id } }
+    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf(authoritativeOrder)
+    }
+    var draggingRecordId by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf<String?>(null)
+    }
+    var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
+    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
+    val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    val displayedRows = remember(rows, rowsById, orderedRecordIds, activeReorder) {
+        if (activeReorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
+    }
+    val submitReorder: () -> Unit = submit@{
+        val plan = activeReorder ?: return@submit
+        val submittedOrder = orderedRecordIds
+        if (submittedOrder == authoritativeOrder) return@submit
+        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
+            reorderError = failure.message ?: "The new order could not be submitted."
+            orderedRecordIds = authoritativeOrder
+            return@submit
+        }
+        reorderExecuting = true
+        reorderError = null
+        scope.launch {
+            when (val result = actionExecutor.execute(request)) {
+                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
+                is NativeActionExecutionResult.Failure -> {
+                    reorderError = result.message
+                    orderedRecordIds = authoritativeOrder
+                    if (result.outcome.requiresMutationReconciliation()) {
+                        onActionSucceeded?.invoke(plan.action)
+                    }
+                }
+            }
+            reorderExecuting = false
+        }
+    }
+    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
+        if (draggingRecordId == null && !reorderExecuting) {
+            orderedRecordIds = authoritativeOrder
+            reorderError = null
+        }
+    }
     var expandedIds by rememberSaveable(resource.id) { mutableStateOf(parentIds.toList()) }
     LaunchedEffect(parentIds) {
         expandedIds = expandedIds.filter(parentIds::contains)
     }
-    val filteredRows = remember(rows, filter) {
-        rows.filter { (_, category) ->
+    val filteredRows = remember(displayedRows, filter) {
+        displayedRows.filter { (_, category) ->
             when (filter) {
                 NativeCategoryFilter.All -> true
                 NativeCategoryFilter.Expenses -> category.kind == NativeCategoryKind.Expense
@@ -3940,8 +4025,12 @@ private fun GenericCategoryCollection(
             }
         }
     }
-    val visibleRows = remember(filteredRows, expandedIds) {
-        flattenNativeCategoryRows(filteredRows, expandedIds.toSet())
+    val visibleRows = remember(filteredRows, expandedIds, activeReorder) {
+        nativeCategoryRowsForDisplay(
+            rows = filteredRows,
+            expandedIds = expandedIds.toSet(),
+            preserveAuthoritativeOrder = activeReorder != null,
+        )
     }
     val expenseCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Expense }
     val incomeCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Income }
@@ -4005,6 +4094,16 @@ private fun GenericCategoryCollection(
             ),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
+            reorderError?.let { message ->
+                item(key = "category-reorder-error") {
+                    Text(
+                        message,
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
             items(visibleRows, key = { row -> row.record.id }) { row ->
                 val recordPresentation = nativeRecordPresentation(resource, row.record)
                 val iconKey = recordPresentation.iconKey
@@ -4028,8 +4127,15 @@ private fun GenericCategoryCollection(
                     onCommandFormRecord = onCommandFormRecord,
                 )
                 var actionsExpanded by rememberSaveable(row.record.id) { mutableStateOf(false) }
+                val dragging = draggingRecordId == row.record.id
                 Card(
-                    modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            rowBounds[row.record.id] = coordinates.boundsInWindow()
+                        }
+                        .graphicsLayer { alpha = if (dragging) 0.56f else 1f }
+                        .nextcloudCardInteractions(
                         onOpen = onSelectRecord?.let { callback -> { callback(row.record) } },
                         onShowActions = if (secondaryActions.isNotEmpty()) {
                             { actionsExpanded = true }
@@ -4048,7 +4154,42 @@ private fun GenericCategoryCollection(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (row.depth > 0) Box(Modifier.width((row.depth * 18).dp))
-                        if (row.hasChildren) {
+                        if (activeReorder != null && !reorderExecuting) {
+                            NextcloudBoardDragHandle(
+                                itemLabel = row.presentation.name,
+                                dragActive = dragging,
+                                onDragStart = { position ->
+                                    draggingRecordId = row.record.id
+                                    dragPosition = position
+                                    reorderError = null
+                                },
+                                onDrag = { delta ->
+                                    val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
+                                    dragPosition = position
+                                    val targetId = orderedRecordIds.firstOrNull { id ->
+                                        rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
+                                    }
+                                    val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+                                    if (targetIndex >= 0 && targetId != draggingRecordId) {
+                                        orderedRecordIds = moveNativeCollectionRecordToIndex(
+                                            orderedRecordIds = orderedRecordIds,
+                                            recordId = row.record.id,
+                                            targetIndex = targetIndex,
+                                        )
+                                    }
+                                },
+                                onDragEnd = {
+                                    draggingRecordId = null
+                                    dragPosition = null
+                                    submitReorder()
+                                },
+                                onDragCancel = {
+                                    draggingRecordId = null
+                                    dragPosition = null
+                                    orderedRecordIds = authoritativeOrder
+                                },
+                            )
+                        } else if (row.hasChildren) {
                             Box(
                                 modifier = Modifier.size(40.dp).clickable {
                                     expandedIds = if (row.record.id in expandedIds) {

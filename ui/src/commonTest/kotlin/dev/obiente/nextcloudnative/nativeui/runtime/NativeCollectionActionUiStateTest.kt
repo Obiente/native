@@ -120,6 +120,49 @@ class NativeCollectionActionUiStateTest {
     }
 
     @Test
+    fun `reorderable flat categories preserve authoritative draft order`() {
+        val rows = listOf(
+            categoryRow("3", "Zulu"),
+            categoryRow("1", "Alpha"),
+            categoryRow("2", "Middle"),
+        )
+
+        assertEquals(
+            listOf("3", "1", "2"),
+            nativeCategoryRowsForDisplay(
+                rows = rows,
+                expandedIds = emptySet(),
+                preserveAuthoritativeOrder = true,
+            ).map { row -> row.record.id },
+        )
+        assertEquals(
+            listOf("1", "2", "3"),
+            nativeCategoryRowsForDisplay(
+                rows = rows,
+                expandedIds = emptySet(),
+                preserveAuthoritativeOrder = false,
+            ).map { row -> row.record.id },
+        )
+    }
+
+    @Test
+    fun `category hierarchy remains projected when order preservation is requested`() {
+        val rows = listOf(
+            categoryRow("child", "Child", parentId = "parent"),
+            categoryRow("parent", "Parent"),
+        )
+
+        assertEquals(
+            listOf("parent", "child"),
+            nativeCategoryRowsForDisplay(
+                rows = rows,
+                expandedIds = setOf("parent"),
+                preserveAuthoritativeOrder = true,
+            ).map { row -> row.record.id },
+        )
+    }
+
+    @Test
     fun `reorder draft restores a complete permutation of the current planned identities`() {
         val currentPlan = listOf("first", "second", "third")
         val savedDraft = mutableListOf("third", "first", "second")
@@ -331,4 +374,22 @@ class NativeCollectionActionUiStateTest {
             ),
         )
     }
+
+    private fun categoryRow(
+        id: String,
+        name: String,
+        parentId: String? = null,
+    ): Pair<NativeRecord, NativeCategoryPresentation> = NativeRecord(
+        id = id,
+        values = mapOf("id" to id, "name" to name),
+    ) to NativeCategoryPresentation(
+        name = name,
+        kind = NativeCategoryKind.Other,
+        parentId = parentId,
+        transactionCount = null,
+        shared = false,
+        writable = true,
+        sharedBy = null,
+        mutedFromReports = false,
+    )
 }

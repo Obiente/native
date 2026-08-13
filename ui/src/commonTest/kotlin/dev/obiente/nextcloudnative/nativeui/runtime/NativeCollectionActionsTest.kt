@@ -1011,6 +1011,60 @@ class NativeCollectionActionsTest {
         assertNotNull(editDenied.batches.singleOrNull { plan -> plan.action.id == destructiveBatch.id })
     }
 
+    @Test
+    fun `declared parent owner role enables reorder while member and display only roles do not`() {
+        val resource = ResourceSpec(
+            id = "categories",
+            name = "Categories",
+            confidence = Confidence.verified,
+        )
+        val parent = ResourceSpec(
+            id = "houses",
+            name = "Houses",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("role", "Role", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("isAdmin", "Is admin", FieldKind.boolean, required = false, readOnly = true),
+                FieldSpec("permissions", "Permissions", FieldKind.objectValue, required = false, readOnly = true),
+            ),
+        )
+        val read = readAction(resource.id, "/houses/{id}/categories", listOf("id"))
+        val reorder = action(
+            id = "reorder-categories",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/houses/{id}/categories/reorder",
+            pathFields = listOf("id"),
+            bodyFields = listOf("items"),
+            bodySchema = reorderBody("items", "id", "sortOrder"),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.reorder,
+            risk = ActionRisk.mutating,
+        )
+        val nativeSchema = schema(resource, read, reorder).copy(resources = listOf(resource, parent))
+        val records = listOf("11", "12").map { id ->
+            NativeRecord(id, mapOf("id" to id), bindingContext = mapOf("id" to "7"))
+        }
+
+        fun plan(values: Map<String, String?>, displayValues: Map<String, String> = emptyMap()) =
+            nativeCollectionActions(
+                schema = nativeSchema,
+                activeReadAction = read,
+                resource = resource,
+                records = records,
+                navigationContext = mapOf("id" to "7"),
+                collectionComplete = true,
+                authorityContext = NativeRecordAuthorityContext(
+                    parentResource = parent,
+                    parentRecord = NativeRecord("7", values, displayValues = displayValues),
+                ),
+            ).reorder
+
+        assertNotNull(plan(mapOf("role" to "owner")))
+        assertNull(plan(mapOf("role" to "member")))
+        assertNull(plan(emptyMap(), displayValues = mapOf("role" to "owner")))
+    }
+
     private fun schema(
         resource: ResourceSpec,
         vararg actions: ActionSpec,
