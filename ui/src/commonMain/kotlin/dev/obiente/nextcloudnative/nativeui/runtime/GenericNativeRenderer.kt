@@ -10163,6 +10163,7 @@ internal fun RepeatableObjectInputFieldSpec.toNativeRepeatableObjectFieldSpec():
         readOnly = false,
         format = format,
         enumValues = enumValues,
+        enumLabels = enumLabels,
     )
 
 @Composable
@@ -10473,7 +10474,9 @@ private fun GenericEnumField(
                     )
                 }
                 Text(
-                    value.takeIf(String::isNotBlank)?.dynamicSettingLabel() ?: "Choose an option",
+                    value.takeIf(String::isNotBlank)?.let { selected ->
+                        field.enumLabels?.get(selected) ?: selected.dynamicSettingLabel()
+                    } ?: "Choose an option",
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Start,
                     maxLines = 1,
@@ -10527,7 +10530,7 @@ private fun GenericEnumField(
                         } else {
                             null
                         },
-                        text = { Text(option.dynamicSettingLabel()) },
+                        text = { Text(field.enumLabels?.get(option) ?: option.dynamicSettingLabel()) },
                         onClick = {
                             expanded = false
                             query = ""

@@ -688,10 +688,10 @@ private fun verifiedChoresWrite(
                             closedObjectSchema(
                                 properties = mapOf(
                                     "name" to stringSchema(title = "Chore name"),
-                                    "points" to JSONObject().put("type", "integer").put("minimum", 0)
-                                        .put("title", "Points"),
+                                    "points" to JSONObject().put("type", "integer").put("minimum", 1)
+                                        .put("maximum", 6).put("title", "Points (1-6)"),
                                     "due" to stringSchema(title = "Due", format = "date-time"),
-                                    "repeat" to stringSchema(title = "Repeat schedule"),
+                                    "repeat" to choresRepeatScheduleSchema(),
                                 ),
                                 required = listOf("name", "points", "due", "repeat"),
                             ),
@@ -767,6 +767,32 @@ private fun stringSchema(title: String, format: String? = null): JSONObject = JS
     .put("type", "string")
     .put("title", title)
     .also { schema -> format?.let { schema.put("format", it) } }
+
+private fun choresRepeatScheduleSchema(): JSONObject {
+    val choices = linkedMapOf(
+        "s:1:-" to "Does not repeat",
+        "o:1" to "On demand",
+        "d:1" to "Every day",
+        "d:2" to "Every 2 days",
+        "d:3" to "Every 3 days",
+        "d:4" to "Every 4 days",
+        "d:5" to "Every 5 days",
+        "d:6" to "Every 6 days",
+        "w:1" to "Every week",
+        "w:2" to "Every 2 weeks",
+        "w:3" to "Every 3 weeks",
+        "w:4" to "Every 4 weeks",
+        "m:1" to "Every month",
+        "m:2" to "Every 2 months",
+        "m:3" to "Every 3 months",
+        "m:4" to "Every 4 months",
+        "m:6" to "Every 6 months",
+        "m:12" to "Every year",
+    )
+    return stringSchema(title = "Repeat")
+        .put("enum", JSONArray(choices.keys))
+        .put("x-nextcloud-native-enum-labels", JSONObject(choices))
+}
 
 private fun String.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(encodeToByteArray())

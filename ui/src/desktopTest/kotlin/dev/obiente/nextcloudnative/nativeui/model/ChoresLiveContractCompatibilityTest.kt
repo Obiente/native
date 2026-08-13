@@ -102,6 +102,11 @@ class ChoresLiveContractCompatibilityTest {
             "fields=${nativeChores.fields.map { field -> field.id to field.kind }}; " +
                 "actionFields=${nativeSchema.actions.single { it.id == createChore.id }.binding.bodyFieldNames}",
         )
+        val choreInputs = assertNotNull(createPlan.fields.single().repeatableObjectInput).fields
+        val repeatInput = choreInputs.single { field -> field.id == "repeat" }
+        assertEquals("Does not repeat", repeatInput.enumLabels?.get("s:1:-"))
+        assertEquals("Every week", repeatInput.enumLabels?.get("w:1"))
+        assertEquals("Every year", repeatInput.enumLabels?.get("m:12"))
 
         val root = descriptor.planDynamicNavigation().rootDestinations
         assertTrue(

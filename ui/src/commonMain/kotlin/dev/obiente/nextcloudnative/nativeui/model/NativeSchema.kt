@@ -69,6 +69,7 @@ data class FieldSpec(
     val readOnly: Boolean,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val enumLabels: Map<String, String>? = null,
     val repeatableObjectInput: RepeatableObjectInputSpec? = null,
 )
 
