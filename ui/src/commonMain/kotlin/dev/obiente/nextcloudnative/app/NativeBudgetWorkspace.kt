@@ -48,6 +48,7 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredEntry
 import kotlin.math.abs
 import kotlin.math.round
 
@@ -118,16 +119,16 @@ internal fun buildNativeBudgetDashboardModel(
         ?.let(dashboardRecordsByActionId::get)
         .orEmpty()
 
-    val allRecords = dashboardRecordsByActionId.values.flatten()
-    val currency = allRecords.firstSemanticText("currency", "currencycode", "defaultcurrency", "basecurrency")
-        ?.uppercase()
-        ?.takeIf { it.length in 3..4 && it.all(Char::isLetter) }
     val accountSummary = records(NativeBudgetDashboardDataKind.AccountSummary)
     val reportSummary = records(NativeBudgetDashboardDataKind.ReportSummary)
     val accountRecords = records(NativeBudgetDashboardDataKind.Accounts)
     val accountCurrencies = accountRecords.mapNotNull { record ->
         record.semanticText("currency", "currencycode")?.uppercase()
     }.distinct()
+    val currency = (reportSummary + accountSummary)
+        .firstSemanticText("basecurrency", "defaultcurrency", "currency", "currencycode")
+        ?.uppercase()
+        ?.takeIf { it.length in 3..4 && it.all(Char::isLetter) }
     val accountBalanceFallback = accountRecords
         .takeIf { accountCurrencies.size <= 1 }
         ?.mapNotNull { it.semanticNumber("balance", "currentbalance", "value") }
@@ -155,7 +156,9 @@ internal fun buildNativeBudgetDashboardModel(
     val alertSummary = records(NativeBudgetDashboardDataKind.AlertSummary)
     val debtSummary = records(NativeBudgetDashboardDataKind.DebtSummary)
     val assetSummary = records(NativeBudgetDashboardDataKind.AssetSummary)
-    val trendSource = reportSummary.firstNotNullOfOrNull(NativeRecord::nativeBudgetTrendSeries)
+    val trendSource = records(NativeBudgetDashboardDataKind.ForecastTrends)
+        .firstNotNullOfOrNull(NativeRecord::nativeBudgetTrendSeries)
+        ?: reportSummary.firstNotNullOfOrNull(NativeRecord::nativeBudgetTrendSeries)
     val recentTransactions = records(NativeBudgetDashboardDataKind.RecentTransactions)
     val savingsGoals = records(NativeBudgetDashboardDataKind.SavingsGoals)
     val budgetProgress = records(NativeBudgetDashboardDataKind.BudgetProgress)
@@ -503,7 +506,8 @@ private fun NativeBudgetTrendChart(
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val maximum = points.maxOfOrNull { maxOf(abs(it.income), abs(it.expenses)) }
         ?.takeIf { it > 0.0 } ?: 1.0
-    val description = points.joinToString(prefix = "Six month cash flow. ", separator = ". ") { point ->
+    val span = listOf(points.first().label, points.last().label).distinct().joinToString(" to ")
+    val description = points.joinToString(prefix = "Cash flow for $span. ", separator = ". ") { point ->
         "${point.label}: income ${formatNativeBudgetMoney(point.income, currency)}, expenses ${formatNativeBudgetMoney(point.expenses, currency)}"
     }
     Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
@@ -757,7 +761,14 @@ private fun NativeStructuredValue.findNativeBudgetStructuredText(
 }
 
 private fun NativeRecord.nativeBudgetTrendSeries(): List<NativeBudgetTrendPoint>? {
-    val trends = structuredValues.entries
+    val directKeys = structuredValues.entries.mapTo(hashSetOf()) { it.key.budgetSemanticKey() }
+    val trends = structuredValues.takeIf { setOf("labels", "income", "expenses").all(directKeys::contains) }
+        ?.let { direct ->
+            NativeStructuredValue.ObjectValue(
+                direct.map { (key, value) -> NativeStructuredEntry(key, key, value) },
+            )
+        }
+        ?: structuredValues.entries
         .firstNotNullOfOrNull { (key, value) ->
             (value as? NativeStructuredValue.ObjectValue)
                 ?.takeIf { key.budgetSemanticKey() == "trends" }
@@ -769,9 +780,12 @@ private fun NativeRecord.nativeBudgetTrendSeries(): List<NativeBudgetTrendPoint>
     val expenses = trends.nativeBudgetNumberList("expenses")
     val size = minOf(labels.size, income.size, expenses.size)
     if (size < 2) return null
-    return (0 until size).map { index ->
-        NativeBudgetTrendPoint(labels[index], income[index], abs(expenses[index]))
-    }
+    return (0 until size).mapNotNull { index ->
+        val label = labels[index] ?: return@mapNotNull null
+        val incomeValue = income[index] ?: return@mapNotNull null
+        val expenseValue = expenses[index] ?: return@mapNotNull null
+        NativeBudgetTrendPoint(label, incomeValue, abs(expenseValue))
+    }.takeIf { it.size >= 2 }
 }
 
 private fun NativeStructuredValue.findNativeBudgetObject(alias: String): NativeStructuredValue.ObjectValue? = when (this) {
@@ -784,16 +798,16 @@ private fun NativeStructuredValue.findNativeBudgetObject(alias: String): NativeS
     }
 }
 
-private fun NativeStructuredValue.ObjectValue.nativeBudgetScalarList(alias: String): List<String> =
+private fun NativeStructuredValue.ObjectValue.nativeBudgetScalarList(alias: String): List<String?> =
     entries.firstOrNull { it.key.budgetSemanticKey() == alias.budgetSemanticKey() }
         ?.value
         ?.let { it as? NativeStructuredValue.ListValue }
         ?.items
-        ?.mapNotNull { (it as? NativeStructuredValue.Scalar)?.value }
+        ?.map { (it as? NativeStructuredValue.Scalar)?.value }
         .orEmpty()
 
-private fun NativeStructuredValue.ObjectValue.nativeBudgetNumberList(alias: String): List<Double> =
-    nativeBudgetScalarList(alias).mapNotNull(String::nativeBudgetNumberOrNull)
+private fun NativeStructuredValue.ObjectValue.nativeBudgetNumberList(alias: String): List<Double?> =
+    nativeBudgetScalarList(alias).map { it?.nativeBudgetNumberOrNull() }
 
 private fun List<NativeRecord>.firstSemanticText(vararg aliases: String): String? =
     firstNotNullOfOrNull { record -> record.semanticText(*aliases) }

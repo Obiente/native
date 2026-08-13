@@ -294,7 +294,7 @@ class DynamicDescriptorMapperTest {
             component("folders", fields("id", "filename", "path", "mimeType", "etag")),
         )
         assertEquals(
-            NativeComponent.documentEditor,
+            NativeComponent.detail,
             component("document", fields("id") + field("content", FieldKind.longText), LayoutKind.detail),
         )
     }

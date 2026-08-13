@@ -743,11 +743,11 @@ internal fun nativeBudgetPlanPresentation(record: NativeRecord): NativeBudgetPla
     val totals = structured["totals"]?.value?.semanticObjectEntries() ?: return null
     val categoryItems = (structured["categories"]?.value as? NativeStructuredValue.ListValue)?.items
         ?: return null
-    val categories = categoryItems.mapNotNull { item ->
-        val row = item.semanticObjectEntries() ?: return@mapNotNull null
-        val name = row.semanticText("categoryname", "name", "label") ?: return@mapNotNull null
-        val budgeted = row.semanticNumber("budgeted", "budget", "limit") ?: return@mapNotNull null
-        val spent = row.semanticNumber("spent") ?: return@mapNotNull null
+    val categories = categoryItems.map { item ->
+        val row = item.semanticObjectEntries() ?: return null
+        val name = row.semanticText("categoryname", "name", "label") ?: return null
+        val budgeted = row.semanticNumber("budgeted", "budget", "limit") ?: return null
+        val spent = row.semanticNumber("spent") ?: return null
         NativeBudgetCategoryProgress(
             id = row.semanticText("categoryid", "id"),
             name = name,

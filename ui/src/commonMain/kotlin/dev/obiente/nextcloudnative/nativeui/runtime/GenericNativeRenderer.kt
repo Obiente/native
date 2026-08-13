@@ -4071,12 +4071,14 @@ private fun GenericFinancialAccountCollection(
         rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Liability }
     }
     val other = remember(rows) { rows.filter { (_, account) -> account.kind == NativeFinancialAccountKind.Other } }
-    val assetTotal = accounts.filter { it.kind == NativeFinancialAccountKind.Asset }
+    val includedAccounts = accounts.filterNot(NativeFinancialAccountPresentation::excludedFromReports)
+    val assetTotal = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Asset }
         .mapNotNull(::convertedBalance).sum()
-    val liabilityTotal = accounts.filter { it.kind == NativeFinancialAccountKind.Liability }
+    val liabilityTotal = includedAccounts.filter { it.kind == NativeFinancialAccountKind.Liability }
         .mapNotNull(::convertedBalance).sumOf { amount -> kotlin.math.abs(amount) }
     val netWorth = assetTotal - liabilityTotal
     val unconvertedCount = accounts.count { convertedBalance(it) == null }
+    val totalsQualifier = if (onLoadMore != null || loadingMore || loadMoreError != null) " (loaded)" else ""
     val listState = rememberLazyListState()
     NativeCollectionAutoPager(listState, rows.size, onLoadMore, loadingMore, loadMoreError)
 
@@ -4100,19 +4102,19 @@ private fun GenericFinancialAccountCollection(
                                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                             ) {
                                 FinancialAccountMetric(
-                                    label = "Assets",
+                                    label = "Assets$totalsQualifier",
                                     value = formatNativeFinanceAmount(assetTotal, currency),
                                     modifier = Modifier.weight(1f),
                                 )
                                 FinancialAccountMetric(
-                                    label = "Liabilities",
+                                    label = "Liabilities$totalsQualifier",
                                     value = formatNativeFinanceAmount(liabilityTotal, currency),
                                     negative = liabilityTotal > 0.0,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
                             FinancialAccountMetric(
-                                label = "Net worth",
+                                label = "Net worth$totalsQualifier",
                                 value = formatNativeFinanceAmount(netWorth, currency),
                                 negative = netWorth < 0.0,
                                 modifier = Modifier.fillMaxWidth(),
@@ -4124,18 +4126,18 @@ private fun GenericFinancialAccountCollection(
                             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                         ) {
                             FinancialAccountMetric(
-                                label = "Assets",
+                                label = "Assets$totalsQualifier",
                                 value = formatNativeFinanceAmount(assetTotal, currency),
                                 modifier = Modifier.weight(1f),
                             )
                             FinancialAccountMetric(
-                                label = "Liabilities",
+                                label = "Liabilities$totalsQualifier",
                                 value = formatNativeFinanceAmount(liabilityTotal, currency),
                                 negative = liabilityTotal > 0.0,
                                 modifier = Modifier.weight(1f),
                             )
                             FinancialAccountMetric(
-                                label = "Net worth",
+                                label = "Net worth$totalsQualifier",
                                 value = formatNativeFinanceAmount(netWorth, currency),
                                 negative = netWorth < 0.0,
                                 modifier = Modifier.weight(1f),
@@ -7345,6 +7347,15 @@ private enum class NativeBudgetProgressFilter(val label: String) {
     OnTrack("On track"),
 }
 
+private fun NativeBudgetCategoryProgress.isOverBudget(): Boolean {
+    val normalizedStatus = status?.lowercase()?.filter(Char::isLetterOrDigit)
+    return when (normalizedStatus) {
+        "over", "overbudget", "overspent", "exceeded" -> true
+        "watch", "warning", "ontrack", "fullyspent", "spent", "complete", "completed" -> false
+        else -> percentage > 100.0
+    }
+}
+
 @Composable
 private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
     var filter by rememberSaveable { mutableStateOf(NativeBudgetProgressFilter.All) }
@@ -7352,8 +7363,8 @@ private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
         plan.categories.filter { category ->
             when (filter) {
                 NativeBudgetProgressFilter.All -> true
-                NativeBudgetProgressFilter.OverBudget -> category.percentage >= 100.0
-                NativeBudgetProgressFilter.Watch -> category.percentage >= 75.0 && category.percentage < 100.0
+                NativeBudgetProgressFilter.OverBudget -> category.isOverBudget()
+                NativeBudgetProgressFilter.Watch -> !category.isOverBudget() && category.percentage >= 75.0
                 NativeBudgetProgressFilter.OnTrack -> category.percentage < 75.0
             }
         }
@@ -7445,8 +7456,8 @@ private fun GenericBudgetPlanDashboard(plan: NativeBudgetPlanPresentation) {
                 val count = plan.categories.count { category ->
                     when (option) {
                         NativeBudgetProgressFilter.All -> true
-                        NativeBudgetProgressFilter.OverBudget -> category.percentage >= 100.0
-                        NativeBudgetProgressFilter.Watch -> category.percentage >= 75.0 && category.percentage < 100.0
+                        NativeBudgetProgressFilter.OverBudget -> category.isOverBudget()
+                        NativeBudgetProgressFilter.Watch -> !category.isOverBudget() && category.percentage >= 75.0
                         NativeBudgetProgressFilter.OnTrack -> category.percentage < 75.0
                     }
                 }

@@ -55,7 +55,14 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
                     id = layout.id,
                     title = layout.title,
                     resourceId = layout.resourceId,
-                    component = layout.toNativeComponent(resource, sourceAction),
+                    component = layout.toNativeComponent(
+                        resource,
+                        sourceAction,
+                        hasWritableAction = actions.any { candidate ->
+                            !candidate.fallbackOnly && candidate.resourceId == resource.id &&
+                                candidate.intent == ActionIntent.update && candidate.risk == ActionRisk.mutating
+                        },
+                    ),
                     sourceActionId = layout.sourceActionId.orEmpty(),
                     confidence = layout.confidence,
                     evidence = layout.provenance.map(Provenance::toEvidence),
@@ -344,6 +351,7 @@ private fun FormField.toNativeField(): FieldSpec = FieldSpec(
 private fun DynamicLayout.toNativeComponent(
     resource: DynamicResource,
     action: DynamicAction?,
+    hasWritableAction: Boolean,
 ): NativeComponent {
     if (kind == LayoutKind.grid) return NativeComponent.mediaGrid
 
@@ -427,7 +435,7 @@ private fun DynamicLayout.toNativeComponent(
             field.kind in setOf(FieldKind.string, FieldKind.longText)
     }
     if (kind == LayoutKind.detail) {
-        return if (hasDocumentSemantics && hasDocumentBody) {
+        return if (hasDocumentSemantics && hasDocumentBody && hasWritableAction) {
             NativeComponent.documentEditor
         } else {
             NativeComponent.detail
