@@ -27,6 +27,75 @@ fn paths_refer_to_same_existing_entry(
 }
 
 #[cfg(any(windows, test))]
+fn normalized_windows_path_units(value: &[u16]) -> Vec<u16> {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const SLASH: u16 = b'/' as u16;
+    const COLON: u16 = b':' as u16;
+    const EXTENDED_PREFIX: &[u16] = &[BACKSLASH, BACKSLASH, b'?' as u16, BACKSLASH];
+    const EXTENDED_UNC_PREFIX: &[u16] = &[
+        BACKSLASH,
+        BACKSLASH,
+        b'?' as u16,
+        BACKSLASH,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        BACKSLASH,
+    ];
+
+    let mut units: Vec<u16> = value
+        .iter()
+        .map(|unit| if *unit == SLASH { BACKSLASH } else { *unit })
+        .collect();
+    if units
+        .get(..EXTENDED_UNC_PREFIX.len())
+        .is_some_and(|prefix| {
+            prefix
+                .iter()
+                .zip(EXTENDED_UNC_PREFIX)
+                .all(|(actual, expected)| ascii_windows_path_unit_eq(*actual, *expected))
+        })
+    {
+        units.splice(..EXTENDED_UNC_PREFIX.len(), [BACKSLASH, BACKSLASH]);
+    } else if units.starts_with(EXTENDED_PREFIX) {
+        units.drain(..EXTENDED_PREFIX.len());
+    }
+    if units.get(1) == Some(&COLON)
+        && units
+            .first()
+            .is_some_and(|unit| (b'A' as u16..=b'Z' as u16).contains(unit))
+    {
+        units[0] += u16::from(b'a' - b'A');
+    }
+    while units.last() == Some(&BACKSLASH)
+        && !(units.len() == 3 && units.get(1) == Some(&COLON))
+        && units.len() > 1
+    {
+        units.pop();
+    }
+    units
+}
+
+#[cfg(any(windows, test))]
+fn ascii_windows_path_unit_eq(first: u16, second: u16) -> bool {
+    fn lowercase(unit: u16) -> u16 {
+        if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+            unit + u16::from(b'a' - b'A')
+        } else {
+            unit
+        }
+    }
+    lowercase(first) == lowercase(second)
+}
+
+#[cfg(any(windows, test))]
+fn normalized_windows_paths_match(first: &[u16], second: &[u16]) -> bool {
+    let first = normalized_windows_path_units(first);
+    let second = normalized_windows_path_units(second);
+    !first.is_empty() && first == second
+}
+
+#[cfg(any(windows, test))]
 #[derive(Debug, PartialEq, Eq)]
 enum RegisteredPathState {
     Missing,
@@ -271,9 +340,9 @@ mod platform {
         OwnedPathConflict, PROVIDER_ID, RECOVERABLE_ROOT_ARGUMENT, RegisteredPathState,
         RegistrationNotFound, UnsafeRegistrationConflict, account_id_from_sync_root_id,
         decode_identity_hex, existing_registration_action, is_windows_absence_hresult,
-        owned_registration_path_is_safe_to_unregister, paths_refer_to_same_existing_entry,
-        recoverable_root_matches, registered_path_state, sid_string, valid_account_id,
-        valid_display_name,
+        normalized_windows_paths_match, owned_registration_path_is_safe_to_unregister,
+        paths_refer_to_same_existing_entry, recoverable_root_matches, registered_path_state,
+        sid_string, valid_account_id, valid_display_name,
     };
     use std::collections::HashMap;
     use std::ffi::{OsStr, OsString};
@@ -302,10 +371,18 @@ mod platform {
     }
 
     fn registered_path_matches(path: &HSTRING, requested: &Path) -> Result<bool, std::io::Error> {
-        if path == &HSTRING::from(requested) {
+        if registered_path_lexically_matches(path, requested) {
             return Ok(true);
         }
         paths_refer_to_same_existing_entry(&PathBuf::from(path.to_os_string()), requested)
+    }
+
+    fn registered_path_lexically_matches(path: &HSTRING, requested: &Path) -> bool {
+        use std::os::windows::ffi::OsStrExt;
+
+        let registered: Vec<u16> = path.to_os_string().encode_wide().collect();
+        let requested: Vec<u16> = requested.as_os_str().encode_wide().collect();
+        normalized_windows_paths_match(&registered, &requested)
     }
 
     fn current_registration_state(
@@ -636,7 +713,7 @@ mod platform {
         match existing.Path().and_then(|folder| folder.Path()) {
             Ok(registered_path)
                 if owned_registration_path_is_safe_to_unregister(
-                    registered_path == HSTRING::from(root.as_path()),
+                    registered_path_lexically_matches(&registered_path, &root),
                     || registered_path_is_missing(&registered_path),
                     || registered_path_matches(&registered_path, &root),
                 )? => {}
@@ -942,6 +1019,41 @@ mod tests {
             )
             .expect("accept exact registered path")
         );
+    }
+
+    #[test]
+    fn normalizes_equivalent_windows_registration_path_forms() {
+        let extended: Vec<u16> = r"\\?\C:\fixtures\Nextcloud Native\account-v2\"
+            .encode_utf16()
+            .collect();
+        let ordinary: Vec<u16> = r"c:/fixtures/Nextcloud Native/account-v2"
+            .encode_utf16()
+            .collect();
+        assert!(normalized_windows_paths_match(&extended, &ordinary));
+
+        let extended_unc: Vec<u16> = r"\\?\UNC\server\share\account-v2\".encode_utf16().collect();
+        let ordinary_unc: Vec<u16> = r"\\server\share\account-v2".encode_utf16().collect();
+        assert!(normalized_windows_paths_match(&extended_unc, &ordinary_unc));
+    }
+
+    #[test]
+    fn rejects_lexically_different_windows_registration_paths() {
+        let registered: Vec<u16> = r"C:\fixtures\Nextcloud Native\old-account-v2"
+            .encode_utf16()
+            .collect();
+        let requested: Vec<u16> = r"C:\fixtures\Nextcloud Native\account-v2"
+            .encode_utf16()
+            .collect();
+        assert!(!normalized_windows_paths_match(&registered, &requested));
+
+        let case_sensitive_registered: Vec<u16> =
+            r"C:\fixtures\Cloud\account-v2".encode_utf16().collect();
+        let case_sensitive_requested: Vec<u16> =
+            r"C:\fixtures\cloud\account-v2".encode_utf16().collect();
+        assert!(!normalized_windows_paths_match(
+            &case_sensitive_registered,
+            &case_sensitive_requested,
+        ));
     }
 
     #[test]
