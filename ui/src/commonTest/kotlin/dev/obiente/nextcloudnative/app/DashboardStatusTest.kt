@@ -10,23 +10,173 @@ import kotlin.test.assertTrue
 class DashboardStatusTest {
     @Test
     fun `dashboard requests are bounded GETs with opaque cursors`() {
-        val widgets = dashboardWidgetsRequest()
+        val widgets = dashboardWidgetsRequest(NextcloudApiCachePolicy.ForceNetwork)
         val items = dashboardItemsRequest(mapOf("calendar" to "2026-07-23T12:00:00Z"))
+        val v2Items = dashboardItemsRequest(
+            apiVersion = DashboardItemApiVersion.V2,
+            widgetIds = setOf("calendar", "activity"),
+            sinceIds = mapOf("calendar" to "cursor-2"),
+        )
 
         assertEquals(NextcloudApiMethod.GET, widgets.method)
         assertEquals("/ocs/v2.php/apps/dashboard/api/v1/widgets", widgets.relativePath)
         assertTrue(widgets.ocsApiRequest)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, widgets.cachePolicy)
         assertTrue(widgets.maximumResponseBytes <= 4L * 1024L * 1024L)
         assertEquals(NextcloudApiMethod.GET, items.method)
+        assertEquals(NextcloudApiCachePolicy.PreferCache, items.cachePolicy)
         assertNull(items.contentType)
         assertNull(items.body)
         assertEquals("2026-07-23T12:00:00Z", items.queryParameters["sinceIds[calendar]"])
+        assertEquals("/ocs/v2.php/apps/dashboard/api/v2/widget-items", v2Items.relativePath)
+        assertEquals("activity", v2Items.queryParameters["widgets[0]"])
+        assertEquals("calendar", v2Items.queryParameters["widgets[1]"])
+        assertEquals("cursor-2", v2Items.queryParameters["sinceIds[calendar]"])
         assertFailsWith<IllegalArgumentException> {
             dashboardItemsRequest(mapOf("../widget" to "cursor"))
         }
         assertFailsWith<IllegalArgumentException> {
             dashboardItemsRequest(mapOf("calendar" to "bad\u0000cursor"))
         }
+        assertFailsWith<IllegalArgumentException> {
+            dashboardItemsRequest(
+                apiVersion = DashboardItemApiVersion.V2,
+                widgetIds = setOf("calendar"),
+                sinceIds = mapOf("activity" to "cursor"),
+            )
+        }
+    }
+
+    @Test
+    fun `dashboard item request planning prefers v2 and skips widgets without an item API`() {
+        val plans = dashboardItemsRequestPlans(
+            widgets = listOf(
+                widget("both", setOf(1, 2)),
+                widget("v2-only", setOf(2)),
+                widget("v1-only", setOf(1)),
+                widget("embedded", emptySet()),
+            ),
+            sinceIds = mapOf(
+                "both" to "both-cursor",
+                "v1-only" to "v1-cursor",
+                "embedded" to "ignored-cursor",
+            ),
+        )
+
+        assertEquals(
+            listOf(DashboardItemApiVersion.V2, DashboardItemApiVersion.V2, DashboardItemApiVersion.V1),
+            plans.map { it.apiVersion },
+        )
+        assertEquals(setOf("both"), plans.first().widgetIds)
+        assertEquals("both-cursor", plans.first().request.queryParameters["sinceIds[both]"])
+        assertEquals(setOf("v1-only"), plans.last().widgetIds)
+        assertEquals("v1-cursor", plans.last().request.queryParameters["sinceIds[v1-only]"])
+        assertFalse(plans.any { plan -> "embedded" in plan.widgetIds })
+    }
+
+    @Test
+    fun `dashboard response budget bounds isolated widget requests`() {
+        val budget = DashboardResponseBudget(totalBytes = 1_000L)
+        val first = budget.reserve(maximumBytes = 600L)
+        val second = budget.reserve(maximumBytes = 600L)
+
+        assertEquals(600L, first)
+        assertEquals(400L, second)
+        assertEquals(0L, budget.remainingBytes)
+        budget.releaseUnused(reservedBytes = first, responseBytes = 250L)
+        assertEquals(350L, budget.remainingBytes)
+        val failedReservation = budget.reserve(maximumBytes = 600L)
+        assertEquals(350L, failedReservation)
+        budget.releaseFailed(failedReservation)
+        assertEquals(350L, budget.remainingBytes)
+        assertEquals(350L, budget.reserve(maximumBytes = 600L))
+        assertEquals(0L, budget.reserve(maximumBytes = 600L))
+        assertFailsWith<IllegalArgumentException> {
+            DashboardResponseBudget(totalBytes = 0L)
+        }
+    }
+
+    @Test
+    fun `dashboard response budget refunds only proven zero-body failures`() {
+        val zeroBodyBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val zeroBodyReservation = zeroBodyBudget.reserve(maximumBytes = 600L)
+        zeroBodyBudget.settleFailedRead(
+            zeroBodyReservation,
+            NextcloudApiReadFailure(responseBodyMayHaveStarted = false, cause = IllegalStateException("offline")),
+        )
+        assertEquals(1_000L, zeroBodyBudget.remainingBytes)
+
+        val ambiguousBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val ambiguousReservation = ambiguousBudget.reserve(maximumBytes = 600L)
+        ambiguousBudget.settleFailedRead(
+            ambiguousReservation,
+            NextcloudApiReadFailure(responseBodyMayHaveStarted = true, cause = IllegalStateException("truncated")),
+        )
+        assertEquals(400L, ambiguousBudget.remainingBytes)
+
+        val parsingBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val parsingReservation = parsingBudget.reserve(maximumBytes = 600L)
+        parsingBudget.settleFailedRead(parsingReservation, IllegalArgumentException("invalid JSON"))
+        assertEquals(400L, parsingBudget.remainingBytes)
+    }
+
+    @Test
+    fun `initial dashboard reads may use persisted cache while explicit refresh forces network`() {
+        val initialWidgets = dashboardWidgetsRequest()
+        val initialItems = dashboardItemsRequestPlans(listOf(widget("calendar", setOf(2)))).single().request
+        val refreshedWidgets = dashboardWidgetsRequest(NextcloudApiCachePolicy.RefreshNetwork)
+        val refreshedItems = dashboardItemsRequestPlans(
+            widgets = listOf(widget("calendar", setOf(2))),
+            cachePolicy = NextcloudApiCachePolicy.RefreshNetwork,
+        ).single().request
+
+        assertEquals(NextcloudApiCachePolicy.PreferCache, initialWidgets.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.PreferCache, initialItems.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.RefreshNetwork, refreshedWidgets.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.RefreshNetwork, refreshedItems.cachePolicy)
+        assertEquals(DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES, refreshedItems.maximumResponseBytes)
+        assertTrue(
+            DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES * 128 > DASHBOARD_REFRESH_RESPONSE_BUDGET_BYTES,
+            "The shared aggregate budget must be stricter than multiplying every per-widget ceiling.",
+        )
+        assertEquals(4, MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
+    }
+
+    @Test
+    fun `expired process cache does not discard the dashboard still displayed during refresh`() {
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        val snapshot = NativeDashboardSnapshot(listOf(widget("calendar", setOf(2))), emptyMap())
+        val cache = DashboardStatusMemoryCache(ttlSeconds = 60L)
+        cache.store(session, snapshot, status = null, nowEpochSeconds = 100L)
+
+        val expired = cache.get(session, nowEpochSeconds = 161L)
+
+        assertNull(expired)
+        assertEquals(snapshot, retainedDashboardRefreshSnapshot(expired, snapshot))
+    }
+
+    @Test
+    fun `unsupported advertised dashboard APIs remain distinguishable from embedded widgets`() {
+        val widgets = listOf(
+            widget("future", setOf(3)),
+            widget("mixed-future", setOf(2, 3)),
+            widget("embedded", emptySet()),
+        )
+
+        assertEquals(setOf("future"), unsupportedDashboardWidgetIds(widgets))
+        val snapshot = mergeDashboardItemFetchResults(
+            widgets = widgets,
+            previousSnapshot = null,
+            results = listOf(
+                DashboardItemsFetchResult.Loaded(
+                    setOf("mixed-future"),
+                    DashboardItemsPayload(mapOf("mixed-future" to emptyList())),
+                ),
+            ),
+            unsupportedWidgetIds = setOf("future"),
+        )
+        assertEquals(setOf("future"), snapshot.unsupportedWidgetIds)
+        assertTrue(snapshot.failedWidgetIds.isEmpty())
     }
 
     @Test
@@ -128,6 +278,166 @@ class DashboardStatusTest {
                 widgets,
             )
         }
+    }
+
+    @Test
+    fun `empty v1 item collection is a valid empty result`() {
+        assertEquals(
+            emptyMap(),
+            parseDashboardItems(response("[]"), listOf(widget("calendar", setOf(1)))),
+        )
+    }
+
+    @Test
+    fun `v2 dashboard items retain official empty state messages`() {
+        val widgets = listOf(widget("calendar", setOf(2)))
+        val payload = parseDashboardItemsV2(
+            response(
+                """
+                {"calendar":{
+                  "items":[
+                    {"title":"Planning","subtitle":"Tomorrow","link":"/apps/calendar/one","iconUrl":"","overlayIconUrl":"","sinceId":"cursor-v2"}
+                  ],
+                  "emptyContentMessage":"No upcoming events",
+                  "halfEmptyContentMessage":"Your schedule is clear after this"
+                }}
+                """.trimIndent(),
+            ),
+            widgets,
+        )
+
+        assertEquals("Planning", payload.itemsByWidget.getValue("calendar").single().title)
+        assertEquals("No upcoming events", payload.emptyContentMessagesByWidget["calendar"])
+        assertEquals("Your schedule is clear after this", payload.halfEmptyContentMessagesByWidget["calendar"])
+        assertFailsWith<IllegalStateException> {
+            parseDashboardItemsV2(response("""{"calendar":[]}"""), widgets)
+        }
+    }
+
+    @Test
+    fun `mixed dashboard item failures preserve cached sections without hiding successful widgets`() {
+        val calendar = widget("calendar", setOf(2))
+        val activity = widget("activity", setOf(1))
+        val previous = NativeDashboardSnapshot(
+            widgets = listOf(calendar, activity),
+            itemsByWidget = mapOf(
+                "calendar" to listOf(item("calendar", "Saved event", "old-calendar")),
+                "activity" to listOf(item("activity", "Old activity", "old-activity")),
+            ),
+            emptyContentMessagesByWidget = mapOf("calendar" to "No saved events"),
+        )
+        val merged = mergeDashboardItemFetchResults(
+            widgets = listOf(calendar, activity),
+            previousSnapshot = previous,
+            results = listOf(
+                DashboardItemsFetchResult.Failed(setOf("calendar")),
+                DashboardItemsFetchResult.Loaded(
+                    widgetIds = setOf("activity"),
+                    payload = DashboardItemsPayload(
+                        itemsByWidget = mapOf(
+                            "activity" to listOf(item("activity", "New activity", "new-activity")),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("Saved event", merged.itemsByWidget.getValue("calendar").single().title)
+        assertEquals("New activity", merged.itemsByWidget.getValue("activity").single().title)
+        assertEquals(setOf("calendar"), merged.failedWidgetIds)
+        assertEquals("No saved events", merged.emptyContentMessagesByWidget["calendar"])
+    }
+
+    @Test
+    fun `pending widgets retain cached content while completed peers publish`() {
+        val calendar = widget("calendar", setOf(2))
+        val activity = widget("activity", setOf(2))
+        val previous = NativeDashboardSnapshot(
+            widgets = listOf(calendar, activity),
+            itemsByWidget = mapOf(
+                "calendar" to listOf(item("calendar", "Saved event", "calendar-old")),
+                "activity" to listOf(item("activity", "Old activity", "activity-old")),
+            ),
+        )
+        val partial = mergeDashboardItemFetchResults(
+            widgets = listOf(calendar, activity),
+            previousSnapshot = previous,
+            results = listOf(
+                DashboardItemsFetchResult.Loaded(
+                    widgetIds = setOf("activity"),
+                    payload = DashboardItemsPayload(
+                        mapOf("activity" to listOf(item("activity", "New activity", "activity-new"))),
+                    ),
+                ),
+            ),
+            loadingWidgetIds = setOf("calendar"),
+        )
+
+        assertEquals("Saved event", partial.itemsByWidget.getValue("calendar").single().title)
+        assertEquals("New activity", partial.itemsByWidget.getValue("activity").single().title)
+        assertEquals(setOf("calendar"), partial.loadingWidgetIds)
+        assertTrue(partial.failedWidgetIds.isEmpty())
+    }
+
+    @Test
+    fun `successful empty item result replaces cached content`() {
+        val calendar = widget("calendar", setOf(2))
+        val previous = NativeDashboardSnapshot(
+            widgets = listOf(calendar),
+            itemsByWidget = mapOf("calendar" to listOf(item("calendar", "Old event", "old"))),
+        )
+        val merged = mergeDashboardItemFetchResults(
+            widgets = listOf(calendar),
+            previousSnapshot = previous,
+            results = listOf(
+                DashboardItemsFetchResult.Loaded(
+                    widgetIds = setOf("calendar"),
+                    payload = DashboardItemsPayload(
+                        itemsByWidget = emptyMap(),
+                        emptyContentMessagesByWidget = mapOf("calendar" to "No events"),
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue(merged.itemsByWidget.getValue("calendar").isEmpty())
+        assertEquals("No events", merged.emptyContentMessagesByWidget["calendar"])
+        assertTrue(merged.failedWidgetIds.isEmpty())
+    }
+
+    @Test
+    fun `omitted requested widget is a failed result rather than an empty success`() {
+        val omitted = dashboardItemsFetchResult(
+            requestedWidgetIds = setOf("calendar"),
+            payload = DashboardItemsPayload(emptyMap()),
+        )
+        val validEmpty = dashboardItemsFetchResult(
+            requestedWidgetIds = setOf("calendar"),
+            payload = DashboardItemsPayload(mapOf("calendar" to emptyList())),
+        )
+
+        assertTrue(omitted is DashboardItemsFetchResult.Failed)
+        assertTrue(validEmpty is DashboardItemsFetchResult.Loaded)
+    }
+
+    @Test
+    fun `dashboard diagnostics expose only bounded stage and cache state`() {
+        val diagnostic = dashboardLoadFailureDiagnostic(
+            stage = "widget_items_v2",
+            code = "DASHBOARD_WIDGET_ITEMS_V2_FAILED",
+            cachedAvailable = true,
+            severity = SupportDiagnosticSeverity.Warning,
+        )
+
+        assertEquals(SupportDiagnosticComponent.App, diagnostic.component)
+        assertEquals("dashboard.load", diagnostic.operation)
+        assertEquals("DASHBOARD_WIDGET_ITEMS_V2_FAILED", diagnostic.code)
+        assertEquals(
+            mapOf("stage" to "widget_items_v2", "cached_available" to "true"),
+            diagnostic.fields.associate { it.name to it.value },
+        )
+        assertNull(diagnostic.message)
+        assertNull(diagnostic.exception)
     }
 
     @Test
@@ -310,4 +620,28 @@ class DashboardStatusTest {
         contentType = "application/json",
         etag = null,
     )
+
+    private fun widget(id: String, versions: Set<Int>): NativeDashboardWidget = NativeDashboardWidget(
+        id = id,
+        title = id,
+        order = 1,
+        iconUrl = null,
+        iconClass = null,
+        widgetUrl = null,
+        itemApiVersions = versions,
+        itemIconsRound = false,
+        reloadIntervalSeconds = null,
+        actions = emptyList(),
+    )
+
+    private fun item(widgetId: String, title: String, sinceId: String): NativeDashboardItem =
+        NativeDashboardItem(
+            widgetId = widgetId,
+            title = title,
+            subtitle = null,
+            link = null,
+            iconUrl = null,
+            overlayIconUrl = null,
+            sinceId = sinceId,
+        )
 }

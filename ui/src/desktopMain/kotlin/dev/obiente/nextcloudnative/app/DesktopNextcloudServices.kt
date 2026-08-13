@@ -877,16 +877,18 @@ internal suspend fun executeDesktopDynamicApiGet(
     executeNetwork: suspend () -> NextcloudApiResponse,
     commit: (NextcloudApiResponse) -> Unit,
 ): NextcloudApiResponse {
-    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
-        loadCached()?.let { return it }
-    } else {
-        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    when (cachePolicy) {
+        NextcloudApiCachePolicy.PreferCache -> loadCached()?.let { return it }
+        NextcloudApiCachePolicy.RefreshNetwork ->
+            coalescer.invalidateRequest(accountId, requestIdentity) {}
+        NextcloudApiCachePolicy.ForceNetwork ->
+            coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
     }
     return coalescer.execute(
         accountId = accountId,
         requestIdentity = requestIdentity,
         load = {
-            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+            if (cachePolicy != NextcloudApiCachePolicy.PreferCache) {
                 executeNetwork()
             } else {
                 loadCached() ?: executeNetwork()
@@ -4651,16 +4653,26 @@ class DesktopNextcloudServices(
             }
         }
         suspend fun executeNetworkRequest(): NextcloudApiResponse {
-            val response = request(
-                method = safeRequest.method.name,
-                url = buildNextcloudApiUrl(session.serverUrl, safeRequest),
-                session = session,
-                contentType = safeRequest.contentType,
-                rawBody = safeRequest.body,
-                ocsRequest = safeRequest.ocsApiRequest,
-                maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
-            )
+            var responseBodyMayHaveStarted = false
+            val response = try {
+                request(
+                    method = safeRequest.method.name,
+                    url = buildNextcloudApiUrl(session.serverUrl, safeRequest),
+                    session = session,
+                    contentType = safeRequest.contentType,
+                    rawBody = safeRequest.body,
+                    ocsRequest = safeRequest.ocsApiRequest,
+                    maxResponseBytes = safeRequest.maximumResponseBytes,
+                    client = noRedirectHttpClient,
+                    onFailurePhase = { phase ->
+                        responseBodyMayHaveStarted = phase == JvmNetworkFailurePhase.ResponseBody
+                    },
+                )
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                if (safeRequest.method != NextcloudApiMethod.GET) throw failure
+                throw NextcloudApiReadFailure(responseBodyMayHaveStarted, failure)
+            }
             return NextcloudApiResponse(
                 response.status,
                 response.body,
@@ -5342,6 +5354,7 @@ class DesktopNextcloudServices(
         mutationExecutor: DesktopHttpMutationExecutor? = null,
         onAmbiguousMutationResult: () -> Unit = {},
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
+        onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -5436,6 +5449,7 @@ class DesktopNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
+            onFailurePhase(networkAttempt.phase)
             if (failure.isJvmLocalUploadSourceFailure()) {
                 recordDesktopRequestDiagnostic(
                     session,
