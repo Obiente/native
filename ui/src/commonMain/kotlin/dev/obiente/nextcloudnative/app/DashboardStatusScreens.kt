@@ -61,9 +61,18 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 
 internal sealed interface DashboardSurfaceState {
@@ -263,6 +272,13 @@ internal fun NativeDashboardPresentation(
                             DashboardWidgetCard(
                                 widget = binding.widget,
                                 items = current.snapshot.itemsByWidget[binding.widget.id].orEmpty(),
+                                emptyContentMessage = current.snapshot
+                                    .emptyContentMessagesByWidget[binding.widget.id],
+                                halfEmptyContentMessage = current.snapshot
+                                    .halfEmptyContentMessagesByWidget[binding.widget.id],
+                                refreshFailed = binding.widget.id in current.snapshot.failedWidgetIds,
+                                apiUnsupported = binding.widget.id in current.snapshot.unsupportedWidgetIds,
+                                loading = binding.widget.id in current.snapshot.loadingWidgetIds,
                                 size = section.size,
                                 onOpenLink = onOpenLink,
                             )
@@ -285,29 +301,160 @@ internal fun rememberNativeDashboardState(
     }
     LaunchedEffect(session, refreshAttempt) {
         val now = currentDashboardEpochSeconds()
-        sharedDashboardStatusMemoryCache.get(session, now)?.let { cached ->
-            state = DashboardSurfaceState.Available(cached.dashboard, cached.status)
+        val displayed = state as? DashboardSurfaceState.Available
+        val cached = sharedDashboardStatusMemoryCache.get(session, now)
+        val previousSnapshot = retainedDashboardRefreshSnapshot(cached, displayed?.snapshot)
+        val previousStatus = cached?.status ?: displayed?.status
+        val cachePolicy = if (refreshAttempt > 0) {
+            NextcloudApiCachePolicy.RefreshNetwork
+        } else {
+            NextcloudApiCachePolicy.PreferCache
+        }
+        previousSnapshot?.let {
+            state = DashboardSurfaceState.Available(it, previousStatus)
         }
         runCatching {
             coroutineScope {
                 val widgetsDeferred = async {
-                    parseDashboardWidgets(
-                        services.executeNextcloudApi(session, dashboardWidgetsRequest()),
-                    )
+                    runCatching {
+                        val response = services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
+                        withContext(Dispatchers.Default) { parseDashboardWidgets(response) }
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        services.recordSupportDiagnostic(
+                            dashboardLoadFailureDiagnostic(
+                                stage = "widgets",
+                                code = "DASHBOARD_WIDGETS_FAILED",
+                                cachedAvailable = previousSnapshot != null,
+                                severity = SupportDiagnosticSeverity.Error,
+                            ),
+                        )
+                        throw failure
+                    }
                 }
                 val statusDeferred = async {
                     runCatching {
-                        parseCurrentUserStatus(
-                            services.executeNextcloudApi(session, currentUserStatusRequest()),
-                        )
-                    }.getOrNull()
+                        val response = services.executeNextcloudApi(session, currentUserStatusRequest())
+                        withContext(Dispatchers.Default) { parseCurrentUserStatus(response) }
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        null
+                    }
                 }
                 val widgets = widgetsDeferred.await()
-                val items = parseDashboardItems(
-                    services.executeNextcloudApi(session, dashboardItemsRequest()),
-                    widgets,
+                val unsupportedWidgetIds = unsupportedDashboardWidgetIds(widgets)
+                if (unsupportedWidgetIds.isNotEmpty()) {
+                    services.recordSupportDiagnostic(
+                        dashboardLoadFailureDiagnostic(
+                            stage = "widget_api_version",
+                            code = "DASHBOARD_WIDGET_API_UNSUPPORTED",
+                            cachedAvailable = previousSnapshot != null,
+                            severity = SupportDiagnosticSeverity.Warning,
+                        ),
+                    )
+                }
+                val plans = dashboardItemsRequestPlans(widgets, cachePolicy = cachePolicy)
+                val pendingWidgetIds = plans.flatMapTo(mutableSetOf(), DashboardItemsRequestPlan::widgetIds)
+                val itemResults = mutableListOf<DashboardItemsFetchResult>()
+                var snapshot = mergeDashboardItemFetchResults(
+                    widgets = widgets,
+                    previousSnapshot = previousSnapshot,
+                    results = emptyList(),
+                    unsupportedWidgetIds = unsupportedWidgetIds,
+                    loadingWidgetIds = pendingWidgetIds,
                 )
-                NativeDashboardSnapshot(widgets, items) to statusDeferred.await()
+                state = DashboardSurfaceState.Available(snapshot, previousStatus)
+
+                val completedResults = Channel<DashboardItemsFetchResult>(capacity = plans.size)
+                val requestLimiter = Semaphore(MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
+                val responseBudget = DashboardResponseBudget()
+                val responseBudgetMutex = Mutex()
+                val requests = plans.map { plan ->
+                    async {
+                        requestLimiter.withPermit {
+                            val reservedBytes = responseBudgetMutex.withLock {
+                                responseBudget.reserve()
+                            }
+                            if (reservedBytes == 0L) {
+                                services.recordSupportDiagnostic(
+                                    dashboardLoadFailureDiagnostic(
+                                        stage = "widget_items_budget",
+                                        code = "DASHBOARD_RESPONSE_BUDGET_EXHAUSTED",
+                                        cachedAvailable = previousSnapshot != null,
+                                        severity = SupportDiagnosticSeverity.Warning,
+                                    ),
+                                )
+                                completedResults.send(DashboardItemsFetchResult.Failed(plan.widgetIds))
+                                return@withPermit
+                            }
+                            var reservationSettled = false
+                            val result = runCatching {
+                                val response = services.executeNextcloudApi(
+                                    session,
+                                    plan.request.copy(maximumResponseBytes = reservedBytes),
+                                )
+                                responseBudgetMutex.withLock {
+                                    responseBudget.releaseUnused(reservedBytes, response.body.size.toLong())
+                                }
+                                reservationSettled = true
+                                val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
+                                val payload = withContext(Dispatchers.Default) {
+                                    when (plan.apiVersion) {
+                                        DashboardItemApiVersion.V1 -> DashboardItemsPayload(
+                                            itemsByWidget = parseDashboardItems(response, selectedWidgets),
+                                        )
+                                        DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
+                                    }
+                                }
+                                dashboardItemsFetchResult(plan.widgetIds, payload).also { result ->
+                                    if (result is DashboardItemsFetchResult.Failed) {
+                                        services.recordSupportDiagnostic(
+                                            dashboardLoadFailureDiagnostic(
+                                                stage = "widget_items_v${plan.apiVersion.wireValue}",
+                                                code = "DASHBOARD_WIDGET_ITEMS_OMITTED",
+                                                cachedAvailable = previousSnapshot != null,
+                                                severity = SupportDiagnosticSeverity.Warning,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }.getOrElse { failure ->
+                                if (!reservationSettled) {
+                                    responseBudgetMutex.withLock {
+                                        responseBudget.settleFailedRead(reservedBytes, failure)
+                                    }
+                                }
+                                if (failure is CancellationException) throw failure
+                                services.recordSupportDiagnostic(
+                                    dashboardLoadFailureDiagnostic(
+                                        stage = "widget_items_v${plan.apiVersion.wireValue}",
+                                        code = "DASHBOARD_WIDGET_ITEMS_V${plan.apiVersion.wireValue}_FAILED",
+                                        cachedAvailable = previousSnapshot != null,
+                                        severity = SupportDiagnosticSeverity.Warning,
+                                    ),
+                                )
+                                DashboardItemsFetchResult.Failed(plan.widgetIds)
+                            }
+                            completedResults.send(result)
+                        }
+                    }
+                }
+                repeat(plans.size) {
+                    val result = completedResults.receive()
+                    itemResults += result
+                    pendingWidgetIds.removeAll(result.widgetIds)
+                    snapshot = mergeDashboardItemFetchResults(
+                        widgets = widgets,
+                        previousSnapshot = previousSnapshot,
+                        results = itemResults,
+                        unsupportedWidgetIds = unsupportedWidgetIds,
+                        loadingWidgetIds = pendingWidgetIds,
+                    )
+                    state = DashboardSurfaceState.Available(snapshot, previousStatus)
+                }
+                requests.awaitAll()
+                completedResults.close()
+                snapshot to statusDeferred.await()
             }
         }.onSuccess { (snapshot, status) ->
             sharedDashboardStatusMemoryCache.store(
@@ -318,9 +465,10 @@ internal fun rememberNativeDashboardState(
             )
             state = DashboardSurfaceState.Available(snapshot, status)
         }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
             if (state !is DashboardSurfaceState.Available) {
                 state = DashboardSurfaceState.Failed(
-                    failure.message ?: "The dashboard could not be loaded.",
+                    "The dashboard could not be loaded. Try again.",
                 )
             }
         }
@@ -774,6 +922,11 @@ private fun HomeSectionSize.nextHomeSectionSize(): HomeSectionSize =
 private fun DashboardWidgetCard(
     widget: NativeDashboardWidget,
     items: List<NativeDashboardItem>,
+    emptyContentMessage: String?,
+    halfEmptyContentMessage: String?,
+    refreshFailed: Boolean,
+    apiUnsupported: Boolean,
+    loading: Boolean,
     size: HomeSectionSize,
     onOpenLink: (String) -> Unit,
 ) {
@@ -816,31 +969,73 @@ private fun DashboardWidgetCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (items.isEmpty()) {
-                Text(
-                    "Nothing new",
+            when {
+                loading && items.isEmpty() -> Text(
+                    "Loading this section...",
                     modifier = Modifier.padding(top = NextcloudSpacing.Large),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else {
-                visibleItems.forEachIndexed { index, item ->
-                    if (index > 0) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = NextcloudSpacing.Small),
-                            color = MaterialTheme.colorScheme.outlineVariant,
+                apiUnsupported -> Text(
+                    "This section requires a newer Dashboard API than this app supports.",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                items.isEmpty() && refreshFailed -> Text(
+                    "Could not load this section. Refresh to try again.",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                items.isEmpty() -> Text(
+                    emptyContentMessage ?: "Nothing new",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> {
+                    if (loading) {
+                        Text(
+                            "Refreshing. Showing recently loaded items.",
+                            modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (refreshFailed) {
+                        Text(
+                            "Could not refresh. Showing recently loaded items.",
+                            modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    DashboardItemRow(item = item, onOpenLink = onOpenLink)
-                }
-                if (items.size > collapsedItemCount) {
-                    TextButton(onClick = { expanded = !expanded }) {
+                    visibleItems.forEachIndexed { index, item ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = NextcloudSpacing.Small),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                        }
+                        DashboardItemRow(item = item, onOpenLink = onOpenLink)
+                    }
+                    if (items.size > collapsedItemCount) {
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(
+                                if (expanded) {
+                                    "Show less"
+                                } else {
+                                    "Show ${items.size - collapsedItemCount} more"
+                                },
+                            )
+                        }
+                    }
+                    halfEmptyContentMessage?.let { message ->
                         Text(
-                            if (expanded) {
-                                "Show less"
-                            } else {
-                                "Show ${items.size - collapsedItemCount} more"
-                            },
+                            message,
+                            modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }

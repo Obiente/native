@@ -175,8 +175,14 @@ enum class NextcloudApiMethod {
 
 enum class NextcloudApiCachePolicy {
     PreferCache,
+    RefreshNetwork,
     ForceNetwork,
 }
+
+class NextcloudApiReadFailure(
+    val responseBodyMayHaveStarted: Boolean,
+    cause: Throwable,
+) : Exception(cause.message, cause)
 
 /**
  * Restricted same-origin transport used by schema-declared dynamic app actions.
