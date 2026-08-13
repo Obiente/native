@@ -252,7 +252,7 @@
         "tools/marketing-capture-inputs.txt": "3c96e83e1ba2d715b1cda9cedf036fc97b78c3ca63b7fc930325ed536940c1f3",
         "ui/build.gradle.kts": "d2ceb55f0ce6e045686fe135e21fb82b08b9e92aa770ec4f16492da4f42b3a39",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivitySemantics.kt": "a64f01199c835eea8058aacca024b7c358c5bcf548f9965beb38ea7e74b1640d",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt": "8027d36d1a7e2ad8b7c1bb935f136e0282d3654e02ae1a15410efe3a0b8e35c9",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt": "5ef2fe2b0a4bfeb800aa73a65a1c6caf47f543f8841f709dee51dac579d594dd",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AdminAppManagement.kt": "b11fbc2c93ab17a20f123c8bde25a993c612ffb1b1525329a7e341952fefbf7d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppUpdateChannels.kt": "2ad7975a0c311c7b5977581b4c63dcc105cfed59840b871cf9f7bead9881bf05",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AppWorkspaceNavigationMemory.kt": "445d8a4b458d427224b2e84ee162aa54ed5bfa2e7b76dd82f58855430d2095a5",
@@ -310,7 +310,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "e6854c18811f03674555d32184e2e1a7aea5ea7b421fecd614780869c26c81b7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "27f703ac2d988782506b87283e21060de84d7a5733ac16d5f26271537cda2033",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "90798d4e25c44a204fe4138e756f27dddb2094b3415dfb5da6148ffbcf2a9b34",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "9c8a681ec205fec05eadec0a49e7fc2e76eae6d9a2b8e3add5bd8060730b092b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "269c032877536751fe5e8be8bdcd83b0ee0e13a3e04ad82fc3633a649b62fd13",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspaceLayout.kt": "95c8b7c8e01244df96999cfb5afb48191fd78369eaf748d2c0b73ca9b8aa45db",
@@ -344,7 +344,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeAppCatalogSurface.kt": "faccc930eb077fb38b594b7a5209c36494167fdddb2d2cc2611c8e7ca3e2614a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeAudioPlayback.kt": "98ac777faf37e87fed23ffa67a3fb6b4b9684ca2cf199efb5079ff9914b95e94",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeBudgetSemantics.kt": "9343ddf6945205d47fbf49940ec2b454115996ea283b5fc479219db2bc8f987a",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeBudgetWorkspace.kt": "1ab4a866a1bdf3daa7c1eb57572d4864dff99434ebd79023aa372bceb8720f93",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeBudgetWorkspace.kt": "1785eed188d5130f96dffbdffe079a833f36dde0f34b22b71462edfde5c85997",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.kt": "5d553bc7a00abda7e3347bb230ba2c215813eab29aadc469602a9ef29da67883",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckDragPlacement.kt": "842636b41f1dce22c43e60e16ee2fd7f2a2f541519e87f77d219d7541239419d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckEditorDialogs.kt": "a88e185187b46a71297ccbfe37e4e20577c29c5d90d0f3efa503443529b67b4c",
@@ -1238,7 +1238,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "080ddcbc1fb0269565dc810963156154f21d11ed407a74b7d4376d3a09a46dfe"
+            "sha256": "1efbcbe56875d25f7280485cfc2da01e7b64a1427b9536edcc3c9f51f6c98c29"
         },
         {
             "scenario": "budget-dashboard-desktop-light",
@@ -1254,7 +1254,7 @@
             "purpose": "showcase",
             "platform": "desktop",
             "viewport": "wide",
-            "sha256": "5faacedfeb3fb5af4ae1fbb073550c736ccb3dbb4f10f6ed72f8e1344e7cdb55"
+            "sha256": "db1943f0b9c6532564ec7121c5ea7be2f89ca2f3777a4d283b988043a45bf765"
         },
         {
             "scenario": "budget-dashboard-mobile-dark",
@@ -1270,7 +1270,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7986cd198bd571aeeed5e9448646be4cc92820c37414359c36ab726153f0fe34"
+            "sha256": "4ceda914c794c07c8ead601d2bfc8ef343f26709c126a5adcec554a384797803"
         },
         {
             "scenario": "budget-dashboard-mobile-light",
@@ -1286,7 +1286,7 @@
             "purpose": "showcase",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "4b2aeab7696eaad9ae79fe8a1c614eda8d01ce97e738366e06ca79fe80deaa29"
+            "sha256": "7c1fa2b03be907e78a72ef965350361d7d32ca002398ebdadfe6ffc0cff86de8"
         },
         {
             "scenario": "budget-transactions-desktop",
