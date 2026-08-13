@@ -97,25 +97,62 @@ class DashboardStatusTest {
     }
 
     @Test
+    fun `dashboard response budget refunds only proven zero-body failures`() {
+        val zeroBodyBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val zeroBodyReservation = zeroBodyBudget.reserve(maximumBytes = 600L)
+        zeroBodyBudget.settleFailedRead(
+            zeroBodyReservation,
+            NextcloudApiReadFailure(responseBodyMayHaveStarted = false, cause = IllegalStateException("offline")),
+        )
+        assertEquals(1_000L, zeroBodyBudget.remainingBytes)
+
+        val ambiguousBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val ambiguousReservation = ambiguousBudget.reserve(maximumBytes = 600L)
+        ambiguousBudget.settleFailedRead(
+            ambiguousReservation,
+            NextcloudApiReadFailure(responseBodyMayHaveStarted = true, cause = IllegalStateException("truncated")),
+        )
+        assertEquals(400L, ambiguousBudget.remainingBytes)
+
+        val parsingBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val parsingReservation = parsingBudget.reserve(maximumBytes = 600L)
+        parsingBudget.settleFailedRead(parsingReservation, IllegalArgumentException("invalid JSON"))
+        assertEquals(400L, parsingBudget.remainingBytes)
+    }
+
+    @Test
     fun `initial dashboard reads may use persisted cache while explicit refresh forces network`() {
         val initialWidgets = dashboardWidgetsRequest()
         val initialItems = dashboardItemsRequestPlans(listOf(widget("calendar", setOf(2)))).single().request
-        val refreshedWidgets = dashboardWidgetsRequest(NextcloudApiCachePolicy.ForceNetwork)
+        val refreshedWidgets = dashboardWidgetsRequest(NextcloudApiCachePolicy.RefreshNetwork)
         val refreshedItems = dashboardItemsRequestPlans(
             widgets = listOf(widget("calendar", setOf(2))),
-            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+            cachePolicy = NextcloudApiCachePolicy.RefreshNetwork,
         ).single().request
 
         assertEquals(NextcloudApiCachePolicy.PreferCache, initialWidgets.cachePolicy)
         assertEquals(NextcloudApiCachePolicy.PreferCache, initialItems.cachePolicy)
-        assertEquals(NextcloudApiCachePolicy.ForceNetwork, refreshedWidgets.cachePolicy)
-        assertEquals(NextcloudApiCachePolicy.ForceNetwork, refreshedItems.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.RefreshNetwork, refreshedWidgets.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.RefreshNetwork, refreshedItems.cachePolicy)
         assertEquals(DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES, refreshedItems.maximumResponseBytes)
         assertTrue(
             DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES * 128 > DASHBOARD_REFRESH_RESPONSE_BUDGET_BYTES,
             "The shared aggregate budget must be stricter than multiplying every per-widget ceiling.",
         )
         assertEquals(4, MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
+    }
+
+    @Test
+    fun `expired process cache does not discard the dashboard still displayed during refresh`() {
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        val snapshot = NativeDashboardSnapshot(listOf(widget("calendar", setOf(2))), emptyMap())
+        val cache = DashboardStatusMemoryCache(ttlSeconds = 60L)
+        cache.store(session, snapshot, status = null, nowEpochSeconds = 100L)
+
+        val expired = cache.get(session, nowEpochSeconds = 161L)
+
+        assertNull(expired)
+        assertEquals(snapshot, retainedDashboardRefreshSnapshot(expired, snapshot))
     }
 
     @Test

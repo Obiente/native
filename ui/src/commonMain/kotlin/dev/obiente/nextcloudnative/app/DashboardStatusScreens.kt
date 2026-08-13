@@ -62,6 +62,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
@@ -71,6 +72,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 
 internal sealed interface DashboardSurfaceState {
@@ -299,29 +301,31 @@ internal fun rememberNativeDashboardState(
     }
     LaunchedEffect(session, refreshAttempt) {
         val now = currentDashboardEpochSeconds()
+        val displayed = state as? DashboardSurfaceState.Available
         val cached = sharedDashboardStatusMemoryCache.get(session, now)
+        val previousSnapshot = retainedDashboardRefreshSnapshot(cached, displayed?.snapshot)
+        val previousStatus = cached?.status ?: displayed?.status
         val cachePolicy = if (refreshAttempt > 0) {
-            NextcloudApiCachePolicy.ForceNetwork
+            NextcloudApiCachePolicy.RefreshNetwork
         } else {
             NextcloudApiCachePolicy.PreferCache
         }
-        cached?.let {
-            state = DashboardSurfaceState.Available(cached.dashboard, cached.status)
+        previousSnapshot?.let {
+            state = DashboardSurfaceState.Available(it, previousStatus)
         }
         runCatching {
             coroutineScope {
                 val widgetsDeferred = async {
                     runCatching {
-                        parseDashboardWidgets(
-                            services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy)),
-                        )
+                        val response = services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
+                        withContext(Dispatchers.Default) { parseDashboardWidgets(response) }
                     }.getOrElse { failure ->
                         if (failure is CancellationException) throw failure
                         services.recordSupportDiagnostic(
                             dashboardLoadFailureDiagnostic(
                                 stage = "widgets",
                                 code = "DASHBOARD_WIDGETS_FAILED",
-                                cachedAvailable = cached != null,
+                                cachedAvailable = previousSnapshot != null,
                                 severity = SupportDiagnosticSeverity.Error,
                             ),
                         )
@@ -330,9 +334,8 @@ internal fun rememberNativeDashboardState(
                 }
                 val statusDeferred = async {
                     runCatching {
-                        parseCurrentUserStatus(
-                            services.executeNextcloudApi(session, currentUserStatusRequest()),
-                        )
+                        val response = services.executeNextcloudApi(session, currentUserStatusRequest())
+                        withContext(Dispatchers.Default) { parseCurrentUserStatus(response) }
                     }.getOrElse { failure ->
                         if (failure is CancellationException) throw failure
                         null
@@ -345,7 +348,7 @@ internal fun rememberNativeDashboardState(
                         dashboardLoadFailureDiagnostic(
                             stage = "widget_api_version",
                             code = "DASHBOARD_WIDGET_API_UNSUPPORTED",
-                            cachedAvailable = cached != null,
+                            cachedAvailable = previousSnapshot != null,
                             severity = SupportDiagnosticSeverity.Warning,
                         ),
                     )
@@ -355,12 +358,12 @@ internal fun rememberNativeDashboardState(
                 val itemResults = mutableListOf<DashboardItemsFetchResult>()
                 var snapshot = mergeDashboardItemFetchResults(
                     widgets = widgets,
-                    previousSnapshot = cached?.dashboard,
+                    previousSnapshot = previousSnapshot,
                     results = emptyList(),
                     unsupportedWidgetIds = unsupportedWidgetIds,
                     loadingWidgetIds = pendingWidgetIds,
                 )
-                state = DashboardSurfaceState.Available(snapshot, cached?.status)
+                state = DashboardSurfaceState.Available(snapshot, previousStatus)
 
                 val completedResults = Channel<DashboardItemsFetchResult>(capacity = plans.size)
                 val requestLimiter = Semaphore(MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
@@ -377,7 +380,7 @@ internal fun rememberNativeDashboardState(
                                     dashboardLoadFailureDiagnostic(
                                         stage = "widget_items_budget",
                                         code = "DASHBOARD_RESPONSE_BUDGET_EXHAUSTED",
-                                        cachedAvailable = cached != null,
+                                        cachedAvailable = previousSnapshot != null,
                                         severity = SupportDiagnosticSeverity.Warning,
                                     ),
                                 )
@@ -395,11 +398,13 @@ internal fun rememberNativeDashboardState(
                                 }
                                 reservationSettled = true
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
-                                val payload = when (plan.apiVersion) {
-                                    DashboardItemApiVersion.V1 -> DashboardItemsPayload(
-                                        itemsByWidget = parseDashboardItems(response, selectedWidgets),
-                                    )
-                                    DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
+                                val payload = withContext(Dispatchers.Default) {
+                                    when (plan.apiVersion) {
+                                        DashboardItemApiVersion.V1 -> DashboardItemsPayload(
+                                            itemsByWidget = parseDashboardItems(response, selectedWidgets),
+                                        )
+                                        DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
+                                    }
                                 }
                                 dashboardItemsFetchResult(plan.widgetIds, payload).also { result ->
                                     if (result is DashboardItemsFetchResult.Failed) {
@@ -407,7 +412,7 @@ internal fun rememberNativeDashboardState(
                                             dashboardLoadFailureDiagnostic(
                                                 stage = "widget_items_v${plan.apiVersion.wireValue}",
                                                 code = "DASHBOARD_WIDGET_ITEMS_OMITTED",
-                                                cachedAvailable = cached != null,
+                                                cachedAvailable = previousSnapshot != null,
                                                 severity = SupportDiagnosticSeverity.Warning,
                                             ),
                                         )
@@ -416,7 +421,7 @@ internal fun rememberNativeDashboardState(
                             }.getOrElse { failure ->
                                 if (!reservationSettled) {
                                     responseBudgetMutex.withLock {
-                                        responseBudget.releaseFailed(reservedBytes)
+                                        responseBudget.settleFailedRead(reservedBytes, failure)
                                     }
                                 }
                                 if (failure is CancellationException) throw failure
@@ -424,7 +429,7 @@ internal fun rememberNativeDashboardState(
                                     dashboardLoadFailureDiagnostic(
                                         stage = "widget_items_v${plan.apiVersion.wireValue}",
                                         code = "DASHBOARD_WIDGET_ITEMS_V${plan.apiVersion.wireValue}_FAILED",
-                                        cachedAvailable = cached != null,
+                                        cachedAvailable = previousSnapshot != null,
                                         severity = SupportDiagnosticSeverity.Warning,
                                     ),
                                 )
@@ -440,12 +445,12 @@ internal fun rememberNativeDashboardState(
                     pendingWidgetIds.removeAll(result.widgetIds)
                     snapshot = mergeDashboardItemFetchResults(
                         widgets = widgets,
-                        previousSnapshot = cached?.dashboard,
+                        previousSnapshot = previousSnapshot,
                         results = itemResults,
                         unsupportedWidgetIds = unsupportedWidgetIds,
                         loadingWidgetIds = pendingWidgetIds,
                     )
-                    state = DashboardSurfaceState.Available(snapshot, cached?.status)
+                    state = DashboardSurfaceState.Available(snapshot, previousStatus)
                 }
                 requests.awaitAll()
                 completedResults.close()

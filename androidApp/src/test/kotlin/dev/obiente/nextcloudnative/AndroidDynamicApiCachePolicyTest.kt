@@ -41,4 +41,29 @@ class AndroidDynamicApiCachePolicyTest {
         assertEquals(1, networkLoads)
         assertEquals(listOf(network), committed)
     }
+
+    @Test
+    fun `refresh network preserves the Android cache until replacement succeeds`() = runBlocking {
+        val coalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
+        var cacheLoads = 0
+        var invalidations = 0
+        var networkLoads = 0
+
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            executeAndroidDynamicApiGet(
+                accountId = "a".repeat(64),
+                requestIdentity = "GET /dashboard/widgets",
+                cachePolicy = NextcloudApiCachePolicy.RefreshNetwork,
+                coalescer = coalescer,
+                loadCached = { cacheLoads += 1; error("refresh must bypass cache reads") },
+                invalidateCached = { invalidations += 1 },
+                executeNetwork = { networkLoads += 1; error("offline") },
+                commit = {},
+            )
+        }
+
+        assertEquals(0, cacheLoads)
+        assertEquals(0, invalidations)
+        assertEquals(1, networkLoads)
+    }
 }

@@ -677,6 +677,20 @@ internal class DashboardStatusMemoryCache(
     }
 }
 
+internal fun retainedDashboardRefreshSnapshot(
+    cached: CachedDashboardStatus?,
+    displayed: NativeDashboardSnapshot?,
+): NativeDashboardSnapshot? = cached?.dashboard ?: displayed
+
+internal fun DashboardResponseBudget.settleFailedRead(
+    reservedBytes: Long,
+    failure: Throwable,
+) {
+    if (failure is NextcloudApiReadFailure && !failure.responseBodyMayHaveStarted) {
+        releaseFailed(reservedBytes)
+    }
+}
+
 internal val sharedDashboardStatusMemoryCache = DashboardStatusMemoryCache()
 
 private fun statusMutationRequest(
