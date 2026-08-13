@@ -800,6 +800,7 @@ internal fun parseDynamicRecords(
     declaredFieldIds: Set<String> = emptySet(),
 ): List<NativeRecord> {
     if (response.status !in 200..299) throw response.toDynamicReadLoadException(action)
+    if (response.status == 204) return emptyList()
     check(response.contentType?.contains("json", ignoreCase = true) == true) {
         "The dynamic endpoint did not return JSON."
     }

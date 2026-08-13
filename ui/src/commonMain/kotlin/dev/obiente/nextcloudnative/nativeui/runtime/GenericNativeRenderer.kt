@@ -149,6 +149,12 @@ fun interface NativeImageLoader {
     suspend fun load(relativePath: String): ImageBitmap?
 }
 
+data class NativeWorkspaceNavigationItem(
+    val id: String,
+    val label: String,
+    val selected: Boolean,
+)
+
 data class NativeRecordImagePreview(
     val image: ImageBitmap,
     val contentDescription: String,
@@ -241,6 +247,8 @@ fun GenericNativeAppScreen(
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
     mutationReconciliationGeneration: Int = 0,
     collectionBatchRelationLoader: NativeCollectionBatchRelationLoader? = null,
+    workspaceNavigationItems: List<NativeWorkspaceNavigationItem> = emptyList(),
+    onWorkspaceNavigate: ((String) -> Unit)? = null,
 ) {
     val resource = schema.resource(view.resourceId)
     val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
@@ -260,6 +268,13 @@ fun GenericNativeAppScreen(
     }
     val presentedResource = hydrated?.resource ?: baseResource
     val presentedRecords = hydrated?.records ?: baseRecords
+    val presentedState = when (state) {
+        is NativeScreenState.Ready -> NativeScreenState.Ready(presentedRecords)
+        else -> state
+    }
+    val choresWorkspace = presentedResource?.let { resourceSpec ->
+        nativeChoresPresentation(schema, view, resourceSpec, presentedState)
+    }
     val presentedSurface = when {
         showSelectedRecordDetail &&
             selectedRecordId != null &&
@@ -728,6 +743,14 @@ fun GenericNativeAppScreen(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
+            choresWorkspace != null && !showSelectedRecordDetail -> NativeChoresWorkspaceSurface(
+                presentation = choresWorkspace,
+                onSelectRecord = onSelectRecord,
+                navigationItems = workspaceNavigationItems,
+                onNavigate = onWorkspaceNavigate,
+                createLabel = collectionCreatePlan?.action?.label,
+                onCreate = openCollectionCreate,
+            )
             mailWorkspacePlan != null && state is NativeScreenState.Loading ->
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
@@ -2125,6 +2148,14 @@ private fun GenericRecordActionFormDialog(
     var submitting by remember(pending) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val operation = pending.operationLabel
+    val formTitle = if (
+        pending is PendingNativeRecordFormAction &&
+        pending.plan.kind == NativeRecordFormActionKind.Create
+    ) {
+        pending.action.label
+    } else {
+        "$operation ${pending.itemLabel}"
+    }
 
     fun submit(confirmed: Boolean) {
         val request = runCatching {
@@ -2167,7 +2198,7 @@ private fun GenericRecordActionFormDialog(
                 } else if (awaitingConfirmation) {
                     "Confirm ${operation.lowercase()}"
                 } else {
-                    "$operation ${pending.itemLabel}"
+                    formTitle
                 },
             )
         },
@@ -9912,6 +9943,64 @@ private fun GenericRepeatableObjectField(
     enabled: Boolean,
     onRowsChange: (List<RepeatableObjectInputRow>) -> Unit,
 ) {
+    if (spec.minimumItems == 1 && spec.maximumItems == 1 && rows.size == 1) {
+        val row = rows.single()
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            spec.fields.forEach { itemField ->
+                val explicitNull = itemField.id in row.nullFieldIds
+                GenericFormField(
+                    field = itemField.toNativeRepeatableObjectFieldSpec(),
+                    value = row.values[itemField.id].orEmpty(),
+                    error = null,
+                    enabled = enabled && !explicitNull,
+                    filePicker = null,
+                    automationFieldId = nativeRepeatableObjectAutomationFieldId(
+                        fieldId = field.id,
+                        rowIndex = 0,
+                        itemFieldId = itemField.id,
+                    ),
+                    onValueChange = { value ->
+                        onRowsChange(
+                            updateNativeRepeatableObjectValue(
+                                rows = rows,
+                                rowIndex = 0,
+                                field = itemField,
+                                value = value,
+                            ),
+                        )
+                    },
+                )
+                if (itemField.nullable) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().semantics {
+                            contentDescription = "Send ${itemField.label} as null"
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = explicitNull,
+                            enabled = enabled,
+                            onCheckedChange = { checked ->
+                                onRowsChange(
+                                    updateNativeRepeatableObjectNull(
+                                        rows = rows,
+                                        rowIndex = 0,
+                                        field = itemField,
+                                        explicitNull = checked,
+                                    ),
+                                )
+                            },
+                        )
+                        Text("Send ${itemField.label} as null", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+        return
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),

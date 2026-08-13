@@ -1628,6 +1628,13 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun `successful no content reads become empty native states`() {
+        val action = readAction().copy(binding = readAction().binding.copy(ocs = null))
+
+        assertTrue(parseDynamicRecords(action, response("", status = 204, contentType = null)).isEmpty())
+    }
+
+    @Test
     fun `collection array with cursor and count metadata becomes native rows`() {
         val records = parseDynamicRecords(
             readAction().copy(binding = readAction().binding.copy(ocs = null)),

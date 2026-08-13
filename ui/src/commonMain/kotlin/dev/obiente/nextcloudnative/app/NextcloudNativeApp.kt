@@ -161,6 +161,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWorkspaceNavigationItem
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailWorkspaceContext
 import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailContainerRecord
@@ -168,6 +170,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.hasNativeMailWorkspaceSemant
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
@@ -2751,6 +2754,9 @@ private fun DynamicDiscoveredAppScreen(
     val initialViewId = remember(descriptor, schema) {
         val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
         schema.views.firstOrNull { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }?.id
+            ?: schema.views.firstOrNull { view ->
+                nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team
+            }?.id
             ?: preferredNativeMusicLandingViewId(rootDestinations, schema)
             ?: rootDestinations.firstOrNull()?.layoutId
             ?: schema.views.firstOrNull { it.component != NativeComponent.form }?.id
@@ -2852,6 +2858,7 @@ private fun DynamicDiscoveredAppScreen(
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var openedDefaultChores by remember(descriptor) { mutableStateOf(false) }
     val hasRestoredMailLocation = restoredNavigation.selectedViewId != null ||
         restoredNavigation.selectedRecord != null ||
         restoredNavigation.history.isNotEmpty()
@@ -3777,6 +3784,64 @@ private fun DynamicDiscoveredAppScreen(
             }
         }
     }
+    val choresNavigationDestinations = remember(
+        descriptor,
+        schema,
+        recordContext,
+        selectedView.id,
+        selectedPathParameterValues,
+    ) {
+        if (schema.app.id != "chores") {
+            emptyList()
+        } else {
+            val unvisitedPlan = descriptor.planDynamicNavigation(
+                recordContext?.copy(visitedStates = emptySet()),
+            )
+            val order = listOf(
+                NativeChoresWorkspaceKind.Chores,
+                NativeChoresWorkspaceKind.History,
+                NativeChoresWorkspaceKind.Team,
+                NativeChoresWorkspaceKind.Invitations,
+            )
+            order.mapNotNull { kind ->
+                val view = schema.views.firstOrNull { candidate ->
+                    nativeChoresWorkspaceKind(schema, candidate) == kind
+                } ?: return@mapNotNull null
+                val planned = (
+                    unvisitedPlan.rootDestinations + unvisitedPlan.contextualChildDestinations
+                    ).firstOrNull { destination -> destination.layoutId == view.id }
+                if (
+                    kind in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History) &&
+                    planned == null && view.id != selectedView.id
+                ) {
+                    return@mapNotNull null
+                }
+                (planned ?: DynamicNavigationDestination(
+                    layoutId = view.id,
+                    label = view.title,
+                    resourceId = view.resourceId,
+                    actionId = view.sourceActionId,
+                    pathParameterValues = selectedPathParameterValues,
+                )) to view
+            }
+        }
+    }
+    val choresNavigationItems = remember(choresNavigationDestinations, selectedView.id) {
+        choresNavigationDestinations.map { (_, view) ->
+            val kind = requireNotNull(nativeChoresWorkspaceKind(schema, view))
+            NativeWorkspaceNavigationItem(
+                id = view.id,
+                label = when (kind) {
+                    NativeChoresWorkspaceKind.Chores -> "All chores"
+                    NativeChoresWorkspaceKind.History -> "History"
+                    NativeChoresWorkspaceKind.Team -> "Team"
+                    NativeChoresWorkspaceKind.Invitations -> "Invitations"
+                },
+                selected = view.id == selectedView.id,
+            )
+        }
+    }
+    val choresWorkspaceActive = nativeChoresWorkspaceKind(schema, selectedView) != null
     // Every verified read destination belongs in the adaptive, scrollable navigator. Keeping
     // technical or trash collections in the small header popup makes them unreachable on compact
     // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
@@ -4099,6 +4164,21 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     LaunchedEffect(
+        selectedView.id,
+        viewState,
+        openedDefaultChores,
+    ) {
+        if (nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team) {
+            return@LaunchedEffect
+        }
+        val records = (viewState as? NativeScreenState.Ready)?.records ?: return@LaunchedEffect
+        if (records.size == 1 && selectedRecord == null && !openedDefaultChores) {
+            openedDefaultChores = true
+            selectDynamicRecord(records.single())
+        }
+    }
+
+    LaunchedEffect(
         descriptor,
         selectedView.id,
         viewState,
@@ -4242,6 +4322,19 @@ private fun DynamicDiscoveredAppScreen(
         selectedViewId = view.id
     }
 
+    fun selectChoresDestination(viewId: String) {
+        val (destination, view) = choresNavigationDestinations
+            .firstOrNull { (_, candidate) -> candidate.id == viewId }
+            ?: return
+        actionMenuExpanded = false
+        contextualMenuOpen = false
+        selectedPathParameterValues = destination.pathParameterValues
+        selectedViewId = view.id
+        paginationState = null
+        loadingMore = false
+        loadMoreError = null
+    }
+
     val hasCollectionHierarchyBack = navigationHistory.isNotEmpty() || selectedRecord != null
     PlatformBackHandler(enabled = true, onBack = ::navigateWithinDynamicApp)
     val showFallbackRecordDetail = shouldShowDynamicRecordFallbackDetail(
@@ -4370,11 +4463,14 @@ private fun DynamicDiscoveredAppScreen(
                     selectedRecordResourceId != selectedView.resourceId
             }
         val activeContentTitle = when {
+            choresWorkspaceActive -> descriptor.app.name
             showContextDestinationMenu -> selectedRecord?.dynamicContextLabel().orEmpty()
             nestedObjectTitle != null -> nestedObjectTitle
             else -> activeSectionLabel
         }.ifBlank { descriptor.app.name }
-        val activeContentSubtitle = if (showContextDestinationMenu) {
+        val activeContentSubtitle = if (choresWorkspaceActive) {
+            null
+        } else if (showContextDestinationMenu) {
             "Choose a section"
         } else if (nestedObjectTitle != null) {
             activeSectionLabel.takeUnless { label ->
@@ -4391,7 +4487,7 @@ private fun DynamicDiscoveredAppScreen(
 
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
-            mode = if (musicWorkspaceIntent == null) {
+            mode = if (musicWorkspaceIntent == null && !choresWorkspaceActive) {
                 collectionNavigationMode
             } else {
                 NextcloudCollectionNavigationMode.Hidden
@@ -4651,6 +4747,12 @@ private fun DynamicDiscoveredAppScreen(
                     onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
+                    workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
+                    onWorkspaceNavigate = if (choresWorkspaceActive && choresNavigationItems.size > 1) {
+                        ::selectChoresDestination
+                    } else {
+                        null
+                    },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -5508,6 +5610,12 @@ internal fun primaryDynamicContentDestination(
                         "entry",
                         "entries",
                     )
+                }
+            }
+        parentWords.any { it in setOf("team", "teams", "household", "households") } ->
+            destinations.firstOrNull { destination ->
+                destination.resourceId.dynamicResourceWords().any { word ->
+                    word in setOf("assignment", "assignments", "chore", "chores", "duty", "duties")
                 }
             }
         else -> null
