@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordActions
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,7 +14,7 @@ import kotlin.test.assertTrue
 
 class ChoresLiveContractCompatibilityTest {
     @Test
-    fun `signed Chores routes expose household reads and only proven guarded deletion`() {
+    fun `signed Chores routes expose the audited team chore and completion workflows`() {
         if (System.getenv("RUN_LIVE_NEXTCLOUD_APPSTORE_TEST") != "1") return
         val contract = assertNotNull(
             SignedAppStoreContractAcquirer().acquire(
@@ -23,6 +24,7 @@ class ChoresLiveContractCompatibilityTest {
         assertEquals(OpenApiContractSourceKind.SignedAppPackage, contract.sourceKind)
         assertEquals(VerifiedContractKind.VerifiedReadRoutes, contract.contractKind)
 
+        val contractDocument = Json.parseToJsonElement(contract.document)
         val descriptor = DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(
                 app = AppIdentity("chores", "Chores", "0.1.0"),
@@ -32,7 +34,7 @@ class ChoresLiveContractCompatibilityTest {
                 ),
                 advertisedOpenApi = AdvertisedOpenApi(
                     documentUrl = contract.sourceUrl,
-                    document = Json.parseToJsonElement(contract.document),
+                    document = contractDocument,
                     trust = OpenApiTrust.nextcloudSignedAppPackage,
                 ),
             ),
@@ -44,16 +46,62 @@ class ChoresLiveContractCompatibilityTest {
             HttpMethod.DELETE,
             "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}",
         )
+        val createTeam = descriptor.action(HttpMethod.POST, "/apps/chores/api/v1.0/team")
+        val inviteMember = descriptor.action(
+            HttpMethod.POST,
+            "/apps/chores/api/v1.0/team/{teamId}/invites",
+        )
+        val acceptInvitation = descriptor.action(
+            HttpMethod.POST,
+            "/apps/chores/api/v1.0/account/invites/accept",
+        )
+        val createChore = descriptor.action(
+            HttpMethod.POST,
+            "/apps/chores/api/v1.0/team/{teamId}/chores",
+        )
+        val editChore = descriptor.action(
+            HttpMethod.PATCH,
+            "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}",
+        )
+        val completeChore = descriptor.action(
+            HttpMethod.POST,
+            "/apps/chores/api/v1.0/team/{teamId}/work",
+        )
+        val removeMember = descriptor.action(
+            HttpMethod.DELETE,
+            "/apps/chores/api/v1.0/team/{teamId}/members/{userIdToRemove}",
+        )
 
         assertEquals(ActionIntent.list, choreRead.intent)
         assertEquals(ActionIntent.list, workRead.intent)
-        assertTrue(descriptor.actions.none { action ->
-            action.binding.method in setOf(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH)
+        assertEquals(ActionIntent.create, createTeam.intent)
+        assertEquals(ActionIntent.create, createChore.intent)
+        assertEquals(ActionIntent.update, editChore.intent)
+        assertTrue(listOf(createTeam, inviteMember, acceptInvitation, createChore, editChore, completeChore).all {
+            it.binding.body != null && it.provenance.any { evidence ->
+                evidence.kind == ProvenanceKind.verifiedAppPackage
+            }
         })
+        assertEquals(ActionRisk.destructive, removeMember.risk)
+        assertTrue(removeMember.requiresConfirmation)
+        assertEquals(setOf("teamId", "userIdToRemove"), removeMember.binding.pathParameters.mapTo(linkedSetOf()) { it.name })
         assertEquals(ActionRisk.destructive, choreDelete.risk)
         assertTrue(choreDelete.requiresConfirmation)
         assertTrue(choreDelete.binding.body == null)
         assertEquals(setOf("teamId", "choreId"), choreDelete.binding.pathParameters.mapTo(linkedSetOf()) { it.name })
+
+        val nativeSchema = descriptor.toNativeAppSchema()
+        val nativeChores = nativeSchema.resources.single { resource -> resource.id == choreRead.resourceId }
+        val createPlan = nativeRecordActions(
+            schema = nativeSchema,
+            resource = nativeChores,
+            navigationContext = mapOf("teamId" to "opaque-team"),
+        ).create
+        assertNotNull(
+            createPlan,
+            "fields=${nativeChores.fields.map { field -> field.id to field.kind }}; " +
+                "actionFields=${nativeSchema.actions.single { it.id == createChore.id }.binding.bodyFieldNames}",
+        )
 
         val root = descriptor.planDynamicNavigation().rootDestinations
         assertTrue(
@@ -97,5 +145,10 @@ class ChoresLiveContractCompatibilityTest {
     }
 
     private fun DynamicAppDescriptor.action(method: HttpMethod, path: String): DynamicAction =
-        actions.single { action -> action.binding.method == method && action.binding.path == path }
+        actions.singleOrNull { action -> action.binding.method == method && action.binding.path == path }
+            ?: error(
+                "Missing $method $path; available=" + actions.joinToString { action ->
+                    "${action.binding.method} ${action.binding.path}"
+                },
+            )
 }
