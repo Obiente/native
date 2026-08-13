@@ -730,7 +730,7 @@ const frequentlyAsked = [
               <p class="eyebrow">Get the current build</p>
               <h2>Download for your platform.</h2>
               <p>
-                Nightly is the default release path for now. Choose the package
+                Nightly is the current release path. Choose the package
                 that matches your operating system and distribution.
               </p>
             </div>
