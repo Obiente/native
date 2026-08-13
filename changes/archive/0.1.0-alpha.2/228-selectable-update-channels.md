@@ -1,7 +1,7 @@
-category: feature
+category: internal
 issue: 228
 pull: 229
 platforms: android
-user-facing: yes
+user-facing: no
 
-Direct APK installations can now choose between signed Alpha and Nightly update channels while preserving channel, version, checksum, package, and signer validation.
+Retained signed Alpha and Nightly update contracts while the public selector remains locked to Nightly.
