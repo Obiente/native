@@ -945,7 +945,7 @@ class DesktopNextcloudServices(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
-    private val httpClient = OkHttpClient()
+    private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -3607,15 +3607,30 @@ class DesktopNextcloudServices(
                 val authorization = Base64.getEncoder().encodeToString(
                     "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
                 )
+                val started = System.nanoTime()
+                val networkAttempt = JvmNetworkRequestAttempt()
                 val request = Request.Builder()
                     .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
                     .get()
+                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
                     .header("Accept", "*/*")
                     .header("OCS-APIRequest", "true")
                     .header("User-Agent", USER_AGENT)
                     .header("Authorization", "Basic $authorization")
                     .build()
-                noRedirectHttpClient.newCall(request).execute().use { response ->
+                val response = try {
+                    noRedirectHttpClient.newCall(request).execute()
+                } catch (failure: Throwable) {
+                    recordDesktopStreamingFailure(
+                        session = session,
+                        streamKind = "deck_attachment",
+                        startedNanos = started,
+                        attempt = networkAttempt,
+                        failure = failure,
+                    )
+                    throw failure
+                }
+                response.use {
                     check(response.isSuccessful) {
                         "Opening the Deck attachment failed (HTTP ${response.code})."
                     }
@@ -3625,7 +3640,22 @@ class DesktopNextcloudServices(
                         "The Deck attachment is larger than the external handoff limit."
                     }
                     DesktopDetachedDownload(
-                        responseBody.byteStream().copyBoundedTo(output, maximumBytes),
+                        responseBody.byteStream().copyBoundedNetworkResponseTo(
+                            output = output,
+                            maxBytes = maximumBytes,
+                            onLimitExceeded = {
+                                error("The Deck attachment is larger than the external handoff limit.")
+                            },
+                            onNetworkReadFailure = { failure ->
+                                recordDesktopStreamingFailure(
+                                    session = session,
+                                    streamKind = "deck_attachment",
+                                    startedNanos = started,
+                                    attempt = networkAttempt,
+                                    failure = failure,
+                                )
+                            },
+                        ),
                     )
                 }
             }
@@ -4078,6 +4108,9 @@ class DesktopNextcloudServices(
                         .header("Range", "bytes=$offset-$endInclusive")
                         .header("If-Match", safeEtag)
                         .header("User-Agent", USER_AGENT)
+                    val started = System.nanoTime()
+                    val networkAttempt = JvmNetworkRequestAttempt()
+                    builder.tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
                     val encoded = Base64.getEncoder()
                         .encodeToString("${session.loginName}:${session.appPassword}".toByteArray())
                     builder.header("Authorization", "Basic $encoded")
@@ -4094,13 +4127,24 @@ class DesktopNextcloudServices(
                             }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
                             check(contentLength == -1L || contentLength == length.toLong()) {
                                 "The server returned an incomplete file range."
                             }
-                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
-                                check(bytes.size == length) { "The server returned an incomplete file range." }
-                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
                         }
+                    } catch (failure: Throwable) {
+                        recordDesktopStreamingFailure(
+                            session = session,
+                            streamKind = "file_range",
+                            startedNanos = started,
+                            attempt = networkAttempt,
+                            failure = failure,
+                        )
+                        throw failure
                     } finally {
                         activeCall.compareAndSet(call, null)
                     }
@@ -4149,6 +4193,8 @@ class DesktopNextcloudServices(
                 "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
+            expectedSuccessResponseBytes = length,
+            expectedSuccessResponseStatus = 206,
             client = noRedirectHttpClient,
         )
         check(response.status == 206) {
@@ -4168,9 +4214,6 @@ class DesktopNextcloudServices(
             check(requireSafeFileRangeEtag(returnedEtag) == safeEtag) {
                 "The Memories stream returned a different file generation."
             }
-        }
-        check(response.body.size == length) {
-            "The Memories stream returned an incomplete file range."
         }
         response.body
     }
@@ -5119,12 +5162,15 @@ class DesktopNextcloudServices(
         headers: Map<String, String> = emptyMap(),
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
+        expectedSuccessResponseBytes: Int? = null,
+        expectedSuccessResponseStatus: Int? = null,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
         mutationExecutor: DesktopHttpMutationExecutor? = null,
         onAmbiguousMutationResult: () -> Unit = {},
     ): HttpResponse {
         val started = System.nanoTime()
+        require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         val requestBody = when {
             streamingBody != null -> streamingBody
             rawBody != null -> rawBody.toRequestBody(contentType?.toMediaType())
@@ -5132,7 +5178,9 @@ class DesktopNextcloudServices(
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)
             else -> null
         }
+        val networkAttempt = JvmNetworkRequestAttempt()
         val builder = Request.Builder().url(url).method(method, requestBody)
+            .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
             .header("Accept", "application/json").header("User-Agent", USER_AGENT)
         if (ocsRequest) builder.header("OCS-APIRequest", "true")
         headers.forEach(builder::header)
@@ -5152,6 +5200,9 @@ class DesktopNextcloudServices(
                 runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
             } else {
                 responseBody.byteStream().readBounded(readLimit)
+            }
+            if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
+                bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
             }
             return HttpResponse(
                 response.code,
@@ -5211,6 +5262,25 @@ class DesktopNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
+            if (failure.isJvmLocalUploadSourceFailure()) {
+                recordDesktopRequestDiagnostic(
+                    session,
+                    failure.toJvmLocalUploadSourceDiagnosticEvent(
+                        method = method,
+                        durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
+                    ),
+                )
+                throw failure
+            }
+            val networkFailure = if (failure is IOException || failure is CancellationException) {
+                failure.toJvmNetworkFailureDiagnostic(
+                    attempt = networkAttempt,
+                    readOnlyRequest = method.isReadOnlyJvmNetworkMethod(),
+                    replayableRequest = requestBody?.isOneShot() != true,
+                )
+            } else {
+                null
+            }
             recordDesktopRequestDiagnostic(
                 session,
                 SupportDiagnosticEventDraft(
@@ -5218,12 +5288,14 @@ class DesktopNextcloudServices(
                     component = SupportDiagnosticComponent.Network,
                     operation = "http.request",
                     outcome = "failed",
+                    code = networkFailure?.code,
+                    attempt = networkFailure?.attempt,
                     durationMillis = (System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000L,
                     fields = listOf(
                         SupportDiagnosticFieldDraft("method", method.lowercase()),
                         SupportDiagnosticFieldDraft("url", url, SupportDiagnosticValuePrivacy.Url),
                         SupportDiagnosticFieldDraft("mutation", (mutationExecutor != null).toString()),
-                    ),
+                    ) + networkFailure?.fields().orEmpty(),
                     exception = failure.toSupportDiagnosticExceptionDraft(),
                 ),
             )
@@ -5242,6 +5314,40 @@ class DesktopNextcloudServices(
         }
     }
 
+    private fun recordDesktopStreamingFailure(
+        session: NextcloudSession,
+        streamKind: String,
+        startedNanos: Long,
+        attempt: JvmNetworkRequestAttempt,
+        failure: Throwable,
+    ) {
+        if (failure !is IOException && failure !is CancellationException) return
+        val networkFailure = failure.toJvmNetworkFailureDiagnostic(
+            attempt = attempt,
+            readOnlyRequest = true,
+            replayableRequest = true,
+        )
+        if (networkFailure.isCancellation) return
+        recordDesktopRequestDiagnostic(
+            session,
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.Network,
+                operation = "http.stream",
+                outcome = "failed",
+                code = networkFailure.code,
+                attempt = networkFailure.attempt,
+                durationMillis = (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L,
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("method", "get"),
+                    SupportDiagnosticFieldDraft("stream_kind", streamKind),
+                    SupportDiagnosticFieldDraft("mutation", "false"),
+                ) + networkFailure.fields(),
+                exception = failure.toSupportDiagnosticExceptionDraft(),
+            ),
+        )
+    }
+
     private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
         val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
@@ -5256,25 +5362,6 @@ class DesktopNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
-    }
-
-    private fun java.io.InputStream.copyBoundedTo(
-        output: java.io.OutputStream,
-        maxBytes: Long,
-    ): Long {
-        require(maxBytes > 0L)
-        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
-        var total = 0L
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            check(total <= maxBytes) {
-                "The Deck attachment is larger than the external handoff limit."
-            }
-            output.write(buffer, 0, read)
-        }
-        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {

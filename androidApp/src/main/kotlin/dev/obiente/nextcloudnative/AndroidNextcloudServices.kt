@@ -103,7 +103,15 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
+import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
+import dev.obiente.nextcloudnative.app.JvmNetworkResponseTruncatedIOException
+import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
+import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
+import dev.obiente.nextcloudnative.app.requireExactJvmNetworkResponseBytes
+import dev.obiente.nextcloudnative.app.toJvmLocalUploadSourceDiagnosticEvent
+import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
+import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
@@ -122,6 +130,7 @@ import dev.obiente.nextcloudnative.app.PeopleTransportRequest
 import dev.obiente.nextcloudnative.app.PersistedDeckCardDraft
 import dev.obiente.nextcloudnative.app.boundedPreviewDimension
 import dev.obiente.nextcloudnative.app.boundedActivityLimit
+import dev.obiente.nextcloudnative.app.copyBoundedNetworkResponseTo
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.buildFileFavoritePropPatch
 import dev.obiente.nextcloudnative.app.buildFavoriteFilesDavReport
@@ -284,7 +293,7 @@ internal class AndroidNextcloudServices(
     private val activity = context as? Activity
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
     private val sessionCipher = SessionCipher()
-    private val httpClient = OkHttpClient()
+    private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -733,15 +742,30 @@ internal class AndroidNextcloudServices(
                     "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
                     Base64.NO_WRAP,
                 )
+                val started = System.nanoTime()
+                val networkAttempt = JvmNetworkRequestAttempt()
                 val request = Request.Builder()
                     .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
                     .get()
+                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
                     .header("Accept", "*/*")
                     .header("OCS-APIRequest", "true")
                     .header("User-Agent", USER_AGENT)
                     .header("Authorization", "Basic $authorization")
                     .build()
-                noRedirectHttpClient.newCall(request).execute().use { response ->
+                val response = try {
+                    noRedirectHttpClient.newCall(request).execute()
+                } catch (failure: Throwable) {
+                    recordStreamingFailure(
+                        session = session,
+                        streamKind = "deck_attachment",
+                        startedNanos = started,
+                        attempt = networkAttempt,
+                        failure = failure,
+                    )
+                    throw failure
+                }
+                response.use {
                     check(response.isSuccessful) {
                         "Opening the Deck attachment failed (HTTP ${response.code})."
                     }
@@ -751,7 +775,22 @@ internal class AndroidNextcloudServices(
                         "The Deck attachment is larger than the external handoff limit."
                     }
                     AndroidDetachedDownload(
-                        byteCount = responseBody.byteStream().copyBoundedTo(output, maximumBytes),
+                        byteCount = responseBody.byteStream().copyBoundedNetworkResponseTo(
+                            output = output,
+                            maxBytes = maximumBytes,
+                            onLimitExceeded = {
+                                error("The Deck attachment is larger than the external handoff limit.")
+                            },
+                            onNetworkReadFailure = { failure ->
+                                recordStreamingFailure(
+                                    session = session,
+                                    streamKind = "deck_attachment",
+                                    startedNanos = started,
+                                    attempt = networkAttempt,
+                                    failure = failure,
+                                )
+                            },
+                        ),
                         mimeType = responseBody.contentType()?.toString(),
                     )
                 }
@@ -1732,6 +1771,8 @@ internal class AndroidNextcloudServices(
                 "If-Match" to safeEtag,
             ),
             maxResponseBytes = length.toLong(),
+            expectedSuccessResponseBytes = length,
+            expectedSuccessResponseStatus = 206,
             client = noRedirectHttpClient,
         )
         check(response.status == 206) {
@@ -1739,9 +1780,6 @@ internal class AndroidNextcloudServices(
         }
         check(isExactHttpByteContentRange(response.contentRange, offset, endInclusive)) {
             "The server returned a different file range than requested."
-        }
-        check(response.body.size == length) {
-            "The server returned an incomplete file range."
         }
         response.body
     }
@@ -1771,9 +1809,12 @@ internal class AndroidNextcloudServices(
                     val endInclusive = Math.addExact(offset, length.toLong() - 1L)
                     require(endInclusive < size) { "The file range exceeds the source size." }
                     check(!closed.get()) { "The file range session is closed." }
+                    val started = System.nanoTime()
+                    val networkAttempt = JvmNetworkRequestAttempt()
                     val request = Request.Builder()
                         .url(url)
                         .get()
+                        .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
                         .header("Accept", "application/octet-stream")
                         .header("User-Agent", USER_AGENT)
                         .header("Authorization", "Basic $authorization")
@@ -1802,15 +1843,24 @@ internal class AndroidNextcloudServices(
                             }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
                             check(contentLength == length.toLong() || contentLength == -1L) {
                                 "The server returned an incomplete file range."
                             }
-                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
-                                check(bytes.size == length) {
-                                    "The server returned an incomplete file range."
-                                }
-                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
                         }
+                    } catch (failure: Throwable) {
+                        recordStreamingFailure(
+                            session = session,
+                            streamKind = "file_range",
+                            startedNanos = started,
+                            attempt = networkAttempt,
+                            failure = failure,
+                        )
+                        throw failure
                     } finally {
                         activeCalls -= call
                     }
@@ -1843,9 +1893,12 @@ internal class AndroidNextcloudServices(
             "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
             Base64.NO_WRAP,
         )
+        val started = System.nanoTime()
+        val networkAttempt = JvmNetworkRequestAttempt()
         val rangeRequest = Request.Builder()
             .url(session.serverUrl.trimEnd('/') + "/index.php/apps/memories/api/stream/$fileId")
             .get()
+            .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
             .header("Accept", "application/octet-stream")
             .header("User-Agent", USER_AGENT)
             .header("Authorization", "Basic $authorization")
@@ -1857,6 +1910,7 @@ internal class AndroidNextcloudServices(
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    recordStreamingFailure(session, "memories_range", started, networkAttempt, e)
                     continuation.resumeWith(Result.failure(e))
                 }
 
@@ -1885,15 +1939,18 @@ internal class AndroidNextcloudServices(
                                 }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
+                            if (contentLength in 0 until length.toLong()) {
+                                throw JvmNetworkResponseTruncatedIOException()
+                            }
                             check(contentLength == length.toLong() || contentLength == -1L) {
                                 "The Memories stream returned an incomplete file range."
                             }
-                            responseBody.byteStream().readBounded(length.toLong()).also { bytes ->
-                                check(bytes.size == length) {
-                                    "The Memories stream returned an incomplete file range."
-                                }
-                            }
+                            responseBody.byteStream().readBounded(length.toLong())
+                                .requireExactJvmNetworkResponseBytes(length)
                         }
+                    }
+                    result.exceptionOrNull()?.let { failure ->
+                        recordStreamingFailure(session, "memories_range", started, networkAttempt, failure)
                     }
                     continuation.resumeWith(result)
                 }
@@ -2778,10 +2835,13 @@ internal class AndroidNextcloudServices(
         headers: Map<String, String> = emptyMap(),
         rawBody: ByteArray? = null,
         maxResponseBytes: Long = MAX_API_RESPONSE_BYTES,
+        expectedSuccessResponseBytes: Int? = null,
+        expectedSuccessResponseStatus: Int? = null,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
     ): HttpResponse {
         val started = System.nanoTime()
+        require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         check(appContext.isAllowedTestRequest(method, url)) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
@@ -2792,9 +2852,11 @@ internal class AndroidNextcloudServices(
             method == "POST" || method == "PUT" || method == "PATCH" -> byteArrayOf().toRequestBody(null)
             else -> null
         }
+        val networkAttempt = JvmNetworkRequestAttempt()
         val builder = Request.Builder()
             .url(url)
             .method(method, requestBody)
+            .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
             .header("Accept", "application/json")
             .header("User-Agent", USER_AGENT)
         if (ocsRequest) builder.header("OCS-APIRequest", "true")
@@ -2812,9 +2874,13 @@ internal class AndroidNextcloudServices(
                 check(contentLength <= readLimit || contentLength == -1L) {
                     "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
                 }
+                val bodyBytes = responseBody.byteStream().readBounded(readLimit)
+                if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
+                    bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
+                }
                 HttpResponse(
                     status = response.code,
-                    body = responseBody.byteStream().readBounded(readLimit),
+                    body = bodyBytes,
                     contentType = responseBody.contentType()?.toString(),
                     etag = response.header("ETag") ?: response.header("OC-Etag"),
                     location = if (session == null) {
@@ -2858,6 +2924,25 @@ internal class AndroidNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
+            if (failure.isJvmLocalUploadSourceFailure()) {
+                recordRequestDiagnostic(
+                    session,
+                    failure.toJvmLocalUploadSourceDiagnosticEvent(
+                        method = method,
+                        durationMillis = elapsedMillis(started),
+                    ),
+                )
+                throw failure
+            }
+            val networkFailure = if (failure is IOException || failure is CancellationException) {
+                failure.toJvmNetworkFailureDiagnostic(
+                    attempt = networkAttempt,
+                    readOnlyRequest = method.isReadOnlyJvmNetworkMethod(),
+                    replayableRequest = requestBody?.isOneShot() != true,
+                )
+            } else {
+                null
+            }
             recordRequestDiagnostic(
                 session,
                 SupportDiagnosticEventDraft(
@@ -2865,12 +2950,14 @@ internal class AndroidNextcloudServices(
                     component = SupportDiagnosticComponent.Network,
                     operation = "network.request",
                     outcome = "failed",
+                    code = networkFailure?.code,
+                    attempt = networkFailure?.attempt,
                     durationMillis = elapsedMillis(started),
                     fields = listOf(
                         SupportDiagnosticFieldDraft("method", method.uppercase(Locale.ROOT)),
                         SupportDiagnosticFieldDraft("url", url, SupportDiagnosticValuePrivacy.Url),
                         SupportDiagnosticFieldDraft("mutation", (!method.isReadOnlyTestRequestMethod()).toString()),
-                    ),
+                    ) + networkFailure?.fields().orEmpty(),
                     exception = failure.toSupportDiagnosticExceptionDraft(),
                 ),
             )
@@ -2887,6 +2974,40 @@ internal class AndroidNextcloudServices(
         } else {
             supportDiagnostics.recordForAccountIdentity(NextcloudDocumentIds.accountKey(session), event)
         }
+    }
+
+    private fun recordStreamingFailure(
+        session: NextcloudSession,
+        streamKind: String,
+        startedNanos: Long,
+        attempt: JvmNetworkRequestAttempt,
+        failure: Throwable,
+    ) {
+        if (failure !is IOException && failure !is CancellationException) return
+        val networkFailure = failure.toJvmNetworkFailureDiagnostic(
+            attempt = attempt,
+            readOnlyRequest = true,
+            replayableRequest = true,
+        )
+        if (networkFailure.isCancellation) return
+        recordRequestDiagnostic(
+            session,
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Error,
+                component = SupportDiagnosticComponent.Network,
+                operation = "network.stream",
+                outcome = "failed",
+                code = networkFailure.code,
+                attempt = networkFailure.attempt,
+                durationMillis = elapsedMillis(startedNanos),
+                fields = listOf(
+                    SupportDiagnosticFieldDraft("method", "GET"),
+                    SupportDiagnosticFieldDraft("stream_kind", streamKind),
+                    SupportDiagnosticFieldDraft("mutation", "false"),
+                ) + networkFailure.fields(),
+                exception = failure.toSupportDiagnosticExceptionDraft(),
+            ),
+        )
     }
 
     private fun registerSessionPrivateValues(session: NextcloudSession) {
@@ -2972,25 +3093,6 @@ internal class AndroidNextcloudServices(
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
-    }
-
-    private fun java.io.InputStream.copyBoundedTo(
-        output: java.io.OutputStream,
-        maxBytes: Long,
-    ): Long {
-        require(maxBytes > 0L)
-        val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
-        var total = 0L
-        while (true) {
-            val read = read(buffer)
-            if (read == -1) break
-            total += read
-            check(total <= maxBytes) {
-                "The Deck attachment is larger than the external handoff limit."
-            }
-            output.write(buffer, 0, read)
-        }
-        return total
     }
 
     private fun formatByteLimit(bytes: Long): String = when {
