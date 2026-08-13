@@ -44,10 +44,24 @@ data class NextcloudSession(
 )
 
 data class LoginChallenge(
+    val enteredServerUrl: String,
     val pollEndpoint: String,
+    val pollFallbackEndpoint: String?,
     val token: String,
     val loginUrl: String,
 )
+
+sealed interface LoginPollResult {
+    data object Pending : LoginPollResult
+
+    data class Approved(val session: NextcloudSession) : LoginPollResult
+
+    data class RetryablePreExchangeFailure(val code: String) : LoginPollResult
+
+    data class FatalFailure(val message: String, val code: String? = null) : LoginPollResult
+
+    data class AmbiguousAfterExchangeFailure(val message: String, val code: String? = null) : LoginPollResult
+}
 
 @Serializable
 data class NextcloudAppEntry(
@@ -592,7 +606,13 @@ interface NextcloudPlatformServices {
 
     suspend fun beginLogin(serverUrl: String): LoginChallenge
 
-    suspend fun pollLogin(challenge: LoginChallenge): NextcloudSession?
+    suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult
+
+    /** Releases transient state for a completed, failed, cancelled, or timed-out login challenge. */
+    fun finishLoginPolling(challenge: LoginChallenge) = Unit
+
+    /** Waits briefly for a usable platform network before another pre-exchange login attempt. */
+    suspend fun awaitLoginNetworkAvailability() = Unit
 
     suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo
 

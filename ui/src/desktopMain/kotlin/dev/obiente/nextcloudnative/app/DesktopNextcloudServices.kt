@@ -26,6 +26,7 @@ import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.prefs.Preferences
@@ -946,6 +947,8 @@ class DesktopNextcloudServices(
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
     private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
+    private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -3725,24 +3728,145 @@ class DesktopNextcloudServices(
         check(response.status in 200..299) { "Nextcloud Login Flow v2 failed (HTTP ${response.status})." }
         val json = JSONObject(response.text)
         val poll = json.getJSONObject("poll")
-        LoginChallenge(poll.getString("endpoint"), poll.getString("token"), json.getString("login"))
+        val pollEndpoint = poll.getString("endpoint")
+        val loginUrl = json.getString("login")
+        val relationships = validateLoginEndpointRelationships(baseUrl, loginUrl, pollEndpoint)
+        recordSupportDiagnostic(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Info,
+                component = SupportDiagnosticComponent.Authentication,
+                operation = "login.challenge",
+                outcome = "started",
+                fields = listOf(
+                    SupportDiagnosticFieldDraft(
+                        "login_origin_matches_entered",
+                        relationships.loginOriginMatchesEntered.toString(),
+                    ),
+                    SupportDiagnosticFieldDraft(
+                        "poll_origin_matches_entered",
+                        relationships.pollOriginMatchesEntered.toString(),
+                    ),
+                    SupportDiagnosticFieldDraft(
+                        "poll_fallback_available",
+                        (relationships.pollFallbackEndpoint != null).toString(),
+                    ),
+                ),
+            ),
+        )
+        LoginChallenge(
+            enteredServerUrl = baseUrl,
+            pollEndpoint = pollEndpoint,
+            pollFallbackEndpoint = relationships.pollFallbackEndpoint,
+            token = poll.getString("token"),
+            loginUrl = loginUrl,
+        )
     }
 
-    override suspend fun pollLogin(challenge: LoginChallenge): NextcloudSession? = withContext(Dispatchers.IO) {
-        val response = request(
-            "POST",
-            challenge.pollEndpoint,
-            body = "token=" + encodeForm(challenge.token),
-            contentType = "application/x-www-form-urlencoded",
-        )
-        if (response.status == 404) return@withContext null
-        check(response.status in 200..299) { "Login approval failed (HTTP ${response.status})." }
-        val json = JSONObject(response.text)
-        NextcloudSession(
-            normalizeServerUrl(json.getString("server")),
-            json.getString("loginName"),
-            json.getString("appPassword"),
-        )
+    override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
+        var networkFailure: JvmNetworkFailureDiagnostic? = null
+        fun poll(endpoint: String): HttpResponse {
+            networkFailure = null
+            return request(
+                "POST",
+                endpoint,
+                body = "token=" + encodeForm(challenge.token),
+                contentType = "application/x-www-form-urlencoded",
+                client = loginPollHttpClient,
+                onNetworkFailure = { networkFailure = it },
+            )
+        }
+        var usedFallback = challenge.token in loginPollFallbackTokens
+        val initialEndpoint = if (usedFallback) {
+            requireNotNull(challenge.pollFallbackEndpoint)
+        } else {
+            challenge.pollEndpoint
+        }
+        val response = try {
+            poll(initialEndpoint)
+        } catch (failure: Throwable) {
+            if (failure is CancellationException) throw failure
+            val initialResult = classifyLoginPollNetworkFailure(networkFailure)
+            val fallback = challenge.pollFallbackEndpoint
+            if (
+                initialResult is LoginPollResult.RetryablePreExchangeFailure &&
+                !usedFallback &&
+                fallback != null
+            ) {
+                runCatching {
+                    recordSupportDiagnostic(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Info,
+                            component = SupportDiagnosticComponent.Authentication,
+                            operation = "login.poll",
+                            outcome = "endpoint-fallback",
+                            fields = listOf(
+                                SupportDiagnosticFieldDraft("safe_to_retry", "true"),
+                                SupportDiagnosticFieldDraft("exchange_started", "false"),
+                            ),
+                        ),
+                    )
+                }
+                try {
+                    poll(fallback).also {
+                        usedFallback = true
+                        loginPollFallbackTokens += challenge.token
+                    }
+                } catch (fallbackFailure: Throwable) {
+                    if (fallbackFailure is CancellationException) throw fallbackFailure
+                    val result = classifyLoginPollNetworkFailure(networkFailure)
+                    result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+                    return@withContext result
+                }
+            } else {
+                initialResult.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+                return@withContext initialResult
+            }
+        }
+        if (response.status == 404) return@withContext LoginPollResult.Pending
+        if (response.status !in 200..299) {
+            val result = LoginPollResult.FatalFailure(
+                "Login approval failed (HTTP ${response.status}). Please try again.",
+                "HTTP:${response.status}",
+            )
+            result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+            return@withContext result
+        }
+        runCatching {
+            val json = JSONObject(response.text)
+            val resultServerUrl = normalizeServerUrl(json.getString("server"))
+            val loginName = json.getString("loginName")
+            val appPassword = json.getString("appPassword")
+            registerSupportDiagnosticPrivateValue(loginName)
+            registerSupportDiagnosticPrivateValue(appPassword)
+            runCatching {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Info,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "login.poll",
+                        outcome = "approved",
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft(
+                                "result_origin_matches_entered",
+                                loginResultOriginMatchesEntered(challenge.enteredServerUrl, resultServerUrl).toString(),
+                            ),
+                            SupportDiagnosticFieldDraft(
+                                "poll_fallback_used",
+                                usedFallback.toString(),
+                            ),
+                        ),
+                    ),
+                )
+            }
+            LoginPollResult.Approved(NextcloudSession(resultServerUrl, loginName, appPassword))
+        }.getOrElse {
+            ambiguousLoginPollResponse("The server approved sign-in, but its one-time response was invalid.")
+                .also { result -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic) }
+        }
+    }
+
+    override fun finishLoginPolling(challenge: LoginChallenge) {
+        loginPollFallbackTokens -= challenge.token
     }
 
     override suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo =
@@ -5217,6 +5341,7 @@ class DesktopNextcloudServices(
         streamingBody: RequestBody? = null,
         mutationExecutor: DesktopHttpMutationExecutor? = null,
         onAmbiguousMutationResult: () -> Unit = {},
+        onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -5330,6 +5455,7 @@ class DesktopNextcloudServices(
             } else {
                 null
             }
+            networkFailure?.let(onNetworkFailure)
             recordDesktopRequestDiagnostic(
                 session,
                 SupportDiagnosticEventDraft(

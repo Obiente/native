@@ -6,6 +6,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Base64
@@ -20,6 +23,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.LoginChallenge
+import dev.obiente.nextcloudnative.app.LoginPollResult
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
@@ -105,6 +109,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
+import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.JvmNetworkResponseTruncatedIOException
 import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
 import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
@@ -113,6 +118,11 @@ import dev.obiente.nextcloudnative.app.toJvmLocalUploadSourceDiagnosticEvent
 import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
+import dev.obiente.nextcloudnative.app.ambiguousLoginPollResponse
+import dev.obiente.nextcloudnative.app.classifyLoginPollNetworkFailure
+import dev.obiente.nextcloudnative.app.loginResultOriginMatchesEntered
+import dev.obiente.nextcloudnative.app.toLoginPollFailureDiagnostic
+import dev.obiente.nextcloudnative.app.validateLoginEndpointRelationships
 import dev.obiente.nextcloudnative.app.PlatformCapability
 import dev.obiente.nextcloudnative.app.PlatformCapabilityStatus
 import dev.obiente.nextcloudnative.app.AndroidDirectRelease
@@ -212,6 +222,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
@@ -259,6 +271,65 @@ internal fun resolveAndroidNextcloudRedirectLocation(
     }
 }
 
+private fun ConnectivityManager.activeNetworkIsValidated(): Boolean {
+    val network = activeNetwork ?: return false
+    val capabilities = getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+}
+
+private suspend fun awaitValidatedAndroidNetwork(connectivity: ConnectivityManager) {
+    withTimeoutOrNull(15_000L) {
+        suspendCancellableCoroutine { continuation ->
+            val registered = AtomicBoolean(false)
+            val completed = AtomicBoolean(false)
+            lateinit var callback: ConnectivityManager.NetworkCallback
+
+            fun unregister() {
+                if (registered.compareAndSet(true, false)) {
+                    runCatching { connectivity.unregisterNetworkCallback(callback) }
+                }
+            }
+
+            fun completeIfActive() {
+                if (completed.compareAndSet(false, true)) {
+                    unregister()
+                    continuation.resume(Unit)
+                }
+            }
+
+            callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    if (
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    ) {
+                        completeIfActive()
+                    }
+                }
+            }
+            continuation.invokeOnCancellation {
+                completed.set(true)
+                unregister()
+            }
+            registered.set(true)
+            runCatching { connectivity.registerDefaultNetworkCallback(callback) }
+                .onFailure {
+                    registered.set(false)
+                    if (completed.compareAndSet(false, true)) continuation.resume(Unit)
+                }
+            if (completed.get()) {
+                // Registration and cancellation/callback delivery can race. A direct best-effort
+                // unregister closes the window where completion happened before registration returned.
+                registered.set(false)
+                runCatching { connectivity.unregisterNetworkCallback(callback) }
+            } else if (registered.get() && connectivity.activeNetworkIsValidated()) {
+                completeIfActive()
+            }
+        }
+    }
+}
+
 internal suspend fun executeAndroidDynamicApiGet(
     accountId: String,
     requestIdentity: String,
@@ -300,6 +371,8 @@ internal class AndroidNextcloudServices(
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
     private val sessionCipher = SessionCipher()
     private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
+    private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -880,29 +953,152 @@ internal class AndroidNextcloudServices(
         }
         val json = JSONObject(response.text)
         val poll = json.getJSONObject("poll")
+        val pollEndpoint = poll.getString("endpoint")
+        val loginUrl = json.getString("login")
+        val relationships = validateLoginEndpointRelationships(baseUrl, loginUrl, pollEndpoint)
+        recordSupportDiagnostic(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Info,
+                component = SupportDiagnosticComponent.Authentication,
+                operation = "login.challenge",
+                outcome = "started",
+                fields = listOf(
+                    SupportDiagnosticFieldDraft(
+                        "login_origin_matches_entered",
+                        relationships.loginOriginMatchesEntered.toString(),
+                    ),
+                    SupportDiagnosticFieldDraft(
+                        "poll_origin_matches_entered",
+                        relationships.pollOriginMatchesEntered.toString(),
+                    ),
+                    SupportDiagnosticFieldDraft(
+                        "poll_fallback_available",
+                        (relationships.pollFallbackEndpoint != null).toString(),
+                    ),
+                ),
+            ),
+        )
         LoginChallenge(
-            pollEndpoint = poll.getString("endpoint"),
+            enteredServerUrl = baseUrl,
+            pollEndpoint = pollEndpoint,
+            pollFallbackEndpoint = relationships.pollFallbackEndpoint,
             token = poll.getString("token"),
-            loginUrl = json.getString("login"),
+            loginUrl = loginUrl,
         )
     }
 
-    override suspend fun pollLogin(challenge: LoginChallenge): NextcloudSession? = withContext(Dispatchers.IO) {
+    override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         val formBody = "token=" + URLEncoder.encode(challenge.token, StandardCharsets.UTF_8.name())
-        val response = request(
-            method = "POST",
-            url = challenge.pollEndpoint,
-            body = formBody,
-            contentType = "application/x-www-form-urlencoded",
-        )
-        if (response.status == 404) return@withContext null
-        check(response.status in 200..299) { "Login approval failed (HTTP ${response.status})." }
-        val json = JSONObject(response.text)
-        NextcloudSession(
-            serverUrl = normalizeServerUrl(json.getString("server")),
-            loginName = json.getString("loginName"),
-            appPassword = json.getString("appPassword"),
-        )
+        var networkFailure: JvmNetworkFailureDiagnostic? = null
+        fun poll(endpoint: String): HttpResponse {
+            networkFailure = null
+            return request(
+                method = "POST",
+                url = endpoint,
+                body = formBody,
+                contentType = "application/x-www-form-urlencoded",
+                client = loginPollHttpClient,
+                onNetworkFailure = { networkFailure = it },
+            )
+        }
+        var usedFallback = challenge.token in loginPollFallbackTokens
+        val initialEndpoint = if (usedFallback) {
+            requireNotNull(challenge.pollFallbackEndpoint)
+        } else {
+            challenge.pollEndpoint
+        }
+        val response = try {
+            poll(initialEndpoint)
+        } catch (failure: Throwable) {
+            if (failure is CancellationException) throw failure
+            val initialResult = classifyLoginPollNetworkFailure(networkFailure)
+            val fallback = challenge.pollFallbackEndpoint
+            if (
+                initialResult is LoginPollResult.RetryablePreExchangeFailure &&
+                !usedFallback &&
+                fallback != null
+            ) {
+                runCatching {
+                    recordSupportDiagnostic(
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Info,
+                            component = SupportDiagnosticComponent.Authentication,
+                            operation = "login.poll",
+                            outcome = "endpoint-fallback",
+                            fields = listOf(
+                                SupportDiagnosticFieldDraft("safe_to_retry", "true"),
+                                SupportDiagnosticFieldDraft("exchange_started", "false"),
+                            ),
+                        ),
+                    )
+                }
+                try {
+                    poll(fallback).also {
+                        usedFallback = true
+                        loginPollFallbackTokens += challenge.token
+                    }
+                } catch (fallbackFailure: Throwable) {
+                    if (fallbackFailure is CancellationException) throw fallbackFailure
+                    val result = classifyLoginPollNetworkFailure(networkFailure)
+                    result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+                    return@withContext result
+                }
+            } else {
+                initialResult.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+                return@withContext initialResult
+            }
+        }
+        if (response.status == 404) return@withContext LoginPollResult.Pending
+        if (response.status !in 200..299) {
+            val result = LoginPollResult.FatalFailure(
+                "Login approval failed (HTTP ${response.status}). Please try again.",
+                "HTTP:${response.status}",
+            )
+            result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
+            return@withContext result
+        }
+        runCatching {
+            val json = JSONObject(response.text)
+            val resultServerUrl = normalizeServerUrl(json.getString("server"))
+            val loginName = json.getString("loginName")
+            val appPassword = json.getString("appPassword")
+            registerSupportDiagnosticPrivateValue(loginName)
+            registerSupportDiagnosticPrivateValue(appPassword)
+            runCatching {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Info,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "login.poll",
+                        outcome = "approved",
+                        fields = listOf(
+                            SupportDiagnosticFieldDraft(
+                                "result_origin_matches_entered",
+                                loginResultOriginMatchesEntered(challenge.enteredServerUrl, resultServerUrl).toString(),
+                            ),
+                            SupportDiagnosticFieldDraft(
+                                "poll_fallback_used",
+                                usedFallback.toString(),
+                            ),
+                        ),
+                    ),
+                )
+            }
+            LoginPollResult.Approved(NextcloudSession(resultServerUrl, loginName, appPassword))
+        }.getOrElse {
+            ambiguousLoginPollResponse("The server approved sign-in, but its one-time response was invalid.")
+                .also { result -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic) }
+        }
+    }
+
+    override fun finishLoginPolling(challenge: LoginChallenge) {
+        loginPollFallbackTokens -= challenge.token
+    }
+
+    override suspend fun awaitLoginNetworkAvailability() {
+        val connectivity = appContext.getSystemService(ConnectivityManager::class.java) ?: return
+        if (connectivity.activeNetworkIsValidated()) return
+        awaitValidatedAndroidNetwork(connectivity)
     }
 
     override suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo =
@@ -2889,6 +3085,7 @@ internal class AndroidNextcloudServices(
         expectedSuccessResponseStatus: Int? = null,
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
+        onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -2993,6 +3190,7 @@ internal class AndroidNextcloudServices(
             } else {
                 null
             }
+            networkFailure?.let(onNetworkFailure)
             recordRequestDiagnostic(
                 session,
                 SupportDiagnosticEventDraft(
