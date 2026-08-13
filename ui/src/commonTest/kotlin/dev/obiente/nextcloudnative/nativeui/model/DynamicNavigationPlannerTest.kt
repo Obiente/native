@@ -598,7 +598,36 @@ class DynamicNavigationPlannerTest {
                     put("required", buildJsonArray { add(JsonPrimitive("teamId")) })
                 },
             ),
-        ).copy(confidence = Confidence.verified)
+        ).copy(
+            confidence = Confidence.verified,
+            binding = action(
+                id = "accept-invitation",
+                resourceId = "invitations",
+                intent = ActionIntent.execute,
+                method = HttpMethod.POST,
+                body = HttpBody(
+                    contentType = "application/json",
+                    required = true,
+                    schema = buildJsonObject {
+                        put("type", "object")
+                        put(
+                            "properties",
+                            buildJsonObject {
+                                put("teamId", buildJsonObject { put("type", "integer") })
+                            },
+                        )
+                        put("required", buildJsonArray { add(JsonPrimitive("teamId")) })
+                    },
+                ),
+            ).binding.copy(path = "/apps/chores/api/v1.0/account/invites/accept"),
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "signed Chores 0.1.0 package",
+                    detail = "Exact verified controller contract",
+                ),
+            ),
+        )
         val invitationForm = DynamicForm(
             id = "accept-invitation.form",
             title = "Accept invitation",
@@ -613,7 +642,7 @@ class DynamicNavigationPlannerTest {
             confidence = Confidence.verified,
         )
         val descriptor = hierarchyDescriptor().copy(
-            app = AppIdentity("shared-work", "Shared work", "test"),
+            app = AppIdentity("chores", "Chores", "0.1.0"),
             resources = listOf(resource("invitations").copy(confidence = Confidence.verified)),
             layouts = listOf(invitationLayout),
             links = emptyList(),
@@ -622,6 +651,17 @@ class DynamicNavigationPlannerTest {
         )
 
         assertTrue(descriptor.planDynamicNavigation().rootFormActions.isEmpty())
+        assertTrue(
+            descriptor.copy(app = AppIdentity("shared-work", "Shared work", "test"))
+                .planDynamicNavigation(
+                    DynamicResourceRecordContext(
+                        resourceId = "invitations",
+                        recordId = "invite-7",
+                        fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
+                        currentLayoutId = invitationLayout.id,
+                    ),
+                ).contextualFormActions.isEmpty(),
+        )
         val contextual = descriptor.planDynamicNavigation(
             DynamicResourceRecordContext(
                 resourceId = "invitations",

@@ -554,6 +554,33 @@ interface NextcloudPlatformServices {
         discovery: DynamicDescriptorDiscovery,
     ) = Unit
 
+    /** Loads one exact account/app/action/record mutation staged before a non-idempotent send. */
+    suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = null
+
+    /** Durably stages exact validated request values before transport may observe the mutation. */
+    suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ): Unit = throw UnsupportedOperationException(
+        "Crash-safe dynamic mutation staging is not supported on this platform.",
+    )
+
+    /** Clears a staged mutation only after success or an authoritative rejected outcome. */
+    suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = Unit
+
     fun loadSession(): NextcloudSession?
 
     suspend fun saveSession(session: NextcloudSession)

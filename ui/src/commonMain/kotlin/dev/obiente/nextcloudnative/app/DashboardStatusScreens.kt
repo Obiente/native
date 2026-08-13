@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -746,6 +747,9 @@ private fun HomeWorkspaceSurface(
     }
 
     val content: @Composable (HomeWorkspaceSection) -> Unit = { item ->
+        DisposableEffect(item.id) {
+            onDispose { sectionBounds.remove(item.id) }
+        }
         val index = layout.sections.indexOfFirst { it.id == item.id }
         HomeWorkspaceSectionContainer(
             section = item,

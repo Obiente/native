@@ -49,6 +49,10 @@ import dev.obiente.nextcloudnative.app.FileVersionDavRecord
 import dev.obiente.nextcloudnative.app.FileVersionHistory
 import dev.obiente.nextcloudnative.app.NextcloudFileVersion
 import dev.obiente.nextcloudnative.app.isSafeDynamicDiscoveryCacheAppId
+import dev.obiente.nextcloudnative.app.MAX_PERSISTED_DYNAMIC_MUTATION_BYTES
+import dev.obiente.nextcloudnative.app.decodePersistedDynamicMutation
+import dev.obiente.nextcloudnative.app.encodePersistedDynamicMutation
+import dev.obiente.nextcloudnative.app.isSafePendingMutationId
 import dev.obiente.nextcloudnative.app.FileOfflineAvailability
 import dev.obiente.nextcloudnative.app.FileOfflineCenterActionResult
 import dev.obiente.nextcloudnative.app.FileOfflineCenterSnapshot
@@ -204,6 +208,7 @@ import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.io.IOException
 import java.io.OutputStream
 import java.net.URI
@@ -386,6 +391,7 @@ internal class AndroidNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
     private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
+    private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
@@ -696,6 +702,81 @@ internal class AndroidNextcloudServices(
         return File(
             dynamicDiscoveryCacheDirectory,
             "${NextcloudDocumentIds.cacheAccountId(session)}-$appId.json",
+        )
+    }
+
+    override suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = withContext(Dispatchers.IO) {
+        val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
+            ?: return@withContext null
+        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong()) {
+            return@withContext null
+        }
+        runCatching { target.readText() }.getOrNull()?.let { encoded ->
+            decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)
+        }
+    }
+
+    override suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = requireNotNull(
+            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+        ) { "The pending dynamic mutation is invalid." }
+        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+            "The pending dynamic mutation identity is invalid."
+        }
+        check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
+            "Could not create the pending mutation store."
+        }
+        val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
+        FileOutputStream(temporary).use { output ->
+            output.write(encoded.encodeToByteArray())
+            output.fd.sync()
+        }
+        check(temporary.renameTo(target) || runCatching {
+            temporary.copyTo(target, overwrite = true)
+            temporary.delete()
+        }.isSuccess) {
+            "Could not publish the pending mutation."
+        }
+    }
+
+    override suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = withContext(Dispatchers.IO) {
+        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        }
+        Unit
+    }
+
+    private fun pendingDynamicMutationFile(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): File? {
+        if (!appId.isSafePendingMutationId() || !actionId.isSafePendingMutationId()) return null
+        if (!targetRecordId.isSafePendingMutationId()) return null
+        val identity = "$actionId\n$targetRecordId"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(identity.encodeToByteArray())
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return File(
+            pendingDynamicMutationDirectory,
+            "${NextcloudDocumentIds.cacheAccountId(session)}-$appId-$digest.json",
         )
     }
 

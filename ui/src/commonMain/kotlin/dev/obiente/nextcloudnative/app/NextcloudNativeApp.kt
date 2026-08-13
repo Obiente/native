@@ -158,6 +158,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
+import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationKey
+import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationStore
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
@@ -2154,6 +2156,7 @@ private fun AuthenticatedApp(
             AppInfoScreen(
                 services = services,
                 session = session,
+                currentUserId = serverInfo?.userId ?: session.loginName,
                 app = current.app,
                 serverVersion = resumePlan.serverVersion,
                 installedAppVersionHint = resumePlan.installedAppVersionHint,
@@ -2569,6 +2572,7 @@ private fun AdminAppsScreen(
 private fun AppInfoScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    currentUserId: String,
     app: NextcloudAppEntry,
     serverVersion: String?,
     installedAppVersionHint: String?,
@@ -2699,6 +2703,7 @@ private fun AppInfoScreen(
             DynamicDiscoveredAppScreen(
                 services = services,
                 session = session,
+                currentUserId = currentUserId,
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
@@ -2738,6 +2743,7 @@ private fun DynamicAppOpeningState(
 private fun DynamicDiscoveredAppScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    currentUserId: String,
     discovery: DynamicDescriptorDiscovery,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
@@ -3589,6 +3595,36 @@ private fun DynamicDiscoveredAppScreen(
             onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
         )
     }
+    val pendingMutationStore = remember(services, session, descriptor.app.id) {
+        object : NativePendingMutationStore {
+            override suspend fun load(key: NativePendingMutationKey): Map<String, String>? =
+                services.loadPendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                )
+
+            override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
+                services.savePendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                    values = values,
+                )
+            }
+
+            override suspend fun clear(key: NativePendingMutationKey) {
+                services.clearPendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                )
+            }
+        }
+    }
     val collectionBatchRelationLoader = remember(services, session, descriptor, schema) {
         NativeCollectionBatchRelationLoader { request ->
             val action = schema.action(request.actionId)
@@ -3716,6 +3752,30 @@ private fun DynamicDiscoveredAppScreen(
             actionBindingProvenanceValid = teamRecord.actionBindingProvenanceValid,
             currentLayoutId = teamView.id,
         )
+    }
+    val retainedChoresTeamActionValues = remember(
+        descriptor,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        if (
+            retainedChoresTeamContext == null ||
+            nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team
+        ) {
+            emptyMap()
+        } else {
+            descriptor.planDynamicNavigation(retainedChoresTeamContext)
+                .contextualFormActions
+                .flatMap { action -> action.pathParameterValues.entries }
+                .groupBy(Map.Entry<String, String>::key)
+                .mapNotNull { (name, entries) ->
+                    entries.map(Map.Entry<String, String>::value)
+                        .distinct()
+                        .singleOrNull()
+                        ?.let { value -> name to value }
+                }
+                .toMap()
+        }
     }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
@@ -4689,10 +4749,11 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
             val rendererDatasetContext = NativeDatasetContext(
-                parentResourceId = selectedRecordResourceId,
-                parentRecord = selectedRecord,
-                currentUserId = session.loginName,
-                bindingValues = datasetBindingValues,
+                parentResourceId = selectedRecordResourceId
+                    ?: retainedChoresTeamContext?.resourceId,
+                parentRecord = selectedRecord ?: retainedChoresTeamRecord,
+                currentUserId = currentUserId,
+                bindingValues = datasetBindingValues + retainedChoresTeamActionValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
             )
@@ -4740,6 +4801,7 @@ private fun DynamicDiscoveredAppScreen(
                     showSelectedRecordDetail = showFallbackRecordDetail,
                     datasetContext = rendererDatasetContext,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
+                    pendingMutationStore = pendingMutationStore,
                     collectionBatchRelationLoader = collectionBatchRelationLoader,
                     filePicker = dynamicFilePicker,
                     recordImageLoader = recordImageLoader,

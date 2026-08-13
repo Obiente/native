@@ -247,6 +247,7 @@ fun GenericNativeAppScreen(
     audioPlayer: NativeAudioRecordPlayer? = null,
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
     mutationReconciliationGeneration: Int = 0,
+    pendingMutationStore: NativePendingMutationStore? = null,
     collectionBatchRelationLoader: NativeCollectionBatchRelationLoader? = null,
     workspaceNavigationItems: List<NativeWorkspaceNavigationItem> = emptyList(),
     onWorkspaceNavigate: ((String) -> Unit)? = null,
@@ -442,6 +443,7 @@ fun GenericNativeAppScreen(
         if (plan.requiresConfirmation) {
             pendingRecordCommandAction = PendingNativeRecordCommandAction(
                 plan = plan,
+                targetRecordId = record.id,
                 itemLabel = itemLabel,
             )
             return@command
@@ -458,6 +460,7 @@ fun GenericNativeAppScreen(
                         }
                         pendingRecordCommandAction = PendingNativeRecordCommandAction(
                             plan = plan,
+                            targetRecordId = record.id,
                             itemLabel = itemLabel,
                             initialError = result.message,
                             initialFailureOutcome = result.outcome,
@@ -1041,6 +1044,7 @@ fun GenericNativeAppScreen(
         GenericRecordCommandActionDialog(
             pending = pending,
             actionExecutor = actionExecutor,
+            pendingMutationStore = pendingMutationStore,
             onDismiss = { pendingRecordCommandAction = null },
             onActionSucceeded = { action ->
                 pendingRecordCommandAction = null
@@ -2107,6 +2111,7 @@ private data class PendingNativeRecordDeleteAction(
 
 private data class PendingNativeRecordCommandAction(
     val plan: NativeRecordCommandActionPlan,
+    val targetRecordId: String,
     val itemLabel: String,
     val initialError: String? = null,
     val initialFailureOutcome: NativeActionFailureOutcome? = null,
@@ -2514,6 +2519,7 @@ private fun GenericRecordDeleteActionDialog(
 private fun GenericRecordCommandActionDialog(
     pending: PendingNativeRecordCommandAction,
     actionExecutor: NativeActionExecutor,
+    pendingMutationStore: NativePendingMutationStore?,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
     onOutcomeUnknown: (ActionSpec) -> Unit,
@@ -2579,11 +2585,20 @@ private fun GenericRecordCommandActionDialog(
                         error = null
                         failureOutcome = null
                         scope.launch {
-                            when (
-                                val result = actionExecutor.execute(
-                                    pending.plan.request(confirmed = pending.plan.requiresConfirmation),
+                            val result = runCatching {
+                                executeNativeRecordCommand(
+                                    plan = pending.plan,
+                                    targetRecordId = pending.targetRecordId,
+                                    confirmed = pending.plan.requiresConfirmation,
+                                    actionExecutor = actionExecutor,
+                                    pendingMutationStore = pendingMutationStore,
                                 )
-                            ) {
+                            }.getOrElse { failure ->
+                                error = failure.message ?: "The action could not be staged safely."
+                                executing = false
+                                return@launch
+                            }
+                            when (result) {
                                 is NativeActionExecutionResult.Success -> {
                                     onActionSucceeded(pending.plan.action)
                                 }
@@ -4046,14 +4061,13 @@ private fun GenericCategoryCollection(
     val displayedRows = remember(rows, rowsById, orderedRecordIds, activeReorder) {
         if (activeReorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
     }
-    val submitReorder: () -> Unit = submit@{
-        val plan = activeReorder ?: return@submit
-        val submittedOrder = orderedRecordIds
-        if (submittedOrder == authoritativeOrder) return@submit
+    fun submitReorder(submittedOrder: List<String> = orderedRecordIds) {
+        val plan = activeReorder ?: return
+        if (submittedOrder == authoritativeOrder) return
         val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
             reorderError = failure.message ?: "The new order could not be submitted."
             orderedRecordIds = authoritativeOrder
-            return@submit
+            return
         }
         reorderExecuting = true
         reorderError = null
@@ -4070,6 +4084,19 @@ private fun GenericCategoryCollection(
             }
             reorderExecuting = false
         }
+    }
+    fun moveRecordBy(recordId: String, offset: Int) {
+        val currentIndex = orderedRecordIds.indexOf(recordId)
+        if (currentIndex < 0) return
+        val targetIndex = (currentIndex + offset).coerceIn(0, orderedRecordIds.lastIndex)
+        if (targetIndex == currentIndex) return
+        val nextOrder = moveNativeCollectionRecordToIndex(
+            orderedRecordIds = orderedRecordIds,
+            recordId = recordId,
+            targetIndex = targetIndex,
+        )
+        orderedRecordIds = nextOrder
+        submitReorder(nextOrder)
     }
     LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
         if (draggingRecordId == null && !reorderExecuting) {
@@ -4211,6 +4238,7 @@ private fun GenericCategoryCollection(
                         authorityContext = authorityContext,
                     )
                 }
+                val reorderIndex = orderedRecordIds.indexOf(row.record.id)
                 val secondaryActions = nativeRecordCardActions(
                     capabilities = actions,
                     record = row.record,
@@ -4218,7 +4246,24 @@ private fun GenericCategoryCollection(
                     onDeleteRecord = onDeleteRecord,
                     onCommandRecord = onCommandRecord,
                     onCommandFormRecord = onCommandFormRecord,
-                )
+                ) + if (activeReorder != null && !reorderExecuting && reorderIndex >= 0) {
+                    listOf(
+                        NextcloudCardAction(
+                            label = "Move earlier",
+                            semanticId = "${activeReorder.action.id}.move-earlier",
+                            enabled = reorderIndex > 0,
+                            onClick = { moveRecordBy(row.record.id, -1) },
+                        ),
+                        NextcloudCardAction(
+                            label = "Move later",
+                            semanticId = "${activeReorder.action.id}.move-later",
+                            enabled = reorderIndex < orderedRecordIds.lastIndex,
+                            onClick = { moveRecordBy(row.record.id, 1) },
+                        ),
+                    )
+                } else {
+                    emptyList()
+                }
                 var actionsExpanded by rememberSaveable(row.record.id) { mutableStateOf(false) }
                 val dragging = draggingRecordId == row.record.id
                 Card(

@@ -491,6 +491,7 @@ fun DynamicAppDescriptor.planDynamicNavigation(
                 ?.toSet()
                 .orEmpty()
             val values = action.resolveContextualFormValues(
+                app = app,
                 form = form,
                 context = selectedRecord,
                 parentLinks = actionLinks,
@@ -680,6 +681,7 @@ private fun String.dynamicCapabilityBooleanOrNull(): Boolean? = when (trim().low
  * This keeps the rule reusable while withholding unrelated or ambiguous writes.
  */
 private fun DynamicAction.resolveContextualFormValues(
+    app: AppIdentity,
     form: DynamicForm,
     context: DynamicResourceRecordContext,
     parentLinks: List<NavigationLinkEdge>,
@@ -693,7 +695,10 @@ private fun DynamicAction.resolveContextualFormValues(
     }
     if (!routeResolution.complete || routeResolution.usedContext) return null
     val requiredBodyFieldIds = requiredBodyFieldIds()
-    if (canBindExecuteBodyFromSelectedRecord(form, selectedRecordResponseFieldIds)) {
+    if (
+        canBindExecuteBodyFromSelectedRecord(form, selectedRecordResponseFieldIds) &&
+        hasTypedExecuteRecordRelationship(app, context, parentLinks)
+    ) {
         val recordBodyValues = requiredBodyFieldIds.associateWith { fieldId ->
             context.exactValue(fieldId) ?: return null
         }
@@ -727,6 +732,32 @@ private fun DynamicAction.resolveContextualFormValues(
         ?: return null
     return routeResolution.values + (parentFieldId to parentValue)
 }
+
+private fun DynamicAction.hasTypedExecuteRecordRelationship(
+    app: AppIdentity,
+    context: DynamicResourceRecordContext,
+    parentLinks: List<NavigationLinkEdge>,
+): Boolean =
+    parentLinks.singleOrNull { edge ->
+        edge.action.id == id && edge.link.resourceId.sameResourceAs(context.resourceId)
+    } != null || isPinnedChoresInvitationAccept(app, context)
+
+/**
+ * Chores 0.1.0 accepts an invitation through a body-scoped command whose controller and payload
+ * are imported only from the exact signed package. The upstream route exposes no OpenAPI link, so
+ * this version-pinned adapter is the typed relationship between an invitation record and Accept.
+ */
+private fun DynamicAction.isPinnedChoresInvitationAccept(
+    app: AppIdentity,
+    context: DynamicResourceRecordContext,
+): Boolean =
+    app.id == "chores" &&
+        app.version == "0.1.0" &&
+        context.resourceId.sameResourceAs(resourceId) &&
+        binding.method == HttpMethod.POST &&
+        binding.path == "/apps/chores/api/v1.0/account/invites/accept" &&
+        requiredBodyFieldIds() == setOf("teamId") &&
+        provenance.any { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
 
 /**
  * A verified execute action may be selected from a record when every required body field is

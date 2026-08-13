@@ -307,8 +307,8 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals("lists", list.resourceId)
         assertEquals(list.resourceId, create.resourceId)
         assertEquals(ActionIntent.create, create.intent)
-        assertEquals("/ocs/v2.php/apps/example/api/houses/{id}/lists", create.binding.path)
-        assertEquals(listOf("id"), create.binding.pathParameters.map { it.name })
+        assertEquals("/ocs/v2.php/apps/example/api/houses/{houseId}/lists", create.binding.path)
+        assertEquals(listOf("houseId"), create.binding.pathParameters.map { it.name })
         assertEquals("lists", descriptor.forms.single { it.actionId == create.id }.resourceId)
         assertTrue(descriptor.validationErrors().isEmpty())
     }

@@ -149,26 +149,70 @@ internal data class NativeRecordCommandActionPlan(
     private val bindingValues: Map<String, String>,
     private val derivedValues: (() -> Map<String, String>)? = null,
     private val forceConfirmation: Boolean = false,
+    private val durableMutationNamespace: String? = null,
 ) {
     val requiresConfirmation: Boolean
         get() = action.requiresConfirmation || forceConfirmation
 
-    fun request(confirmed: Boolean = false): NativeActionRequest.Submit {
+    fun pendingMutationKey(targetRecordId: String): NativePendingMutationKey? =
+        durableMutationNamespace?.let { namespace ->
+            NativePendingMutationKey(
+                actionId = "$namespace:${action.id}",
+                targetRecordId = targetRecordId,
+            )
+        }
+
+    fun request(
+        confirmed: Boolean = false,
+        persistedValues: Map<String, String>? = null,
+    ): NativeActionRequest.Submit {
         require(!requiresConfirmation || confirmed) {
             "This action requires explicit confirmation."
         }
         return NativeActionRequest.Submit(
             action = action,
-            values = derivedValues
-                ?.invoke()
-                ?.let { generated ->
-                    requireNotNull(safeActionBindingValues(bindingValues, generated)) {
-                        "The action generated invalid or conflicting values."
-                    }
+            values = persistedValues?.let { staged ->
+                requireNotNull(safeActionBindingValues(bindingValues, staged)) {
+                    "The staged action values are invalid or conflict with the active record."
                 }
-                ?: bindingValues,
+            } ?: derivedValues
+                    ?.invoke()
+                    ?.let { generated ->
+                        requireNotNull(safeActionBindingValues(bindingValues, generated)) {
+                            "The action generated invalid or conflicting values."
+                        }
+                    }
+                    ?: bindingValues,
             confirmed = confirmed,
         )
+    }
+}
+
+internal suspend fun executeNativeRecordCommand(
+    plan: NativeRecordCommandActionPlan,
+    targetRecordId: String,
+    confirmed: Boolean,
+    actionExecutor: NativeActionExecutor,
+    pendingMutationStore: NativePendingMutationStore?,
+): NativeActionExecutionResult {
+    val pendingKey = plan.pendingMutationKey(targetRecordId)
+    val stagedValues = pendingKey?.let { key ->
+        requireNotNull(pendingMutationStore) {
+            "Crash-safe staging is unavailable for this action."
+        }.load(key)
+    }
+    val request = plan.request(confirmed = confirmed, persistedValues = stagedValues)
+    if (pendingKey != null && stagedValues == null) {
+        requireNotNull(pendingMutationStore).save(pendingKey, request.values)
+    }
+    return actionExecutor.execute(request).also { result ->
+        if (
+            pendingKey != null &&
+            (result is NativeActionExecutionResult.Success ||
+                (result as? NativeActionExecutionResult.Failure)?.outcome == NativeActionFailureOutcome.Rejected)
+        ) {
+            runCatching { pendingMutationStore?.clear(pendingKey) }
+        }
     }
 }
 
@@ -742,6 +786,7 @@ private fun ActionSpec.verifiedChoresCompletionCommandPlan(
         effect = ActionEffect.execute,
         bindingValues = resolved,
         forceConfirmation = true,
+        durableMutationNamespace = "chores-completion-v1",
         derivedValues = {
             val completionId = valueSource.completionId().trim()
             val completedAt = valueSource.completedAt().trim()

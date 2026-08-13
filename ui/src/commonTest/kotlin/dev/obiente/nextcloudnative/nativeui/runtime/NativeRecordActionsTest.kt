@@ -25,6 +25,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -2099,7 +2100,7 @@ class NativeRecordActionsTest {
     }
 
     @Test
-    fun `verified Chores completion derives protocol fields and requires confirmation`() {
+    fun `verified Chores completion derives protocol fields and requires confirmation`() = runBlocking {
         val workSpec = RepeatableObjectInputSpec(
             minimumItems = 1,
             maximumItems = 1,
@@ -2216,13 +2217,79 @@ class NativeRecordActionsTest {
 
         assertTrue(plan.requiresConfirmation)
         assertFailsWith<IllegalArgumentException> { plan.request() }
+        val firstRequest = plan.request(confirmed = true)
         assertEquals(
             mapOf(
                 "teamId" to "4",
                 "work" to "[{\"id\":\"123e4567-e89b-42d3-a456-426614174000\",\"work_time\":\"2026-08-13T10:15:30Z\",\"chore_id\":23,\"member\":\"alex\"}]",
             ),
-            plan.request(confirmed = true).values,
+            firstRequest.values,
         )
+        assertEquals(
+            NativePendingMutationKey(
+                actionId = "chores-completion-v1:${completion.id}",
+                targetRecordId = "23",
+            ),
+            plan.pendingMutationKey("23"),
+        )
+        assertEquals(
+            firstRequest.values,
+            plan.request(confirmed = true, persistedValues = firstRequest.values).values,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            plan.request(
+                confirmed = true,
+                persistedValues = firstRequest.values + ("teamId" to "different-team"),
+            )
+        }
+        val persistenceEvents = mutableListOf<String>()
+        var stagedValues: Map<String, String>? = null
+        val pendingStore = object : NativePendingMutationStore {
+            override suspend fun load(key: NativePendingMutationKey): Map<String, String>? {
+                persistenceEvents += "load"
+                return stagedValues
+            }
+
+            override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
+                persistenceEvents += "save"
+                stagedValues = values
+            }
+
+            override suspend fun clear(key: NativePendingMutationKey) {
+                persistenceEvents += "clear"
+                stagedValues = null
+            }
+        }
+        val unknown = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor { request ->
+                persistenceEvents += "execute"
+                assertEquals(stagedValues, (request as NativeActionRequest.Submit).values)
+                NativeActionExecutionResult.Failure("Connection lost", NativeActionFailureOutcome.Unknown)
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertTrue(unknown is NativeActionExecutionResult.Failure)
+        assertEquals(listOf("load", "save", "execute"), persistenceEvents)
+        val retainedValues = requireNotNull(stagedValues)
+
+        persistenceEvents.clear()
+        val success = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor { request ->
+                persistenceEvents += "execute"
+                assertEquals(retainedValues, (request as NativeActionRequest.Submit).values)
+                NativeActionExecutionResult.Success()
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertTrue(success is NativeActionExecutionResult.Success)
+        assertEquals(listOf("load", "execute", "clear"), persistenceEvents)
+        assertNull(stagedValues)
         assertTrue(
             nativeRecordActions(
                 schema = nativeSchema.copy(app = nativeSchema.app.copy(version = "0.1.1")),

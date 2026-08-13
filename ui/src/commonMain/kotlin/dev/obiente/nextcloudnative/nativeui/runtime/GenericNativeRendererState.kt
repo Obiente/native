@@ -1106,6 +1106,19 @@ fun interface NativeActionExecutor {
     suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult
 }
 
+data class NativePendingMutationKey(
+    val actionId: String,
+    val targetRecordId: String,
+)
+
+interface NativePendingMutationStore {
+    suspend fun load(key: NativePendingMutationKey): Map<String, String>?
+
+    suspend fun save(key: NativePendingMutationKey, values: Map<String, String>)
+
+    suspend fun clear(key: NativePendingMutationKey)
+}
+
 enum class NativeActionFailureOutcome {
     Rejected,
     Unknown,
