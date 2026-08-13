@@ -39,6 +39,8 @@ require_text "$commit_workflow" 'name: Validate marketing captures'
 require_text "$commit_workflow" "if: needs.inspect.outputs.changed == 'true'"
 require_text "$commit_workflow" 'environment: capture-automation'
 require_text "$commit_workflow" 'github.event.workflow_run.head_repository.full_name == github.repository'
+require_text "$commit_workflow" 'pull_request_state="$(jq -r '\''.state'\'' <<<"${pull_request_json}")"'
+require_text "$commit_workflow" '( "${state}" == '\''changed'\'' && "${pull_request_state}" != '\''open'\'' )'
 require_text "$commit_workflow" 'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1'
 require_text "$commit_workflow" 'app-id: ${{ vars.OBIENTE_AUTOMATIONS_APP_ID }}'
 require_text "$commit_workflow" 'private-key: ${{ secrets.OBIENTE_AUTOMATIONS_PRIVATE_KEY }}'
