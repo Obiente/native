@@ -26,6 +26,14 @@ install -D -m 0644 "$metadata" \
     "$root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
 install -D -m 0644 "$license" "$root/usr/share/doc/nextcloudnative/copyright"
 control="$root/DEBIAN/control"
+if ! grep -q '^Depends:' "$control"; then
+    sed -i '/^Description:/i Depends: libsecret-tools' "$control"
+elif ! sed -n '/^Depends:/p' "$control" |
+    tr ',' '\n' |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+    grep -Eq '^libsecret-tools([[:space:](]|$)'; then
+    sed -i '/^Depends:/ s/$/, libsecret-tools/' "$control"
+fi
 if grep -q '^Homepage:' "$control"; then
     sed -i 's|^Homepage:.*|Homepage: https://nc-native.obiente.dev/|' "$control"
 else
@@ -57,3 +65,7 @@ install -D -m 0644 "$icon" \
 )
 dpkg-deb --build --root-owner-group "$root" "$rebuilt"
 mv -- "$rebuilt" "${packages[0]}"
+dpkg-deb --field "${packages[0]}" Depends |
+    tr ',' '\n' |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+    grep -Eq '^libsecret-tools([[:space:](]|$)'

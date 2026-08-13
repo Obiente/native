@@ -17,6 +17,52 @@ import kotlin.test.assertTrue
 
 class DesktopSecretStoreTest {
     @Test
+    fun missingSecretToolProducesActionableSecureStorageError() {
+        val store = SecretToolDesktopSecretStore(
+            startProcess = { throw java.io.IOException("synthetic missing executable") },
+        )
+        val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+            store.save(
+                reference = DesktopSecretReference(
+                    targetName = "test/missing",
+                    label = "Missing tool test",
+                    attributes = mapOf("application" to "test"),
+                ),
+                username = "synthetic-user",
+                secret = "synthetic-secret".encodeToByteArray(),
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("libsecret-tools"))
+        assertTrue(failure.message.orEmpty().contains("libsecret"))
+        assertFalse(failure.message.orEmpty().contains("Cannot run program"))
+        assertFalse(failure.message.orEmpty().contains("synthetic-user"))
+        assertFalse(failure.message.orEmpty().contains("synthetic-secret"))
+    }
+
+    @Test
+    fun rejectedSecretStoreKeepsSignInRetryableWithoutExposingTheSecret() {
+        val store = SecretToolDesktopSecretStore(
+            startProcess = { CompletedProcess(exitCode = 1) },
+        )
+        val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+            store.save(
+                reference = DesktopSecretReference(
+                    targetName = "test/rejected",
+                    label = "Rejected store test",
+                    attributes = mapOf("application" to "test"),
+                ),
+                username = "synthetic-user",
+                secret = "synthetic-secret".encodeToByteArray(),
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("running and unlocked"))
+        assertFalse(failure.message.orEmpty().contains("synthetic-user"))
+        assertFalse(failure.message.orEmpty().contains("synthetic-secret"))
+    }
+
+    @Test
     fun secretLookupTimeoutIncludesReadingStandardOutput() {
         val store = SecretToolDesktopSecretStore(
             timeoutMillis = 100,
@@ -60,6 +106,19 @@ class DesktopSecretStoreTest {
         override fun destroy() = completion.countDown()
         override fun destroyForcibly(): Process = apply { completion.countDown() }
         override fun isAlive(): Boolean = completion.count > 0L
+    }
+
+    private class CompletedProcess(private val exitCode: Int) : Process() {
+        private val output = ByteArrayOutputStream()
+
+        override fun getOutputStream(): OutputStream = output
+        override fun getInputStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun waitFor(): Int = exitCode
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = true
+        override fun exitValue(): Int = exitCode
+        override fun destroy() = Unit
+        override fun isAlive(): Boolean = false
     }
 
     @Test
