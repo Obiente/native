@@ -140,6 +140,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -559,9 +560,20 @@ internal fun NativeAppSchema.forDynamicContractVersion(
     if (versionStatus == DynamicContractVersionStatus.VerifiedCurrent) return this
     val availableActions = actions.filter { action -> versionStatus.allows(action.risk) }
     val availableActionIds = availableActions.mapTo(hashSetOf(), ActionSpec::id)
+    val writableResourceIds = availableActions
+        .filter { action -> action.intent == ActionIntent.update && action.risk == ActionRisk.mutating }
+        .mapTo(hashSetOf(), ActionSpec::resourceId)
     return copy(
         actions = availableActions,
-        views = views.filter { view -> view.sourceActionId in availableActionIds },
+        views = views
+            .filter { view -> view.sourceActionId in availableActionIds }
+            .map { view ->
+                if (view.component == NativeComponent.documentEditor && view.resourceId !in writableResourceIds) {
+                    view.copy(component = NativeComponent.detail)
+                } else {
+                    view
+                }
+            },
     )
 }
 

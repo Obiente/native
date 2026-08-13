@@ -125,6 +125,24 @@ class DynamicCollectionDestinationSelectionTest {
     }
 
     @Test
+    fun `last known read only schema replaces document editors with read only detail views`() {
+        val read = action("read-document", HttpMethod.GET, ActionIntent.read, ActionRisk.readOnly)
+        val update = action("update-document", HttpMethod.PUT, ActionIntent.update, ActionRisk.mutating)
+        val schema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("notes", "Notes", "1"),
+            confidence = Confidence.verified,
+            actions = listOf(read, update),
+            views = listOf(view("document.detail", read.id, NativeComponent.documentEditor)),
+        )
+
+        val readOnly = schema.forDynamicContractVersion(DynamicContractVersionStatus.LastKnownReadOnly)
+
+        assertEquals(listOf(read.id), readOnly.actions.map(ActionSpec::id))
+        assertEquals(NativeComponent.detail, readOnly.views.single().component)
+    }
+
+    @Test
     fun `switching a root collection clears stale hierarchy context`() {
         val mutableParameters = mutableMapOf("houseId" to "house-2")
 
