@@ -45,7 +45,7 @@ fun encodePersistedDynamicDiscovery(discovery: DynamicDescriptorDiscovery): Stri
 fun decodePersistedDynamicDiscovery(
     encoded: String,
     expectedAppId: String,
-    activeServerOrigin: String,
+    activeServerUrl: String,
 ): DynamicDescriptorDiscovery? {
     if (
         encoded.isBlank() ||
@@ -63,7 +63,9 @@ fun decodePersistedDynamicDiscovery(
         ?.let { discovery ->
             discovery.copy(
                 descriptor = discovery.descriptor.copy(
-                    endpointPolicy = discovery.descriptor.endpointPolicy.copy(serverOrigin = activeServerOrigin),
+                    endpointPolicy = discovery.descriptor.endpointPolicy.copy(
+                        serverOrigin = activeServerUrl.httpOrigin(),
+                    ),
                 ),
                 versionStatus = DynamicContractVersionStatus.LastKnownReadOnly,
             )

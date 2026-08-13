@@ -589,7 +589,7 @@ internal class AndroidNextcloudServices(
         }
         runCatching { target.readText() }
             .getOrNull()
-            ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl.httpOrigin()) }
+            ?.let { encoded -> decodePersistedDynamicDiscovery(encoded, appId, session.serverUrl) }
     }
 
     override suspend fun saveCachedDynamicAppDiscovery(
