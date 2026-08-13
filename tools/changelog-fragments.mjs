@@ -493,7 +493,7 @@ async function gitChangedFiles(repositoryRoot, base, head) {
     ["diff", "--name-status", "--find-renames", `${base}..${head}`],
     { cwd: repositoryRoot, maxBuffer: 1024 * 1024 },
   );
-  return stdout
+  const changed = stdout
     .trim()
     .split("\n")
     .filter(Boolean)
@@ -507,6 +507,36 @@ async function gitChangedFiles(repositoryRoot, base, head) {
           : null;
       return { file, sourceFile, status };
     });
+  return recognizeCuratedReleaseMoves(changed);
+}
+
+function recognizeCuratedReleaseMoves(changed) {
+  const deletedUnreleased = new Map(
+    changed
+      .filter(
+        ({ file, status }) =>
+          status === "D" &&
+          /^changes\/unreleased\/[a-z0-9][a-z0-9-]*\.md$/.test(file),
+      )
+      .map((change) => [path.basename(change.file), change]),
+  );
+  const paired = new Set();
+  const curatedMoves = [];
+  for (const change of changed) {
+    if (change.status !== "A" || !archivedFragmentPattern.test(change.file)) {
+      continue;
+    }
+    const deleted = deletedUnreleased.get(path.basename(change.file));
+    if (deleted === undefined) continue;
+    paired.add(change);
+    paired.add(deleted);
+    curatedMoves.push({
+      file: change.file,
+      sourceFile: deleted.file,
+      status: "R",
+    });
+  }
+  return [...changed.filter((change) => !paired.has(change)), ...curatedMoves];
 }
 
 function releasedChangelogSections(source) {
