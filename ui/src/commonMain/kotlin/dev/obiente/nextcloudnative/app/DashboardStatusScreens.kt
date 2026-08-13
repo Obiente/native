@@ -67,6 +67,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlin.time.Clock
 
 internal sealed interface DashboardSurfaceState {
@@ -296,6 +300,11 @@ internal fun rememberNativeDashboardState(
     LaunchedEffect(session, refreshAttempt) {
         val now = currentDashboardEpochSeconds()
         val cached = sharedDashboardStatusMemoryCache.get(session, now)
+        val cachePolicy = if (refreshAttempt > 0) {
+            NextcloudApiCachePolicy.ForceNetwork
+        } else {
+            NextcloudApiCachePolicy.PreferCache
+        }
         cached?.let {
             state = DashboardSurfaceState.Available(cached.dashboard, cached.status)
         }
@@ -304,7 +313,7 @@ internal fun rememberNativeDashboardState(
                 val widgetsDeferred = async {
                     runCatching {
                         parseDashboardWidgets(
-                            services.executeNextcloudApi(session, dashboardWidgetsRequest()),
+                            services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy)),
                         )
                     }.getOrElse { failure ->
                         if (failure is CancellationException) throw failure
@@ -341,7 +350,7 @@ internal fun rememberNativeDashboardState(
                         ),
                     )
                 }
-                val plans = dashboardItemsRequestPlans(widgets)
+                val plans = dashboardItemsRequestPlans(widgets, cachePolicy = cachePolicy)
                 val pendingWidgetIds = plans.flatMapTo(mutableSetOf(), DashboardItemsRequestPlan::widgetIds)
                 val itemResults = mutableListOf<DashboardItemsFetchResult>()
                 var snapshot = mergeDashboardItemFetchResults(
@@ -354,11 +363,35 @@ internal fun rememberNativeDashboardState(
                 state = DashboardSurfaceState.Available(snapshot, cached?.status)
 
                 val completedResults = Channel<DashboardItemsFetchResult>(capacity = plans.size)
-                val workers = dashboardItemsRequestWorkers(plans).map { worker ->
+                val requestLimiter = Semaphore(MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
+                val responseBudget = DashboardResponseBudget()
+                val responseBudgetMutex = Mutex()
+                val requests = plans.map { plan ->
                     async {
-                        worker.forEach { plan ->
+                        requestLimiter.withPermit {
+                            val reservedBytes = responseBudgetMutex.withLock {
+                                responseBudget.reserve()
+                            }
+                            if (reservedBytes == 0L) {
+                                services.recordSupportDiagnostic(
+                                    dashboardLoadFailureDiagnostic(
+                                        stage = "widget_items_budget",
+                                        code = "DASHBOARD_RESPONSE_BUDGET_EXHAUSTED",
+                                        cachedAvailable = cached != null,
+                                        severity = SupportDiagnosticSeverity.Warning,
+                                    ),
+                                )
+                                completedResults.send(DashboardItemsFetchResult.Failed(plan.widgetIds))
+                                return@withPermit
+                            }
                             val result = runCatching {
-                                val response = services.executeNextcloudApi(session, plan.request)
+                                val response = services.executeNextcloudApi(
+                                    session,
+                                    plan.request.copy(maximumResponseBytes = reservedBytes),
+                                )
+                                responseBudgetMutex.withLock {
+                                    responseBudget.releaseUnused(reservedBytes, response.body.size.toLong())
+                                }
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
                                 val payload = when (plan.apiVersion) {
                                     DashboardItemApiVersion.V1 -> DashboardItemsPayload(
@@ -407,7 +440,7 @@ internal fun rememberNativeDashboardState(
                     )
                     state = DashboardSurfaceState.Available(snapshot, cached?.status)
                 }
-                workers.awaitAll()
+                requests.awaitAll()
                 completedResults.close()
                 snapshot to statusDeferred.await()
             }
@@ -931,12 +964,6 @@ private fun DashboardWidgetCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                loading -> Text(
-                    "Refreshing. Showing recently loaded items.",
-                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 apiUnsupported -> Text(
                     "This section requires a newer Dashboard API than this app supports.",
                     modifier = Modifier.padding(top = NextcloudSpacing.Large),
@@ -956,7 +983,14 @@ private fun DashboardWidgetCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> {
-                    if (refreshFailed) {
+                    if (loading) {
+                        Text(
+                            "Refreshing. Showing recently loaded items.",
+                            modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (refreshFailed) {
                         Text(
                             "Could not refresh. Showing recently loaded items.",
                             modifier = Modifier.padding(top = NextcloudSpacing.Large),

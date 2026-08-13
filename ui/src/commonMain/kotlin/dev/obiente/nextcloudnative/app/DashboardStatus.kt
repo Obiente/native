@@ -174,20 +174,26 @@ data class NativeStatusExpiryOption(
     val time: Long,
 )
 
-fun dashboardWidgetsRequest(): NextcloudApiRequest = NextcloudApiRequest(
+fun dashboardWidgetsRequest(
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
+): NextcloudApiRequest = NextcloudApiRequest(
     method = NextcloudApiMethod.GET,
     relativePath = "/ocs/v2.php/apps/dashboard/api/v1/widgets",
     queryParameters = mapOf("format" to "json"),
     ocsApiRequest = true,
     maximumResponseBytes = DASHBOARD_RESPONSE_LIMIT_BYTES,
-    cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+    cachePolicy = cachePolicy,
 ).requireSafe()
 
-fun dashboardItemsRequest(sinceIds: Map<String, String> = emptyMap()): NextcloudApiRequest {
+fun dashboardItemsRequest(
+    sinceIds: Map<String, String> = emptyMap(),
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
+): NextcloudApiRequest {
     return dashboardItemsRequest(
         apiVersion = DashboardItemApiVersion.V1,
         widgetIds = emptySet(),
         sinceIds = sinceIds,
+        cachePolicy = cachePolicy,
     )
 }
 
@@ -195,6 +201,7 @@ internal fun dashboardItemsRequest(
     apiVersion: DashboardItemApiVersion,
     widgetIds: Set<String>,
     sinceIds: Map<String, String> = emptyMap(),
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 ): NextcloudApiRequest {
     require(widgetIds.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard widget set is too large." }
     require(sinceIds.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard cursor set is too large." }
@@ -225,14 +232,15 @@ internal fun dashboardItemsRequest(
             }
         },
         ocsApiRequest = true,
-        maximumResponseBytes = DASHBOARD_RESPONSE_LIMIT_BYTES,
-        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+        maximumResponseBytes = DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES,
+        cachePolicy = cachePolicy,
     ).requireSafe()
 }
 
 internal fun dashboardItemsRequestPlans(
     widgets: List<NativeDashboardWidget>,
     sinceIds: Map<String, String> = emptyMap(),
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 ): List<DashboardItemsRequestPlan> {
     return widgets.mapNotNull { widget ->
         val apiVersion = when {
@@ -248,6 +256,7 @@ internal fun dashboardItemsRequestPlans(
                 apiVersion = apiVersion,
                 widgetIds = widgetIds,
                 sinceIds = sinceIds.filterKeys(widgetIds::contains),
+                cachePolicy = cachePolicy,
             ),
         )
     }
@@ -259,15 +268,28 @@ internal fun unsupportedDashboardWidgetIds(widgets: List<NativeDashboardWidget>)
             widget.itemApiVersions.none { version -> version == 1 || version == 2 }
     }.mapTo(mutableSetOf(), NativeDashboardWidget::id)
 
-internal fun dashboardItemsRequestWorkers(
-    plans: List<DashboardItemsRequestPlan>,
-    maximumWorkers: Int = MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS,
-): List<List<DashboardItemsRequestPlan>> {
-    require(maximumWorkers > 0) { "The Dashboard worker limit must be positive." }
-    if (plans.isEmpty()) return emptyList()
-    val workerCount = minOf(plans.size, maximumWorkers)
-    return List(workerCount) { workerIndex ->
-        plans.filterIndexed { index, _ -> index % workerCount == workerIndex }
+internal class DashboardResponseBudget(
+    totalBytes: Long = DASHBOARD_REFRESH_RESPONSE_BUDGET_BYTES,
+) {
+    init {
+        require(totalBytes > 0L) { "The Dashboard response budget must be positive." }
+    }
+
+    var remainingBytes: Long = totalBytes
+        private set
+
+    fun reserve(maximumBytes: Long = DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES): Long {
+        require(maximumBytes > 0L) { "The Dashboard response reservation must be positive." }
+        val reserved = minOf(remainingBytes, maximumBytes)
+        remainingBytes -= reserved
+        return reserved
+    }
+
+    fun releaseUnused(reservedBytes: Long, responseBytes: Long) {
+        require(reservedBytes >= 0L && responseBytes in 0L..reservedBytes) {
+            "The Dashboard response usage is invalid."
+        }
+        remainingBytes += reservedBytes - responseBytes
     }
 }
 
@@ -813,6 +835,8 @@ private val dashboardJson = Json { ignoreUnknownKeys = true }
 
 private const val USER_STATUS_BASE_PATH = "/ocs/v2.php/apps/user_status/api/v1/user_status"
 private const val DASHBOARD_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
+internal const val DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES = 512L * 1024L
+internal const val DASHBOARD_REFRESH_RESPONSE_BUDGET_BYTES = 8L * 1024L * 1024L
 private const val STATUS_RESPONSE_LIMIT_BYTES = 1L * 1024L * 1024L
 private const val MAX_DASHBOARD_WIDGETS = 128
 private const val MAX_DASHBOARD_ITEMS_PER_WIDGET = 100
@@ -823,7 +847,7 @@ private const val MAX_DASHBOARD_TEXT_LENGTH = 4_096
 private const val MAX_DASHBOARD_LINK_LENGTH = 8_192
 private const val MAX_DASHBOARD_TYPE_LENGTH = 128
 private const val MAX_DASHBOARD_API_VERSION = 32
-private const val MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS = 4
+internal const val MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS = 4
 private const val MIN_DASHBOARD_RELOAD_SECONDS = 5
 private const val MAX_DASHBOARD_RELOAD_SECONDS = 86_400
 private const val MAX_PREDEFINED_STATUSES = 128

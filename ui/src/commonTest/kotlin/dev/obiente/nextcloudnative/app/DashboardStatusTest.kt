@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 class DashboardStatusTest {
     @Test
     fun `dashboard requests are bounded GETs with opaque cursors`() {
-        val widgets = dashboardWidgetsRequest()
+        val widgets = dashboardWidgetsRequest(NextcloudApiCachePolicy.ForceNetwork)
         val items = dashboardItemsRequest(mapOf("calendar" to "2026-07-23T12:00:00Z"))
         val v2Items = dashboardItemsRequest(
             apiVersion = DashboardItemApiVersion.V2,
@@ -24,7 +24,7 @@ class DashboardStatusTest {
         assertEquals(NextcloudApiCachePolicy.ForceNetwork, widgets.cachePolicy)
         assertTrue(widgets.maximumResponseBytes <= 4L * 1024L * 1024L)
         assertEquals(NextcloudApiMethod.GET, items.method)
-        assertEquals(NextcloudApiCachePolicy.ForceNetwork, items.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.PreferCache, items.cachePolicy)
         assertNull(items.contentType)
         assertNull(items.body)
         assertEquals("2026-07-23T12:00:00Z", items.queryParameters["sinceIds[calendar]"])
@@ -75,18 +75,43 @@ class DashboardStatusTest {
     }
 
     @Test
-    fun `dashboard item requests are distributed across a bounded worker pool`() {
-        val widgets = (1..11).map { index -> widget("widget-$index", setOf(2)) }
-        val plans = dashboardItemsRequestPlans(widgets)
-        val workers = dashboardItemsRequestWorkers(plans, maximumWorkers = 4)
+    fun `dashboard response budget bounds isolated widget requests`() {
+        val budget = DashboardResponseBudget(totalBytes = 1_000L)
+        val first = budget.reserve(maximumBytes = 600L)
+        val second = budget.reserve(maximumBytes = 600L)
 
-        assertEquals(4, workers.size)
-        assertEquals(plans.toSet(), workers.flatten().toSet())
-        assertEquals(plans.size, workers.sumOf { it.size })
-        assertTrue(workers.all(List<DashboardItemsRequestPlan>::isNotEmpty))
+        assertEquals(600L, first)
+        assertEquals(400L, second)
+        assertEquals(0L, budget.remainingBytes)
+        budget.releaseUnused(reservedBytes = first, responseBytes = 250L)
+        assertEquals(350L, budget.remainingBytes)
+        assertEquals(350L, budget.reserve(maximumBytes = 600L))
+        assertEquals(0L, budget.reserve(maximumBytes = 600L))
         assertFailsWith<IllegalArgumentException> {
-            dashboardItemsRequestWorkers(plans, maximumWorkers = 0)
+            DashboardResponseBudget(totalBytes = 0L)
         }
+    }
+
+    @Test
+    fun `initial dashboard reads may use persisted cache while explicit refresh forces network`() {
+        val initialWidgets = dashboardWidgetsRequest()
+        val initialItems = dashboardItemsRequestPlans(listOf(widget("calendar", setOf(2)))).single().request
+        val refreshedWidgets = dashboardWidgetsRequest(NextcloudApiCachePolicy.ForceNetwork)
+        val refreshedItems = dashboardItemsRequestPlans(
+            widgets = listOf(widget("calendar", setOf(2))),
+            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+        ).single().request
+
+        assertEquals(NextcloudApiCachePolicy.PreferCache, initialWidgets.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.PreferCache, initialItems.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, refreshedWidgets.cachePolicy)
+        assertEquals(NextcloudApiCachePolicy.ForceNetwork, refreshedItems.cachePolicy)
+        assertEquals(DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES, refreshedItems.maximumResponseBytes)
+        assertTrue(
+            DASHBOARD_ITEM_RESPONSE_LIMIT_BYTES * 128 > DASHBOARD_REFRESH_RESPONSE_BUDGET_BYTES,
+            "The shared aggregate budget must be stricter than multiplying every per-widget ceiling.",
+        )
+        assertEquals(4, MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
     }
 
     @Test
