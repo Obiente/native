@@ -65,6 +65,7 @@ internal data class NativeBudgetAccountRow(
     val id: String,
     val name: String,
     val balance: Double?,
+    val currency: String?,
 )
 
 internal data class NativeBudgetTrendPoint(
@@ -182,7 +183,11 @@ internal fun buildNativeBudgetDashboardModel(
             NativeBudgetAccountRow(
                 id = record.id,
                 name = record.semanticText("name", "accountname", "title") ?: "Account",
-                balance = record.semanticNumber("balance", "currentbalance", "value"),
+                balance = record.semanticNumber("convertedbalance")
+                    ?: record.semanticNumber("balance", "currentbalance", "value"),
+                currency = record.semanticText("basecurrency")
+                    ?.takeIf { record.semanticNumber("convertedbalance") != null }
+                    ?: record.semanticText("currency", "currencycode"),
             )
         }.take(5),
         trends = trendSource.orEmpty(),
@@ -192,8 +197,8 @@ internal fun buildNativeBudgetDashboardModel(
                 title = record.semanticText("description", "merchant", "name", "title") ?: "Transaction",
                 detail = record.semanticText("categoryname", "category", "date", "bookingdate"),
                 amount = record.semanticNumber("amount", "value", "total"),
-                isCredit = record.semanticText("type", "transactiontype")
-                    ?.equals("credit", ignoreCase = true) == true,
+                isCredit = record.semanticText("direction", "type", "transactiontype")
+                    ?.lowercase() in setOf("credit", "income", "deposit", "refund", "inflow"),
             )
         }.take(5),
         upcomingBills = upcomingBills.map { record ->
@@ -610,7 +615,7 @@ private fun NativeBudgetAccountsCard(
                 }
                 account.balance?.let { balance ->
                     Text(
-                        formatNativeBudgetMoney(balance, model.currency),
+                        formatNativeBudgetMoney(balance, account.currency ?: model.currency),
                         modifier = Modifier.padding(start = NextcloudSpacing.Medium),
                         fontWeight = FontWeight.SemiBold,
                         color = if (balance < 0.0) MaterialTheme.colorScheme.error else Color(0xFF3F8F50),
