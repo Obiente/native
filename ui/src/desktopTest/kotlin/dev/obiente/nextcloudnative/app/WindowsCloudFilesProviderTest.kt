@@ -1726,7 +1726,7 @@ class WindowsCloudFilesProviderTest {
             assertTrue(diagnostics.any { it.outcome == "corrupt-entry-detected" })
             assertTrue(diagnostics.any { it.outcome == "corrupt-root-recovered" })
             assertEquals(preserved, provider.preservedRecoveryRoot)
-            assertTrue(api.updatedPaths.isNotEmpty())
+            assertTrue(api.updatedPaths.size in 1..2)
             assertTrue(api.updatedPaths.all { it == local })
         } finally {
             provider.close()
