@@ -703,7 +703,15 @@ internal fun MonthCalendar(
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val byDay = remember(events) { events.groupBy { it.start.take(8) } }
+    val byDay = remember(events) {
+        buildMap {
+            events.forEach { event ->
+                event.occupiedCalendarDates().forEach { date ->
+                    getOrPut(date) { mutableListOf() }.add(event)
+                }
+            }
+        }
+    }
     val leading = dayOfWeekMondayFirst(month.year, month.month, 1)
     val cells = remember(month) {
         (List<Int?>(leading) { null } + (1..month.days()).map<Int, Int?> { it })
@@ -838,6 +846,23 @@ internal fun GroupwareCalendarEvent.overlapsCalendarDateRange(
     }
     return eventStart <= rangeEnd && reachesRange
 }
+
+internal fun GroupwareCalendarEvent.occupiedCalendarDates(): List<String> {
+    val first = start.take(8).takeIf { it.length == 8 } ?: return emptyList()
+    val last = end?.take(8)?.takeIf { it.length == 8 } ?: first
+    if (last < first) return listOf(first)
+    return buildList {
+        var current: String? = first
+        while (current != null && size < 370 && current <= last && !(allDay && current == last)) {
+            add(current)
+            if (current == last) break
+            current = nextCompactDate(current)
+        }
+    }
+}
+
+private fun nextCompactDate(date: String): String? =
+    nextIsoDate(date.compactDateToIso())?.isoDateToCompact()
 
 @Composable
 private fun mobileCalendarEventColor(event: GroupwareCalendarEvent): Color {

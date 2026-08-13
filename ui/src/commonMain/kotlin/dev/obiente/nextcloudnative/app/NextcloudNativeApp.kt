@@ -2560,6 +2560,9 @@ private fun AppInfoScreen(
             discoveryError = null
             return@LaunchedEffect
         }
+        if (retainedDiscovery?.versionStatus == DynamicContractVersionStatus.VerifiedCurrent) {
+            discovery = retainedDiscovery.copy(versionStatus = DynamicContractVersionStatus.LastKnownReadOnly)
+        }
         if (!shouldRetry && retainedDiscovery == null) discovery = null
         discoveryError = null
         runCatching {

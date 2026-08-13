@@ -317,7 +317,7 @@ internal fun NativeBudgetDashboard(
                 }
             }
         }
-        if (state is NativeScreenState.Error && model.loadedSectionCount == 0) {
+        if (state is NativeScreenState.Error) {
             item("error") {
                 Text(state.message, color = MaterialTheme.colorScheme.error)
             }

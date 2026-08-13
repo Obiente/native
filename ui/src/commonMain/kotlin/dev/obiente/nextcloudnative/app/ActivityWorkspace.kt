@@ -152,8 +152,9 @@ internal fun ActivityDesktopWorkspace(
     onOpenSettings: (ActivitySettingsDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val attention = remember(timeline.activities) {
-        timeline.activities.filter(NextcloudActivity::needsDesktopAttention).take(3)
+    val attention = remember(feed.groups) {
+        feed.groups.flatMap(ActivityFeedDayGroup::activities)
+            .filter(NextcloudActivity::needsDesktopAttention).take(3)
     }
     val filtersActive = selectedServerFilterId != "all" ||
         query.isNotBlank() || selectedSemantic != null || selectedApp != null || selectedType != null
@@ -247,8 +248,9 @@ internal fun ActivityMobileWorkspace(
     onOpenSettings: (ActivitySettingsDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val attention = remember(timeline.activities) {
-        timeline.activities.filter(NextcloudActivity::needsDesktopAttention).take(3)
+    val attention = remember(feed.groups) {
+        feed.groups.flatMap(ActivityFeedDayGroup::activities)
+            .filter(NextcloudActivity::needsDesktopAttention).take(3)
     }
     val filtersActive = selectedServerFilterId != "all" ||
         query.isNotBlank() || selectedSemantic != null || selectedApp != null || selectedType != null
