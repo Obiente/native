@@ -369,7 +369,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt": "3445cee9cb4e039c3992103f1d71ab5cee4fea9751e5f9282160c64b44e84d4c",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt": "50fb7abc2b1cfea19cb8875c853a60ff627c0d5275f34810552c4aff4b068e7e",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt": "fab7b5a39ca0c25f3aeb62af82bf9d2c34a2f4d995e3b7e925227b8541a4eedd",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesApi.kt": "e0eb6645fdfb786a942af58ada15d5385c477b4f1a1fc5613ecc14a8c0089c4d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NotesFolderOperations.kt": "db6a04cfcd3b25b17c996cdc6dba21847d14f5970e06e6c24a3e2c85139dbe1d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/OfficeDocumentWorkflow.kt": "8d8e3362282230175bdda673d76baccf537220f175539404cf67295fe05bb44b",
