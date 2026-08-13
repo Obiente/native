@@ -253,7 +253,6 @@ private fun parseQueryParameters(query: String): Map<String, List<String>>? {
     for (part in query.split('&')) {
         if (part.isEmpty()) return null
         val name = decodeUrlComponent(part.substringBefore('='), plusAsSpace = true)
-            ?.lowercase()
             ?.takeIf { it.isNotBlank() && it.length <= MAX_NEXTCLOUD_QUERY_NAME_LENGTH }
             ?: return null
         val value = decodeUrlComponent(part.substringAfter('=', ""), plusAsSpace = true)

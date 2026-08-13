@@ -168,6 +168,35 @@ class CalendarWorkspacePresentationTest {
         )
     }
 
+    @Test
+    fun `calendar navigation detects every user editable draft field`() {
+        val initial = EventDraft(
+            title = "Planning",
+            date = "2026-08-14",
+            startTime = "09:00",
+            endTime = "10:00",
+            allDay = false,
+            location = "Team room",
+            description = "Weekly planning",
+            recurrenceRule = "FREQ=WEEKLY",
+        )
+
+        assertFalse(calendarEventDraftIsDirty(initial, initial.copy(), "personal", "personal"))
+        listOf(
+            initial.copy(title = "Roadmap planning"),
+            initial.copy(date = "2026-08-15"),
+            initial.copy(startTime = "09:30"),
+            initial.copy(endTime = "10:30"),
+            initial.copy(allDay = true),
+            initial.copy(location = "Talk"),
+            initial.copy(description = "Updated agenda"),
+            initial.copy(recurrenceRule = "FREQ=MONTHLY"),
+        ).forEach { changed ->
+            assertTrue(calendarEventDraftIsDirty(initial, changed, "personal", "personal"))
+        }
+        assertTrue(calendarEventDraftIsDirty(initial, initial, "personal", "team"))
+    }
+
     private fun calendar(id: String, name: String) = GroupwareCalendar(
         href = "/remote.php/dav/calendars/synthetic/$id/",
         displayName = name,

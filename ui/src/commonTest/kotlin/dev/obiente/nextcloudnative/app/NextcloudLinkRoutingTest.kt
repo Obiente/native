@@ -162,4 +162,14 @@ class NextcloudLinkRoutingTest {
 
         assertEquals("", assertIs<NextcloudLinkDestination.FilesPath>(destination).value)
     }
+
+    @Test
+    fun queryParameterNamesMatchOnlyTheirDocumentedCase() {
+        val destination = nextcloudLinkDestination(
+            session,
+            "/index.php/apps/files/?OpenFile=42&DIR=%2FPrivate",
+        )
+
+        assertEquals("", assertIs<NextcloudLinkDestination.FilesPath>(destination).value)
+    }
 }

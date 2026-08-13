@@ -1698,7 +1698,8 @@ private fun AuthenticatedApp(
         if (
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
-            screen is Screen.MediaViewer
+            screen is Screen.MediaViewer ||
+            screen is Screen.Calendar
         ) {
             pendingEditorNavigationRequest = NextcloudPendingNavigationRequest.Native(request)
         } else {
@@ -1999,7 +2000,8 @@ private fun AuthenticatedApp(
         if (
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
-            screen is Screen.MediaViewer
+            screen is Screen.MediaViewer ||
+            screen is Screen.Calendar
         ) {
             linkNavigationJob?.cancel()
             pendingEditorNavigationRequest = NextcloudPendingNavigationRequest.IncomingLink(request)
@@ -2341,6 +2343,9 @@ private fun AuthenticatedApp(
             session = session,
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
         )
         Screen.Contacts -> NativeGroupwareContactsScreen(
             services = services,

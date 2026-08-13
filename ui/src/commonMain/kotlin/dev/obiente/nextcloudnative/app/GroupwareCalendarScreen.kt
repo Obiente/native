@@ -126,6 +126,9 @@ fun NativeGroupwareCalendarScreen(
     session: NextcloudSession,
     userId: String,
     onBack: () -> Unit,
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
 ) {
     val initialMonth = remember { currentCalendarMonth() }
     var monthYear by rememberSaveable { mutableStateOf(initialMonth.year) }
@@ -371,6 +374,12 @@ fun NativeGroupwareCalendarScreen(
     }
 
     val ready = state as? CalendarLoadState.Ready
+    val eventEditorVisible = (creating && ready != null) || editing?.let { event ->
+        event.status == EDITING_MARKER && ready?.calendars?.any { it.href == event.calendarHref } == true
+    } == true
+    LaunchedEffect(navigationRequest?.identity, eventEditorVisible) {
+        navigationRequest?.takeIf { !eventEditorVisible }?.let(onNavigationConfirmed)
+    }
     if (creating && ready != null) {
         EventEditorDialog(
             event = null,
@@ -378,6 +387,9 @@ fun NativeGroupwareCalendarScreen(
             calendars = ready.calendars.filter(GroupwareCalendar::writable),
             onDismiss = { creating = false },
             error = mutationError,
+            navigationRequest = navigationRequest,
+            onNavigationConfirmed = onNavigationConfirmed,
+            onNavigationCancelled = onNavigationCancelled,
             onSave = { draft, calendar ->
                 mutationError = null
                 scope.launch {
@@ -418,6 +430,9 @@ fun NativeGroupwareCalendarScreen(
                 calendars = listOf(calendar),
                 onDismiss = { editing = null },
                 error = mutationError,
+                navigationRequest = navigationRequest,
+                onNavigationConfirmed = onNavigationConfirmed,
+                onNavigationCancelled = onNavigationCancelled,
                 onSave = { draft, _ ->
                     mutationError = null
                     scope.launch {
@@ -999,7 +1014,7 @@ private fun EventDetailDialog(
     )
 }
 
-private data class EventDraft(
+internal data class EventDraft(
     val title: String,
     val date: String,
     val startTime: String,
@@ -1013,6 +1028,13 @@ private data class EventDraft(
     fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact()
     else date.isoDateToCompact() + "T${endTime.timeToCompact()}00Z"
 }
+
+internal fun calendarEventDraftIsDirty(
+    initial: EventDraft,
+    current: EventDraft,
+    initialCalendarHref: String?,
+    currentCalendarHref: String?,
+): Boolean = initial != current || initialCalendarHref != currentCalendarHref
 
 private enum class EventRecurrencePreset(
     val label: String,
@@ -1109,21 +1131,56 @@ private fun EventEditorDialog(
     calendars: List<GroupwareCalendar>,
     onDismiss: () -> Unit,
     error: String?,
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     onSave: (EventDraft, GroupwareCalendar) -> Unit,
 ) {
     val initialIsoDate = (event?.start?.take(8) ?: initialDate).compactDateToIso()
-    var title by remember(event) { mutableStateOf(event?.title.orEmpty()) }
-    var date by remember(event, initialDate) { mutableStateOf(initialIsoDate) }
-    var startTime by remember(event) { mutableStateOf(event?.start?.compactTime() ?: "09:00") }
-    var endTime by remember(event) { mutableStateOf(event?.end?.compactTime() ?: "10:00") }
-    var allDay by remember(event) { mutableStateOf(event?.allDay ?: false) }
-    var location by remember(event) { mutableStateOf(event?.location.orEmpty()) }
-    var description by remember(event) { mutableStateOf(event?.description.orEmpty()) }
-    var recurrencePresetName by remember(event) {
-        mutableStateOf(EventRecurrencePreset.forRule(event?.recurrenceRule).name)
+    val initialTitle = event?.title.orEmpty()
+    val initialStartTime = event?.start?.compactTime() ?: "09:00"
+    val initialEndTime = event?.end?.compactTime() ?: "10:00"
+    val initialAllDay = event?.allDay ?: false
+    val initialLocation = event?.location.orEmpty()
+    val initialDescription = event?.description.orEmpty()
+    val initialRecurrencePreset = EventRecurrencePreset.forRule(event?.recurrenceRule)
+    val initialRecurrenceRule = when (initialRecurrencePreset) {
+        EventRecurrencePreset.None -> null
+        EventRecurrencePreset.Custom -> event?.recurrenceRule?.trim()?.takeIf(String::isNotBlank)
+        else -> initialRecurrencePreset.rule
     }
-    var customRecurrenceRule by remember(event) { mutableStateOf(event?.recurrenceRule.orEmpty()) }
-    var calendar by remember(calendars) { mutableStateOf(calendars.firstOrNull()) }
+    val initialCalendarHref = calendars.firstOrNull()?.href
+    val initialDraft = remember(event, initialDate) {
+        EventDraft(
+            title = initialTitle,
+            date = initialIsoDate,
+            startTime = initialStartTime,
+            endTime = initialEndTime,
+            allDay = initialAllDay,
+            location = initialLocation,
+            description = initialDescription,
+            recurrenceRule = initialRecurrenceRule,
+        )
+    }
+    val editorStateKey = event?.instanceId ?: "new:$initialDate"
+    var title by rememberSaveable(editorStateKey) { mutableStateOf(initialTitle) }
+    var date by rememberSaveable(editorStateKey) { mutableStateOf(initialIsoDate) }
+    var startTime by rememberSaveable(editorStateKey) { mutableStateOf(initialStartTime) }
+    var endTime by rememberSaveable(editorStateKey) { mutableStateOf(initialEndTime) }
+    var allDay by rememberSaveable(editorStateKey) { mutableStateOf(initialAllDay) }
+    var location by rememberSaveable(editorStateKey) { mutableStateOf(initialLocation) }
+    var description by rememberSaveable(editorStateKey) { mutableStateOf(initialDescription) }
+    var recurrencePresetName by rememberSaveable(editorStateKey) {
+        mutableStateOf(initialRecurrencePreset.name)
+    }
+    var customRecurrenceRule by rememberSaveable(editorStateKey) {
+        mutableStateOf(event?.recurrenceRule.orEmpty())
+    }
+    var selectedCalendarHref by rememberSaveable(editorStateKey) {
+        mutableStateOf(initialCalendarHref)
+    }
+    val calendar = calendars.firstOrNull { candidate -> candidate.href == selectedCalendarHref }
+        ?: calendars.firstOrNull()
     val recurrencePreset = EventRecurrencePreset.entries.firstOrNull { it.name == recurrencePresetName }
         ?: EventRecurrencePreset.None
     val recurrenceRule = when (recurrencePreset) {
@@ -1133,6 +1190,33 @@ private fun EventEditorDialog(
     }
     val recurrenceValid = recurrencePreset != EventRecurrencePreset.Custom ||
         recurrenceRule?.let(::isSupportedCalendarRecurrenceRuleForWrite) == true
+    val currentDraft = EventDraft(
+        title = title,
+        date = date,
+        startTime = startTime,
+        endTime = endTime,
+        allDay = allDay,
+        location = location,
+        description = description,
+        recurrenceRule = recurrenceRule,
+    )
+    val dirty = calendarEventDraftIsDirty(
+        initial = initialDraft,
+        current = currentDraft,
+        initialCalendarHref = initialCalendarHref,
+        currentCalendarHref = calendar?.href,
+    )
+    var confirmNavigationDiscard by remember(event) { mutableStateOf(false) }
+    LaunchedEffect(navigationRequest?.identity, dirty) {
+        val request = navigationRequest
+        if (request == null) {
+            confirmNavigationDiscard = false
+        } else if (dirty) {
+            confirmNavigationDiscard = true
+        } else {
+            onNavigationConfirmed(request)
+        }
+    }
     val valid = title.isNotBlank() && date.isIsoCalendarDate() &&
         (allDay || startTime.isCalendarTime() && endTime.isCalendarTime()) && recurrenceValid
 
@@ -1237,7 +1321,7 @@ private fun EventEditorDialog(
                             calendars.forEach { candidate ->
                                 FilterChip(
                                     selected = calendar == candidate,
-                                    onClick = { calendar = candidate },
+                                    onClick = { selectedCalendarHref = candidate.href },
                                     label = { Text(candidate.displayName) },
                                 )
                             }
@@ -1254,16 +1338,7 @@ private fun EventEditorDialog(
                 enabled = valid && calendar != null,
                 onClick = {
                     onSave(
-                        EventDraft(
-                            title,
-                            date,
-                            startTime,
-                            endTime,
-                            allDay,
-                            location,
-                            description,
-                            recurrenceRule,
-                        ),
+                        currentDraft,
                         requireNotNull(calendar),
                     )
                 },
@@ -1271,6 +1346,35 @@ private fun EventEditorDialog(
         },
         dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
     )
+
+    if (confirmNavigationDiscard) {
+        navigationRequest?.let { request ->
+            AlertDialog(
+                onDismissRequest = {
+                    confirmNavigationDiscard = false
+                    onNavigationCancelled(request)
+                },
+                title = { Text("Discard unsaved event changes?") },
+                text = { Text("Your event draft has not been saved.") },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            confirmNavigationDiscard = false
+                            onNavigationCancelled(request)
+                        },
+                    ) { Text("Keep editing") }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            confirmNavigationDiscard = false
+                            onNavigationConfirmed(request)
+                        },
+                    ) { Text("Discard") }
+                },
+            )
+        }
+    }
 }
 
 internal fun GroupwareCalendarEvent.displayTimeRange(): String {
