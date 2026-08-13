@@ -120,6 +120,15 @@ export function composeNightlyReleaseNotes({
     );
   }
 
+  if (availablePlatforms.has("macos")) {
+    lines.push(
+      "",
+      "## macOS limitations",
+      "",
+      "The Intel DMG is an early packaging preview. Native Keychain credential storage is not implemented, so this package cannot be used to sign in to a Nextcloud account. It also has no direct update path; install a newer DMG manually when one is published.",
+    );
+  }
+
   lines.push(
     "",
     "## Updating",

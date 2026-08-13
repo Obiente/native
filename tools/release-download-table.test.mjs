@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { composeReleaseDownloadTable } from "./release-download-table.mjs";
+import {
+  composeReleaseDownloadTable,
+  replaceReleaseDownloadTable,
+} from "./release-download-table.mjs";
 
 test("release download table links only assets that actually exist", () => {
   const table = composeReleaseDownloadTable({
@@ -29,4 +32,22 @@ test("release download table percent-encodes asset names", () => {
     tag: "nightly-20260813-0800-run1-01234567",
   });
   assert.doesNotMatch(table, /preview build/);
+});
+
+test("release download table replacement accepts unchanged notes", () => {
+  const table = composeReleaseDownloadTable({
+    assetNames: ["nextcloud-native-0.1.0-alpha.2-android.apk"],
+    repository: "Obiente/nc-native",
+    tag: "v0.1.0-alpha.2",
+  });
+  const notes = `${table}## Changes\n\nSomething useful.\n`;
+
+  assert.equal(replaceReleaseDownloadTable(notes, table), notes);
+});
+
+test("release download table replacement rejects a missing marker", () => {
+  assert.throws(
+    () => replaceReleaseDownloadTable("## Changes\n", "replacement"),
+    /do not contain a quick-download table/,
+  );
 });

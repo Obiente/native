@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const modulePath = fileURLToPath(import.meta.url);
+const quickDownloadsPattern = /<!-- quick-downloads:start -->[\s\S]*?<!-- quick-downloads:end -->\n?/;
 
 const packageRows = [
   { platform: "Android", formats: [{ label: "APK", pattern: /^nextcloud-native-.*-android\.apk$/ }] },
@@ -61,6 +62,13 @@ export function composeReleaseDownloadTable({ assetNames, repository, tag }) {
   return lines.join("\n");
 }
 
+export function replaceReleaseDownloadTable(notes, table) {
+  if (!quickDownloadsPattern.test(notes)) {
+    fail("release notes do not contain a quick-download table.");
+  }
+  return notes.replace(quickDownloadsPattern, table);
+}
+
 function argument(args, name) {
   const index = args.indexOf(name);
   if (index < 0 || index + 1 >= args.length) fail(`${name} is required.`);
@@ -82,11 +90,7 @@ async function runCli() {
     : null;
   if (replaceIn) {
     const notes = await readFile(replaceIn, "utf8");
-    const updated = notes.replace(
-      /<!-- quick-downloads:start -->[\s\S]*?<!-- quick-downloads:end -->\n?/,
-      table,
-    );
-    if (updated === notes) fail("release notes do not contain a quick-download table.");
+    const updated = replaceReleaseDownloadTable(notes, table);
     await writeFile(replaceIn, updated, "utf8");
   }
 }

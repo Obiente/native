@@ -86,3 +86,16 @@ test("nightly notes disclose the unsigned Windows installation path", () => {
     /gh attestation verify <downloaded-msi> --repo Obiente\/nc-native/,
   );
 });
+
+test("nightly notes disclose macOS sign-in and update limitations", () => {
+  const notes = composeNightlyReleaseNotes({
+    ...baseOptions,
+    assetNames: ["NextcloudNative-1.0.1.dmg"],
+    availablePlatforms: new Set(["macos"]),
+  });
+
+  assert.match(notes, /\| macOS preview \| \[DMG \(Intel\)\]/);
+  assert.match(notes, /## macOS limitations/);
+  assert.match(notes, /cannot be used to sign in to a Nextcloud account/);
+  assert.match(notes, /has no direct update path/);
+});
