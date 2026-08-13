@@ -491,6 +491,7 @@ private fun String.observedResourceId(): String = split('/').asReversed().firstO
 private data class KotlinRouteResourceIdentity(
     val resourceId: String,
     val collection: Boolean,
+    val responseFieldIds: Set<String>,
 )
 
 private fun String.collectionRouteForTerminalIdentity(): String? {
@@ -754,6 +755,10 @@ private class KotlinCompilerState(
         return KotlinRouteResourceIdentity(
             resourceId = resourceId,
             collection = responseCollection || filteredCollectionResourceId != null,
+            responseFieldIds = itemSchema
+                ?.let(::fieldsFromSchema)
+                .orEmpty()
+                .mapTo(linkedSetOf()) { field -> field.id.lowercase() },
         )
     }
 
@@ -848,9 +853,8 @@ private class KotlinCompilerState(
             defaultBoundPath,
             defaultPathParameters,
             collection,
-            identifierUsedOutsidePath = method != HttpMethod.GET ||
-                queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
-                responseFields.any { it.id.equals("id", ignoreCase = true) } ||
+            collectionResponseFieldIds = routeResourceIdentity?.responseFieldIds.orEmpty(),
+            identifierUsedOutsidePath = queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
                 (declaredBody?.schema as? JsonObject)?.let(::fieldsFromSchema).orEmpty()
                     .any { it.id.equals("id", ignoreCase = true) },
         )
@@ -1578,11 +1582,18 @@ private class KotlinCompilerState(
         path: String,
         parameters: List<HttpParameter>,
         collection: Boolean,
+        collectionResponseFieldIds: Set<String> = emptySet(),
         identifierUsedOutsidePath: Boolean = false,
     ): Pair<String, List<HttpParameter>> {
-        if (!collection || parameters.size != 1 || identifierUsedOutsidePath) return path to parameters
+        if (!collection || parameters.size != 1) return path to parameters
         val parameter = parameters.single()
         if (parameter.name.equals("id", ignoreCase = true) || !parameter.name.endsWith("Id", ignoreCase = true)) {
+            return path to parameters
+        }
+        val parameterFieldId = parameter.name.lowercase()
+        val itemHasOwnIdentity = "id" in collectionResponseFieldIds
+        val itemCarriesParentIdentity = parameterFieldId in collectionResponseFieldIds
+        if (identifierUsedOutsidePath || itemHasOwnIdentity && !itemCarriesParentIdentity) {
             return path to parameters
         }
         val placeholder = "{${parameter.name}}"
