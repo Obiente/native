@@ -15,7 +15,7 @@ until the full product sprint is complete.
 
 ### Features
 
-- [Android, Desktop] Activity, Calendar, Budget, Tables, and verified dynamic apps now share native data and actions across mobile and desktop while adapting navigation, density, forms, charts, and workspace layout to each screen (issue #252, PR #336).
+- [Android, Desktop] Activity, Calendar, Budget, Tables, and contract-derived dynamic apps now have adaptive native workspace layouts across mobile and desktop. Available data and actions remain limited to each verified server contract (issue #252, PR #336).
 - [Android, Desktop] Android can render RAW sources through Memories or bounded embedded previews, decode and cache TIFF images, and show useful format and image metadata in the media viewer (issue #84, PR #249).
 - [Android, Desktop] Deck boards now open as native lanes and cards with drag-and-drop movement, context-aware editing, durable drafts, attachments, relationships, and safer mutation recovery (issue #52, PR #221).
 - [Android] Direct Android installs now check their selected channel automatically, show one notification per available version, and keep download and installation under the user's control (issue #237).
@@ -33,7 +33,7 @@ until the full product sprint is complete.
 - [Android, Desktop] Native workspaces now cover Home, Apps, Settings, Calendar, and desktop navigation. Calendar adds searchable Month, Week, and Agenda views with safe event and recurrence editing. App switching and refreshes retain content and state (PR #273).
 - [Website] Nextcloud Native now has a timeless product website with clearer platform guidance, living project articles, and native application captures that adapt between dark and light themes (issue #230).
 - [Android, Desktop, Website] Nextcloud Native now includes illustrated guides for setup, folder sync, offline files, photo backup, Calendar, and app switching. Each step uses dedicated light and dark captures from the real Compose interface (PR #273).
-- [Android, Desktop, Linux, macOS, Windows] Nightly builds now publish signed Android packages and native desktop packages for direct installations that follow the Nightly update track (issue #226, PR #227).
+- [Android, Desktop, Linux, macOS, Windows] Nightly builds now publish signed Android packages and native desktop packages. Direct Android, Linux, and Windows installations follow the Nightly update track (issue #226, PR #227).
 - [Android, Desktop] Pantry and other dynamic collection apps now provide adaptive nested navigation, meaningful icons, option and relation pickers, permission-aware editing, reversible completion, and confirmed archive, restore, trash, and deletion actions (issue #252, PR #258).
 - [Android, Desktop] Photo folders now use the dedicated Memories folder endpoints, keep direct and recursive scopes explicit, and retain useful saved content when a refresh fails (issue #243, PR #249).
 - [Android, Desktop] Photos now loads the Memories timeline in bounded day batches and provides a full-height edge scrubber for fast, smooth navigation across months and years (issue #242, PR #249).

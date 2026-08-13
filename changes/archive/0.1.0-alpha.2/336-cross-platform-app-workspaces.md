@@ -4,4 +4,4 @@ pull: 336
 platforms: android, desktop
 user-facing: yes
 
-Activity, Calendar, Budget, Tables, and verified dynamic apps now share native data and actions across mobile and desktop while adapting navigation, density, forms, charts, and workspace layout to each screen.
+Activity, Calendar, Budget, Tables, and contract-derived dynamic apps now have adaptive native workspace layouts across mobile and desktop. Available data and actions remain limited to each verified server contract.
