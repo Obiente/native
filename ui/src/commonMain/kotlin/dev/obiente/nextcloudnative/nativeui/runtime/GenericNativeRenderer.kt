@@ -4172,7 +4172,8 @@ private fun GenericFinancialAccountCollection(
             ) {
                 if (sectionRows.isEmpty()) return
                 item(key = "$key-header") {
-                    val subtotal = sectionRows.mapNotNull { (_, account) -> convertedBalance(account) }
+                    val subtotal = sectionRows.filterNot { (_, account) -> account.excludedFromReports }
+                        .mapNotNull { (_, account) -> convertedBalance(account) }
                         .sumOf { amount -> if (key == "liabilities") kotlin.math.abs(amount) else amount }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.XSmall),
@@ -4445,7 +4446,15 @@ private fun GenericFinanceCollection(
                 }
             }
             val listState = rememberLazyListState()
-            NativeCollectionAutoPager(listState, presentedRows.size, onLoadMore, loadingMore, loadMoreError)
+            val localFiltersActive = filter != NativeFinanceLedgerFilter.All ||
+                categoryFilter != null || accountFilter != null
+            NativeCollectionAutoPager(
+                listState,
+                presentedRows.size,
+                onLoadMore.takeUnless { localFiltersActive },
+                loadingMore,
+                loadMoreError,
+            )
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),

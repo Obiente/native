@@ -5963,6 +5963,7 @@ private fun ActivityScreen(
 
     fun selectServerFilter(filterId: String) {
         if (filterId == selectedServerFilterId) return
+        olderPageAttempt = 0
         selectedServerFilterId = filterId
         timeline = ActivityWorkspaceMemoryCache.get(session, filterId) ?: ActivityTimelineState()
         loadAttempt += 1
