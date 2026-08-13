@@ -706,6 +706,24 @@ private fun verifiedChoresResponseSchema(
         )
         "/apps/chores/api/v1.0/account/invites" ->
             JSONObject().put("type", "array").put("items", inviteSchema)
+        "/apps/chores/api/v1.0/team/{teamId}/chores" ->
+            JSONObject().put(
+                "type",
+                "array",
+            ).put(
+                "items",
+                closedObjectSchema(
+                    properties = mapOf(
+                        "id" to integerSchema(title = "Chore"),
+                        "name" to stringSchema(title = "Chore name"),
+                        "assignee" to nullableStringSchema(title = "Assignee"),
+                        "points" to integerSchema(title = "Points"),
+                        "due" to stringSchema(title = "Due", format = "date-time"),
+                        "repeat" to choresRepeatScheduleSchema(),
+                    ),
+                    required = listOf("id", "name", "points", "due", "repeat"),
+                ),
+            )
         else -> null
     }
 }
@@ -849,6 +867,10 @@ private fun stringSchema(title: String, format: String? = null): JSONObject = JS
 
 private fun integerSchema(title: String): JSONObject = JSONObject()
     .put("type", "integer")
+    .put("title", title)
+
+private fun nullableStringSchema(title: String): JSONObject = JSONObject()
+    .put("type", JSONArray().put("string").put("null"))
     .put("title", title)
 
 private fun choresRepeatScheduleSchema(): JSONObject {

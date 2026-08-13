@@ -83,6 +83,7 @@ class ChoresLiveContractCompatibilityTest {
         assertEquals(ActionIntent.update, editChore.intent)
         assertEquals(ActionIntent.execute, acceptInvitation.intent)
         assertTrue("id" in teamRead.responseFieldIds, "team fields=${teamRead.responseFieldIds}")
+        assertTrue("id" in choreRead.responseFieldIds, "chore fields=${choreRead.responseFieldIds}")
         assertTrue(
             setOf("inviteId", "teamId", "teamName", "userId")
                 .all(invitationsRead.responseFieldIds::contains),

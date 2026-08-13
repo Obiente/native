@@ -2858,6 +2858,7 @@ private fun DynamicDiscoveredAppScreen(
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var retainedChoresTeamRecord by remember(descriptor) { mutableStateOf<NativeRecord?>(null) }
     var openedDefaultChores by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -3702,6 +3703,20 @@ private fun DynamicDiscoveredAppScreen(
             visitedStates = visitedStates,
         )
     }
+    val retainedChoresTeamContext = remember(schema, retainedChoresTeamRecord) {
+        val teamRecord = retainedChoresTeamRecord ?: return@remember null
+        val teamView = schema.views.singleOrNull { view ->
+            nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team
+        } ?: return@remember null
+        DynamicResourceRecordContext(
+            resourceId = teamView.resourceId,
+            recordId = teamRecord.id,
+            fieldValues = teamRecord.values,
+            actionSafeIdentity = teamRecord.actionSafeIdentity,
+            actionBindingProvenanceValid = teamRecord.actionBindingProvenanceValid,
+            currentLayoutId = teamView.id,
+        )
+    }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
     }
@@ -3794,6 +3809,7 @@ private fun DynamicDiscoveredAppScreen(
         descriptor,
         schema,
         recordContext,
+        retainedChoresTeamContext,
         selectedView.id,
         selectedPathParameterValues,
     ) {
@@ -3801,7 +3817,10 @@ private fun DynamicDiscoveredAppScreen(
             emptyList()
         } else {
             val unvisitedPlan = descriptor.planDynamicNavigation(
-                recordContext?.copy(visitedStates = emptySet()),
+                retainedChoresNavigationContext(
+                    retainedTeamContext = retainedChoresTeamContext,
+                    currentRecordContext = recordContext,
+                )?.copy(visitedStates = emptySet()),
             )
             val order = listOf(
                 NativeChoresWorkspaceKind.Chores,
@@ -4178,6 +4197,9 @@ private fun DynamicDiscoveredAppScreen(
             return@LaunchedEffect
         }
         val records = (viewState as? NativeScreenState.Ready)?.records ?: return@LaunchedEffect
+        records.singleOrNull()
+            ?.takeIf { record -> record.actionSafeIdentity && record.actionBindingProvenanceValid }
+            ?.let { record -> retainedChoresTeamRecord = record }
         if (records.size == 1 && selectedRecord == null && !openedDefaultChores) {
             openedDefaultChores = true
             selectDynamicRecord(records.single())
@@ -5409,6 +5431,11 @@ internal data class DynamicAppNavigationState(
 
 internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
     selectedViewId != null || selectedRecord != null || history.isNotEmpty()
+
+internal fun retainedChoresNavigationContext(
+    retainedTeamContext: DynamicResourceRecordContext?,
+    currentRecordContext: DynamicResourceRecordContext?,
+): DynamicResourceRecordContext? = retainedTeamContext ?: currentRecordContext
 
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()

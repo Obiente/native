@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
@@ -59,6 +60,15 @@ internal fun moveNativeCollectionRecordToIndex(
         removeAt(fromIndex)
         add(targetIndex, recordId)
     }
+}
+
+internal fun nativeVisibleReorderTargetId(
+    orderedRecordIds: List<String>,
+    rowBounds: Map<String, Rect>,
+    pointerPosition: Offset,
+    visibleItemKeys: Set<String>,
+): String? = orderedRecordIds.firstOrNull { recordId ->
+    recordId in visibleItemKeys && rowBounds[recordId]?.contains(pointerPosition) == true
 }
 
 internal fun moveNativeCollectionRecordAcrossAdjacentMidpoint(

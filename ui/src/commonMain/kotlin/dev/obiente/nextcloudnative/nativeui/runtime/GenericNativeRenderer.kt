@@ -269,21 +269,6 @@ fun GenericNativeAppScreen(
     }
     val presentedResource = hydrated?.resource ?: baseResource
     val presentedRecords = hydrated?.records ?: baseRecords
-    val presentedState = when (state) {
-        is NativeScreenState.Ready -> NativeScreenState.Ready(presentedRecords)
-        else -> state
-    }
-    val choresWorkspace = presentedResource?.let { resourceSpec ->
-        nativeChoresPresentation(schema, view, resourceSpec, presentedState)
-    }
-    val rosterPresentation = choresWorkspace
-        ?.takeIf { presentation -> presentation.kind == NativeChoresWorkspaceKind.Team }
-        ?.let {
-            (presentedState as? NativeScreenState.Ready)
-                ?.records
-                ?.singleOrNull()
-                ?.let(::nativeRosterPresentation)
-        }
     val presentedSurface = when {
         showSelectedRecordDetail &&
             selectedRecordId != null &&
@@ -336,6 +321,27 @@ fun GenericNativeAppScreen(
             }
         }
     }
+    val dedicatedPresentedState = nativeDedicatedCollectionState(
+        state = state,
+        presentedRecords = presentedRecords,
+        visiblePresentedRecords = visiblePresentedRecords,
+        searchableCollection = searchableCollection,
+    )
+    val choresWorkspace = presentedResource
+        ?.takeUnless {
+            searchableCollection && collectionQuery.isNotBlank() && visiblePresentedRecords.isEmpty()
+        }
+        ?.let { resourceSpec ->
+            nativeChoresPresentation(schema, view, resourceSpec, dedicatedPresentedState)
+        }
+    val rosterPresentation = choresWorkspace
+        ?.takeIf { presentation -> presentation.kind == NativeChoresWorkspaceKind.Team }
+        ?.let {
+            (dedicatedPresentedState as? NativeScreenState.Ready)
+                ?.records
+                ?.singleOrNull()
+                ?.let(::nativeRosterPresentation)
+        }
     LaunchedEffect(
         collectionQuery,
         visiblePresentedRecords.size,
@@ -3285,9 +3291,15 @@ private fun GenericRecordList(
     }
     fun moveDraggedRecord(position: Offset) {
         val recordId = draggingRecordId ?: return
-        val targetId = orderedRecordIds.firstOrNull { id ->
-            rowBounds[id]?.contains(position) == true
-        }
+        val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { item -> item.key as? String }
+            .toSet()
+        val targetId = nativeVisibleReorderTargetId(
+            orderedRecordIds = orderedRecordIds,
+            rowBounds = rowBounds,
+            pointerPosition = position,
+            visibleItemKeys = visibleItemKeys,
+        )
         val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
         if (targetIndex >= 0 && targetId != recordId) {
             orderedRecordIds = moveNativeCollectionRecordToIndex(
@@ -4030,6 +4042,7 @@ private fun GenericCategoryCollection(
     var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
     var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
+    val listState = rememberLazyListState()
     val displayedRows = remember(rows, rowsById, orderedRecordIds, activeReorder) {
         if (activeReorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
     }
@@ -4066,9 +4079,15 @@ private fun GenericCategoryCollection(
     }
     fun moveDraggedRecord(position: Offset) {
         val recordId = draggingRecordId ?: return
-        val targetId = orderedRecordIds.firstOrNull { id ->
-            rowBounds[id]?.contains(position) == true
-        }
+        val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { item -> item.key as? String }
+            .toSet()
+        val targetId = nativeVisibleReorderTargetId(
+            orderedRecordIds = orderedRecordIds,
+            rowBounds = rowBounds,
+            pointerPosition = position,
+            visibleItemKeys = visibleItemKeys,
+        )
         val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
         if (targetIndex >= 0 && targetId != recordId) {
             orderedRecordIds = moveNativeCollectionRecordToIndex(
@@ -4100,7 +4119,6 @@ private fun GenericCategoryCollection(
     }
     val expenseCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Expense }
     val incomeCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Income }
-    val listState = rememberLazyListState()
     NativeCollectionAutoPager(
         listState,
         visibleRows.size,
@@ -5231,9 +5249,15 @@ private fun GenericTaskCollection(
     }
     fun moveDraggedRecord(position: Offset) {
         val recordId = draggingRecordId ?: return
-        val targetId = orderedRecordIds.firstOrNull { id ->
-            rowBounds[id]?.contains(position) == true
-        }
+        val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { item -> item.key as? String }
+            .toSet()
+        val targetId = nativeVisibleReorderTargetId(
+            orderedRecordIds = orderedRecordIds,
+            rowBounds = rowBounds,
+            pointerPosition = position,
+            visibleItemKeys = visibleItemKeys,
+        )
         val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
         if (targetIndex >= 0 && targetId != recordId) {
             orderedRecordIds = moveNativeCollectionRecordToIndex(
@@ -10796,6 +10820,18 @@ private fun GenericEnumField(
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
+}
+
+internal fun nativeDedicatedCollectionState(
+    state: NativeScreenState,
+    presentedRecords: List<NativeRecord>,
+    visiblePresentedRecords: List<NativeRecord>,
+    searchableCollection: Boolean,
+): NativeScreenState = when (state) {
+    is NativeScreenState.Ready -> NativeScreenState.Ready(
+        if (searchableCollection) visiblePresentedRecords else presentedRecords,
+    )
+    else -> state
 }
 
 internal fun nativeEnumOptionLabel(field: FieldSpec, option: String): String =

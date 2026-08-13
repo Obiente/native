@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
@@ -146,6 +147,24 @@ class NativeCollectionActionUiStateTest {
                 pointerY = 280f,
                 movementY = 20f,
                 rowBounds = bounds,
+            ),
+        )
+    }
+
+    @Test
+    fun `drop target ignores retained bounds for off-screen rows`() {
+        val overlappingBounds = mapOf(
+            "offscreen" to Rect(0f, 100f, 100f, 200f),
+            "visible" to Rect(0f, 100f, 100f, 200f),
+        )
+
+        assertEquals(
+            "visible",
+            nativeVisibleReorderTargetId(
+                orderedRecordIds = listOf("offscreen", "visible"),
+                rowBounds = overlappingBounds,
+                pointerPosition = Offset(50f, 150f),
+                visibleItemKeys = setOf("visible"),
             ),
         )
     }

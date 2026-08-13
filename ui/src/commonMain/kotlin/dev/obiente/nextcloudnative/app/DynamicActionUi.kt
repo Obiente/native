@@ -113,6 +113,14 @@ internal fun dynamicContextualFormTargetsActiveSurface(
             action.risk == ActionRisk.mutating &&
             hasEditableFileField &&
             verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
+        action.intent == ActionIntent.execute &&
+            action.effect != ActionEffect.upload &&
+            action.risk == ActionRisk.mutating &&
+            action.binding.requiredBodyFieldNames.isNotEmpty() &&
+            action.binding.requiredBodyFieldNames.all { name ->
+                plannedBindingValues[name]?.isNotBlank() == true
+            } &&
+            verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
         action.intent == ActionIntent.update &&
             action.risk == ActionRisk.mutating &&
             activeView.component == NativeComponent.detail &&

@@ -33,6 +33,32 @@ import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
     @Test
+    fun dedicatedCollectionUsesTheSameFilteredRecordsAsItsSearchBar() {
+        val first = NativeRecord(id = "1", values = mapOf("name" to "Kitchen"))
+        val second = NativeRecord(id = "2", values = mapOf("name" to "Garden"))
+
+        val filtered = assertIs<NativeScreenState.Ready>(
+            nativeDedicatedCollectionState(
+                state = NativeScreenState.Ready(listOf(first, second)),
+                presentedRecords = listOf(first, second),
+                visiblePresentedRecords = listOf(second),
+                searchableCollection = true,
+            ),
+        )
+        val unfiltered = assertIs<NativeScreenState.Ready>(
+            nativeDedicatedCollectionState(
+                state = NativeScreenState.Ready(listOf(first, second)),
+                presentedRecords = listOf(first, second),
+                visiblePresentedRecords = listOf(second),
+                searchableCollection = false,
+            ),
+        )
+
+        assertEquals(listOf(second), filtered.records)
+        assertEquals(listOf(first, second), unfiltered.records)
+    }
+
+    @Test
     fun enumSearchMatchesTheLabelsShownToUsers() {
         val field = FieldSpec(
             id = "repeat",

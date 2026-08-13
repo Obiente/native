@@ -848,7 +848,9 @@ private class KotlinCompilerState(
             defaultBoundPath,
             defaultPathParameters,
             collection,
-            identifierUsedOutsidePath = queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
+            identifierUsedOutsidePath = method != HttpMethod.GET ||
+                queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
+                responseFields.any { it.id.equals("id", ignoreCase = true) } ||
                 (declaredBody?.schema as? JsonObject)?.let(::fieldsFromSchema).orEmpty()
                     .any { it.id.equals("id", ignoreCase = true) },
         )
