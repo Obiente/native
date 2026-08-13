@@ -61,9 +61,13 @@ grep -Fq 'usr/share/icons/hicolor/512x512/apps/dev.obiente.nextcloudnative.png' 
 grep -Fq 'tools/enrich-deb-appstream.sh' "$project_root/ui/build.gradle.kts"
 grep -Fq 'Homepage: https://nc-native.obiente.dev/' \
   "$project_root/tools/enrich-deb-appstream.sh"
+grep -Fq 'libsecret-tools' \
+  "$project_root/tools/enrich-deb-appstream.sh"
 grep -Fq 'usr/share/doc/nextcloudnative/copyright' \
   "$project_root/tools/enrich-deb-appstream.sh"
 grep -Fq -- '--app-image "$app_image"' \
+  "$project_root/tools/repackage-rpm-with-metadata.sh"
+grep -Fq -- '--linux-package-deps libsecret' \
   "$project_root/tools/repackage-rpm-with-metadata.sh"
 grep -Fq 'tools/verify-rpm-package.sh' \
   "$project_root/tools/repackage-rpm-with-metadata.sh"
@@ -108,7 +112,10 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  'printf "%s" "${MOCK_RPM_VERSION:-1.0.2971}"' >"$temporary/rpm"
+  'case "$*" in' \
+  '  *--requires*) printf "%s\\n" "${MOCK_RPM_REQUIRES:-libsecret}" ;;' \
+  '  *) printf "%s" "${MOCK_RPM_VERSION:-1.0.2971}" ;;' \
+  'esac' >"$temporary/rpm"
 chmod +x "$temporary/rpm2cpio" "$temporary/cpio" "$temporary/rpm"
 touch "$temporary/nextcloudnative.rpm"
 printf '%s\n' \
@@ -152,6 +159,19 @@ grep -Fq '/usr/share/applications/nextcloudnative-NextcloudNative.desktop' \
   "$temporary/verification-error"
 grep -Fq '/usr/share/icons/hicolor/512x512/apps/dev.obiente.nextcloudnative.png' \
   "$temporary/verification-error"
+
+if PATH="$temporary:$PATH" \
+  MOCK_RPM_REQUIRES='glibc' \
+  MOCK_RPM_FILE_LIST="$valid_rpm_file_list" \
+  MOCK_RPM_METADATA="$rendered_metadata" \
+  MOCK_RPM_DESKTOP="$temporary/application.desktop" \
+  MOCK_RPM_ICON="$temporary/icon.png" \
+  bash "$project_root/tools/verify-rpm-package.sh" \
+  "$temporary/nextcloudnative.rpm" >"$temporary/verification-error" 2>&1; then
+  printf 'RPM verifier accepted a package without the libsecret dependency.\n' >&2
+  exit 1
+fi
+grep -Fq 'must require libsecret' "$temporary/verification-error"
 
 if PATH="$temporary:$PATH" \
   MOCK_RPM_FILE_LIST="$valid_rpm_file_list" \

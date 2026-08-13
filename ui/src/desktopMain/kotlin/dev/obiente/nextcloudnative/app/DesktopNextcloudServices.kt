@@ -3478,14 +3478,32 @@ class DesktopNextcloudServices(
         }
     }
 
-    override fun saveSession(session: NextcloudSession) {
+    override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         listOf(session.serverUrl, session.loginName, session.appPassword)
             .forEach(supportDiagnostics::registerPrivateValue)
-        secretStore.save(
-            reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
-            username = session.loginName,
-            secret = session.appPassword.encodeToByteArray(),
-        )
+        try {
+            secretStore.save(
+                reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
+                username = session.loginName,
+                secret = session.appPassword.encodeToByteArray(),
+            )
+        } catch (failure: Throwable) {
+            recordSupportDiagnostic(
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Error,
+                    component = SupportDiagnosticComponent.Authentication,
+                    operation = "credentials.save",
+                    outcome = "failed",
+                    code = if (failure is DesktopSecretStoreUnavailableException) {
+                        "DESKTOP_SECRET_STORE_UNAVAILABLE"
+                    } else {
+                        "DESKTOP_SECRET_STORE_FAILED"
+                    },
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                ),
+            )
+            throw failure
+        }
         preferences.put(KEY_SERVER, session.serverUrl)
         preferences.put(KEY_LOGIN, session.loginName)
         val accountIdentity = desktopFileCacheAccountId(session)

@@ -45,6 +45,11 @@ internal interface DesktopSecretStore {
     fun clear(reference: DesktopSecretReference)
 }
 
+internal class DesktopSecretStoreUnavailableException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
 internal enum class DesktopSecretStoreKind {
     SecretService,
     WindowsCredentialManager,
@@ -149,22 +154,27 @@ internal class SecretToolDesktopSecretStore(
                 add(value)
             }
         }
-        val process = ProcessBuilder(command)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
-        process.outputStream.use { it.write(secret) }
-        check(process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
-            process.destroyForcibly()
-            "Timed out while storing a desktop secret."
+        val process = runCatching { startProcess(command) }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
         }
-        check(process.exitValue() == 0) { "Could not store a secret in the desktop keyring." }
+        runCatching {
+            process.outputStream.use { it.write(secret) }
+        }.getOrElse { failure ->
+            process.destroyForcibly()
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
+        }
+        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
+            process.destroyForcibly()
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+        }
+        if (process.exitValue() != 0) {
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+        }
     }
 
     override fun clear(reference: DesktopSecretReference) {
         val process = runCatching {
-            ProcessBuilder(secretToolCommand("clear", reference))
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
+            startProcess(secretToolCommand("clear", reference))
         }.getOrElse { return }
         if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) process.destroyForcibly()
     }
@@ -309,3 +319,7 @@ private const val CRED_TYPE_GENERIC = 1
 private const val CRED_PERSIST_LOCAL_MACHINE = 2
 private const val ERROR_NOT_FOUND = 1_168
 private const val MAX_SECRET_BYTES = 2_560
+private const val MISSING_SECRET_TOOL_MESSAGE =
+    "Secure credential storage is unavailable. Install libsecret-tools on Debian or Ubuntu, or libsecret on Fedora or RHEL, then restart Nextcloud Native."
+private const val KEYRING_UNAVAILABLE_MESSAGE =
+    "Could not save the account securely. Make sure your desktop keyring is running and unlocked, then try again."

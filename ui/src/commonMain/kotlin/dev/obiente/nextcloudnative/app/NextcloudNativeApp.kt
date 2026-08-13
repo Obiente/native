@@ -1412,7 +1412,7 @@ private fun MarketingDesktopStartupSettingsScenario(
 @Composable
 private fun LoginScreen(
     services: NextcloudPlatformServices,
-    onLoggedIn: (NextcloudSession) -> Unit,
+    onLoggedIn: suspend (NextcloudSession) -> Unit,
 ) {
     var serverUrl by remember { mutableStateOf("") }
     var connecting by remember { mutableStateOf(false) }
@@ -1500,7 +1500,9 @@ private fun LoginScreen(
                             } finally {
                                 services.finishLoginPolling(challenge)
                             }
-                        }.onSuccess(onLoggedIn).onFailure { failure ->
+                        }.mapCatching { authenticated ->
+                            onLoggedIn(authenticated)
+                        }.onFailure { failure ->
                             if (failure is CancellationException) throw failure
                             error = failure.message ?: "Could not connect to this server."
                             connecting = false

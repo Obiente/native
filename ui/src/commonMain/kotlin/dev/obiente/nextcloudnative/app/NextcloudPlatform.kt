@@ -569,7 +569,7 @@ interface NextcloudPlatformServices {
 
     fun loadSession(): NextcloudSession?
 
-    fun saveSession(session: NextcloudSession)
+    suspend fun saveSession(session: NextcloudSession)
 
     suspend fun clearSession()
 

@@ -80,13 +80,14 @@ jobs:
             exit 1
           fi
           pull_request_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pull_request}")"
-          if [[ "$(jq -r '.state' <<<"${pull_request_json}")" != 'open' ||
+          pull_request_state="$(jq -r '.state' <<<"${pull_request_json}")"
+          if [[ ( "${state}" == 'changed' && "${pull_request_state}" != 'open' ) ||
                 "$(jq -r '.head.repo.full_name' <<<"${pull_request_json}")" != "${repository}" ||
                 "$(jq -r '.head.ref' <<<"${pull_request_json}")" != "${head_ref}" ||
                 "$(jq -r '.head.sha' <<<"${pull_request_json}")" != "${head_sha}" ||
                 "$(jq -r '.user.login' <<<"${pull_request_json}")" != "${author}" ||
                 ( "${state}" == 'changed' && "${author}" == 'dependabot[bot]' ) ]]; then
-            printf 'Capture refresh metadata does not match an eligible open pull request.\n' >&2
+            printf 'Capture refresh metadata does not match an eligible pull request.\n' >&2
             exit 1
           fi
           if [[ "${state}" == 'current' && "${patch_size}" -ne 0 ]]; then
