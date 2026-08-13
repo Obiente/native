@@ -730,9 +730,8 @@ const frequentlyAsked = [
               <p class="eyebrow">Get the current build</p>
               <h2>Download for your platform.</h2>
               <p>
-                Nightly is the default release path for now. The short links below
-                always resolve to the current verified package and will remain stable
-                when Latest moves to a curated Stable release later.
+                Nightly is the default release path for now. Choose the package
+                that matches your operating system and distribution.
               </p>
             </div>
             <div class="download-grid">

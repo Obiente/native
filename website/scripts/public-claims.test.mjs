@@ -28,6 +28,7 @@ test("machine-readable product claims match current supported platforms and alph
   assert.match(app, /Platform status/);
   assert.match(app, /class="platform-pending"[^>]*>.*<span>macOS<\/span>/);
   assert.match(app, /class="platform-pending"[^>]*>.*<span>iOS<\/span>/);
+  assert.doesNotMatch(app, /short links|moves to a curated Stable release/i);
   assert.match(app, /AGPL-3\.0-or-later/);
   assert.doesNotMatch(app, /No Obiente account|No hosted intermediary|Obiente never carries your data/);
   assert.match(app, /Built by <strong>Obiente<\/strong>\. Independent and/);

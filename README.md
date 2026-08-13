@@ -48,9 +48,7 @@ endorsed by Nextcloud GmbH.
 
 ## Quick downloads
 
-Nightly is currently the default and only selectable update track. These stable
-links will keep working when package version filenames change; the `latest`
-links follow Nightly for now and can move to Stable later.
+Nightly is currently the default and only selectable update track.
 
 | Platform | Latest build | Explicit Nightly |
 | --- | --- | --- |
