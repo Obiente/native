@@ -60,6 +60,13 @@ fn normalized_windows_path_units(value: &[u16]) -> Vec<u16> {
     } else if units.starts_with(EXTENDED_PREFIX) {
         units.drain(..EXTENDED_PREFIX.len());
     }
+    if units.get(1) == Some(&COLON)
+        && units
+            .first()
+            .is_some_and(|unit| (b'A' as u16..=b'Z' as u16).contains(unit))
+    {
+        units[0] += u16::from(b'a' - b'A');
+    }
     while units.last() == Some(&BACKSLASH)
         && !(units.len() == 3 && units.get(1) == Some(&COLON))
         && units.len() > 1
@@ -82,17 +89,10 @@ fn ascii_windows_path_unit_eq(first: u16, second: u16) -> bool {
 }
 
 #[cfg(any(windows, test))]
-fn normalized_windows_paths_match<Compare>(
-    first: &[u16],
-    second: &[u16],
-    compare_case_insensitive: Compare,
-) -> bool
-where
-    Compare: FnOnce(&[u16], &[u16]) -> bool,
-{
+fn normalized_windows_paths_match(first: &[u16], second: &[u16]) -> bool {
     let first = normalized_windows_path_units(first);
     let second = normalized_windows_path_units(second);
-    !first.is_empty() && !second.is_empty() && compare_case_insensitive(&first, &second)
+    !first.is_empty() && first == second
 }
 
 #[cfg(any(windows, test))]
@@ -357,7 +357,6 @@ mod platform {
     };
     use windows::Storage::StorageFolder;
     use windows::Win32::Foundation::{CloseHandle, E_FAIL, HANDLE};
-    use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
     use windows::Win32::Security::{
         GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
     };
@@ -383,11 +382,7 @@ mod platform {
 
         let registered: Vec<u16> = path.to_os_string().encode_wide().collect();
         let requested: Vec<u16> = requested.as_os_str().encode_wide().collect();
-        normalized_windows_paths_match(&registered, &requested, |first, second| {
-            // SAFETY: both slices remain alive for the call and the API reads exactly their
-            // declared lengths without requiring terminating nulls.
-            unsafe { CompareStringOrdinal(first, second, true) == CSTR_EQUAL }
-        })
+        normalized_windows_paths_match(&registered, &requested)
     }
 
     fn current_registration_state(
@@ -1028,55 +1023,36 @@ mod tests {
 
     #[test]
     fn normalizes_equivalent_windows_registration_path_forms() {
-        fn ascii_case_insensitive(first: &[u16], second: &[u16]) -> bool {
-            first.len() == second.len()
-                && first
-                    .iter()
-                    .zip(second)
-                    .all(|(left, right)| ascii_windows_path_unit_eq(*left, *right))
-        }
-
         let extended: Vec<u16> = r"\\?\C:\fixtures\Nextcloud Native\account-v2\"
             .encode_utf16()
             .collect();
-        let ordinary: Vec<u16> = r"c:/fixtures/nextcloud native/account-v2"
+        let ordinary: Vec<u16> = r"c:/fixtures/Nextcloud Native/account-v2"
             .encode_utf16()
             .collect();
-        assert!(normalized_windows_paths_match(
-            &extended,
-            &ordinary,
-            ascii_case_insensitive,
-        ));
+        assert!(normalized_windows_paths_match(&extended, &ordinary));
 
         let extended_unc: Vec<u16> = r"\\?\UNC\server\share\account-v2\".encode_utf16().collect();
-        let ordinary_unc: Vec<u16> = r"\\SERVER\SHARE\ACCOUNT-V2".encode_utf16().collect();
-        assert!(normalized_windows_paths_match(
-            &extended_unc,
-            &ordinary_unc,
-            ascii_case_insensitive,
-        ));
+        let ordinary_unc: Vec<u16> = r"\\server\share\account-v2".encode_utf16().collect();
+        assert!(normalized_windows_paths_match(&extended_unc, &ordinary_unc));
     }
 
     #[test]
     fn rejects_lexically_different_windows_registration_paths() {
-        fn ascii_case_insensitive(first: &[u16], second: &[u16]) -> bool {
-            first.len() == second.len()
-                && first
-                    .iter()
-                    .zip(second)
-                    .all(|(left, right)| ascii_windows_path_unit_eq(*left, *right))
-        }
-
         let registered: Vec<u16> = r"C:\fixtures\Nextcloud Native\old-account-v2"
             .encode_utf16()
             .collect();
         let requested: Vec<u16> = r"C:\fixtures\Nextcloud Native\account-v2"
             .encode_utf16()
             .collect();
+        assert!(!normalized_windows_paths_match(&registered, &requested));
+
+        let case_sensitive_registered: Vec<u16> =
+            r"C:\fixtures\Cloud\account-v2".encode_utf16().collect();
+        let case_sensitive_requested: Vec<u16> =
+            r"C:\fixtures\cloud\account-v2".encode_utf16().collect();
         assert!(!normalized_windows_paths_match(
-            &registered,
-            &requested,
-            ascii_case_insensitive,
+            &case_sensitive_registered,
+            &case_sensitive_requested,
         ));
     }
 
