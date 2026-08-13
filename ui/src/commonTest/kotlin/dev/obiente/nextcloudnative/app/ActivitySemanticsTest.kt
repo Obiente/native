@@ -114,6 +114,23 @@ class ActivitySemanticsTest {
     }
 
     @Test
+    fun `file previews accept the documented numeric source identity`() {
+        val page = parseNextcloudActivityPage(
+            response(
+                """
+                {"ocs":{"meta":{"status":"ok","statuscode":200},"data":[{
+                  "activity_id":43,"app":"files","type":"file_changed","subject":"Changed report.pdf",
+                  "object_type":"files","object_id":74,"object_name":"/Documents/report.pdf",
+                  "previews":[{"source":74,"filename":"report.pdf","mimeType":"application/pdf"}]
+                }]}}
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals(74L, page.activities.single().preview?.fileId)
+    }
+
+    @Test
     fun `server contributed filters are validated de duplicated and ordered`() {
         val filters = parseNextcloudActivityFilters(
             response(

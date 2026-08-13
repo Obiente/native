@@ -52,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -646,6 +648,7 @@ internal fun MobileGroupwareCalendarWorkspace(
                     )
                 },
                 onSelectEvent = onSelectEvent,
+                emptyPeriod = "week",
                 modifier = Modifier.weight(1f),
             )
             CalendarWorkspaceView.Agenda -> CalendarAgenda(
@@ -754,6 +757,9 @@ internal fun MonthCalendar(
                                     else MaterialTheme.colorScheme.outlineVariant,
                                     shape = RoundedCornerShape(NextcloudRadii.Medium),
                                 )
+                                .semantics {
+                                    contentDescription = "$date, ${dayEvents.size} ${if (dayEvents.size == 1) "event" else "events"}"
+                                }
                                 .clickable { onSelectDate(date) }
                                 .padding(5.dp),
                         ) {
@@ -847,6 +853,7 @@ internal fun CalendarAgenda(
     events: List<GroupwareCalendarEvent>,
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     modifier: Modifier = Modifier,
+    emptyPeriod: String = "month",
 ) {
     val groups = events.groupBy { it.start.take(8) }.toSortedMap()
     LazyColumn(
@@ -869,7 +876,7 @@ internal fun CalendarAgenda(
         }
         if (events.isEmpty()) {
             item {
-                Text("No events this month.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No events this $emptyPeriod.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

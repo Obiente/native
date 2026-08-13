@@ -452,7 +452,8 @@ private fun JsonObject.activityPreview(): NextcloudActivityPreview? {
     val previews = this["previews"] as? JsonArray ?: return null
     return previews.firstNotNullOfOrNull { element ->
         val preview = element as? JsonObject ?: return@firstNotNullOfOrNull null
-        val fileId = (preview["fileId"] as? JsonPrimitive)?.longOrNull?.takeIf { it > 0L }
+        val fileId = ((preview["source"] as? JsonPrimitive)?.longOrNull
+            ?: (preview["fileId"] as? JsonPrimitive)?.longOrNull)?.takeIf { it > 0L }
             ?: return@firstNotNullOfOrNull null
         val filename = preview.activityString("filename") ?: activityString("object_name")
             ?: return@firstNotNullOfOrNull null

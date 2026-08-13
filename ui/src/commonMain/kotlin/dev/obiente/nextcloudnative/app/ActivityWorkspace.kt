@@ -260,7 +260,7 @@ internal fun ActivityMobileWorkspace(
         lastVisibleItemIndex = lastVisibleItemIndex,
     )
     LaunchedEffect(autoLoadMore, timeline.activities.size) {
-        if (autoLoadMore) onLoadMore()
+        if (autoLoadMore && !filtersActive) onLoadMore()
     }
     Column(modifier = modifier.fillMaxSize()) {
         ActivityMobileHeader(
@@ -404,7 +404,9 @@ internal fun ActivityMobileWorkspace(
                             loadPreview = loadPreview,
                             previewCacheScope = previewCacheScope,
                         )
-                        is DesktopActivityEntry.AutomationBundle -> ActivityMobileAutomationBundle(entry)
+                        is DesktopActivityEntry.AutomationBundle -> ActivityMobileAutomationBundle(
+                            entry, actionFor, onOpenAction, loadPreview, previewCacheScope,
+                        )
                     }
                 }
             }
@@ -565,7 +567,13 @@ private fun ActivityMobileRow(
 }
 
 @Composable
-private fun ActivityMobileAutomationBundle(entry: DesktopActivityEntry.AutomationBundle) {
+private fun ActivityMobileAutomationBundle(
+    entry: DesktopActivityEntry.AutomationBundle,
+    actionFor: (NextcloudActivity) -> ActivityOpenAction?,
+    onOpenAction: (ActivityOpenAction) -> Unit,
+    loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String,
+) {
     var expanded by remember(entry.stableId) { mutableStateOf(false) }
     Surface(
         modifier = Modifier.fillMaxWidth()
@@ -614,13 +622,13 @@ private fun ActivityMobileAutomationBundle(entry: DesktopActivityEntry.Automatio
                     modifier = Modifier.padding(top = NextcloudSpacing.Small, start = 48.dp),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
                 ) {
-                    entry.activities.take(8).forEach { activity ->
-                        Text(
-                            activity.subject,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                    entry.activities.forEach { activity ->
+                        ActivityMobileRow(
+                            activity = activity,
+                            action = actionFor(activity),
+                            onOpenAction = onOpenAction,
+                            loadPreview = loadPreview,
+                            previewCacheScope = previewCacheScope,
                         )
                     }
                 }
@@ -1024,7 +1032,9 @@ private fun ActivityDesktopTimeline(
                             loadPreview = loadPreview,
                             previewCacheScope = previewCacheScope,
                         )
-                        is DesktopActivityEntry.AutomationBundle -> ActivityAutomationBundleRow(entry)
+                        is DesktopActivityEntry.AutomationBundle -> ActivityAutomationBundleRow(
+                            entry, actionFor, onOpenAction, loadPreview, previewCacheScope,
+                        )
                     }
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 76.dp),
@@ -1097,7 +1107,13 @@ private fun ActivityDesktopRow(
 }
 
 @Composable
-private fun ActivityAutomationBundleRow(entry: DesktopActivityEntry.AutomationBundle) {
+private fun ActivityAutomationBundleRow(
+    entry: DesktopActivityEntry.AutomationBundle,
+    actionFor: (NextcloudActivity) -> ActivityOpenAction?,
+    onOpenAction: (ActivityOpenAction) -> Unit,
+    loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
+    previewCacheScope: String,
+) {
     var expanded by remember(entry.stableId) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -1145,17 +1161,10 @@ private fun ActivityAutomationBundleRow(entry: DesktopActivityEntry.AutomationBu
                 modifier = Modifier.fillMaxWidth().padding(start = 76.dp, end = 12.dp, bottom = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                entry.activities.take(8).forEach { activity ->
-                    Text(
-                        activity.subject,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                entry.activities.forEach { activity ->
+                    ActivityDesktopRow(
+                        activity, actionFor(activity), onOpenAction, loadPreview, previewCacheScope,
                     )
-                }
-                if (entry.activities.size > 8) {
-                    Text("${entry.activities.size - 8} more", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
