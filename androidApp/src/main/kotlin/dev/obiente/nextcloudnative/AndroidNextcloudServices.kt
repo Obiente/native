@@ -29,6 +29,7 @@ import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_TALK_MESSAGE_PAGE_SIZE
 import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
+import dev.obiente.nextcloudnative.app.NextcloudApiReadFailure
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
 import dev.obiente.nextcloudnative.app.LocalUploadFile
@@ -110,6 +111,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
+import dev.obiente.nextcloudnative.app.JvmNetworkFailurePhase
 import dev.obiente.nextcloudnative.app.JvmNetworkResponseTruncatedIOException
 import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
 import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
@@ -340,16 +342,18 @@ internal suspend fun executeAndroidDynamicApiGet(
     executeNetwork: suspend () -> NextcloudApiResponse,
     commit: (NextcloudApiResponse) -> Unit,
 ): NextcloudApiResponse {
-    if (cachePolicy == NextcloudApiCachePolicy.PreferCache) {
-        loadCached()?.let { return it }
-    } else {
-        coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
+    when (cachePolicy) {
+        NextcloudApiCachePolicy.PreferCache -> loadCached()?.let { return it }
+        NextcloudApiCachePolicy.RefreshNetwork ->
+            coalescer.invalidateRequest(accountId, requestIdentity) {}
+        NextcloudApiCachePolicy.ForceNetwork ->
+            coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
     }
     return coalescer.execute(
         accountId = accountId,
         requestIdentity = requestIdentity,
         load = {
-            if (cachePolicy == NextcloudApiCachePolicy.ForceNetwork) {
+            if (cachePolicy != NextcloudApiCachePolicy.PreferCache) {
                 executeNetwork()
             } else {
                 loadCached() ?: executeNetwork()
@@ -2433,16 +2437,26 @@ internal class AndroidNextcloudServices(
             }
         }
         suspend fun executeNetworkRequest(): NextcloudApiResponse {
-            val response = request(
-                method = safeRequest.method.name,
-                url = buildNextcloudApiUrl(session.serverUrl, safeRequest),
-                session = session,
-                contentType = safeRequest.contentType,
-                rawBody = safeRequest.body,
-                ocsRequest = safeRequest.ocsApiRequest,
-                maxResponseBytes = safeRequest.maximumResponseBytes,
-                client = noRedirectHttpClient,
-            )
+            var responseBodyMayHaveStarted = false
+            val response = try {
+                request(
+                    method = safeRequest.method.name,
+                    url = buildNextcloudApiUrl(session.serverUrl, safeRequest),
+                    session = session,
+                    contentType = safeRequest.contentType,
+                    rawBody = safeRequest.body,
+                    ocsRequest = safeRequest.ocsApiRequest,
+                    maxResponseBytes = safeRequest.maximumResponseBytes,
+                    client = noRedirectHttpClient,
+                    onFailurePhase = { phase ->
+                        responseBodyMayHaveStarted = phase == JvmNetworkFailurePhase.ResponseBody
+                    },
+                )
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                if (safeRequest.method != dev.obiente.nextcloudnative.app.NextcloudApiMethod.GET) throw failure
+                throw NextcloudApiReadFailure(responseBodyMayHaveStarted, failure)
+            }
             return NextcloudApiResponse(
                 response.status,
                 response.body,
@@ -3086,6 +3100,7 @@ internal class AndroidNextcloudServices(
         client: OkHttpClient = httpClient,
         streamingBody: RequestBody? = null,
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
+        onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -3171,6 +3186,7 @@ internal class AndroidNextcloudServices(
             }
             result
         } catch (failure: Throwable) {
+            onFailurePhase(networkAttempt.phase)
             if (failure.isJvmLocalUploadSourceFailure()) {
                 recordRequestDiagnostic(
                     session,
