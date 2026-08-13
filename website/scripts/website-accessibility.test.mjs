@@ -73,3 +73,27 @@ test("roadmap links and indexed details remain available with truthful fallback 
   assert.match(app, /class="roadmap-source-document"/);
   assert.match(app, /v-html="currentDoc\.html"/);
 });
+
+test("downloads use stable channel URLs and GitHub stars retain a useful fallback", async () => {
+  const [app, nginx] = await Promise.all([
+    readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
+    readFile(path.join(websiteRoot, "nginx.conf"), "utf8"),
+  ]);
+
+  for (const route of [
+    "android-latest",
+    "android-nightly",
+    "linux-deb-latest",
+    "linux-rpm-latest",
+    "windows-latest",
+    "macos-latest",
+  ]) {
+    assert.match(nginx, new RegExp(`location = /d/${route}`));
+  }
+  assert.match(nginx, /releases\/download\/channel-nightly\/nextcloud-native-android\.apk/);
+  assert.match(app, /const githubStars = ref\(null\)/);
+  assert.match(app, /"Star on GitHub"/);
+  assert.match(app, /repository\.stargazers_count/);
+  assert.match(app, /href: "\/d\/android-latest"/);
+  assert.match(app, /id="downloads"/);
+});

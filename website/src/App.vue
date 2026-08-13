@@ -21,6 +21,7 @@ import {
   PhMagnifyingGlass as MagnifyingGlass,
   PhMoon as Moon,
   PhShieldCheck as ShieldCheck,
+  PhStar as Star,
   PhSquaresFour as SquaresFour,
   PhSun as Sun,
   PhWindowsLogo as WindowsLogo,
@@ -59,6 +60,54 @@ const props = defineProps({
 });
 
 const githubUrl = "https://github.com/Obiente/nc-native";
+const githubStars = ref(null);
+const githubStarLabel = computed(() =>
+  githubStars.value === null
+    ? "Star on GitHub"
+    : `${new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(githubStars.value)} stars`,
+);
+const downloadPlatforms = [
+  {
+    id: "android",
+    name: "Android",
+    detail: "Android 8.0 or newer",
+    format: "APK",
+    href: "/d/android-latest",
+    icon: AndroidLogo,
+  },
+  {
+    id: "windows",
+    name: "Windows",
+    detail: "x86-64 · unsigned MSI",
+    format: "MSI",
+    href: "/d/windows-latest",
+    icon: WindowsLogo,
+  },
+  {
+    id: "linux-deb",
+    name: "Linux",
+    detail: "Debian and Ubuntu · x86-64",
+    format: "DEB",
+    href: "/d/linux-deb-latest",
+    icon: LinuxLogo,
+  },
+  {
+    id: "linux-rpm",
+    name: "Linux",
+    detail: "Fedora and RHEL · x86-64",
+    format: "RPM",
+    href: "/d/linux-rpm-latest",
+    icon: LinuxLogo,
+  },
+  {
+    id: "macos",
+    name: "macOS preview",
+    detail: "Intel · sign-in unavailable",
+    format: "DMG",
+    href: "/d/macos-latest",
+    icon: AppleLogo,
+  },
+];
 const captureByScenario = new Map(
   marketingCaptures.map((capture) => [capture.scenario, capture]),
 );
@@ -107,6 +156,17 @@ onMounted(() => {
   systemTheme.value = themeMediaQuery.matches ? "light" : "dark";
   themeMediaQuery.addEventListener("change", themeMediaListener);
   applyDocumentTheme();
+
+  fetch("https://api.github.com/repos/Obiente/nc-native", {
+    headers: { Accept: "application/vnd.github+json" },
+  })
+    .then((response) => (response.ok ? response.json() : Promise.reject(new Error("GitHub unavailable"))))
+    .then((repository) => {
+      if (Number.isInteger(repository.stargazers_count)) {
+        githubStars.value = repository.stargazers_count;
+      }
+    })
+    .catch(() => {});
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   if (!reducedMotion.matches && "IntersectionObserver" in window) {
@@ -654,12 +714,12 @@ const frequentlyAsked = [
 
               <ul class="hero-trust">
                 <li>
-                  <GithubLogo :size="21" weight="fill" aria-hidden="true" />
+                  <Star :size="21" weight="fill" aria-hidden="true" />
                   <span>
-                    <strong>Open source</strong>
+                    <strong>{{ githubStarLabel }}</strong>
                     <small>
-                      AGPL-3.0-or-later
-                      <a :href="githubUrl" target="_blank" rel="noreferrer">View source</a>
+                      Support the project
+                      <a :href="githubUrl" target="_blank" rel="noreferrer">Star repository</a>
                     </small>
                   </span>
                 </li>
@@ -675,6 +735,40 @@ const frequentlyAsked = [
                 </nav>
               </div>
             </div>
+          </section>
+
+          <section id="downloads" class="download-section section-width" data-reveal>
+            <div class="section-heading compact">
+              <p class="eyebrow">Get the current build</p>
+              <h2>Download for your platform.</h2>
+              <p>
+                Nightly is the default release path for now. The short links below
+                always resolve to the current verified package and will remain stable
+                when Latest moves to a curated Stable release later.
+              </p>
+            </div>
+            <div class="download-grid">
+              <a
+                v-for="platform in downloadPlatforms"
+                :id="`download-${platform.id}`"
+                :key="platform.id"
+                class="download-card"
+                :href="platform.href"
+              >
+                <component :is="platform.icon" :size="28" weight="fill" aria-hidden="true" />
+                <span>
+                  <strong>{{ platform.name }}</strong>
+                  <small>{{ platform.detail }}</small>
+                </span>
+                <b>{{ platform.format }}</b>
+                <ArrowRight :size="18" weight="bold" aria-hidden="true" />
+              </a>
+            </div>
+            <p class="download-caveat">
+              Alpha software: keep another copy of important data. Check the
+              <a href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">release notes and checksums</a>
+              before installing.
+            </p>
           </section>
 
           <section id="experience" class="native-promise section-width" data-reveal>

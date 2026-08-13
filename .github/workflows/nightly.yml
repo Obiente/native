@@ -481,6 +481,7 @@ jobs:
               --source-sha "${NIGHTLY_SHA}" \
               --source-run-url "${SOURCE_RUN_URL}" \
               --available "${available_platforms}" \
+              --assets dist \
               --output "${RUNNER_TEMP}/release-notes.md"
           }
           write_release_notes "${STAGED_AVAILABLE_PLATFORMS}"
@@ -561,7 +562,15 @@ jobs:
           echo "successful=${canonical_successful}" >>"${GITHUB_OUTPUT}"
           echo "available=${canonical_available}" >>"${GITHUB_OUTPUT}"
 
-          write_release_notes "${canonical_available}"
+          rm -f "${canonical}/SHA256SUMS"
+          node tools/nightly-release-notes.mjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${NIGHTLY_TAG}" \
+            --source-sha "${NIGHTLY_SHA}" \
+            --source-run-url "${SOURCE_RUN_URL}" \
+            --available "${canonical_available}" \
+            --assets "${canonical}" \
+            --output "${RUNNER_TEMP}/release-notes.md"
           gh release edit "${NIGHTLY_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
@@ -673,7 +682,7 @@ jobs:
       - source
       - publish
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     concurrency:
       group: app-nightly-channel
       cancel-in-progress: false
@@ -697,6 +706,14 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --pattern '*update-manifest.json' \
             --dir channel
+          gh release download "${NIGHTLY_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern '*.apk' \
+            --pattern '*.deb' \
+            --pattern '*.rpm' \
+            --pattern '*.msi' \
+            --pattern '*.dmg' \
+            --dir channel
           android_manifest="-"
           desktop_manifest="-"
           [[ -f channel/update-manifest.json ]] && android_manifest=channel/update-manifest.json
@@ -709,3 +726,8 @@ jobs:
             "${android_manifest}" \
             "${desktop_manifest}" \
             1
+          tools/promote-download-channel.sh \
+            "${GITHUB_REPOSITORY}" \
+            channel-nightly \
+            "${NIGHTLY_TAG}" \
+            channel

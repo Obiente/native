@@ -2912,6 +2912,85 @@ h1 span {
   border-block: 1px solid var(--outline);
 }
 
+.download-section {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.62fr) minmax(560px, 1.38fr);
+  gap: clamp(36px, 5vw, 76px);
+  padding-top: 88px;
+  padding-bottom: 88px;
+}
+
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.download-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid var(--outline);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 12%);
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.download-card:hover,
+.download-card:focus-visible {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--outline));
+  color: var(--text);
+  box-shadow: 0 16px 38px rgb(0 0 0 / 20%);
+  transform: translateY(-2px);
+}
+
+.download-card > svg:first-child {
+  color: var(--primary);
+}
+
+.download-card span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.download-card strong,
+.download-card small {
+  overflow-wrap: anywhere;
+}
+
+.download-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.download-card b {
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: var(--surface-high);
+  color: var(--text-soft);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.download-caveat {
+  grid-column: 2;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.download-caveat a {
+  color: var(--primary);
+  font-weight: 700;
+}
+
 .hero-foundation-platforms {
   min-width: 0;
   padding: 20px 28px 20px 0;
@@ -4494,6 +4573,15 @@ h1 span {
 }
 
 @media (max-width: 1120px) {
+  .download-section {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+
+  .download-caveat {
+    grid-column: 1;
+  }
+
   .product-hero {
     min-height: auto;
     grid-template-columns: 1fr;
@@ -4783,6 +4871,14 @@ h1 span {
 }
 
 @media (max-width: 760px) {
+  .download-section {
+    padding-block: 62px;
+  }
+
+  .download-grid {
+    grid-template-columns: 1fr;
+  }
+
   .guide-platform-nav {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
