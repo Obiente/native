@@ -15,7 +15,7 @@ class DesktopExternalUrlLauncherTest {
         val launcher = DesktopExternalUrlLauncher(
             osName = "Linux",
             awtBrowser = opened::add,
-            startCommand = commands::add,
+            startCommand = { arguments -> commands += arguments; acceptedProcess() },
         )
 
         val method = launcher.open("https://cloud.example.test/index.php/login/v2/flow/abc")
@@ -31,7 +31,7 @@ class DesktopExternalUrlLauncherTest {
         val launcher = DesktopExternalUrlLauncher(
             osName = "Linux",
             awtBrowser = null,
-            startCommand = commands::add,
+            startCommand = { arguments -> commands += arguments; acceptedProcess() },
         )
 
         val method = launcher.open("https://cloud.example.test/index.php/login/v2/flow/abc?token=redacted")
@@ -57,6 +57,7 @@ class DesktopExternalUrlLauncherTest {
             startCommand = { arguments ->
                 commands += arguments
                 if (arguments.first() == "xdg-open") throw IOException("missing helper")
+                acceptedProcess()
             },
         )
 
@@ -95,7 +96,7 @@ class DesktopExternalUrlLauncherTest {
         val launcher = DesktopExternalUrlLauncher(
             osName = "Linux",
             awtBrowser = null,
-            startCommand = { commandStarted = true },
+            startCommand = { commandStarted = true; acceptedProcess() },
         )
 
         val failure = assertFailsWith<DesktopExternalUrlLaunchException> {
@@ -119,6 +120,78 @@ class DesktopExternalUrlLauncherTest {
             listOf("rundll32", "url.dll,FileProtocolHandler", uri.toASCIIString()),
             desktopExternalUrlCommands("Windows 11", uri).single().arguments,
         )
+    }
+
+    @Test
+    fun immediateNonzeroXdgExitFallsBackToGio() {
+        val commands = mutableListOf<String>()
+        val launcher = DesktopExternalUrlLauncher(
+            osName = "Linux",
+            awtBrowser = null,
+            startCommand = { arguments ->
+                commands += arguments.first()
+                if (arguments.first() == "xdg-open") exitedProcess(3) else acceptedProcess()
+            },
+        )
+
+        val method = launcher.open("https://cloud.example.test/login")
+
+        assertEquals(DesktopExternalUrlMethod.LinuxGio, method)
+        assertEquals(listOf("xdg-open", "gio"), commands)
+    }
+
+    @Test
+    fun runningHelperCountsAsAcceptedWithoutWaitingForItToExit() {
+        val launcher = DesktopExternalUrlLauncher(
+            osName = "Linux",
+            awtBrowser = null,
+            startCommand = { DesktopExternalUrlProcess { null } },
+        )
+
+        assertEquals(
+            DesktopExternalUrlMethod.LinuxXdgOpen,
+            launcher.open("https://cloud.example.test/login"),
+        )
+    }
+
+    @Test
+    fun mailAndTelephoneLinksUseNativeHelpersWithoutAwtBrowse() {
+        val commands = mutableListOf<List<String>>()
+        val launcher = DesktopExternalUrlLauncher(
+            osName = "Linux",
+            awtBrowser = { error("AWT browse must not receive non-web schemes") },
+            startCommand = { arguments -> commands += arguments; acceptedProcess() },
+        )
+
+        assertEquals(DesktopExternalUrlMethod.LinuxXdgOpen, launcher.open("mailto:person@example.test"))
+        assertEquals(DesktopExternalUrlMethod.LinuxXdgOpen, launcher.open("tel:+31201234567"))
+        assertEquals(
+            listOf(
+                listOf("xdg-open", "mailto:person@example.test"),
+                listOf("xdg-open", "tel:+31201234567"),
+            ),
+            commands,
+        )
+    }
+
+    @Test
+    fun unsafeEmailAndTelephoneLinksAreRejected() {
+        listOf(
+            "mailto:person@example.test?subject=secret",
+            "mailto:missing-at-sign",
+            "tel:12;postd=34",
+            "tel:+12",
+        ).forEach { url ->
+            val launcher = DesktopExternalUrlLauncher(
+                osName = "Linux",
+                awtBrowser = null,
+                startCommand = { error("Unsafe link reached a platform helper") },
+            )
+            assertEquals(
+                "BROWSER_URL_INVALID",
+                assertFailsWith<DesktopExternalUrlLaunchException> { launcher.open(url) }.code,
+            )
+        }
     }
 
     @Test
@@ -149,4 +222,9 @@ class DesktopExternalUrlLauncherTest {
         assertEquals(null, event.message)
         assertEquals(null, event.exception)
     }
+
+    private fun acceptedProcess(): DesktopExternalUrlProcess = exitedProcess(0)
+
+    private fun exitedProcess(exitCode: Int): DesktopExternalUrlProcess =
+        DesktopExternalUrlProcess { exitCode }
 }

@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import java.awt.Desktop
 import java.net.URI
+import java.util.concurrent.TimeUnit
 
 internal enum class DesktopExternalUrlMethod(val diagnosticName: String) {
     Awt("awt"),
@@ -21,14 +22,14 @@ internal class DesktopExternalUrlLaunchException(
 internal class DesktopExternalUrlLauncher(
     private val osName: String = System.getProperty("os.name").orEmpty(),
     private val awtBrowser: ((URI) -> Unit)? = supportedAwtBrowser(),
-    private val startCommand: (List<String>) -> Unit = ::startExternalUrlCommand,
+    private val startCommand: (List<String>) -> DesktopExternalUrlProcess = ::startExternalUrlCommand,
 ) {
     fun open(url: String): DesktopExternalUrlMethod {
-        val uri = externalBrowserUri(url)
+        val uri = externalHandoffUri(url)
         val attempts = mutableListOf<DesktopExternalUrlMethod>()
         var lastFailure: Throwable? = null
 
-        awtBrowser?.let { browse ->
+        awtBrowser?.takeIf { uri.scheme.isWebScheme() }?.let { browse ->
             attempts += DesktopExternalUrlMethod.Awt
             runCatching { browse(uri) }
                 .onSuccess { return DesktopExternalUrlMethod.Awt }
@@ -37,14 +38,24 @@ internal class DesktopExternalUrlLauncher(
 
         desktopExternalUrlCommands(osName, uri).forEach { candidate ->
             attempts += candidate.method
-            runCatching { startCommand(candidate.arguments) }
+            runCatching {
+                val process = startCommand(candidate.arguments)
+                val exitCode = process.exitCodeWithin(EXTERNAL_URL_HELPER_EXIT_TIMEOUT_MILLIS)
+                check(exitCode == null || exitCode == 0) {
+                    "The external URL helper exited before accepting the request."
+                }
+            }
                 .onSuccess { return candidate.method }
                 .onFailure { failure -> lastFailure = failure }
         }
 
         throw DesktopExternalUrlLaunchException(
-            message = desktopExternalUrlFailureMessage(osName),
-            code = "BROWSER_HANDOFF_UNAVAILABLE",
+            message = desktopExternalUrlFailureMessage(osName, uri.scheme.isWebScheme()),
+            code = if (uri.scheme.isWebScheme()) {
+                "BROWSER_HANDOFF_UNAVAILABLE"
+            } else {
+                "EXTERNAL_HANDOFF_UNAVAILABLE"
+            },
             attemptedMethods = attempts,
             cause = lastFailure,
         )
@@ -56,7 +67,12 @@ internal data class DesktopExternalUrlCommand(
     val arguments: List<String>,
 )
 
-internal fun externalBrowserUri(url: String): URI {
+internal fun interface DesktopExternalUrlProcess {
+    /** Returns null when the helper is still running after the bounded observation window. */
+    fun exitCodeWithin(timeoutMillis: Long): Int?
+}
+
+internal fun externalHandoffUri(url: String): URI {
     val uri = runCatching { URI(url) }.getOrElse { failure ->
         throw DesktopExternalUrlLaunchException(
             message = "This link is not a valid web address.",
@@ -65,13 +81,15 @@ internal fun externalBrowserUri(url: String): URI {
             cause = failure,
         )
     }
-    if (
-        uri.scheme?.lowercase() !in setOf("http", "https") ||
-        uri.host.isNullOrBlank() ||
-        uri.rawUserInfo != null
-    ) {
+    val valid = when (uri.scheme?.lowercase()) {
+        "http", "https" -> !uri.host.isNullOrBlank() && uri.rawUserInfo == null
+        "mailto" -> uri.isSafeMailtoUri()
+        "tel" -> uri.isSafeTelephoneUri()
+        else -> false
+    }
+    if (!valid) {
         throw DesktopExternalUrlLaunchException(
-            message = "This link is not a supported http:// or https:// address.",
+            message = "This link is not a supported web, email, or telephone address.",
             code = "BROWSER_URL_INVALID",
             attemptedMethods = emptyList(),
         )
@@ -139,12 +157,15 @@ internal fun desktopExternalUrlFailureDiagnostic(
     ),
 )
 
-private fun desktopExternalUrlFailureMessage(osName: String): String =
-    if (osName.contains("linux", ignoreCase = true)) {
+private fun desktopExternalUrlFailureMessage(osName: String, browser: Boolean): String = when {
+    browser && osName.contains("linux", ignoreCase = true) -> {
         "Could not open your browser. Set a default browser or install xdg-utils, then try again."
-    } else {
+    }
+    browser -> {
         "Could not open your browser. Set a default browser, then try again."
     }
+    else -> "Could not open this link with an installed application."
+}
 
 private fun supportedAwtBrowser(): ((URI) -> Unit)? = runCatching {
     if (!Desktop.isDesktopSupported()) return@runCatching null
@@ -153,10 +174,37 @@ private fun supportedAwtBrowser(): ((URI) -> Unit)? = runCatching {
     { uri: URI -> desktop.browse(uri) }
 }.getOrNull()
 
-private fun startExternalUrlCommand(arguments: List<String>) {
+private fun startExternalUrlCommand(arguments: List<String>): DesktopExternalUrlProcess {
     require(arguments.isNotEmpty())
-    ProcessBuilder(arguments)
+    val process = ProcessBuilder(arguments)
         .redirectOutput(ProcessBuilder.Redirect.DISCARD)
         .redirectError(ProcessBuilder.Redirect.DISCARD)
         .start()
+    return DesktopExternalUrlProcess { timeoutMillis ->
+        if (process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) process.exitValue() else null
+    }
 }
+
+private fun String?.isWebScheme(): Boolean = equals("http", ignoreCase = true) || equals("https", ignoreCase = true)
+
+private fun URI.isSafeMailtoUri(): Boolean {
+    if (!isOpaque || rawQuery != null || rawFragment != null) return false
+    val address = rawSchemeSpecificPart.orEmpty()
+    return address.length in 3..320 &&
+        address.none { it.isWhitespace() || it.isISOControl() || it == '?' || it == '#' } &&
+        address.count { it == '@' } == 1 &&
+        !address.startsWith('@') &&
+        !address.endsWith('@')
+}
+
+private fun URI.isSafeTelephoneUri(): Boolean {
+    if (!isOpaque || rawQuery != null || rawFragment != null) return false
+    val number = rawSchemeSpecificPart.orEmpty()
+    return number.length in 3..64 &&
+        number.count(Char::isDigit) >= 3 &&
+        number.withIndex().all { (index, character) ->
+            character.isDigit() || character == '+' && index == 0
+        }
+}
+
+private const val EXTERNAL_URL_HELPER_EXIT_TIMEOUT_MILLIS = 500L

@@ -574,6 +574,9 @@ interface NextcloudPlatformServices {
 
     fun openExternalUrl(url: String)
 
+    /** Opens the one-time browser login URL without blocking the UI dispatcher. */
+    suspend fun openLoginUrl(url: String) = openExternalUrl(url)
+
     /** Copies bounded application text without exposing session credentials to another process. */
     fun copyTextToClipboard(label: String, text: String): Boolean = false
 

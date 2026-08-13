@@ -3624,6 +3624,16 @@ class DesktopNextcloudServices(
     }
 
     override fun openExternalUrl(url: String) {
+        serviceScope.launch {
+            runCatching { openExternalUrlNow(url) }
+        }
+    }
+
+    override suspend fun openLoginUrl(url: String) = withContext(Dispatchers.IO) {
+        openExternalUrlNow(url)
+    }
+
+    private fun openExternalUrlNow(url: String) {
         try {
             externalUrlLauncher.open(url)
         } catch (failure: DesktopExternalUrlLaunchException) {
