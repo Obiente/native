@@ -175,11 +175,18 @@ class AsyncJvmSupportDiagnostics(
 
     internal suspend fun writeBundleForSubmission(
         destination: File,
-        reproductionSteps: String,
-        featureState: List<SupportDiagnosticFieldDraft>,
+        context: PreparedSupportSubmissionContext,
     ): PreparedSupportDiagnosticsBundle = withContext(dispatcher) {
         ready.await().also(::drainPendingSnapshot)
-            .writeBundleForSubmission(destination, reproductionSteps, featureState)
+            .writeBundleForSubmission(destination, context)
+    }
+
+    internal suspend fun prepareSubmissionContext(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ): PreparedSupportSubmissionContext = withContext(dispatcher) {
+        ready.await().also(::drainPendingSnapshot)
+            .prepareSubmissionContext(reproductionSteps, featureState)
     }
 
     override fun close() {

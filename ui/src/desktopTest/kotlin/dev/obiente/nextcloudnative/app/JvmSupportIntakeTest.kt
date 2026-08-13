@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
@@ -292,6 +295,107 @@ class JvmSupportIntakeTest {
             assertEquals(upload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             Unit
+        }
+    }
+
+    @Test
+    fun restoresConfirmedSubmissionInterruptedBeforePackaging() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            fixture.intake.submit("Visit https://private.example.test and refresh.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val firstUpload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            val persisted = descriptor.readText()
+            val archiveName = requireNotNull(
+                Regex("\\\"archiveName\\\":\\\"([^\\\"]+)\\\"").find(persisted)?.groupValues?.get(1),
+            )
+            File(fixture.temporaryRoot, archiveName).delete()
+            descriptor.writeText(
+                persisted.replace(
+                    Regex("\\\"archiveName\\\":\\\"[^\\\"]+\\\""),
+                    "\"archiveName\":null",
+                ),
+            )
+            fixture.intake.close()
+
+            val restored = fixture.newIntake()
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(firstUpload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
+            val body = retry.body?.utf8().orEmpty()
+            assertFalse(body.contains("private.example.test"))
+            assertTrue(body.contains("<url:"))
+        }
+    }
+
+    @Test
+    fun retriesPersistedDeletionCapabilityWithoutResubmitting() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val failedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", reconciliation.method)
+            assertEquals("DELETE", failedDeletion.method)
+            fixture.intake.close()
+
+            val restored = fixture.newIntake()
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            val retriedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", retriedDeletion.method)
+            assertEquals(4, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun restrictsPendingSubmissionFilesToTheCurrentUnixUser() = runBlocking {
+        testFixture().use { fixture ->
+            if (
+                Files.getFileAttributeView(
+                    fixture.temporaryRoot.toPath(),
+                    PosixFileAttributeView::class.java,
+                ) == null
+            ) {
+                return@use
+            }
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val expectedDirectoryPermissions = setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE,
+            )
+            val expectedFilePermissions = setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+            )
+            assertEquals(expectedDirectoryPermissions, Files.getPosixFilePermissions(fixture.temporaryRoot.toPath()))
+            fixture.temporaryRoot.listFiles().orEmpty().filter(File::isFile).forEach { file ->
+                assertEquals(expectedFilePermissions, Files.getPosixFilePermissions(file.toPath()))
+            }
         }
     }
 

@@ -4,7 +4,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.security.SecureRandom
 import java.time.Instant
 import java.time.ZonedDateTime
@@ -60,16 +63,20 @@ class JvmSupportIntake(
     private val shutdownRequested = AtomicBoolean(false)
     private val operationActive = AtomicBoolean(false)
     private val lock = Any()
+    private val persistenceLock = Any()
     private var pending: PendingSubmission? = null
 
     init {
-        val restored = restorePendingSubmission()
-        pruneTemporaryReports(restored?.archive)
+        val storageReady = runCatching { preparePrivateStorage() }.isSuccess
+        val restored = if (storageReady) restorePendingSubmission() else null
+        if (storageReady) pruneTemporaryReports(restored?.archive)
         restored?.let {
             pending = restored
             state.value = SupportDiagnosticsSubmissionState.RetryableFailure(
                 if (restored.cancellationPending) {
                     "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
+                } else if (restored.archive == null) {
+                    "Private report preparation was interrupted. You can retry it safely."
                 } else {
                     "A private support submission was interrupted. You can retry it safely."
                 },
@@ -96,16 +103,9 @@ class JvmSupportIntake(
                 return@withContext
             }
             cancellationRequested.set(false)
-            state.value = SupportDiagnosticsSubmissionState.Packaging
-            val prepared = try {
-                require(temporaryRoot.isDirectory || temporaryRoot.mkdirs()) {
-                    "Could not prepare private support submission storage."
-                }
-                diagnostics.writeBundleForSubmission(
-                    destination = File(temporaryRoot, "support-${UUID.randomUUID()}.zip"),
-                    reproductionSteps = reproductionSteps,
-                    featureState = featureState,
-                )
+            val context = try {
+                preparePrivateStorage()
+                diagnostics.prepareSubmissionContext(reproductionSteps, featureState)
             } catch (cancellation: CancellationException) {
                 state.value = SupportDiagnosticsSubmissionState.Cancelled
                 throw cancellation
@@ -117,10 +117,10 @@ class JvmSupportIntake(
                 return@withContext
             }
             val submission = PendingSubmission(
-                archive = prepared.archive,
+                archive = null,
                 metadata = SupportIntakeMetadata(
                     title = "Nextcloud Native diagnostic report",
-                    description = prepared.sanitizedReproductionSteps.toSupportIntakeDescription(),
+                    description = context.sanitizedReproductionSteps.toSupportIntakeDescription(),
                     release = environment.safeForReport().let { safe ->
                         SupportIntakeRelease(
                             version = safe.appVersion.filterSupportMetadata(80),
@@ -134,12 +134,14 @@ class JvmSupportIntake(
                 idempotencyKey = secureIdempotencyKey(),
                 createdAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L),
                 cancellationPending = cancellationRequested.get(),
+                context = context,
             )
             synchronized(lock) { pending = submission }
             if (!persistPendingSafely(submission)) {
                 finishRejected(submission, "The private support submission could not be retained safely on this device.")
                 return@withContext
             }
+            if (!packageSubmission(submission)) return@withContext
             upload(submission)
         } finally {
             operationActive.set(false)
@@ -150,7 +152,7 @@ class JvmSupportIntake(
         if (!operationActive.compareAndSet(false, true)) return@withContext
         try {
             val submission = synchronized(lock) { pending }
-            if (submission == null || !submission.archive.isFile) {
+            if (submission == null) {
                 state.value = SupportDiagnosticsSubmissionState.Rejected(
                     "There is no private support submission available to retry.",
                 )
@@ -162,10 +164,15 @@ class JvmSupportIntake(
             }
             if (submission.cancellationPending) {
                 cancellationRequested.set(true)
-                reconcileAfterAmbiguousResult(
-                    submission,
-                    IOException("Cancellation still needs to be reconciled."),
-                )
+                val receipt = submission.receipt
+                if (receipt == null) {
+                    reconcileAfterAmbiguousResult(
+                        submission,
+                        IOException("Cancellation still needs to be reconciled."),
+                    )
+                } else {
+                    deleteCancelledReceipt(submission, receipt)
+                }
                 return@withContext
             }
             val waitMillis = submission.retryNotBeforeEpochMillis?.minus(System.currentTimeMillis()) ?: 0L
@@ -182,6 +189,11 @@ class JvmSupportIntake(
                 finishRejected(submission, "The private support submission could not be retained safely on this device.")
                 return@withContext
             }
+            if (submission.archive == null && !packageSubmission(submission)) return@withContext
+            if (submission.archive?.isFile != true) {
+                finishRejected(submission, "The pending private report archive is unavailable.")
+                return@withContext
+            }
             upload(submission)
         } finally {
             operationActive.set(false)
@@ -189,10 +201,10 @@ class JvmSupportIntake(
     }
 
     fun cancel(): Boolean {
+        cancellationRequested.set(true)
         val submission = synchronized(lock) { pending }
         if (submission != null) {
             if (!submission.outcomeAmbiguous && activeCall.get() == null) {
-                cancellationRequested.set(true)
                 finishCancelled(submission)
                 return true
             }
@@ -200,6 +212,7 @@ class JvmSupportIntake(
             submission.outcomeAmbiguous = true
             if (!persistPendingSafely(submission)) {
                 submission.cancellationPending = false
+                cancellationRequested.compareAndSet(true, false)
                 state.value = SupportDiagnosticsSubmissionState.RetryableFailure(
                     "Cancellation could not be retained safely. The current submission was left unchanged.",
                     outcomeAmbiguous = true,
@@ -207,7 +220,6 @@ class JvmSupportIntake(
                 return false
             }
         }
-        cancellationRequested.set(true)
         val call = activeCall.getAndSet(null)
         if (call != null) {
             call.cancel()
@@ -224,12 +236,64 @@ class JvmSupportIntake(
             state.value = SupportDiagnosticsSubmissionState.Cancelled
             return true
         }
+        cancellationRequested.compareAndSet(true, false)
         return false
     }
 
     override fun close() {
         shutdownRequested.set(true)
         activeCall.getAndSet(null)?.cancel()
+    }
+
+    private suspend fun packageSubmission(submission: PendingSubmission): Boolean {
+        if (cancellationRequested.get()) {
+            finishCancelled(submission)
+            return false
+        }
+        state.value = SupportDiagnosticsSubmissionState.Packaging
+        val destination = File(temporaryRoot, "support-${UUID.randomUUID()}.zip")
+        val prepared = try {
+            diagnostics.writeBundleForSubmission(destination, submission.context)
+        } catch (cancellation: CancellationException) {
+            retainForRetry(
+                submission,
+                "Private report preparation was interrupted. You can retry it safely.",
+                ambiguous = false,
+            )
+            throw cancellation
+        } catch (_: Throwable) {
+            retainForRetry(
+                submission,
+                "The private diagnostic report could not be prepared. You can retry safely.",
+                ambiguous = false,
+            )
+            return false
+        }
+        try {
+            restrictOwnerOnlyFile(prepared.archive)
+        } catch (_: Throwable) {
+            prepared.archive.delete()
+            retainForRetry(
+                submission,
+                "The private report could not be protected on this device. You can retry safely.",
+                ambiguous = false,
+            )
+            return false
+        }
+        if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
+            prepared.archive.delete()
+            return false
+        }
+        submission.archive = prepared.archive
+        if (!persistPendingSafely(submission)) {
+            finishRejected(submission, "The private support submission could not be retained safely on this device.")
+            return false
+        }
+        if (cancellationRequested.get()) {
+            finishCancelled(submission)
+            return false
+        }
+        return true
     }
 
     private fun upload(submission: PendingSubmission) {
@@ -242,9 +306,11 @@ class JvmSupportIntake(
             finishRejected(submission, "The private support submission could not be retained safely on this device.")
             return
         }
+        val archive = requireNotNull(submission.archive) { "The private support archive has not been prepared." }
+        require(archive.isFile && archive.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
         val metadata = json.encodeToString(SupportIntakeMetadata.serializer(), submission.metadata)
         val progressBody = ProgressRequestBody(
-            delegate = submission.archive.asRequestBody(SUPPORT_ARCHIVE_MEDIA_TYPE),
+            delegate = archive.asRequestBody(SUPPORT_ARCHIVE_MEDIA_TYPE),
             onProgress = { uploaded, total ->
                 if (!cancellationRequested.get()) {
                     state.value = SupportDiagnosticsSubmissionState.Uploading(
@@ -352,7 +418,16 @@ class JvmSupportIntake(
     }
 
     private fun finishReceived(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
-        if (cancellationRequested.get()) {
+        val submitReceivedReport = synchronized(lock) {
+            if (pending !== submission) return
+            if (cancellationRequested.get()) {
+                false
+            } else {
+                pending = null
+                true
+            }
+        }
+        if (!submitReceivedReport) {
             deleteCancelledReceipt(submission, receipt)
         } else {
             finishSubmitted(submission, receipt)
@@ -370,6 +445,13 @@ class JvmSupportIntake(
                 deletionUrl.encodedQuery == null &&
                 deletionUrl.fragment == null,
         )
+        submission.cancellationPending = true
+        submission.outcomeAmbiguous = true
+        submission.receipt = receipt
+        if (!persistPendingSafely(submission)) {
+            finishSubmitted(submission, receipt)
+            return
+        }
         val capability = statusUrl.pathSegments.last()
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
@@ -384,11 +466,19 @@ class JvmSupportIntake(
                 if (response.isSuccessful || response.code == 404) {
                     finishCancelled(submission)
                 } else {
-                    finishSubmitted(submission, receipt)
+                    retainCancellationForRetry(
+                        submission,
+                        receipt,
+                        "Deletion could not be confirmed. Retry safely to delete the private report.",
+                    )
                 }
             }
         } catch (_: IOException) {
-            finishSubmitted(submission, receipt)
+            retainCancellationForRetry(
+                submission,
+                receipt,
+                "Deletion could not be confirmed. Check your connection, then retry safely.",
+            )
         } finally {
             activeCall.compareAndSet(call, null)
         }
@@ -429,8 +519,10 @@ class JvmSupportIntake(
         synchronized(lock) {
             if (pending === submission) pending = null
         }
-        submission.archive.delete()
-        pendingDescriptor().delete()
+        submission.archive?.delete()
+        synchronized(persistenceLock) {
+            pendingDescriptor().delete()
+        }
     }
 
     private fun finishRejected(submission: PendingSubmission, message: String) {
@@ -459,8 +551,26 @@ class JvmSupportIntake(
         }
     }
 
-    private fun persistPendingSafely(submission: PendingSubmission): Boolean =
+    private fun retainCancellationForRetry(
+        submission: PendingSubmission,
+        receipt: SupportIntakeReceipt,
+        message: String,
+    ) {
+        submission.cancellationPending = true
+        submission.outcomeAmbiguous = true
+        submission.receipt = receipt
+        synchronized(lock) { pending = submission }
+        if (persistPendingSafely(submission)) {
+            state.value = SupportDiagnosticsSubmissionState.RetryableFailure(message, outcomeAmbiguous = true)
+        } else {
+            finishSubmitted(submission, receipt)
+        }
+    }
+
+    private fun persistPendingSafely(submission: PendingSubmission): Boolean = synchronized(persistenceLock) {
+        if (synchronized(lock) { pending !== submission }) return@synchronized false
         runCatching { persistPending(submission) }.isSuccess
+    }
 
     private fun decodeReceipt(response: String): SupportIntakeReceipt = try {
         json.decodeFromString(SupportIntakeReceipt.serializer(), response)
@@ -488,22 +598,54 @@ class JvmSupportIntake(
             .forEach(File::delete)
     }
 
+    private fun preparePrivateStorage() {
+        require(temporaryRoot.isDirectory || temporaryRoot.mkdirs()) {
+            "Could not prepare private support submission storage."
+        }
+        restrictOwnerOnlyDirectory(temporaryRoot)
+    }
+
+    private fun restrictOwnerOnlyDirectory(directory: File) {
+        val path = directory.toPath()
+        if (Files.getFileAttributeView(path, PosixFileAttributeView::class.java) == null) return
+        Files.setPosixFilePermissions(
+            path,
+            setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE,
+            ),
+        )
+    }
+
+    private fun restrictOwnerOnlyFile(file: File) {
+        val path = file.toPath()
+        if (Files.getFileAttributeView(path, PosixFileAttributeView::class.java) == null) return
+        Files.setPosixFilePermissions(
+            path,
+            setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+        )
+    }
+
     private fun persistPending(submission: PendingSubmission) {
         val descriptor = pendingDescriptor()
         val parent = requireNotNull(descriptor.parentFile)
-        require(parent.isDirectory || parent.mkdirs())
-        val temporary = File(parent, ".pending-${UUID.randomUUID()}.tmp")
+        preparePrivateStorage()
+        val temporary = Files.createTempFile(parent.toPath(), ".pending-", ".tmp").toFile()
         try {
+            restrictOwnerOnlyFile(temporary)
             val encoded = json.encodeToString(
                 PersistedPendingSubmission.serializer(),
                 PersistedPendingSubmission(
-                    archiveName = submission.archive.name,
+                    archiveName = submission.archive?.name,
                     metadata = submission.metadata,
                     idempotencyKey = submission.idempotencyKey,
                     createdAtEpochMillis = submission.createdAtEpochMillis,
+                    context = submission.context,
                     cancellationPending = submission.cancellationPending,
                     outcomeAmbiguous = submission.outcomeAmbiguous,
                     retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis,
+                    receipt = submission.receipt,
                 ),
             ).encodeToByteArray()
             FileOutputStream(temporary).use { output ->
@@ -511,19 +653,20 @@ class JvmSupportIntake(
                 output.fd.sync()
             }
             runCatching {
-                java.nio.file.Files.move(
+                Files.move(
                     temporary.toPath(),
                     descriptor.toPath(),
                     StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING,
                 )
             }.recoverCatching {
-                java.nio.file.Files.move(
+                Files.move(
                     temporary.toPath(),
                     descriptor.toPath(),
                     StandardCopyOption.REPLACE_EXISTING,
                 )
             }.getOrThrow()
+            restrictOwnerOnlyFile(descriptor)
         } finally {
             temporary.delete()
         }
@@ -537,24 +680,34 @@ class JvmSupportIntake(
             PersistedPendingSubmission.serializer(),
             descriptor.readText(Charsets.UTF_8),
         )
-        require(persisted.archiveName.matches(SUPPORT_TEMPORARY_FILE_PATTERN))
+        require(persisted.archiveName == null || persisted.archiveName.matches(SUPPORT_TEMPORARY_FILE_PATTERN))
         require(persisted.idempotencyKey.matches(SUPPORT_IDEMPOTENCY_PATTERN))
         require(System.currentTimeMillis() - persisted.createdAtEpochMillis in 0L..SUPPORT_TEMPORARY_MAX_AGE_MILLIS)
         require(
             persisted.retryNotBeforeEpochMillis == null ||
                 persisted.retryNotBeforeEpochMillis <= System.currentTimeMillis() + MAX_SUPPORT_RETRY_AFTER_MILLIS,
         )
-        val archive = File(temporaryRoot, persisted.archiveName).absoluteFile.normalize()
-        require(archive.parentFile == temporaryRoot.absoluteFile.normalize())
-        require(archive.isFile && archive.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
+        persisted.receipt?.let { receipt ->
+            require(persisted.cancellationPending)
+            validateReceipt(receipt)
+        }
+        val archive = persisted.archiveName?.let { archiveName ->
+            File(temporaryRoot, archiveName).absoluteFile.normalize().also { candidate ->
+                require(candidate.parentFile == temporaryRoot.absoluteFile.normalize())
+                require(candidate.isFile && candidate.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
+                restrictOwnerOnlyFile(candidate)
+            }
+        }
         PendingSubmission(
             archive = archive,
             metadata = persisted.metadata,
             idempotencyKey = persisted.idempotencyKey,
             createdAtEpochMillis = persisted.createdAtEpochMillis,
+            context = persisted.context,
             cancellationPending = persisted.cancellationPending,
             outcomeAmbiguous = persisted.outcomeAmbiguous,
             retryNotBeforeEpochMillis = persisted.retryNotBeforeEpochMillis,
+            receipt = persisted.receipt,
         )
     }.getOrElse {
         pendingDescriptor().delete()
@@ -564,24 +717,28 @@ class JvmSupportIntake(
     private fun pendingDescriptor(): File = File(temporaryRoot, SUPPORT_PENDING_DESCRIPTOR)
 
     private data class PendingSubmission(
-        val archive: File,
+        var archive: File?,
         val metadata: SupportIntakeMetadata,
         val idempotencyKey: String,
         val createdAtEpochMillis: Long,
+        val context: PreparedSupportSubmissionContext,
         var cancellationPending: Boolean = false,
         var outcomeAmbiguous: Boolean = false,
         var retryNotBeforeEpochMillis: Long? = null,
+        var receipt: SupportIntakeReceipt? = null,
     )
 
     @Serializable
     private data class PersistedPendingSubmission(
-        val archiveName: String,
+        val archiveName: String?,
         val metadata: SupportIntakeMetadata,
         val idempotencyKey: String,
         val createdAtEpochMillis: Long,
+        val context: PreparedSupportSubmissionContext,
         val cancellationPending: Boolean = false,
         val outcomeAmbiguous: Boolean = true,
         val retryNotBeforeEpochMillis: Long? = null,
+        val receipt: SupportIntakeReceipt? = null,
     )
 }
 
@@ -675,7 +832,7 @@ private val SUPPORT_CODE_PATTERN = Regex("OBI-[A-HJ-KM-NP-Z2-9]{5}-[A-HJ-KM-NP-Z
 private val SUPPORT_RECEIPT_STATUS_PATTERN = Regex("[a-z][a-z_]{1,31}")
 private val SUPPORT_STATUS_PATH_PATTERN = Regex("/r/[A-Za-z0-9_-]{43}")
 private val SUPPORT_TEMPORARY_FILE_PATTERN = Regex("support-[0-9a-f-]{36}\\.zip")
-private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.pending-[0-9a-f-]{36}\\.tmp")
+private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.pending-[A-Za-z0-9._-]+\\.tmp")
 private val SUPPORT_IDEMPOTENCY_PATTERN = Regex("[A-Za-z0-9_-]{43}")
 private val RETRYABLE_CLIENT_STATUS_CODES = setOf(425, 429)
 private const val MAX_SUPPORT_INTAKE_MESSAGE_LENGTH = 240

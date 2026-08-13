@@ -433,7 +433,7 @@ private const val MIN_UNBOUNDED_PRIVATE_VALUE_LENGTH = 3
 private const val MAX_PRIVATE_VALUE_LENGTH = 4_096
 private const val MAX_REGISTERED_PRIVATE_VALUES = 128
 private const val MAX_SUPPORT_DIAGNOSTIC_RAW_TEXT_LENGTH = 16_384
-private const val MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH = 512
+internal const val MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH = 512
 private const val MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH = 96
 private const val MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES = 16
 private const val MAX_SUPPORT_DIAGNOSTIC_CAUSE_DEPTH = 4
@@ -442,7 +442,7 @@ private const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
 private const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
 internal const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
 
-private val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")
+internal val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")
 private val SUPPORT_DIAGNOSTIC_OPERATION = Regex("^[a-z][a-z0-9._-]{0,79}$")
 private val SUPPORT_DIAGNOSTIC_CODE = Regex("^[A-Za-z0-9._:-]{1,96}$")
 private val SUPPORT_DIAGNOSTIC_ALIAS = Regex("^<[a-z-]+:[a-f0-9]{16}>$")

@@ -216,29 +216,48 @@ class JvmSupportDiagnostics(
         destination: File,
         reproductionSteps: String,
         featureState: List<SupportDiagnosticFieldDraft>,
-    ): File = writeBundleForSubmission(destination, reproductionSteps, featureState).archive
+    ): File = writeBundleForSubmission(
+        destination,
+        prepareSubmissionContext(reproductionSteps, featureState),
+    ).archive
+
+    internal fun prepareSubmissionContext(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ): PreparedSupportSubmissionContext = synchronized(lock) {
+        check(storageAvailable) { "Private diagnostic storage is unavailable." }
+        require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
+        PreparedSupportSubmissionContext(
+            sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
+            featureState = sanitizer.sanitizeFields(featureState),
+        )
+    }
 
     internal fun writeBundleForSubmission(
         destination: File,
-        reproductionSteps: String,
-        featureState: List<SupportDiagnosticFieldDraft>,
+        context: PreparedSupportSubmissionContext,
     ): PreparedSupportDiagnosticsBundle = synchronized(lock) {
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
-        require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
+        require(context.featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
+        require(context.sanitizedReproductionSteps.orEmpty().length <= MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
+        require(context.featureState.all { field ->
+            SUPPORT_DIAGNOSTIC_FIELD_NAME.matches(field.name) &&
+                field.value.length <= MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH &&
+                field.value.none(Char::isISOControl)
+        })
         val createdAt = nowEpochMillis().coerceAtLeast(0L)
         discardedHistoryBytes += pruneEvents(createdAt)
         if (discardedHistoryBytes > 0L) persistHistory()
         val snapshot = visibleEvents()
-        val sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank)
         val report = SupportBundleReport(
             createdAtEpochMillis = createdAt,
             environment = environment.safeForReport(),
-            reproductionSteps = sanitizedReproductionSteps,
+            reproductionSteps = context.sanitizedReproductionSteps,
             eventCount = snapshot.size,
             warningCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Warning },
             errorCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Error },
             components = snapshot.map { it.component }.distinct().sortedBy(Enum<*>::name),
-            featureState = sanitizer.sanitizeFields(featureState),
+            featureState = context.featureState,
         )
         val reportBytes = SUPPORT_JSON.encodeToString(report).encodeToByteArray()
         val eventBytes = snapshot.joinToString(separator = "\n", postfix = if (snapshot.isEmpty()) "" else "\n") {
@@ -267,7 +286,7 @@ class JvmSupportDiagnostics(
             "The bounded diagnostic report is unexpectedly large."
         }
         writeZipAtomically(destination, completeContent, createdAt)
-        PreparedSupportDiagnosticsBundle(destination, sanitizedReproductionSteps)
+        PreparedSupportDiagnosticsBundle(destination, context.sanitizedReproductionSteps)
     }
 
     private fun loadHistory() {
@@ -406,6 +425,12 @@ class JvmSupportDiagnostics(
 internal data class PreparedSupportDiagnosticsBundle(
     val archive: File,
     val sanitizedReproductionSteps: String?,
+)
+
+@Serializable
+internal data class PreparedSupportSubmissionContext(
+    val sanitizedReproductionSteps: String?,
+    val featureState: List<SupportDiagnosticField>,
 )
 
 fun Throwable.toSupportDiagnosticExceptionDraft(
