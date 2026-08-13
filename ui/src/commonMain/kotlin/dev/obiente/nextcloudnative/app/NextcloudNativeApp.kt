@@ -1549,8 +1549,123 @@ private fun LoginScreen(
     var connecting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var certificateReview by remember { mutableStateOf<ServerCertificateReview?>(null) }
+    var trustedCertificate by remember { mutableStateOf<TrustedServerCertificate?>(null) }
+    var trustingCertificate by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    fun startLogin(certificateJustApproved: String? = null) {
+        connecting = true
+        error = null
+        status = "Contacting your server..."
+        scope.launch {
+            try {
+                val challenge = services.beginLogin(serverUrl)
+                services.openLoginUrl(challenge.loginUrl)
+                status = "Finish signing in in your browser, then return here."
+                val started = TimeSource.Monotonic.markNow()
+                val authenticated = try {
+                    pollLoginUntilApproved(
+                        poll = { services.pollLogin(challenge) },
+                        waitBeforeNextPoll = { delayMillis, awaitNetwork ->
+                            if (awaitNetwork) services.awaitLoginNetworkAvailability()
+                            delay(delayMillis)
+                        },
+                        hasTimedOut = { started.elapsedNow() >= 5.minutes },
+                        onStatus = { status = it },
+                    )
+                } finally {
+                    services.finishLoginPolling(challenge)
+                }
+                onLoggedIn(authenticated)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (failure: Throwable) {
+                val reviewResult = if (certificateJustApproved == null) {
+                    runCatching { services.inspectServerCertificateFailure(serverUrl, failure) }
+                } else {
+                    Result.success(null)
+                }
+                val review = reviewResult.getOrNull()
+                if (review != null) {
+                    certificateReview = review
+                    error = null
+                } else {
+                    error = reviewResult.exceptionOrNull()?.message
+                        ?: failure.message
+                        ?: if (certificateJustApproved != null) {
+                            "The server still rejected the approved certificate. Review the server certificate and try again."
+                        } else {
+                            "Could not connect to this server."
+                        }
+                }
+                connecting = false
+                status = null
+            }
+        }
+    }
+
+    certificateReview?.let { review ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!trustingCertificate) certificateReview = null
+            },
+            title = { Text("Unverified server certificate") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                ) {
+                    Text(
+                        "Android cannot verify the identity of ${review.serverDisplayName}. " +
+                            "Only continue if you obtained this fingerprint from your server administrator through a separate trusted channel.",
+                    )
+                    Text("Subject", style = MaterialTheme.typography.labelLarge)
+                    Text(review.subject, style = MaterialTheme.typography.bodySmall)
+                    Text("Issuer", style = MaterialTheme.typography.labelLarge)
+                    Text(review.issuer, style = MaterialTheme.typography.bodySmall)
+                    Text("SHA-256 fingerprint", style = MaterialTheme.typography.labelLarge)
+                    Text(review.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
+                    Text("Valid from ${review.validFrom} until ${review.validUntil}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Approval is limited to this exact certificate and server address. A changed or expired certificate will require a new review.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !trustingCertificate,
+                    onClick = { certificateReview = null },
+                ) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !trustingCertificate,
+                    onClick = {
+                        trustingCertificate = true
+                        scope.launch {
+                            runCatching { services.trustServerCertificate(review) }
+                                .onSuccess {
+                                    trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
+                                    certificateReview = null
+                                    trustingCertificate = false
+                                    startLogin(review.sha256Fingerprint)
+                                }
+                                .onFailure { failure ->
+                                    if (failure is CancellationException) throw failure
+                                    error = failure.message ?: "The certificate could not be trusted."
+                                    certificateReview = null
+                                    trustingCertificate = false
+                                }
+                        }
+                    },
+                ) { Text(if (trustingCertificate) "Checking..." else "Trust and connect") }
+            },
+        )
+    }
 
     if (showDiagnostics) {
         AlertDialog(
@@ -1596,51 +1711,35 @@ private fun LoginScreen(
             )
             OutlinedTextField(
                 value = serverUrl,
-                onValueChange = { serverUrl = it },
+                onValueChange = { value ->
+                    serverUrl = value
+                    trustedCertificate = services.trustedServerCertificate(value)
+                },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Server address") },
                 placeholder = { Text("https://cloud.example.com") },
                 singleLine = true,
                 enabled = !connecting,
             )
+            trustedCertificate?.let { certificate ->
+                TrustedCertificateSettings(
+                    certificate = certificate,
+                    error = null,
+                    onRemove = {
+                        if (services.removeTrustedServerCertificate(serverUrl)) {
+                            trustedCertificate = null
+                        } else {
+                            error = "The certificate trust could not be removed."
+                        }
+                    },
+                )
+            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             Button(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 enabled = serverUrl.isNotBlank() && !connecting,
-                onClick = {
-                    connecting = true
-                    error = null
-                    status = "Contacting your server..."
-                    scope.launch {
-                        runCatching {
-                            val challenge = services.beginLogin(serverUrl)
-                            services.openLoginUrl(challenge.loginUrl)
-                            status = "Finish signing in in your browser, then return here."
-                            val started = TimeSource.Monotonic.markNow()
-                            try {
-                                pollLoginUntilApproved(
-                                    poll = { services.pollLogin(challenge) },
-                                    waitBeforeNextPoll = { delayMillis, awaitNetwork ->
-                                        if (awaitNetwork) services.awaitLoginNetworkAvailability()
-                                        delay(delayMillis)
-                                    },
-                                    hasTimedOut = { started.elapsedNow() >= 5.minutes },
-                                    onStatus = { status = it },
-                                )
-                            } finally {
-                                services.finishLoginPolling(challenge)
-                            }
-                        }.mapCatching { authenticated ->
-                            onLoggedIn(authenticated)
-                        }.onFailure { failure ->
-                            if (failure is CancellationException) throw failure
-                            error = failure.message ?: "Could not connect to this server."
-                            connecting = false
-                            status = null
-                        }
-                    }
-                },
+                onClick = { startLogin() },
             ) {
                 if (connecting) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp).padding(end = 4.dp))
@@ -13347,6 +13446,10 @@ private fun SettingsScreen(
     var keepRunningInBackground by remember(services) {
         mutableStateOf(services.loadKeepRunningInBackgroundPreference())
     }
+    var trustedCertificate by remember(services, session.serverUrl) {
+        mutableStateOf(services.trustedServerCertificate(session.serverUrl))
+    }
+    var trustRemovalError by remember { mutableStateOf<String?>(null) }
     val platformCapabilities = remember(services, capabilityRefresh, platformCapabilityRefreshRequest) {
         services.platformCapabilities()
     }
@@ -13388,6 +13491,20 @@ private fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            trustedCertificate?.let { certificate ->
+                                TrustedCertificateSettings(
+                                    certificate = certificate,
+                                    error = trustRemovalError,
+                                    onRemove = {
+                                        trustRemovalError = null
+                                        if (services.removeTrustedServerCertificate(session.serverUrl)) {
+                                            trustedCertificate = null
+                                        } else {
+                                            trustRemovalError = "The certificate trust could not be removed."
+                                        }
+                                    },
+                                )
+                            }
                             OutlinedButton(
                                 enabled = !loggingOut,
                                 onClick = {
@@ -13694,6 +13811,22 @@ private fun SettingsScreen(
                     }
                 }
             }
+            trustedCertificate?.let { certificate ->
+                item {
+                    TrustedCertificateSettings(
+                        certificate = certificate,
+                        error = trustRemovalError,
+                        onRemove = {
+                            trustRemovalError = null
+                            if (services.removeTrustedServerCertificate(session.serverUrl)) {
+                                trustedCertificate = null
+                            } else {
+                                trustRemovalError = "The certificate trust could not be removed."
+                            }
+                        },
+                    )
+                }
+            }
             item {
                 SectionTitle("Files")
                 Surface(
@@ -13973,6 +14106,60 @@ private fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrustedCertificateSettings(
+    certificate: TrustedServerCertificate,
+    error: String?,
+    onRemove: () -> Unit,
+) {
+    var confirmRemoval by remember { mutableStateOf(false) }
+    if (confirmRemoval) {
+        AlertDialog(
+            onDismissRequest = { confirmRemoval = false },
+            title = { Text("Stop trusting this certificate?") },
+            text = {
+                Text(
+                    "Nextcloud Native will return to Android's normal certificate checks. " +
+                        "The account may stop connecting until the server uses a trusted certificate.",
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemoval = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmRemoval = false
+                        onRemove()
+                    },
+                ) { Text("Stop trusting") }
+            },
+        )
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Text("Explicitly trusted server certificate", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Android could not verify this server through its certificate authorities. " +
+                    "Nextcloud Native accepts only the exact SHA-256 fingerprint below for this account's server.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(certificate.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { confirmRemoval = true }) { Text("Stop trusting") }
+            error?.let { message ->
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
     }

@@ -28,6 +28,8 @@ import dev.obiente.nextcloudnative.app.markFileOfflineJobRunning
 import dev.obiente.nextcloudnative.app.planFileOfflineRequest
 import dev.obiente.nextcloudnative.app.recordFileOfflineJobResult
 import dev.obiente.nextcloudnative.app.fileOfflineCenterSnapshot
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
+import okhttp3.OkHttpClient
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -72,6 +74,9 @@ internal class AndroidFileOfflineRepository(context: Context) {
     private val store = AndroidFileOfflineQueueStore(appContext)
     private val contentRoot = File(appContext.filesDir, CONTENT_DIRECTORY)
     private val webDav = NextcloudDocumentWebDav(
+        client = OkHttpClient.Builder()
+            .useAndroidNextcloudCertificateTrust(appContext)
+            .build(),
         cloudMutationsAllowed = appContext.cloudMutationGate(),
     )
 

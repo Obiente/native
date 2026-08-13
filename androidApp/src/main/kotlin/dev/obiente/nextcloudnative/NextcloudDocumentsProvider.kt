@@ -21,6 +21,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
 import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileNotFoundException
@@ -30,6 +31,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONObject
@@ -59,6 +61,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
         webDav = NextcloudDocumentWebDav(
+            client = OkHttpClient.Builder()
+                .useAndroidNextcloudCertificateTrust(providerContext)
+                .build(),
             cloudMutationsAllowed = providerContext.cloudMutationGate(),
         )
         return true

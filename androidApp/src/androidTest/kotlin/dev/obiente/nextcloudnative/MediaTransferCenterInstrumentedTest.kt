@@ -33,7 +33,7 @@ class MediaTransferCenterInstrumentedTest {
         val accountId = NextcloudDocumentIds.accountKey(session)
         val services = AndroidNextcloudServices(context)
         seedSyntheticHistory(context, accountId)
-        services.saveSession(session)
+        runBlocking { services.saveSession(session) }
 
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         try {
@@ -65,7 +65,7 @@ class MediaTransferCenterInstrumentedTest {
             assertVisible(device, "Newer")
         } finally {
             scenario.close()
-            services.clearSession()
+            runBlocking { services.clearSession() }
             clearSyntheticHistory(context, accountId)
         }
     }
@@ -83,7 +83,7 @@ class MediaTransferCenterInstrumentedTest {
         val services = AndroidNextcloudServices(context)
         resetLedgerFiles(context)
         ledgerFile(context).writeText("Synthetic invalid SQLite fixture")
-        services.saveSession(session)
+        runBlocking { services.saveSession(session) }
 
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         try {
@@ -95,7 +95,7 @@ class MediaTransferCenterInstrumentedTest {
             assertVisible(device, "Try again")
         } finally {
             scenario.close()
-            services.clearSession()
+            runBlocking { services.clearSession() }
             resetLedgerFiles(context)
         }
     }

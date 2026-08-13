@@ -48,16 +48,18 @@ internal object AndroidAudioPlaybackBridge {
 @OptIn(UnstableApi::class)
 class AndroidAudioPlaybackService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val httpClient = OkHttpClient.Builder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private lateinit var httpClient: OkHttpClient
     private lateinit var player: ExoPlayer
     private var mediaSession: MediaSession? = null
     private var positionJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
+        httpClient = OkHttpClient.Builder()
+            .useAndroidNextcloudCertificateTrust(applicationContext)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
         val authenticatedFactory = DataSource.Factory {
             val request = AndroidAudioPlaybackBridge.pendingRequest
             val authorization = request?.session?.let { session ->
