@@ -100,7 +100,7 @@ const downloadPlatforms = [
   },
   {
     id: "macos",
-    name: "macOS preview",
+    name: "macOS",
     detail: "Intel - sign-in unavailable",
     format: "DMG",
     href: "/d/macos-latest",

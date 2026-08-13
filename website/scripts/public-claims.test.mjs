@@ -28,6 +28,8 @@ test("machine-readable product claims match current supported platforms and alph
   assert.match(app, /Platform status/);
   assert.match(app, /aria-label="macOS preview"[^>]*>.*<span aria-hidden="true">macOS<\/span>/);
   assert.match(app, /aria-label="iOS unavailable"[^>]*>.*<span aria-hidden="true">iOS<\/span>/);
+  assert.match(app, /name: "macOS",/);
+  assert.doesNotMatch(app, /name: "macOS preview",/);
   assert.doesNotMatch(app, /Nightly is the (?:default|current) release path|short links|curated Stable release/i);
   assert.match(app, /AGPL-3\.0-or-later/);
   assert.doesNotMatch(app, /No Obiente account|No hosted intermediary|Obiente never carries your data/);
