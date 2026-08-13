@@ -275,6 +275,10 @@ fun GenericNativeAppScreen(
     val choresWorkspace = presentedResource?.let { resourceSpec ->
         nativeChoresPresentation(schema, view, resourceSpec, presentedState)
     }
+    val rosterPresentation = (presentedState as? NativeScreenState.Ready)
+        ?.records
+        ?.singleOrNull()
+        ?.let(::nativeRosterPresentation)
     val presentedSurface = when {
         showSelectedRecordDetail &&
             selectedRecordId != null &&
@@ -743,6 +747,8 @@ fun GenericNativeAppScreen(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
+            rosterPresentation != null && !showSelectedRecordDetail ->
+                NativeRosterSurface(rosterPresentation)
             choresWorkspace != null && !showSelectedRecordDetail -> NativeChoresWorkspaceSurface(
                 presentation = choresWorkspace,
                 onSelectRecord = onSelectRecord,

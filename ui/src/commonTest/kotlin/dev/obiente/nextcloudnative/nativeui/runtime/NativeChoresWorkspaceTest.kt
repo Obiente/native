@@ -108,6 +108,57 @@ class NativeChoresWorkspaceTest {
         assertEquals(1, retries)
     }
 
+    @Test
+    fun `team presentation expands members and pending invitations`() {
+        val fixture = fixture()
+        fun scalar(value: String) = NativeStructuredValue.Scalar(value, NativeStructuredScalarKind.string)
+        fun objectValue(vararg values: Pair<String, String>) = NativeStructuredValue.ObjectValue(
+            values.map { (key, value) -> NativeStructuredEntry(key, key, scalar(value)) },
+        )
+        val presentation = requireNotNull(
+            nativeChoresPresentation(
+                fixture.schema,
+                fixture.teamView,
+                fixture.teamResource,
+                NativeScreenState.Ready(
+                    listOf(
+                        NativeRecord(
+                            id = "12",
+                            values = mapOf("name" to "Home", "owner" to "alex"),
+                            structuredValues = mapOf(
+                                "members" to NativeStructuredValue.ListValue(
+                                    listOf(
+                                        objectValue(
+                                            "member" to "alex",
+                                            "displayName" to "Alex",
+                                            "points" to "8",
+                                        ),
+                                        objectValue(
+                                            "member" to "sam",
+                                            "displayName" to "Sam",
+                                            "points" to "3",
+                                        ),
+                                    ),
+                                ),
+                                "invites" to NativeStructuredValue.ListValue(
+                                    listOf(objectValue("userId" to "taylor")),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val team = requireNotNull(nativeRosterPresentation((presentation.content as NativeChoresContent.Ready).items.single().record))
+        assertEquals("12", team.id)
+        assertEquals("Home", team.name)
+        assertEquals(listOf("alex", "sam"), team.people.map(NativeRosterPerson::userId))
+        assertTrue(team.people.single { it.userId == "alex" }.owner)
+        assertEquals(8, team.people.single { it.userId == "alex" }.score)
+        assertEquals(listOf("taylor"), team.invitations.map(NativeRosterInvitation::userId))
+    }
+
     private fun fixture(): Fixture {
         val team = ResourceSpec("team", "Team", Confidence.verified)
         val chores = ResourceSpec("chores", "Chores", Confidence.verified)
@@ -127,6 +178,7 @@ class NativeChoresWorkspaceTest {
                 views = listOf(teamView, choresView, historyView),
                 actions = listOf(teamAction, choresAction, historyAction),
             ),
+            team,
             chores,
             teamView,
             choresView,
@@ -157,6 +209,7 @@ class NativeChoresWorkspaceTest {
 
     private data class Fixture(
         val schema: NativeAppSchema,
+        val teamResource: ResourceSpec,
         val choresResource: ResourceSpec,
         val teamView: ViewSpec,
         val choresView: ViewSpec,
