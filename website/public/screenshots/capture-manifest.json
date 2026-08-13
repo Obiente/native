@@ -245,7 +245,7 @@
     ],
     "captureSourceHashes": {
         "build.gradle.kts": "de2d98f7fce24b2bc67423bb06aa88d251e1458b1fa3c9c9700dbb14289edbf0",
-        "gradle.properties": "117a2a0e77aaca46b4a79869810dec3f22c4436bf821031ebfdab59eeef03199",
+        "gradle.properties": "99c3ee1a9d68a2548830e7dca0cc4b02f4acf408bfc394a0acd55e7865c53739",
         "gradle/libs.versions.toml": "10ef19d481e525d0ad1e94c9a74abe0a4caca6572cf7d2d0dadabfba3974ab5a",
         "gradle/wrapper/gradle-wrapper.properties": "aef287d114ce3153c3d535697a61928f5034990d570cbb2e93df549e9671483d",
         "settings.gradle.kts": "0acbe4b907815189abfedb2256c8659558e5a7e6995a3681a2bdfb05e335fd1a",
