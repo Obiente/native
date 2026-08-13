@@ -477,6 +477,87 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun restoresDeletionCapabilityWhenTheWallClockMovesBackward() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.intake.close()
+
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            val futureCreatedAt = Instant.now().plus(1, ChronoUnit.DAYS).toEpochMilli()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    Regex("\"createdAtEpochMillis\":\\d+"),
+                    "\"createdAtEpochMillis\":$futureCreatedAt",
+                ),
+            )
+
+            val restored = fixture.newIntake()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            assertTrue(descriptor.isFile)
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun preservesLastPersistedReceiptWhenRetryStateCannotBeRewritten() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(
+                MockResponse.Builder().code(503).headersDelay(1, TimeUnit.SECONDS).build(),
+            )
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val retainedRoot = File(fixture.root, "submissions-retained")
+            Files.move(fixture.temporaryRoot.toPath(), retainedRoot.toPath())
+            fixture.temporaryRoot.writeText("temporarily unavailable")
+            submission.join()
+
+            val state = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(state.message.contains("could not be stored"))
+            val descriptor = File(retainedRoot, "pending.json")
+            assertTrue(descriptor.isFile)
+            assertTrue(descriptor.readText().contains("OBI-ABCDE-23456"))
+
+            assertTrue(fixture.temporaryRoot.delete())
+            Files.move(retainedRoot.toPath(), fixture.temporaryRoot.toPath())
+            fixture.intake.close()
+            val restored = fixture.newIntake()
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
     fun restrictsPendingSubmissionFilesToTheCurrentUnixUser() = runBlocking {
         testFixture().use { fixture ->
             if (
@@ -574,7 +655,7 @@ class JvmSupportIntakeTest {
         )
 
         override fun close() {
-            intake.cancel()
+            intake.close()
             diagnostics.close()
             server.close()
             root.deleteRecursively()

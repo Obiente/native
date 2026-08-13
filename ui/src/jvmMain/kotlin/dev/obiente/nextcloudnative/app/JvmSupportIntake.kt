@@ -207,8 +207,14 @@ class JvmSupportIntake(
         }
     }
 
-    fun cancel(): Boolean {
+    suspend fun cancel(): Boolean {
+        // Publish the user's intent before leaving the caller's context so a racing upload response
+        // cannot be finalized as submitted while durable cancellation state is being written.
         cancellationRequested.set(true)
+        return withContext(Dispatchers.IO) { cancelAfterIntentPublished() }
+    }
+
+    private fun cancelAfterIntentPublished(): Boolean {
         val submission = synchronized(lock) { pending }
         if (submission != null) {
             if (!submission.outcomeAmbiguous && activeCall.get() == null) {
@@ -218,10 +224,8 @@ class JvmSupportIntake(
             submission.cancellationPending = true
             submission.outcomeAmbiguous = true
             if (!persistPendingSafely(submission)) {
-                submission.cancellationPending = false
-                cancellationRequested.compareAndSet(true, false)
                 state.value = SupportDiagnosticsSubmissionState.RetryableFailure(
-                    "Cancellation could not be retained safely. The current submission was left unchanged.",
+                    "Cancellation could not be stored safely. Keep the app open and retry to reconcile the private report.",
                     outcomeAmbiguous = true,
                 )
                 return false
@@ -611,7 +615,12 @@ class JvmSupportIntake(
         if (persistPendingSafely(submission)) {
             state.value = SupportDiagnosticsSubmissionState.RetryableFailure(message, outcomeAmbiguous = true)
         } else {
-            finishSubmitted(submission, receipt)
+            // The receipt was persisted before deletion began. Atomic replacement leaves that last
+            // valid recovery record in place when this newer retry-state write fails.
+            state.value = SupportDiagnosticsSubmissionState.RetryableFailure(
+                "Deletion was not confirmed and its updated retry state could not be stored. Keep the app open and retry.",
+                outcomeAmbiguous = true,
+            )
         }
     }
 
@@ -730,8 +739,8 @@ class JvmSupportIntake(
         )
         require(persisted.archiveName == null || persisted.archiveName.matches(SUPPORT_TEMPORARY_FILE_PATTERN))
         require(persisted.idempotencyKey.matches(SUPPORT_IDEMPOTENCY_PATTERN))
+        require(persisted.createdAtEpochMillis >= 0L)
         val nowEpochMillis = System.currentTimeMillis()
-        require(nowEpochMillis >= persisted.createdAtEpochMillis)
         require(
             persisted.retryNotBeforeEpochMillis == null ||
                 persisted.retryNotBeforeEpochMillis <= System.currentTimeMillis() + MAX_SUPPORT_RETRY_AFTER_MILLIS,
@@ -742,9 +751,10 @@ class JvmSupportIntake(
         }
         val recoveryDeadlineEpochMillis = persisted.receipt
             ?.let { receipt -> Instant.parse(receipt.retentionUntil).toEpochMilli() }
-            ?: persisted.createdAtEpochMillis + SUPPORT_RECOVERY_MAX_AGE_MILLIS
+            ?: persisted.createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
         require(nowEpochMillis <= recoveryDeadlineEpochMillis)
-        val archiveIsRetained = nowEpochMillis - persisted.createdAtEpochMillis <= SUPPORT_TEMPORARY_MAX_AGE_MILLIS
+        val archiveAgeMillis = (nowEpochMillis - persisted.createdAtEpochMillis).coerceAtLeast(0L)
+        val archiveIsRetained = archiveAgeMillis <= SUPPORT_TEMPORARY_MAX_AGE_MILLIS
         val archive = persisted.archiveName?.let { archiveName ->
             File(temporaryRoot, archiveName).absoluteFile.normalize().also { candidate ->
                 require(candidate.parentFile == temporaryRoot.absoluteFile.normalize())
@@ -786,10 +796,9 @@ class JvmSupportIntake(
         var receipt: SupportIntakeReceipt? = null,
     ) {
         fun recoveryExpired(nowEpochMillis: Long): Boolean {
-            if (nowEpochMillis < createdAtEpochMillis) return true
             val deadline = receipt
                 ?.let { value -> runCatching { Instant.parse(value.retentionUntil).toEpochMilli() }.getOrNull() }
-                ?: (createdAtEpochMillis + SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+                ?: createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
             return nowEpochMillis > deadline
         }
     }
@@ -807,6 +816,9 @@ class JvmSupportIntake(
         val receipt: SupportIntakeReceipt? = null,
     )
 }
+
+private fun Long.saturatingAdd(increment: Long): Long =
+    if (this > Long.MAX_VALUE - increment) Long.MAX_VALUE else this + increment
 
 private class ProgressRequestBody(
     private val delegate: RequestBody,

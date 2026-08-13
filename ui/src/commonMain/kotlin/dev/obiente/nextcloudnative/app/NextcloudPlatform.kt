@@ -532,7 +532,7 @@ interface NextcloudPlatformServices {
     suspend fun retrySupportDiagnosticsSubmission() = Unit
 
     /** Cancels packaging or upload and removes its app-private temporary archive. */
-    fun cancelSupportDiagnosticsSubmission(): Boolean = false
+    suspend fun cancelSupportDiagnosticsSubmission(): Boolean = false
 
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
     suspend fun clearSupportDiagnostics(): Boolean = false

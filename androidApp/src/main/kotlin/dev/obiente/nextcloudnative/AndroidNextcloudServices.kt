@@ -113,7 +113,6 @@ import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.JvmNetworkFailurePhase
 import dev.obiente.nextcloudnative.app.JvmNetworkResponseTruncatedIOException
-import dev.obiente.nextcloudnative.app.JvmSupportIntake
 import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
 import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
 import dev.obiente.nextcloudnative.app.requireExactJvmNetworkResponseBytes
@@ -417,11 +416,10 @@ internal class AndroidNextcloudServices(
         activity = activity,
         diagnostics = supportDiagnostics,
     )
-    private val supportIntake = JvmSupportIntake(
+    private val supportIntake = AndroidSupportIntakeCoordinator.get(
+        context = appContext,
         diagnostics = supportDiagnostics,
-        temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions"),
-        environment = androidSupportDiagnosticsEnvironment(),
-        client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
+        client = httpClient,
     )
 
     init {
@@ -635,7 +633,7 @@ internal class AndroidNextcloudServices(
 
     override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
 
-    override fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+    override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
 
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(

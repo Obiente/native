@@ -3382,7 +3382,7 @@ class DesktopNextcloudServices(
 
     override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
 
-    override fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+    override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
 
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(

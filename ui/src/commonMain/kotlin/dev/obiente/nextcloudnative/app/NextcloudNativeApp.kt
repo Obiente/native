@@ -12597,7 +12597,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     onClick = {
                         confirmDiscard = false
-                        services.cancelSupportDiagnosticsSubmission()
+                        scope.launch { services.cancelSupportDiagnosticsSubmission() }
                     },
                 ) { Text("Discard report") }
             },
@@ -12771,7 +12771,9 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     Text(if (exporting) "Preparing..." else "Save a copy")
                 }
                 if (submissionBusy) {
-                    OutlinedButton(onClick = { services.cancelSupportDiagnosticsSubmission() }) {
+                    OutlinedButton(onClick = {
+                        scope.launch { services.cancelSupportDiagnosticsSubmission() }
+                    }) {
                         Text("Cancel sending")
                     }
                 }

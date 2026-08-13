@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.AsyncJvmSupportDiagnostics
+import dev.obiente.nextcloudnative.app.JvmSupportIntake
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
@@ -18,6 +19,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import kotlin.system.exitProcess
 
 private val UNCAUGHT_DIAGNOSTIC_HANDLER_INSTALLED = AtomicBoolean(false)
@@ -64,6 +66,32 @@ internal object AndroidSupportDiagnostics {
             root = File(appContext.filesDir, "support-diagnostics"),
             environment = androidSupportDiagnosticsEnvironment(),
             workerName = "nextcloud-support-diagnostics",
+        ).also { instance = it }
+    }
+}
+
+/**
+ * Owns the one durable support-submission state machine for this Android process.
+ *
+ * Activities, workers, and providers each create their own service facade, but they all operate on
+ * the same no-backup directory. Sharing the coordinator prevents a replacement facade from
+ * restoring or mutating that directory while an earlier facade is still packaging or uploading.
+ */
+internal object AndroidSupportIntakeCoordinator {
+    @Volatile
+    private var instance: JvmSupportIntake? = null
+
+    fun get(
+        context: Context,
+        diagnostics: AsyncJvmSupportDiagnostics,
+        client: OkHttpClient,
+    ): JvmSupportIntake = instance ?: synchronized(this) {
+        val appContext = context.applicationContext ?: context
+        instance ?: JvmSupportIntake(
+            diagnostics = diagnostics,
+            temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions"),
+            environment = androidSupportDiagnosticsEnvironment(),
+            client = client.newBuilder().retryOnConnectionFailure(false).build(),
         ).also { instance = it }
     }
 }
