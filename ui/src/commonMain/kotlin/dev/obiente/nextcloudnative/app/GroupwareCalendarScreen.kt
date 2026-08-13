@@ -649,6 +649,7 @@ internal fun MobileGroupwareCalendarWorkspace(
                 },
                 onSelectEvent = onSelectEvent,
                 emptyPeriod = "week",
+                earliestDisplayDate = presentation.weekDates.firstOrNull(),
                 modifier = Modifier.weight(1f),
             )
             CalendarWorkspaceView.Agenda -> CalendarAgenda(
@@ -854,8 +855,12 @@ internal fun CalendarAgenda(
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     modifier: Modifier = Modifier,
     emptyPeriod: String = "month",
+    earliestDisplayDate: String? = null,
 ) {
-    val groups = events.groupBy { it.start.take(8) }.toSortedMap()
+    val groups = events.groupBy { event ->
+        val startDate = event.start.take(8)
+        earliestDisplayDate?.let { maxOf(startDate, it) } ?: startDate
+    }.toSortedMap()
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(NextcloudSpacing.Large),

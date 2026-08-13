@@ -155,6 +155,8 @@ internal fun ActivityDesktopWorkspace(
     val attention = remember(timeline.activities) {
         timeline.activities.filter(NextcloudActivity::needsDesktopAttention).take(3)
     }
+    val filtersActive = selectedServerFilterId != "all" ||
+        query.isNotBlank() || selectedSemantic != null || selectedApp != null || selectedType != null
     Column(modifier = modifier.fillMaxSize()) {
         ActivityDesktopHeader(
             refreshing = timeline.refreshing,
@@ -197,6 +199,7 @@ internal fun ActivityDesktopWorkspace(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         timeline = timeline,
                         feed = feed,
+                        filtersActive = filtersActive,
                         onClearFilters = onClearFilters,
                         onLoadMore = onLoadMore,
                         onRetry = onRefresh,
@@ -945,6 +948,7 @@ private fun ActivityDesktopTimeline(
     modifier: Modifier,
     timeline: ActivityTimelineState,
     feed: ActivityFeedPresentation,
+    filtersActive: Boolean,
     onClearFilters: () -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
@@ -964,7 +968,7 @@ private fun ActivityDesktopTimeline(
         lastVisibleItemIndex = lastVisibleItemIndex,
     )
     LaunchedEffect(autoLoadMore, timeline.activities.size) {
-        if (autoLoadMore) onLoadMore()
+        if (autoLoadMore && !filtersActive) onLoadMore()
     }
     Surface(
         modifier = modifier,

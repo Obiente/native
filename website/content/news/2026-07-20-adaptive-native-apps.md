@@ -6,8 +6,8 @@ lastUpdated: 2026-08-01
 description: Nextcloud Native makes installed apps feel consistent across Android, iOS, Linux, macOS, and Windows without wrapping their web pages.
 tags: Nextcloud apps, native Nextcloud client, Android, iOS, Linux, macOS, Windows, Files, Talk, Photos
 captureScenario: tables-insights-desktop
-imageAlt: Nextcloud Native rendering a synthetic community inventory as a native data table after recognizing verified typed fields
-imageCaption: The production adaptive Compose renderer maps a fixed synthetic contract into Item, Category, Value, Status, and Updated columns.
+imageAlt: Nextcloud Native showing an inventory Insights dashboard with total quantity, low-stock metrics, and category bars
+imageCaption: The production adaptive Compose renderer turns verified inventory data into responsive quantity metrics and category insights.
 ---
 
 # One native app for Files, Talk, Photos, and more
