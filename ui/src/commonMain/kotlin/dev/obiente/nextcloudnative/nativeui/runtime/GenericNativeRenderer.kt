@@ -101,6 +101,7 @@ import com.mohamedrejeb.richeditor.annotation.ExperimentalRichTextApi
 import com.mohamedrejeb.richeditor.ui.material3.RichText
 import dev.obiente.nextcloudnative.app.design.BoardDragVerticalScrollTarget
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragAutoScroll
+import dev.obiente.nextcloudnative.app.design.NextcloudVerticalDragAutoScroll
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
@@ -3214,10 +3215,12 @@ private fun GenericRecordList(
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
+    var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
@@ -3256,6 +3259,20 @@ private fun GenericRecordList(
             reorderError = null
         }
     }
+    fun moveDraggedRecord(position: Offset) {
+        val recordId = draggingRecordId ?: return
+        val targetId = orderedRecordIds.firstOrNull { id ->
+            rowBounds[id]?.contains(position) == true
+        }
+        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+        if (targetIndex >= 0 && targetId != recordId) {
+            orderedRecordIds = moveNativeCollectionRecordToIndex(
+                orderedRecordIds = orderedRecordIds,
+                recordId = recordId,
+                targetIndex = targetIndex,
+            )
+        }
+    }
     NativeCollectionAutoPager(
         listState = listState,
         itemCount = displayedRecords.size,
@@ -3263,8 +3280,17 @@ private fun GenericRecordList(
         loadingMore = loadingMore,
         loadMoreError = loadMoreError,
     )
+    NextcloudVerticalDragAutoScroll(
+        activeDragKey = draggingRecordId,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        viewport = listBounds,
+        scrollState = listState,
+    )
     LazyColumn(
-        modifier = modifier,
+        modifier = modifier.onGloballyPositioned { coordinates ->
+            listBounds = coordinates.boundsInWindow()
+        },
         state = listState,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
@@ -3309,31 +3335,31 @@ private fun GenericRecordList(
                             dragActive = dragging,
                             onDragStart = { position ->
                                 draggingRecordId = record.id
+                                dragOrigin = position
                                 dragPosition = position
                                 reorderError = null
                             },
                             onDrag = { delta ->
                                 val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                 dragPosition = position
-                                val targetId = orderedRecordIds.firstOrNull { id ->
-                                    rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
-                                }
-                                val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
-                                if (targetIndex >= 0 && targetId != draggingRecordId) {
-                                    orderedRecordIds = moveNativeCollectionRecordToIndex(
-                                        orderedRecordIds = orderedRecordIds,
-                                        recordId = record.id,
-                                        targetIndex = targetIndex,
-                                    )
-                                }
+                                orderedRecordIds = moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                    orderedRecordIds = orderedRecordIds,
+                                    recordId = record.id,
+                                    pointerY = position.y,
+                                    movementY = delta.y,
+                                    rowBounds = rowBounds,
+                                )
                             },
                             onDragEnd = {
+                                dragPosition?.let(::moveDraggedRecord)
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
                                 submitReorder()
                             },
                             onDragCancel = {
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
                                 orderedRecordIds = authoritativeOrder
                             },
@@ -3974,10 +4000,12 @@ private fun GenericCategoryCollection(
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
+    var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
     val displayedRows = remember(rows, rowsById, orderedRecordIds, activeReorder) {
         if (activeReorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
     }
@@ -4012,6 +4040,20 @@ private fun GenericCategoryCollection(
             reorderError = null
         }
     }
+    fun moveDraggedRecord(position: Offset) {
+        val recordId = draggingRecordId ?: return
+        val targetId = orderedRecordIds.firstOrNull { id ->
+            rowBounds[id]?.contains(position) == true
+        }
+        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+        if (targetIndex >= 0 && targetId != recordId) {
+            orderedRecordIds = moveNativeCollectionRecordToIndex(
+                orderedRecordIds = orderedRecordIds,
+                recordId = recordId,
+                targetIndex = targetIndex,
+            )
+        }
+    }
     var expandedIds by rememberSaveable(resource.id) { mutableStateOf(parentIds.toList()) }
     LaunchedEffect(parentIds) {
         expandedIds = expandedIds.filter(parentIds::contains)
@@ -4041,6 +4083,13 @@ private fun GenericCategoryCollection(
         onLoadMore.takeIf { filter == NativeCategoryFilter.All },
         loadingMore,
         loadMoreError,
+    )
+    NextcloudVerticalDragAutoScroll(
+        activeDragKey = draggingRecordId,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        viewport = listBounds,
+        scrollState = listState,
     )
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -4085,7 +4134,9 @@ private fun GenericCategoryCollection(
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).onGloballyPositioned { coordinates ->
+                listBounds = coordinates.boundsInWindow()
+            },
             contentPadding = PaddingValues(
                 start = NextcloudSpacing.Large,
                 top = NextcloudSpacing.Medium,
@@ -4160,31 +4211,31 @@ private fun GenericCategoryCollection(
                                 dragActive = dragging,
                                 onDragStart = { position ->
                                     draggingRecordId = row.record.id
+                                    dragOrigin = position
                                     dragPosition = position
                                     reorderError = null
                                 },
                                 onDrag = { delta ->
                                     val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                     dragPosition = position
-                                    val targetId = orderedRecordIds.firstOrNull { id ->
-                                        rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
-                                    }
-                                    val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
-                                    if (targetIndex >= 0 && targetId != draggingRecordId) {
-                                        orderedRecordIds = moveNativeCollectionRecordToIndex(
-                                            orderedRecordIds = orderedRecordIds,
-                                            recordId = row.record.id,
-                                            targetIndex = targetIndex,
-                                        )
-                                    }
+                                    orderedRecordIds = moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                        orderedRecordIds = orderedRecordIds,
+                                        recordId = row.record.id,
+                                        pointerY = position.y,
+                                        movementY = delta.y,
+                                        rowBounds = rowBounds,
+                                    )
                                 },
                                 onDragEnd = {
+                                    dragPosition?.let(::moveDraggedRecord)
                                     draggingRecordId = null
+                                    dragOrigin = null
                                     dragPosition = null
                                     submitReorder()
                                 },
                                 onDragCancel = {
                                     draggingRecordId = null
+                                    dragOrigin = null
                                     dragPosition = null
                                     orderedRecordIds = authoritativeOrder
                                 },
@@ -5099,10 +5150,12 @@ private fun GenericTaskCollection(
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
+    var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
     val displayedRows = remember(rowsById, orderedRecordIds, reorder) {
         if (reorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
     }
@@ -5152,6 +5205,20 @@ private fun GenericTaskCollection(
             reorderError = null
         }
     }
+    fun moveDraggedRecord(position: Offset) {
+        val recordId = draggingRecordId ?: return
+        val targetId = orderedRecordIds.firstOrNull { id ->
+            rowBounds[id]?.contains(position) == true
+        }
+        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+        if (targetIndex >= 0 && targetId != recordId) {
+            orderedRecordIds = moveNativeCollectionRecordToIndex(
+                orderedRecordIds = orderedRecordIds,
+                recordId = recordId,
+                targetIndex = targetIndex,
+            )
+        }
+    }
     NativeCollectionAutoPager(
         listState = listState,
         itemCount = displayedRows.size,
@@ -5159,8 +5226,17 @@ private fun GenericTaskCollection(
         loadingMore = loadingMore,
         loadMoreError = loadMoreError,
     )
+    NextcloudVerticalDragAutoScroll(
+        activeDragKey = draggingRecordId,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        viewport = listBounds,
+        scrollState = listState,
+    )
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+            listBounds = coordinates.boundsInWindow()
+        },
         state = listState,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
@@ -5251,31 +5327,31 @@ private fun GenericTaskCollection(
                             dragActive = dragging,
                             onDragStart = { position ->
                                 draggingRecordId = record.id
+                                dragOrigin = position
                                 dragPosition = position
                                 reorderError = null
                             },
                             onDrag = { delta ->
                                 val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                 dragPosition = position
-                                val targetId = orderedRecordIds.firstOrNull { id ->
-                                    rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
-                                }
-                                val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
-                                if (targetIndex >= 0 && targetId != draggingRecordId) {
-                                    orderedRecordIds = moveNativeCollectionRecordToIndex(
-                                        orderedRecordIds = orderedRecordIds,
-                                        recordId = record.id,
-                                        targetIndex = targetIndex,
-                                    )
-                                }
+                                orderedRecordIds = moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                    orderedRecordIds = orderedRecordIds,
+                                    recordId = record.id,
+                                    pointerY = position.y,
+                                    movementY = delta.y,
+                                    rowBounds = rowBounds,
+                                )
                             },
                             onDragEnd = {
+                                dragPosition?.let(::moveDraggedRecord)
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
                                 submitReorder()
                             },
                             onDragCancel = {
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
                                 orderedRecordIds = authoritativeOrder
                             },

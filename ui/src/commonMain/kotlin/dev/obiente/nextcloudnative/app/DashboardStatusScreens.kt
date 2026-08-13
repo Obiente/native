@@ -14,11 +14,15 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -57,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragHandle
+import dev.obiente.nextcloudnative.app.design.NextcloudVerticalDragAutoScroll
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -712,18 +717,37 @@ private fun HomeWorkspaceSurface(
 ) {
     val sectionBounds = remember(layout.scope) { mutableStateMapOf<HomeSectionId, Rect>() }
     var draggingSectionId by remember(layout.scope) { mutableStateOf<HomeSectionId?>(null) }
+    var dragOrigin by remember(layout.scope) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(layout.scope) { mutableStateOf<Offset?>(null) }
+    var workspaceViewport by remember(layout.scope) { mutableStateOf<Rect?>(null) }
 
-    fun moveDraggedSection(position: Offset) {
-        val sourceId = draggingSectionId ?: return
+    fun layoutWithDraggedSectionAt(position: Offset): HomeWorkspaceLayout {
+        val sourceId = draggingSectionId ?: return layout
         val targetId = sectionBounds.entries.firstOrNull { (_, bounds) ->
             bounds.contains(position)
-        }?.key ?: return
-        if (targetId == sourceId) return
+        }?.key ?: return layout
+        if (targetId == sourceId) return layout
         val destinationIndex = layout.sections.indexOfFirst { it.id == targetId }
-        if (destinationIndex >= 0) {
-            onLayoutChanged(layout.move(sourceId, destinationIndex), false)
+        return if (destinationIndex >= 0) layout.move(sourceId, destinationIndex) else layout
+    }
+
+    fun moveDraggedSectionAcrossAdjacentMidpoint(position: Offset, movementY: Float) {
+        val sourceId = draggingSectionId ?: return
+        if (movementY == 0f) return
+        val visibleIds = layout.visibleSections.map(HomeWorkspaceSection::id)
+        val sourceIndex = visibleIds.indexOf(sourceId)
+        if (sourceIndex < 0) return
+        val direction = if (movementY < 0f) -1 else 1
+        val targetId = visibleIds.getOrNull(sourceIndex + direction) ?: return
+        val targetBounds = sectionBounds[targetId] ?: return
+        val crossedMidpoint = if (direction < 0) {
+            position.y <= targetBounds.center.y
+        } else {
+            position.y >= targetBounds.center.y
         }
+        if (!crossedMidpoint) return
+        val destinationIndex = layout.sections.indexOfFirst { it.id == targetId }
+        if (destinationIndex >= 0) onLayoutChanged(layout.move(sourceId, destinationIndex), false)
     }
 
     val content: @Composable (HomeWorkspaceSection) -> Unit = { item ->
@@ -738,22 +762,26 @@ private fun HomeWorkspaceSurface(
             onBoundsChanged = { bounds -> sectionBounds[item.id] = bounds },
             onDragStart = { position ->
                 draggingSectionId = item.id
+                dragOrigin = position
                 dragPosition = position
             },
             onDrag = { delta ->
                 dragPosition?.let { current ->
                     val position = current + delta
                     dragPosition = position
-                    moveDraggedSection(position)
+                    moveDraggedSectionAcrossAdjacentMidpoint(position, delta.y)
                 }
             },
             onDragEnd = {
+                val finalLayout = dragPosition?.let(::layoutWithDraggedSectionAt) ?: layout
                 draggingSectionId = null
+                dragOrigin = null
                 dragPosition = null
-                onLayoutChanged(layout, true)
+                onLayoutChanged(finalLayout, true)
             },
             onDragCancel = {
                 draggingSectionId = null
+                dragOrigin = null
                 dragPosition = null
             },
             onMoveEarlier = {
@@ -774,19 +802,69 @@ private fun HomeWorkspaceSurface(
     }
 
     when (layout.scope.formFactor) {
-        HomeFormFactor.Phone -> MobileHomeWorkspace(layout.visibleSections, content)
-        HomeFormFactor.Tablet -> TabletHomeWorkspace(layout.visibleSections, content)
-        HomeFormFactor.Desktop -> DesktopHomeWorkspace(layout.visibleSections, content)
+        HomeFormFactor.Phone -> {
+            val state = rememberLazyListState()
+            NextcloudVerticalDragAutoScroll(
+                activeDragKey = draggingSectionId,
+                position = dragPosition,
+                dragOrigin = dragOrigin,
+                viewport = workspaceViewport,
+                scrollState = state,
+            )
+            MobileHomeWorkspace(
+                sections = layout.visibleSections,
+                state = state,
+                onViewportChanged = { workspaceViewport = it },
+                sectionContent = content,
+            )
+        }
+        HomeFormFactor.Tablet -> {
+            val state = rememberLazyStaggeredGridState()
+            NextcloudVerticalDragAutoScroll(
+                activeDragKey = draggingSectionId,
+                position = dragPosition,
+                dragOrigin = dragOrigin,
+                viewport = workspaceViewport,
+                scrollState = state,
+            )
+            TabletHomeWorkspace(
+                sections = layout.visibleSections,
+                state = state,
+                onViewportChanged = { workspaceViewport = it },
+                sectionContent = content,
+            )
+        }
+        HomeFormFactor.Desktop -> {
+            val state = rememberLazyStaggeredGridState()
+            NextcloudVerticalDragAutoScroll(
+                activeDragKey = draggingSectionId,
+                position = dragPosition,
+                dragOrigin = dragOrigin,
+                viewport = workspaceViewport,
+                scrollState = state,
+            )
+            DesktopHomeWorkspace(
+                sections = layout.visibleSections,
+                state = state,
+                onViewportChanged = { workspaceViewport = it },
+                sectionContent = content,
+            )
+        }
     }
 }
 
 @Composable
 private fun MobileHomeWorkspace(
     sections: List<HomeWorkspaceSection>,
+    state: LazyListState,
+    onViewportChanged: (Rect) -> Unit,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        state = state,
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+            onViewportChanged(coordinates.boundsInWindow())
+        },
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Medium,
             top = NextcloudSpacing.Medium,
@@ -804,11 +882,16 @@ private fun MobileHomeWorkspace(
 @Composable
 private fun TabletHomeWorkspace(
     sections: List<HomeWorkspaceSection>,
+    state: LazyStaggeredGridState,
+    onViewportChanged: (Rect) -> Unit,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     LazyVerticalStaggeredGrid(
+        state = state,
         columns = StaggeredGridCells.Adaptive(300.dp),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+            onViewportChanged(coordinates.boundsInWindow())
+        },
         contentPadding = PaddingValues(NextcloudSpacing.Large),
         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         verticalItemSpacing = NextcloudSpacing.Large,
@@ -822,11 +905,16 @@ private fun TabletHomeWorkspace(
 @Composable
 private fun DesktopHomeWorkspace(
     sections: List<HomeWorkspaceSection>,
+    state: LazyStaggeredGridState,
+    onViewportChanged: (Rect) -> Unit,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     LazyVerticalStaggeredGrid(
+        state = state,
         columns = StaggeredGridCells.Adaptive(340.dp),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+            onViewportChanged(coordinates.boundsInWindow())
+        },
         contentPadding = PaddingValues(
             start = NextcloudSpacing.XLarge,
             top = NextcloudSpacing.Large,

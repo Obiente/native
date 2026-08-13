@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.geometry.Rect
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
@@ -57,6 +58,32 @@ internal fun moveNativeCollectionRecordToIndex(
     return orderedRecordIds.toMutableList().apply {
         removeAt(fromIndex)
         add(targetIndex, recordId)
+    }
+}
+
+internal fun moveNativeCollectionRecordAcrossAdjacentMidpoint(
+    orderedRecordIds: List<String>,
+    recordId: String,
+    pointerY: Float,
+    movementY: Float,
+    rowBounds: Map<String, Rect>,
+): List<String> {
+    if (!pointerY.isFinite() || !movementY.isFinite() || movementY == 0f) return orderedRecordIds
+    val fromIndex = orderedRecordIds.indexOf(recordId)
+    if (fromIndex < 0) return orderedRecordIds
+    val direction = if (movementY < 0f) -1 else 1
+    val targetIndex = fromIndex + direction
+    val targetId = orderedRecordIds.getOrNull(targetIndex) ?: return orderedRecordIds
+    val targetBounds = rowBounds[targetId] ?: return orderedRecordIds
+    val crossedMidpoint = if (direction < 0) {
+        pointerY <= targetBounds.center.y
+    } else {
+        pointerY >= targetBounds.center.y
+    }
+    return if (crossedMidpoint) {
+        moveNativeCollectionRecord(orderedRecordIds, recordId, direction)
+    } else {
+        orderedRecordIds
     }
 }
 

@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.geometry.Rect
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
@@ -115,6 +116,36 @@ class NativeCollectionActionUiStateTest {
                 orderedRecordIds = listOf("first", "second"),
                 recordId = "missing",
                 targetIndex = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun `live drag crosses only the adjacent row midpoint`() {
+        val bounds = mapOf(
+            "first" to Rect(0f, 0f, 100f, 100f),
+            "second" to Rect(0f, 100f, 100f, 200f),
+            "third" to Rect(0f, 200f, 100f, 300f),
+        )
+
+        assertEquals(
+            listOf("first", "second", "third"),
+            moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                orderedRecordIds = listOf("first", "second", "third"),
+                recordId = "first",
+                pointerY = 140f,
+                movementY = 20f,
+                rowBounds = bounds,
+            ),
+        )
+        assertEquals(
+            listOf("second", "first", "third"),
+            moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                orderedRecordIds = listOf("first", "second", "third"),
+                recordId = "first",
+                pointerY = 280f,
+                movementY = 20f,
+                rowBounds = bounds,
             ),
         )
     }
