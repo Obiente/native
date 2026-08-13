@@ -1,6 +1,6 @@
 category: fix
 issue: 337
-pull: none
+pull: 362
 platforms: desktop, linux
 user-facing: yes
 
