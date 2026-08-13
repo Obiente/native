@@ -6,6 +6,11 @@ import { composeNightlyReleaseNotes } from "./nightly-release-notes.mjs";
 
 const sourceSha = "0123456789abcdef0123456789abcdef01234567";
 const baseOptions = {
+  assetNames: [
+    "nextcloud-native-nightly-android.apk",
+    "nextcloudnative_1.0.1_amd64.deb",
+    "nextcloudnative-1.0.1-1.x86_64.rpm",
+  ],
   availablePlatforms: new Set(["android", "linux"]),
   fragments: [
     parseFragment(
@@ -49,9 +54,9 @@ test("nightly notes are useful, traceable, and omit internal fragments", () => {
     /Direct installs now report when a verified update is available \(issue #237\)\./,
   );
   assert.doesNotMatch(notes, /Release automation now emits richer nightly descriptions/);
-  assert.match(notes, /\| Android \| \.apk \| Available \|/);
-  assert.match(notes, /\| Linux \| \.deb and \.rpm \| Available \|/);
-  assert.match(notes, /\| Windows \| \.msi \| Unavailable \|/);
+  assert.match(notes, /\| Android \| \[APK\]\(.*android\.apk\) \|/);
+  assert.match(notes, /\| Linux \| \[DEB\]\(.*\.deb\) \/ \[RPM\]\(.*\.rpm\) \|/);
+  assert.match(notes, /\| Windows \| Unavailable \|/);
   assert.match(notes, new RegExp(`/commit/${sourceSha.replaceAll("/", "\\/")}`));
   assert.match(notes, /Updates are never downloaded or installed silently\./);
 });
@@ -80,4 +85,17 @@ test("nightly notes disclose the unsigned Windows installation path", () => {
     notes,
     /gh attestation verify <downloaded-msi> --repo Obiente\/nc-native/,
   );
+});
+
+test("nightly notes disclose macOS sign-in and update limitations", () => {
+  const notes = composeNightlyReleaseNotes({
+    ...baseOptions,
+    assetNames: ["NextcloudNative-1.0.1.dmg"],
+    availablePlatforms: new Set(["macos"]),
+  });
+
+  assert.match(notes, /\| macOS preview \| \[DMG \(Intel\)\]/);
+  assert.match(notes, /## macOS limitations/);
+  assert.match(notes, /cannot be used to sign in to a Nextcloud account/);
+  assert.match(notes, /has no direct update path/);
 });

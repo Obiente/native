@@ -9,6 +9,7 @@ import {
   loadFragments,
   renderFragments,
 } from "./changelog-fragments.mjs";
+import { composeReleaseDownloadTable } from "./release-download-table.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 
@@ -55,6 +56,7 @@ function parseAvailablePlatforms(value) {
 }
 
 export function composeNightlyReleaseNotes({
+  assetNames = [],
   availablePlatforms,
   fragments,
   repository,
@@ -92,6 +94,7 @@ export function composeNightlyReleaseNotes({
   const lines = [
     `# Nextcloud Native ${tag}`,
     "",
+    composeReleaseDownloadTable({ assetNames, repository, tag }),
     "This is an automated prerelease built from the exact `main` revision that passed the repository's build and test workflow. Nightlies are intended for testing and may include unfinished behavior. Keep a backup of important data.",
     "",
     "## Current development highlights",
@@ -106,19 +109,6 @@ export function composeNightlyReleaseNotes({
     lines.push("No user-facing changelog entries are currently recorded.", "");
   }
 
-  lines.push(
-    "## Downloads",
-    "",
-    "Choose the package for your platform from the release assets below.",
-    "",
-    "| Platform | Package | Status |",
-    "| --- | --- | --- |",
-  );
-  for (const row of platformRows) {
-    const status = availablePlatforms.has(row.id) ? "Available" : "Unavailable";
-    lines.push(`| ${row.label} | ${row.packages} | ${status} |`);
-  }
-
   if (availablePlatforms.has("windows")) {
     lines.push(
       "",
@@ -127,6 +117,15 @@ export function composeNightlyReleaseNotes({
       "The Windows MSI is currently unsigned. Windows may show a Microsoft Defender SmartScreen warning. After confirming that the download came from this release, choose `More info > Run anyway` to continue. Managed devices may block unsigned installers.",
       "",
       `Verify build provenance with \`gh attestation verify <downloaded-msi> --repo ${repository}\` and compare the file with \`SHA256SUMS\` when it is available.`,
+    );
+  }
+
+  if (availablePlatforms.has("macos")) {
+    lines.push(
+      "",
+      "## macOS limitations",
+      "",
+      "The Intel DMG is an early packaging preview. Native Keychain credential storage is not implemented, so this package cannot be used to sign in to a Nextcloud account. It also has no direct update path; install a newer DMG manually when one is published.",
     );
   }
 
@@ -160,8 +159,13 @@ async function runCli() {
   const availablePlatforms = parseAvailablePlatforms(
     argumentValue(args, "--available", ""),
   );
+  const assetsDirectory = argumentValue(args, "--assets");
+  const assetNames = assetsDirectory
+    ? await (await import("node:fs/promises")).readdir(path.resolve(repositoryRoot, assetsDirectory))
+    : [];
   const fragments = await loadFragments(repositoryRoot);
   const notes = composeNightlyReleaseNotes({
+    assetNames,
     availablePlatforms,
     fragments,
     repository,

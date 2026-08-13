@@ -555,6 +555,17 @@ jobs:
             NR == 2 && /^$/ { next }
             { print }
           ' "docs/release-notes/${version}.md" >"${RUNNER_TEMP}/release-notes.md"
+          node tools/release-download-table.mjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --assets dist \
+            --output "${RUNNER_TEMP}/release-downloads.md"
+          {
+            cat "${RUNNER_TEMP}/release-downloads.md"
+            cat "${RUNNER_TEMP}/release-notes.md"
+          } >"${RUNNER_TEMP}/release-notes-with-downloads.md"
+          mv "${RUNNER_TEMP}/release-notes-with-downloads.md" \
+            "${RUNNER_TEMP}/release-notes.md"
           if [[ "${SUCCESSFUL_PLATFORMS}" -lt 4 ]]; then
             {
               printf '\n## Build availability\n\n'
@@ -702,6 +713,19 @@ jobs:
             if [[ -f "${canonical}/SHA256SUMS" ]]; then
               rm "${canonical}/SHA256SUMS"
             fi
+            node tools/release-download-table.mjs \
+              --repository "${GITHUB_REPOSITORY}" \
+              --tag "${GITHUB_REF_NAME}" \
+              --assets "${canonical}" \
+              --output "${RUNNER_TEMP}/canonical-release-downloads.md" \
+              --replace-in "${RUNNER_TEMP}/release-notes.md"
+            gh release edit "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --prerelease \
+              --latest=false \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
+              --title "Nextcloud Native ${version}"
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0

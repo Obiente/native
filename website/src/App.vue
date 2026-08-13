@@ -21,6 +21,7 @@ import {
   PhMagnifyingGlass as MagnifyingGlass,
   PhMoon as Moon,
   PhShieldCheck as ShieldCheck,
+  PhStar as Star,
   PhSquaresFour as SquaresFour,
   PhSun as Sun,
   PhWindowsLogo as WindowsLogo,
@@ -31,6 +32,7 @@ import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
+import githubRepository from "../data/github-repository.json";
 import {
   guidePlatformHubForPath,
   guidePlatformHubs,
@@ -59,6 +61,52 @@ const props = defineProps({
 });
 
 const githubUrl = "https://github.com/Obiente/nc-native";
+const githubStarLabel = `${new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+}).format(githubRepository.stargazersCount)} stars`;
+const downloadPlatforms = [
+  {
+    id: "android",
+    name: "Android",
+    detail: "Android 8.0 or newer",
+    format: "APK",
+    href: "/d/android-latest",
+    icon: AndroidLogo,
+  },
+  {
+    id: "windows",
+    name: "Windows",
+    detail: "x86-64 - unsigned MSI",
+    format: "MSI",
+    href: "/d/windows-latest",
+    icon: WindowsLogo,
+  },
+  {
+    id: "linux-deb",
+    name: "Linux",
+    detail: "Debian and Ubuntu - x86-64",
+    format: "DEB",
+    href: "/d/linux-deb-latest",
+    icon: LinuxLogo,
+  },
+  {
+    id: "linux-rpm",
+    name: "Linux",
+    detail: "Fedora and RHEL - x86-64",
+    format: "RPM",
+    href: "/d/linux-rpm-latest",
+    icon: LinuxLogo,
+  },
+  {
+    id: "macos",
+    name: "macOS",
+    detail: "Intel - sign-in unavailable",
+    format: "DMG",
+    href: "/d/macos-latest",
+    icon: AppleLogo,
+  },
+];
 const captureByScenario = new Map(
   marketingCaptures.map((capture) => [capture.scenario, capture]),
 );
@@ -644,22 +692,22 @@ const frequentlyAsked = [
                   <p>Platform status</p>
                   <ul>
                     <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
-                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS preview</span></li>
+                    <li class="platform-pending" aria-label="macOS preview"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span aria-hidden="true">macOS</span></li>
                     <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
                     <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
-                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS planned</span></li>
+                    <li class="platform-pending" aria-label="iOS unavailable"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span aria-hidden="true">iOS</span></li>
                   </ul>
                 </div>
               </div>
 
               <ul class="hero-trust">
                 <li>
-                  <GithubLogo :size="21" weight="fill" aria-hidden="true" />
+                  <Star :size="21" weight="fill" aria-hidden="true" />
                   <span>
-                    <strong>Open source</strong>
+                    <strong>{{ githubStarLabel }}</strong>
                     <small>
-                      AGPL-3.0-or-later
-                      <a :href="githubUrl" target="_blank" rel="noreferrer">View source</a>
+                      Support the project
+                      <a :href="githubUrl" target="_blank" rel="noreferrer">Star repository</a>
                     </small>
                   </span>
                 </li>
@@ -675,6 +723,35 @@ const frequentlyAsked = [
                 </nav>
               </div>
             </div>
+          </section>
+
+          <section id="downloads" class="download-section section-width" data-reveal>
+            <div class="section-heading compact">
+              <p class="eyebrow">Get the current build</p>
+              <h2>Download for your platform.</h2>
+            </div>
+            <div class="download-grid">
+              <a
+                v-for="platform in downloadPlatforms"
+                :id="`download-${platform.id}`"
+                :key="platform.id"
+                class="download-card"
+                :href="platform.href"
+              >
+                <component :is="platform.icon" :size="28" weight="fill" aria-hidden="true" />
+                <span>
+                  <strong>{{ platform.name }}</strong>
+                  <small>{{ platform.detail }}</small>
+                </span>
+                <b>{{ platform.format }}</b>
+                <ArrowRight :size="18" weight="bold" aria-hidden="true" />
+              </a>
+            </div>
+            <p class="download-caveat">
+              Alpha software: keep another copy of important data. Check the
+              <a href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">release notes and checksums</a>
+              before installing.
+            </p>
           </section>
 
           <section id="experience" class="native-promise section-width" data-reveal>

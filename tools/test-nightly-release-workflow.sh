@@ -7,6 +7,7 @@ prerelease="$project_root/.github/workflows/prerelease.yml"
 ci="$project_root/.github/workflows/ci.yml"
 nightly_notes="$project_root/tools/nightly-release-notes.mjs"
 promotion="$project_root/tools/promote-app-update-channel.sh"
+download_promotion="$project_root/tools/promote-download-channel.sh"
 msi_repackager="$project_root/tools/repackage-msi-with-uninstall-cleanup.ps1"
 msi_verifier="$project_root/tools/verify-windows-package.ps1"
 ui_build="$project_root/ui/build.gradle.kts"
@@ -109,6 +110,8 @@ require_text "$nightly" 'canonical-release-assets'
 require_text "$nightly" 'if [[ "${canonical_successful}" -ge 3 ]]; then'
 require_text "$nightly" 'if: needs.stage-assets.outputs.already-published != '\''true'\'''
 require_text "$nightly" 'tools/promote-app-update-channel.sh'
+require_text "$nightly" 'tools/promote-download-channel.sh'
+require_text "$nightly" 'channel-nightly'
 require_text "$nightly" 'tools/verify-android-update-manifest-assets.sh'
 require_text "$nightly" 'tools/verify-desktop-update-manifest-assets.sh'
 require_text "$nightly_notes" 'The Windows MSI is currently unsigned.'
@@ -194,6 +197,7 @@ if grep -Fq 'Join-Path $AppImage "lib/app/.jpackage.xml"' "$msi_repackager"; the
     exit 1
 fi
 bash -n "$promotion"
+bash -n "$download_promotion"
 
 if [[ -e "$project_root/tools/sign-windows-package.ps1" ]]; then
     echo "The unsigned Windows release path must not retain a PFX signing helper." >&2

@@ -46,6 +46,22 @@ feel like one operating-system service:
 Nextcloud Native is unofficial and is not affiliated with, sponsored by, or
 endorsed by Nextcloud GmbH.
 
+## Quick downloads
+
+Nightly is currently the default and only selectable update track.
+
+| Platform | Latest build | Explicit Nightly |
+| --- | --- | --- |
+| Android 8.0+ | [Download APK](https://nc-native.obiente.dev/d/android-latest) | [Nightly APK](https://nc-native.obiente.dev/d/android-nightly) |
+| Linux (Debian/Ubuntu) | [Download DEB](https://nc-native.obiente.dev/d/linux-deb-latest) | [Nightly DEB](https://nc-native.obiente.dev/d/linux-deb-nightly) |
+| Linux (Fedora/RHEL) | [Download RPM](https://nc-native.obiente.dev/d/linux-rpm-latest) | [Nightly RPM](https://nc-native.obiente.dev/d/linux-rpm-nightly) |
+| Windows x86-64 | [Download MSI](https://nc-native.obiente.dev/d/windows-latest) | [Nightly MSI](https://nc-native.obiente.dev/d/windows-nightly) |
+| macOS Intel preview | [Download DMG](https://nc-native.obiente.dev/d/macos-latest) | [Nightly DMG](https://nc-native.obiente.dev/d/macos-nightly) |
+
+The macOS package is a packaging preview and cannot sign in yet. Windows builds
+are not Authenticode-signed. See the current release notes for platform-specific
+limitations, checksums, and Windows provenance verification.
+
 ## Why this project exists
 
 The Nextcloud ecosystem has excellent server apps, but their mobile and desktop
