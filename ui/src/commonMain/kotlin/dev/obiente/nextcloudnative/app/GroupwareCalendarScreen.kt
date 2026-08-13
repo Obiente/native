@@ -849,11 +849,15 @@ internal fun GroupwareCalendarEvent.overlapsCalendarDateRange(
 
 internal fun GroupwareCalendarEvent.occupiedCalendarDates(): List<String> {
     val first = start.take(8).takeIf { it.length == 8 } ?: return emptyList()
-    val last = end?.take(8)?.takeIf { it.length == 8 } ?: first
+    val explicitEnd = end?.take(8)?.takeIf { it.length == 8 }
+    val last = explicitEnd ?: first
     if (last < first) return listOf(first)
     return buildList {
         var current: String? = first
-        while (current != null && size < 370 && current <= last && !(allDay && current == last)) {
+        while (
+            current != null && size < 370 && current <= last &&
+            !(allDay && explicitEnd != null && current == last)
+        ) {
             add(current)
             if (current == last) break
             current = nextCompactDate(current)

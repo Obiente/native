@@ -3885,7 +3885,13 @@ private fun GenericCategoryCollection(
     val expenseCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Expense }
     val incomeCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Income }
     val listState = rememberLazyListState()
-    NativeCollectionAutoPager(listState, visibleRows.size, onLoadMore, loadingMore, loadMoreError)
+    NativeCollectionAutoPager(
+        listState,
+        visibleRows.size,
+        onLoadMore.takeIf { filter == NativeCategoryFilter.All },
+        loadingMore,
+        loadMoreError,
+    )
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
@@ -4367,11 +4373,15 @@ private fun GenericFinanceCollection(
                 (accountFilter == null || transaction?.paymentMethod == accountFilter)
         }
     }
-    val currency = remember(presentations, contextualCurrency) {
-        presentations.mapNotNull(NativeFinancePresentation::currency).distinct().singleOrNull()
-            ?: contextualCurrency
+    val loadedCurrencies = remember(presentations) {
+        presentations.mapNotNull(NativeFinancePresentation::currency).distinct()
     }
-    val netFlow = remember(presentations) { presentations.sumOf(NativeFinancePresentation::amount) }
+    val currency = remember(loadedCurrencies, contextualCurrency) {
+        loadedCurrencies.singleOrNull() ?: contextualCurrency.takeIf { loadedCurrencies.isEmpty() }
+    }
+    val netFlow = remember(presentations, loadedCurrencies) {
+        presentations.sumOf(NativeFinancePresentation::amount).takeIf { loadedCurrencies.size <= 1 }
+    }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             Surface(
@@ -4393,10 +4403,15 @@ private fun GenericFinanceCollection(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "Loaded net ${formatNativeFinanceAmount(netFlow, currency)}",
+                            netFlow?.let { "Loaded net ${formatNativeFinanceAmount(it, currency)}" }
+                                ?: "Multiple currencies",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (netFlow < 0) MaterialTheme.colorScheme.error else Color(0xFF3F8F50),
+                            color = when {
+                                netFlow == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                                netFlow < 0 -> MaterialTheme.colorScheme.error
+                                else -> Color(0xFF3F8F50)
+                            },
                         )
                     }
                     Row(

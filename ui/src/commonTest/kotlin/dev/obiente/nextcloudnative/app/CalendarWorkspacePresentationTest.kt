@@ -98,6 +98,31 @@ class CalendarWorkspacePresentationTest {
     }
 
     @Test
+    fun `all day event without explicit end occupies its start date`() {
+        val event = event(
+            calendarId = "team",
+            start = "20260803",
+            title = "Release day",
+            allDay = true,
+        ).copy(end = null)
+
+        assertEquals(listOf("20260803"), event.occupiedCalendarDates())
+    }
+
+    @Test
+    fun `all day event with explicit end excludes that end date`() {
+        val event = event(
+            calendarId = "team",
+            start = "20260803",
+            title = "Conference",
+            end = "20260805",
+            allDay = true,
+        )
+
+        assertEquals(listOf("20260803", "20260804"), event.occupiedCalendarDates())
+    }
+
+    @Test
     fun `timed event ending on the first range date remains visible`() {
         val mondayMorning = event(
             calendarId = "team",
