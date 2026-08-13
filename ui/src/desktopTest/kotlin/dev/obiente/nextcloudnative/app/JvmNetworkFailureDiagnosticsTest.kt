@@ -12,6 +12,7 @@ import java.security.cert.CertificateException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLProtocolException
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -256,5 +257,18 @@ class JvmNetworkFailureDiagnosticsTest {
         assertEquals("NETWORK_CERTIFICATE_REJECTED", diagnostic.code)
         assertFalse(diagnostic.retryable)
         assertFalse(diagnostic.fields().any { "certificate" in it.value })
+    }
+
+    @Test
+    fun tlsPhaseProtocolFailureIsNotReportedAsRetryableIo() {
+        val attempt = JvmNetworkRequestAttempt().apply {
+            markPhase(JvmNetworkFailurePhase.Tls)
+        }
+
+        val diagnostic = SSLProtocolException("incompatible TLS record")
+            .toJvmNetworkFailureDiagnostic(attempt, true, true)
+
+        assertEquals("NETWORK_TLS_HANDSHAKE", diagnostic.code)
+        assertFalse(diagnostic.retryable)
     }
 }

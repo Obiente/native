@@ -403,26 +403,36 @@ fun writePreparedMultipartUpload(
     var fileBytes = 0L
     while (true) {
         val read = readFile(buffer)
-        require(read == -1 || read in 1..buffer.size) {
-            "The local upload stream returned an invalid read count."
+        if (read != -1 && read !in 1..buffer.size) {
+            throw LocalUploadSourceValidationException(
+                "The local upload stream returned an invalid read count.",
+            )
         }
         if (read == -1) break
         fileBytes = fileBytes.safeAdd(read.toLong())
-        require(fileBytes <= upload.maximumFileBytes) {
-            "The selected file exceeded the allowed upload limit while reading."
+        if (fileBytes > upload.maximumFileBytes) {
+            throw LocalUploadSourceValidationException(
+                "The selected file exceeded the allowed upload limit while reading.",
+            )
         }
         upload.declaredFileBytes?.let { declared ->
-            require(fileBytes <= declared) {
-                "The selected file changed after it was chosen."
+            if (fileBytes > declared) {
+                throw LocalUploadSourceValidationException(
+                    "The selected file changed after it was chosen.",
+                )
             }
         }
         write(buffer, 0, read)
     }
-    require(upload.declaredFileBytes == null || fileBytes == upload.declaredFileBytes) {
-        "The selected file changed after it was chosen."
+    if (upload.declaredFileBytes != null && fileBytes != upload.declaredFileBytes) {
+        throw LocalUploadSourceValidationException(
+            "The selected file changed after it was chosen.",
+        )
     }
     write(upload.suffix, 0, upload.suffix.size)
 }
+
+class LocalUploadSourceValidationException(message: String) : IllegalArgumentException(message)
 
 private fun String.isSafeMultipartMimeType(): Boolean {
     if (length !in 3..160 || count { it == '/' } != 1) return false

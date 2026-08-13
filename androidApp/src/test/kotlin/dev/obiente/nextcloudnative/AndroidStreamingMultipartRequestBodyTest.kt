@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.JvmLocalUploadSourceIOException
+import dev.obiente.nextcloudnative.app.LocalUploadSourceValidationException
 import dev.obiente.nextcloudnative.app.PreparedMultipartUpload
 import dev.obiente.nextcloudnative.app.localUploadFile
 import dev.obiente.nextcloudnative.app.prepareMultipartUpload
@@ -42,6 +43,17 @@ class AndroidStreamingMultipartRequestBodyTest {
         }
 
         assertSame(sourceFailure, thrown.cause)
+    }
+
+    @Test
+    fun changedSourceSizeIsTypedAsLocalUploadIo() {
+        val thrown = assertFailsWith<JvmLocalUploadSourceIOException> {
+            AndroidStreamingMultipartRequestBody(upload()) {
+                byteArrayOf(1, 2, 3).inputStream()
+            }.writeTo(Buffer())
+        }
+
+        assertTrue(thrown.cause is LocalUploadSourceValidationException)
     }
 
     @Test

@@ -105,7 +105,7 @@ internal class DesktopStreamingMultipartRequestBody(
 
     override fun writeTo(sink: BufferedSink) {
         openJvmLocalUploadSource(openSource).use { source ->
-            writePreparedMultipartUpload(
+            writeJvmPreparedMultipartUpload(
                 upload = upload,
                 readFile = source::read,
                 write = { bytes, offset, count ->

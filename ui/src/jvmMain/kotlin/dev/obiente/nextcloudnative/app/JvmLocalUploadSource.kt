@@ -22,6 +22,18 @@ fun openJvmLocalUploadSource(openSource: () -> InputStream): InputStream {
     return JvmLocalUploadInputStream(source)
 }
 
+fun writeJvmPreparedMultipartUpload(
+    upload: PreparedMultipartUpload,
+    readFile: (ByteArray) -> Int,
+    write: (ByteArray, Int, Int) -> Unit,
+) {
+    try {
+        writePreparedMultipartUpload(upload, readFile, write)
+    } catch (failure: LocalUploadSourceValidationException) {
+        throw JvmLocalUploadSourceIOException(failure)
+    }
+}
+
 fun Throwable.isJvmLocalUploadSourceFailure(): Boolean {
     var current: Throwable? = this
     var depth = 0

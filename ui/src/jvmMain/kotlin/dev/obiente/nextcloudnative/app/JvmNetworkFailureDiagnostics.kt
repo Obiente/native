@@ -9,6 +9,7 @@ import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.cert.CertificateException
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
 import kotlinx.coroutines.CancellationException
@@ -126,6 +127,8 @@ fun Throwable.toJvmNetworkFailureDiagnostic(
         causes.any { it is CertificateException || it is SSLPeerUnverifiedException } ->
             ClassifiedJvmNetworkFailure("NETWORK_CERTIFICATE_REJECTED", retryable = false)
         causes.any { it is SSLHandshakeException } ->
+            ClassifiedJvmNetworkFailure("NETWORK_TLS_HANDSHAKE", retryable = false)
+        attempt.phase == JvmNetworkFailurePhase.Tls && causes.any { it is SSLException } ->
             ClassifiedJvmNetworkFailure("NETWORK_TLS_HANDSHAKE", retryable = false)
         http2Reset != null ->
             ClassifiedJvmNetworkFailure(

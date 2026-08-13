@@ -44,6 +44,17 @@ class DesktopStreamingMultipartRequestBodyTest {
     }
 
     @Test
+    fun changedSourceSizeIsTypedAsLocalUploadIo() {
+        val thrown = assertFailsWith<JvmLocalUploadSourceIOException> {
+            DesktopStreamingMultipartRequestBody(upload()) {
+                byteArrayOf(1, 2, 3).inputStream()
+            }.writeTo(Buffer())
+        }
+
+        assertTrue(thrown.cause is LocalUploadSourceValidationException)
+    }
+
+    @Test
     fun sinkFailureIsNotTypedAsLocalUploadIo() {
         val sinkFailure = IOException("network sink failed")
         val sink = object : ForwardingSink(blackholeSink()) {
