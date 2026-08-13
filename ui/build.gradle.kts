@@ -227,6 +227,10 @@ kotlin {
             implementation("net.java.dev.jna:jna:5.19.1")
             implementation("net.java.dev.jna:jna-platform:5.19.1")
         }
+        val desktopTest by getting
+        desktopTest.dependencies {
+            implementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+        }
     }
 }
 

@@ -216,17 +216,24 @@ class JvmSupportDiagnostics(
         destination: File,
         reproductionSteps: String,
         featureState: List<SupportDiagnosticFieldDraft>,
-    ): File = synchronized(lock) {
+    ): File = writeBundleForSubmission(destination, reproductionSteps, featureState).archive
+
+    internal fun writeBundleForSubmission(
+        destination: File,
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ): PreparedSupportDiagnosticsBundle = synchronized(lock) {
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
         val createdAt = nowEpochMillis().coerceAtLeast(0L)
         discardedHistoryBytes += pruneEvents(createdAt)
         if (discardedHistoryBytes > 0L) persistHistory()
         val snapshot = visibleEvents()
+        val sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank)
         val report = SupportBundleReport(
             createdAtEpochMillis = createdAt,
             environment = environment.safeForReport(),
-            reproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
+            reproductionSteps = sanitizedReproductionSteps,
             eventCount = snapshot.size,
             warningCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Warning },
             errorCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Error },
@@ -260,7 +267,7 @@ class JvmSupportDiagnostics(
             "The bounded diagnostic report is unexpectedly large."
         }
         writeZipAtomically(destination, completeContent, createdAt)
-        destination
+        PreparedSupportDiagnosticsBundle(destination, sanitizedReproductionSteps)
     }
 
     private fun loadHistory() {
@@ -396,6 +403,11 @@ class JvmSupportDiagnostics(
     }
 }
 
+internal data class PreparedSupportDiagnosticsBundle(
+    val archive: File,
+    val sanitizedReproductionSteps: String?,
+)
+
 fun Throwable.toSupportDiagnosticExceptionDraft(
     depth: Int = 0,
 ): SupportDiagnosticExceptionDraft = SupportDiagnosticExceptionDraft(
@@ -414,7 +426,7 @@ fun Throwable.toSupportDiagnosticExceptionDraft(
         ?.toSupportDiagnosticExceptionDraft(depth + 1),
 )
 
-private fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
+internal fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
     SupportDiagnosticsEnvironment(
         appVersion = appVersion.safeEnvironmentValue(),
         packageVersion = packageVersion.safeEnvironmentValue(),

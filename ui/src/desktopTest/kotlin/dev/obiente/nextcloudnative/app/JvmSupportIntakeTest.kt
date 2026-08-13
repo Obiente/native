@@ -1,0 +1,216 @@
+package dev.obiente.nextcloudnative.app
+
+import java.io.File
+import java.util.concurrent.TimeUnit
+import kotlin.io.path.createTempDirectory
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.SocketEffect
+import okhttp3.OkHttpClient
+
+class JvmSupportIntakeTest {
+    @Test
+    fun submitsSanitizedBundleAndRemovesTemporaryArchive() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            fixture.intake.submit("Visit https://private.example.test and refresh.", "nightly", emptyList())
+
+            val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals("OBI-ABCDE-23456", submitted.supportCode)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+            val request = fixture.server.takeRequest(2, TimeUnit.SECONDS)
+            requireNotNull(request)
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/reports", request.url.encodedPath)
+            assertTrue(request.headers["Idempotency-Key"].orEmpty().matches(Regex("[A-Za-z0-9_-]{43}")))
+            val body = request.body?.utf8().orEmpty()
+            assertTrue(body.contains("nextcloud-native"))
+            assertFalse(body.contains("private.example.test"))
+            assertTrue(body.contains("<url:"))
+            assertFalse(body.contains("password"))
+        }
+    }
+
+    @Test
+    fun reconcilesAmbiguousUploadBeforeOfferingRetry() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(2, fixture.server.requestCount)
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val reconcile = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], reconcile.headers["Idempotency-Key"])
+            assertEquals("/api/v1/receipts", reconcile.url.encodedPath)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun permanentRejectionRemovesTemporaryArchive() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                MockResponse.Builder().code(400)
+                    .body("""{"contractVersion":1,"code":"invalid_report","message":"Report schema rejected."}""")
+                    .build(),
+            )
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val rejected = assertIs<SupportDiagnosticsSubmissionState.Rejected>(fixture.intake.states().value)
+            assertEquals("Report schema rejected.", rejected.message)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun restoresInterruptedSubmissionAndReusesIdempotencyKey() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val interrupted = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(interrupted.outcomeAmbiguous)
+            val firstUpload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val idempotencyKey = requireNotNull(firstUpload.headers["Idempotency-Key"])
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+
+            fixture.intake.close()
+            val restored = fixture.newIntake()
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(idempotencyKey, retry.headers["Idempotency-Key"])
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun cancellingRetainedSubmissionDeletesPrivateTemporaryFiles() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(fixture.intake.cancel())
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun cancellationReconcilesAndDeletesReceiptAcceptedDuringUpload() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val reconcile = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val deletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], reconcile.headers["Idempotency-Key"])
+            assertEquals("GET", reconcile.method)
+            assertEquals("DELETE", deletion.method)
+            assertTrue(deletion.url.encodedPath.startsWith("/api/v1/reports/"))
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    private fun testFixture(): Fixture {
+        val root = createTempDirectory("support-intake-test").toFile()
+        val diagnosticRoot = File(root, "diagnostics")
+        val temporaryRoot = File(root, "submissions")
+        val environment = SupportDiagnosticsEnvironment(
+            appVersion = "0.1.0-test",
+            packageVersion = "1",
+            platform = "Synthetic desktop",
+            operatingSystemVersion = "Synthetic OS",
+            architecture = "x86_64",
+        )
+        val diagnostics = AsyncJvmSupportDiagnostics(diagnosticRoot, environment, "support-intake-test")
+        diagnostics.record(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Warning,
+                component = SupportDiagnosticComponent.Network,
+                operation = "network.synthetic",
+                outcome = "failed",
+            ),
+        )
+        val server = MockWebServer().also { it.start() }
+        return Fixture(
+            root = root,
+            temporaryRoot = temporaryRoot,
+            diagnostics = diagnostics,
+            environment = environment,
+            server = server,
+        )
+    }
+
+    private fun receiptResponse(statusUrl: String): MockResponse = MockResponse.Builder().code(201).body(
+        """
+            {
+              "contractVersion": 1,
+              "supportCode": "OBI-ABCDE-23456",
+              "status": "new",
+              "statusUrl": "$statusUrl",
+              "deletionUrl": "$statusUrl",
+              "createdAt": "2026-08-13T12:00:00Z",
+              "retentionUntil": "2026-09-12T12:00:00Z"
+            }
+        """.trimIndent(),
+    ).build()
+
+    private data class Fixture(
+        val root: File,
+        val temporaryRoot: File,
+        val diagnostics: AsyncJvmSupportDiagnostics,
+        val environment: SupportDiagnosticsEnvironment,
+        val server: MockWebServer,
+    ) : AutoCloseable {
+        val intake = newIntake()
+        val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
+
+        fun newIntake() = JvmSupportIntake(
+            diagnostics = diagnostics,
+            temporaryRoot = temporaryRoot,
+            environment = environment,
+            client = OkHttpClient.Builder().retryOnConnectionFailure(false).build(),
+            supportBaseUrl = server.url("/").toString(),
+        )
+
+        override fun close() {
+            intake.cancel()
+            diagnostics.close()
+            server.close()
+            root.deleteRecursively()
+        }
+    }
+}

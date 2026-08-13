@@ -111,6 +111,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.JvmNetworkFailureDiagnostic
 import dev.obiente.nextcloudnative.app.JvmNetworkResponseTruncatedIOException
+import dev.obiente.nextcloudnative.app.JvmSupportIntake
 import dev.obiente.nextcloudnative.app.isReadOnlyJvmNetworkMethod
 import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
 import dev.obiente.nextcloudnative.app.requireExactJvmNetworkResponseBytes
@@ -412,6 +413,12 @@ internal class AndroidNextcloudServices(
         activity = activity,
         diagnostics = supportDiagnostics,
     )
+    private val supportIntake = JvmSupportIntake(
+        diagnostics = supportDiagnostics,
+        temporaryRoot = File(appContext.cacheDir, "support-submissions"),
+        environment = androidSupportDiagnosticsEnvironment(),
+        client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
+    )
 
     init {
         supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
@@ -611,14 +618,29 @@ internal class AndroidNextcloudServices(
         reproductionSteps: String,
     ): SupportDiagnosticsExportResult = supportBundleExporter.export(
         reproductionSteps = reproductionSteps,
-        featureState = listOf(
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override fun supportDiagnosticsSubmissionStates() = supportIntake.states()
+
+    override suspend fun submitSupportDiagnostics(reproductionSteps: String) = supportIntake.submit(
+        reproductionSteps = reproductionSteps,
+        channel = appUpdateSupport().channel.name.lowercase(),
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
+
+    override fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+
+    private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
+        listOf(
             SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
             SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
             SupportDiagnosticFieldDraft("virtual_files_supported", supportsVirtualFileStorage.toString()),
             SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
             SupportDiagnosticFieldDraft("network_metered", isAndroidActiveNetworkMetered(appContext).toString()),
-        ),
-    )
+        )
 
     override suspend fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
 

@@ -62,17 +62,20 @@ internal object AndroidSupportDiagnostics {
         val appContext = context.applicationContext ?: context
         instance ?: AsyncJvmSupportDiagnostics(
             root = File(appContext.filesDir, "support-diagnostics"),
-            environment = SupportDiagnosticsEnvironment(
-                appVersion = BuildConfig.VERSION_NAME,
-                packageVersion = BuildConfig.VERSION_CODE.toString(),
-                platform = "Android",
-                operatingSystemVersion = android.os.Build.VERSION.RELEASE.orEmpty(),
-                architecture = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
-            ),
+            environment = androidSupportDiagnosticsEnvironment(),
             workerName = "nextcloud-support-diagnostics",
         ).also { instance = it }
     }
 }
+
+internal fun androidSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =
+    SupportDiagnosticsEnvironment(
+        appVersion = BuildConfig.VERSION_NAME,
+        packageVersion = BuildConfig.VERSION_CODE.toString(),
+        platform = "Android",
+        operatingSystemVersion = android.os.Build.VERSION.RELEASE.orEmpty(),
+        architecture = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+    )
 
 internal class AndroidSupportBundleExporter(
     private val context: Context,

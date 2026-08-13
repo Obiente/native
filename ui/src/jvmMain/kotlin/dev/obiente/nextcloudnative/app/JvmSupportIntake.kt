@@ -1,0 +1,548 @@
+package dev.obiente.nextcloudnative.app
+
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.charset.StandardCharsets
+import java.nio.file.StandardCopyOption
+import java.security.SecureRandom
+import java.time.Instant
+import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Call
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okio.Buffer
+import okio.BufferedSink
+import okio.buffer
+
+class JvmSupportIntake(
+    private val diagnostics: AsyncJvmSupportDiagnostics,
+    private val temporaryRoot: File,
+    private val environment: SupportDiagnosticsEnvironment,
+    private val client: OkHttpClient,
+    supportBaseUrl: String = DEFAULT_OBIENTE_SUPPORT_URL,
+) : AutoCloseable {
+    private val baseUrl = supportBaseUrl.toHttpUrl()
+    private val json = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = false
+    }
+    private val state = MutableStateFlow<SupportDiagnosticsSubmissionState>(SupportDiagnosticsSubmissionState.Idle)
+    private val activeCall = AtomicReference<Call?>()
+    private val cancellationRequested = AtomicBoolean(false)
+    private val shutdownRequested = AtomicBoolean(false)
+    private val lock = Any()
+    private var pending: PendingSubmission? = null
+
+    init {
+        restorePendingSubmission()?.let { restored ->
+            pending = restored
+            state.value = SupportDiagnosticsSubmissionState.RetryableFailure(
+                "A private support submission was interrupted. You can retry it safely.",
+                outcomeAmbiguous = true,
+            )
+        }
+    }
+
+    fun states(): StateFlow<SupportDiagnosticsSubmissionState> = state.asStateFlow()
+
+    suspend fun submit(
+        reproductionSteps: String,
+        channel: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ) = withContext(Dispatchers.IO) {
+        discardPending()
+        cancellationRequested.set(false)
+        state.value = SupportDiagnosticsSubmissionState.Packaging
+        val prepared = try {
+            require(temporaryRoot.isDirectory || temporaryRoot.mkdirs()) {
+                "Could not prepare private support submission storage."
+            }
+            pruneStaleTemporaryReports()
+            diagnostics.writeBundleForSubmission(
+                destination = File(temporaryRoot, "support-${UUID.randomUUID()}.zip"),
+                reproductionSteps = reproductionSteps,
+                featureState = featureState,
+            )
+        } catch (cancellation: CancellationException) {
+            state.value = SupportDiagnosticsSubmissionState.Cancelled
+            throw cancellation
+        } catch (failure: Throwable) {
+            state.value = SupportDiagnosticsSubmissionState.Rejected(
+                failure.message?.take(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
+                    ?: "The private diagnostic report could not be prepared.",
+            )
+            return@withContext
+        }
+        val submission = PendingSubmission(
+            archive = prepared.archive,
+            metadata = SupportIntakeMetadata(
+                title = "Nextcloud Native diagnostic report",
+                description = prepared.sanitizedReproductionSteps.toSupportIntakeDescription(),
+                release = environment.safeForReport().let { safe ->
+                    SupportIntakeRelease(
+                        version = safe.appVersion.filterSupportMetadata(80),
+                        channel = channel.filterSupportMetadata(40),
+                        platform = safe.platform.filterSupportMetadata(60),
+                        osVersion = safe.operatingSystemVersion.filterSupportMetadata(120),
+                        architecture = safe.architecture.filterSupportMetadata(40),
+                    )
+                },
+            ),
+            idempotencyKey = secureIdempotencyKey(),
+        )
+        synchronized(lock) { pending = submission }
+        if (!persistPendingSafely(submission)) {
+            finishRejected(submission, "The private support submission could not be retained safely on this device.")
+            return@withContext
+        }
+        upload(submission)
+    }
+
+    suspend fun retry() = withContext(Dispatchers.IO) {
+        val submission = synchronized(lock) { pending }
+        if (submission == null || !submission.archive.isFile) {
+            state.value = SupportDiagnosticsSubmissionState.Rejected(
+                "There is no private support submission available to retry.",
+            )
+            return@withContext
+        }
+        cancellationRequested.set(false)
+        upload(submission)
+    }
+
+    fun cancel(): Boolean {
+        val call = activeCall.getAndSet(null)
+        cancellationRequested.set(true)
+        if (call != null) {
+            call.cancel()
+            return true
+        }
+        val submission = synchronized(lock) { pending.also { pending = null } }
+        if (submission != null || state.value == SupportDiagnosticsSubmissionState.Packaging) {
+            submission?.archive?.delete()
+            pendingDescriptor().delete()
+            state.value = SupportDiagnosticsSubmissionState.Cancelled
+            return true
+        }
+        return false
+    }
+
+    override fun close() {
+        shutdownRequested.set(true)
+        activeCall.getAndSet(null)?.cancel()
+    }
+
+    private fun upload(submission: PendingSubmission) {
+        if (cancellationRequested.get()) {
+            finishCancelled(submission)
+            return
+        }
+        val metadata = json.encodeToString(SupportIntakeMetadata.serializer(), submission.metadata)
+        val progressBody = ProgressRequestBody(
+            delegate = submission.archive.asRequestBody(SUPPORT_ARCHIVE_MEDIA_TYPE),
+            onProgress = { uploaded, total ->
+                if (!cancellationRequested.get()) {
+                    state.value = SupportDiagnosticsSubmissionState.Uploading(
+                        total.takeIf { it > 0L }?.let { uploaded.toFloat() / it.toFloat() }?.coerceIn(0f, 1f),
+                    )
+                }
+            },
+        )
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("metadata", "metadata.json", metadata.toRequestBody(SUPPORT_METADATA_MEDIA_TYPE))
+            .addFormDataPart("diagnostics", "diagnostics.zip", progressBody)
+            .build()
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").build())
+            .header("Accept", "application/json")
+            .header("Idempotency-Key", submission.idempotencyKey)
+            .post(body)
+            .build()
+        state.value = SupportDiagnosticsSubmissionState.Uploading(0f)
+        val call = client.newCall(request)
+        activeCall.set(call)
+        try {
+            call.execute().use { response ->
+                val responseText = response.readBoundedText()
+                when {
+                    response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
+                    response.code in 400..499 -> finishRejected(submission, decodeProblem(responseText))
+                    else -> retainForRetry(submission, "Obiente Support is temporarily unavailable.", false)
+                }
+            }
+        } catch (failure: IOException) {
+            if (shutdownRequested.get()) {
+                retainForRetry(
+                    submission,
+                    "The private support submission was interrupted while the app closed. You can retry it safely.",
+                    true,
+                )
+            } else {
+                reconcileAfterAmbiguousResult(submission, failure)
+            }
+        } catch (_: IllegalArgumentException) {
+            retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
+        } catch (cancellation: CancellationException) {
+            finishCancelled(submission)
+            throw cancellation
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+    }
+
+    private fun reconcileAfterAmbiguousResult(submission: PendingSubmission, uploadFailure: IOException) {
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/receipts").build())
+            .header("Accept", "application/json")
+            .header("Idempotency-Key", submission.idempotencyKey)
+            .get()
+            .build()
+        val call = client.newCall(request)
+        activeCall.set(call)
+        try {
+            call.execute().use { response ->
+                val responseText = response.readBoundedText()
+                when {
+                    response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
+                    response.code == 404 && cancellationRequested.get() -> finishCancelled(submission)
+                    response.code == 404 -> retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
+                    else -> retainForRetry(
+                        submission,
+                        "The upload result is uncertain. Check your connection before retrying.",
+                        true,
+                    )
+                }
+            }
+        } catch (_: IOException) {
+            retainForRetry(
+                submission,
+                if (cancellationRequested.get()) {
+                    "Cancellation could not be confirmed. Reconcile the private submission before retrying."
+                } else uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
+                    ?.takeIf(String::isNotBlank)
+                    ?: "The upload result is uncertain. Check your connection before retrying.",
+                true,
+            )
+        } catch (_: IllegalArgumentException) {
+            retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+    }
+
+    private fun finishReceived(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
+        if (cancellationRequested.get()) {
+            deleteCancelledReceipt(submission, receipt)
+        } else {
+            finishSubmitted(submission, receipt)
+        }
+    }
+
+    private fun deleteCancelledReceipt(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
+        val statusUrl = validateReceipt(receipt)
+        val deletionUrl = receipt.deletionUrl.toHttpUrl()
+        require(
+            deletionUrl.scheme == statusUrl.scheme &&
+                deletionUrl.host == statusUrl.host &&
+                deletionUrl.port == statusUrl.port &&
+                deletionUrl.encodedPath == statusUrl.encodedPath &&
+                deletionUrl.encodedQuery == null &&
+                deletionUrl.fragment == null,
+        )
+        val capability = statusUrl.pathSegments.last()
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
+            .header("Accept", "application/json")
+            .delete()
+            .build()
+        val call = client.newCall(request)
+        activeCall.set(call)
+        try {
+            call.execute().use { response ->
+                response.readBoundedText()
+                if (response.isSuccessful || response.code == 404) {
+                    finishCancelled(submission)
+                } else {
+                    finishSubmitted(submission, receipt)
+                }
+            }
+        } catch (_: IOException) {
+            finishSubmitted(submission, receipt)
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+    }
+
+    private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
+        validateReceipt(receipt)
+        finishTerminal(submission)
+        state.value = SupportDiagnosticsSubmissionState.Submitted(
+            supportCode = receipt.supportCode,
+            statusUrl = receipt.statusUrl,
+            retentionUntil = receipt.retentionUntil,
+        )
+    }
+
+    private fun validateReceipt(receipt: SupportIntakeReceipt): okhttp3.HttpUrl {
+        require(receipt.contractVersion == SUPPORT_INTAKE_CONTRACT_VERSION)
+        require(receipt.supportCode.matches(SUPPORT_CODE_PATTERN))
+        require(receipt.status.matches(SUPPORT_RECEIPT_STATUS_PATTERN))
+        val createdAt = runCatching { Instant.parse(receipt.createdAt) }
+            .getOrElse { throw IllegalArgumentException("Invalid receipt timestamp.", it) }
+        val retentionUntil = runCatching { Instant.parse(receipt.retentionUntil) }
+            .getOrElse { throw IllegalArgumentException("Invalid receipt timestamp.", it) }
+        require(!retentionUntil.isBefore(createdAt))
+        val statusUrl = receipt.statusUrl.toHttpUrl()
+        require(
+            statusUrl.scheme == baseUrl.scheme &&
+                statusUrl.host == baseUrl.host &&
+                statusUrl.port == baseUrl.port &&
+                statusUrl.encodedPath.matches(SUPPORT_STATUS_PATH_PATTERN) &&
+                statusUrl.encodedQuery == null &&
+                statusUrl.fragment == null,
+        )
+        return statusUrl
+    }
+
+    private fun finishTerminal(submission: PendingSubmission) {
+        synchronized(lock) {
+            if (pending === submission) pending = null
+        }
+        submission.archive.delete()
+        pendingDescriptor().delete()
+    }
+
+    private fun finishRejected(submission: PendingSubmission, message: String) {
+        finishTerminal(submission)
+        state.value = SupportDiagnosticsSubmissionState.Rejected(message)
+    }
+
+    private fun finishCancelled(submission: PendingSubmission) {
+        finishTerminal(submission)
+        state.value = SupportDiagnosticsSubmissionState.Cancelled
+    }
+
+    private fun retainForRetry(submission: PendingSubmission, message: String, ambiguous: Boolean) {
+        synchronized(lock) { pending = submission }
+        if (persistPendingSafely(submission)) {
+            state.value = SupportDiagnosticsSubmissionState.RetryableFailure(message, ambiguous)
+        } else {
+            finishRejected(submission, "The private support submission could not be retained safely on this device.")
+        }
+    }
+
+    private fun persistPendingSafely(submission: PendingSubmission): Boolean =
+        runCatching { persistPending(submission) }.isSuccess
+
+    private fun decodeReceipt(response: String): SupportIntakeReceipt = try {
+        json.decodeFromString(SupportIntakeReceipt.serializer(), response)
+    } catch (failure: SerializationException) {
+        throw IOException("Obiente Support returned an invalid receipt.", failure)
+    }
+
+    private fun decodeProblem(response: String): String = runCatching {
+        json.parseToJsonElement(response).jsonObject["message"]?.jsonPrimitive?.content
+    }.getOrNull()
+        ?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
+        ?.takeIf(String::isNotBlank)
+        ?: "Obiente Support rejected this diagnostic report."
+
+    private fun discardPending() {
+        synchronized(lock) {
+            pending?.archive?.delete()
+            pending = null
+        }
+        pendingDescriptor().delete()
+    }
+
+    private fun pruneStaleTemporaryReports() {
+        val cutoff = System.currentTimeMillis() - SUPPORT_TEMPORARY_MAX_AGE_MILLIS
+        temporaryRoot.listFiles().orEmpty()
+            .filter { file -> file.isFile && file.name.matches(SUPPORT_TEMPORARY_FILE_PATTERN) && file.lastModified() < cutoff }
+            .forEach(File::delete)
+    }
+
+    private fun persistPending(submission: PendingSubmission) {
+        val descriptor = pendingDescriptor()
+        val parent = requireNotNull(descriptor.parentFile)
+        require(parent.isDirectory || parent.mkdirs())
+        val temporary = File(parent, ".pending-${UUID.randomUUID()}.tmp")
+        try {
+            val encoded = json.encodeToString(
+                PersistedPendingSubmission.serializer(),
+                PersistedPendingSubmission(
+                    archiveName = submission.archive.name,
+                    metadata = submission.metadata,
+                    idempotencyKey = submission.idempotencyKey,
+                    createdAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L),
+                ),
+            ).encodeToByteArray()
+            FileOutputStream(temporary).use { output ->
+                output.write(encoded)
+                output.fd.sync()
+            }
+            runCatching {
+                java.nio.file.Files.move(
+                    temporary.toPath(),
+                    descriptor.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }.recoverCatching {
+                java.nio.file.Files.move(
+                    temporary.toPath(),
+                    descriptor.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }.getOrThrow()
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    private fun restorePendingSubmission(): PendingSubmission? = runCatching {
+        val descriptor = pendingDescriptor()
+        if (!descriptor.isFile || descriptor.length() !in 1L..MAX_PENDING_DESCRIPTOR_BYTES) return@runCatching null
+        val persisted = json.decodeFromString(
+            PersistedPendingSubmission.serializer(),
+            descriptor.readText(Charsets.UTF_8),
+        )
+        require(persisted.archiveName.matches(SUPPORT_TEMPORARY_FILE_PATTERN))
+        require(persisted.idempotencyKey.matches(SUPPORT_IDEMPOTENCY_PATTERN))
+        require(System.currentTimeMillis() - persisted.createdAtEpochMillis in 0L..SUPPORT_TEMPORARY_MAX_AGE_MILLIS)
+        val archive = File(temporaryRoot, persisted.archiveName).absoluteFile.normalize()
+        require(archive.parentFile == temporaryRoot.absoluteFile.normalize())
+        require(archive.isFile && archive.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
+        PendingSubmission(archive, persisted.metadata, persisted.idempotencyKey)
+    }.getOrElse {
+        pendingDescriptor().delete()
+        null
+    }
+
+    private fun pendingDescriptor(): File = File(temporaryRoot, SUPPORT_PENDING_DESCRIPTOR)
+
+    private data class PendingSubmission(
+        val archive: File,
+        val metadata: SupportIntakeMetadata,
+        val idempotencyKey: String,
+    )
+
+    @Serializable
+    private data class PersistedPendingSubmission(
+        val archiveName: String,
+        val metadata: SupportIntakeMetadata,
+        val idempotencyKey: String,
+        val createdAtEpochMillis: Long,
+    )
+}
+
+private class ProgressRequestBody(
+    private val delegate: RequestBody,
+    private val onProgress: (Long, Long) -> Unit,
+) : RequestBody() {
+    override fun contentType() = delegate.contentType()
+    override fun contentLength(): Long = delegate.contentLength()
+
+    override fun writeTo(sink: BufferedSink) {
+        val total = contentLength()
+        val forwarding = object : okio.ForwardingSink(sink) {
+            var uploaded = 0L
+            override fun write(source: okio.Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                uploaded += byteCount
+                onProgress(uploaded, total)
+            }
+        }
+        val buffered = forwarding.buffer()
+        delegate.writeTo(buffered)
+        buffered.flush()
+    }
+}
+
+private fun secureIdempotencyKey(): String {
+    val bytes = ByteArray(32).also(SecureRandom()::nextBytes)
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+}
+
+private fun Response.readBoundedText(): String {
+    val source = body.source()
+    val buffer = Buffer()
+    val limit = MAX_SUPPORT_INTAKE_RESPONSE_BYTES.toLong() + 1L
+    while (buffer.size < limit) {
+        val read = source.read(buffer, minOf(8_192L, limit - buffer.size))
+        if (read == -1L) break
+    }
+    if (buffer.size > MAX_SUPPORT_INTAKE_RESPONSE_BYTES) {
+        throw IOException("Obiente Support returned an oversized response.")
+    }
+    return buffer.readString(Charsets.UTF_8)
+}
+
+private fun String.filterSupportMetadata(maximumBytes: Int): String =
+    filterNot(Char::isISOControl).trim().takeUtf8Bytes(maximumBytes)
+
+private fun String?.toSupportIntakeDescription(): String {
+    val sanitized = orEmpty().takeUtf8Bytes(MAX_SUPPORT_INTAKE_DESCRIPTION_BYTES)
+    if (sanitized.isBlank()) return "The diagnostic report was submitted without additional reproduction steps."
+    return if (sanitized.toByteArray(StandardCharsets.UTF_8).size < MIN_SUPPORT_INTAKE_DESCRIPTION_BYTES) {
+        "User note: $sanitized"
+    } else {
+        sanitized
+    }
+}
+
+private fun String.takeUtf8Bytes(maximumBytes: Int): String {
+    require(maximumBytes >= 0)
+    if (toByteArray(StandardCharsets.UTF_8).size <= maximumBytes) return this
+    val bounded = StringBuilder(length)
+    var byteCount = 0
+    var index = 0
+    while (index < length) {
+        val codePoint = codePointAt(index)
+        val encoded = String(Character.toChars(codePoint)).toByteArray(StandardCharsets.UTF_8)
+        if (byteCount + encoded.size > maximumBytes) break
+        bounded.appendCodePoint(codePoint)
+        byteCount += encoded.size
+        index += Character.charCount(codePoint)
+    }
+    return bounded.toString()
+}
+
+private val SUPPORT_METADATA_MEDIA_TYPE = "application/json".toMediaType()
+private val SUPPORT_ARCHIVE_MEDIA_TYPE = "application/zip".toMediaType()
+private val SUPPORT_CODE_PATTERN = Regex("OBI-[A-HJ-KM-NP-Z2-9]{5}-[A-HJ-KM-NP-Z2-9]{5}")
+private val SUPPORT_RECEIPT_STATUS_PATTERN = Regex("[a-z][a-z_]{1,31}")
+private val SUPPORT_STATUS_PATH_PATTERN = Regex("/r/[A-Za-z0-9_-]{43}")
+private val SUPPORT_TEMPORARY_FILE_PATTERN = Regex("support-[0-9a-f-]{36}\\.zip")
+private val SUPPORT_IDEMPOTENCY_PATTERN = Regex("[A-Za-z0-9_-]{43}")
+private const val MAX_SUPPORT_INTAKE_MESSAGE_LENGTH = 240
+private const val MAX_SUPPORT_INTAKE_RESPONSE_BYTES = 64 * 1024
+private const val MAX_SUPPORT_INTAKE_DESCRIPTION_BYTES = 8_000
+private const val MIN_SUPPORT_INTAKE_DESCRIPTION_BYTES = 10
+private const val MAX_PENDING_DESCRIPTOR_BYTES = 32L * 1024L
+private const val MAX_SUPPORT_ARCHIVE_BYTES = 4L * 1024L * 1024L
+private const val SUPPORT_PENDING_DESCRIPTOR = "pending.json"
+private const val SUPPORT_TEMPORARY_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L

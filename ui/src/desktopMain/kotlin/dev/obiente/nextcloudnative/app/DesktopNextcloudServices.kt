@@ -929,6 +929,7 @@ class DesktopNextcloudServices(
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
     supportDiagnosticsRoot: File? = null,
     providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
+    supportIntakeRoot: File? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
     private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
@@ -941,12 +942,22 @@ class DesktopNextcloudServices(
         requireNotNull(resolvedSupportDiagnosticsRoot),
     )
     private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
+    private val ownsTemporarySupportIntakeRoot = supportIntakeRoot == null && resolvedSupportDiagnosticsRoot == null
+    private val resolvedSupportIntakeRoot = supportIntakeRoot
+        ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
+        ?: Files.createTempDirectory("nextcloud-native-test-support-intake").toFile()
     private val secretStore = defaultDesktopSecretStore()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
     )
     private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val supportIntake = JvmSupportIntake(
+        diagnostics = supportDiagnostics,
+        temporaryRoot = resolvedSupportIntakeRoot,
+        environment = desktopSupportDiagnosticsEnvironment(),
+        client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
+    )
     private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
@@ -2534,7 +2545,9 @@ class DesktopNextcloudServices(
         // Closing its backend while holding the same lock reverses that order and deadlocks.
         runCatching { providersToClose.first?.unmount() }
         runCatching { providersToClose.second?.close() }
+        supportIntake.close()
         supportDiagnostics.close()
+        if (ownsTemporarySupportIntakeRoot) resolvedSupportIntakeRoot.deleteRecursively()
         if (ownsTemporarySupportDiagnosticsRoot) requireNotNull(resolvedSupportDiagnosticsRoot).deleteRecursively()
     }
 
@@ -3354,7 +3367,23 @@ class DesktopNextcloudServices(
         reproductionSteps: String,
     ): SupportDiagnosticsExportResult = supportBundleExporter.export(
         reproductionSteps = reproductionSteps,
-        featureState = listOf(
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override fun supportDiagnosticsSubmissionStates() = supportIntake.states()
+
+    override suspend fun submitSupportDiagnostics(reproductionSteps: String) = supportIntake.submit(
+        reproductionSteps = reproductionSteps,
+        channel = appUpdateSupport().channel.name.lowercase(),
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
+
+    override fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+
+    private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
+        listOf(
             SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
             SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
             SupportDiagnosticFieldDraft("start_on_login_supported", supportsStartOnLogin.toString()),
@@ -3364,8 +3393,7 @@ class DesktopNextcloudServices(
                 (windowsCloudFilesProvider != null || linuxVirtualFileSystem != null).toString(),
             ),
             SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
-        ),
-    )
+        )
 
     override suspend fun clearSupportDiagnostics(): Boolean = withContext(Dispatchers.IO) {
         supportDiagnostics.clear()

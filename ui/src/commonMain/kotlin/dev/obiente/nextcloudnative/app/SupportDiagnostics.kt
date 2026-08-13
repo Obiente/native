@@ -184,6 +184,63 @@ sealed interface SupportDiagnosticsExportResult {
     data class Unsupported(val reason: String) : SupportDiagnosticsExportResult
 }
 
+sealed interface SupportDiagnosticsSubmissionState {
+    data object Idle : SupportDiagnosticsSubmissionState
+    data object Packaging : SupportDiagnosticsSubmissionState
+    data class Uploading(val progress: Float?) : SupportDiagnosticsSubmissionState {
+        init {
+            require(progress == null || progress in 0f..1f)
+        }
+    }
+    data class RetryableFailure(val message: String, val outcomeAmbiguous: Boolean) :
+        SupportDiagnosticsSubmissionState
+    data class Rejected(val message: String) : SupportDiagnosticsSubmissionState
+    data object Cancelled : SupportDiagnosticsSubmissionState
+    data class Submitted(
+        val supportCode: String,
+        val statusUrl: String,
+        val retentionUntil: String,
+    ) : SupportDiagnosticsSubmissionState
+    data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
+}
+
+@Serializable
+internal data class SupportIntakeRelease(
+    val version: String,
+    val channel: String,
+    val platform: String,
+    val osVersion: String,
+    val architecture: String,
+)
+
+@Serializable
+internal data class SupportIntakeMetadata(
+    val contractVersion: Int = SUPPORT_INTAKE_CONTRACT_VERSION,
+    val productId: String = SUPPORT_INTAKE_PRODUCT_ID,
+    val requestType: String = "bug",
+    val title: String,
+    val description: String,
+    val contact: String = "",
+    val source: String = "app",
+    val release: SupportIntakeRelease,
+    val privacyAccepted: Boolean = true,
+)
+
+@Serializable
+internal data class SupportIntakeReceipt(
+    val contractVersion: Int,
+    val supportCode: String,
+    val status: String,
+    val statusUrl: String,
+    val deletionUrl: String,
+    val createdAt: String,
+    val retentionUntil: String,
+)
+
+internal const val SUPPORT_INTAKE_CONTRACT_VERSION = 1
+internal const val SUPPORT_INTAKE_PRODUCT_ID = "nextcloud-native"
+internal const val DEFAULT_OBIENTE_SUPPORT_URL = "https://support.obiente.org"
+
 internal class SupportDiagnosticSanitizer(
     private val pseudonymize: (String) -> String,
 ) {

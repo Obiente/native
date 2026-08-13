@@ -12510,7 +12510,14 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     var exporting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var confirmSend by rememberSaveable { mutableStateOf(false) }
     var showPreview by rememberSaveable { mutableStateOf(false) }
+    val submissionState by remember(services) {
+        services.supportDiagnosticsSubmissionStates()
+    }.collectAsState(SupportDiagnosticsSubmissionState.Idle)
+    val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Packaging ||
+        submissionState is SupportDiagnosticsSubmissionState.Uploading
+    val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure
 
     if (confirmClear) {
         AlertDialog(
@@ -12540,6 +12547,37 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             dismissButton = {
                 TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (confirmSend) {
+        AlertDialog(
+            onDismissRequest = { if (!submissionBusy) confirmSend = false },
+            title = { Text("Send this private report?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    Text(
+                        "The sanitized report, the description you reviewed, and app release details will be sent to Obiente Support.",
+                    )
+                    Text(
+                        "It does not include account credentials, server URLs, filenames, file contents, or a stable device identifier. Private report data is retained for 30 days unless you delete it first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !submissionBusy,
+                    onClick = {
+                        confirmSend = false
+                        scope.launch { services.submitSupportDiagnostics(reproductionSteps) }
+                    },
+                ) { Text("Send privately") }
+            },
+            dismissButton = {
+                TextButton(enabled = !submissionBusy, onClick = { confirmSend = false }) { Text("Cancel") }
             },
         )
     }
@@ -12601,7 +12639,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 value = reproductionSteps,
                 onValueChange = { reproductionSteps = it.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH) },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = summary.available && !exporting,
+                enabled = summary.available && !exporting && !submissionBusy && !submissionPending,
                 label = { Text("What happened? (optional)") },
                 placeholder = { Text("Describe what you did, what you expected, and what happened.") },
                 supportingText = {
@@ -12670,7 +12708,13 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
                 Button(
-                    enabled = summary.available && !exporting,
+                    enabled = summary.available && !exporting && !submissionBusy && !submissionPending,
+                    onClick = { confirmSend = true },
+                ) {
+                    Text("Send to support")
+                }
+                OutlinedButton(
+                    enabled = summary.available && !exporting && !submissionBusy,
                     onClick = {
                         exporting = true
                         status = null
@@ -12699,14 +12743,93 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (exporting) "Preparing..." else "Export report")
+                    Text(if (exporting) "Preparing..." else "Save a copy")
+                }
+                if (submissionBusy) {
+                    OutlinedButton(onClick = { services.cancelSupportDiagnosticsSubmission() }) {
+                        Text("Cancel sending")
+                    }
                 }
                 if (summary.eventCount > 0) {
                     OutlinedButton(
-                        enabled = !exporting,
+                        enabled = !exporting && !submissionBusy,
                         onClick = { confirmClear = true },
                     ) { Text("Clear history") }
                 }
+            }
+            when (val current = submissionState) {
+                SupportDiagnosticsSubmissionState.Idle -> Unit
+                SupportDiagnosticsSubmissionState.Packaging -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)
+                }
+                is SupportDiagnosticsSubmissionState.Uploading -> {
+                    if (current.progress == null) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { current.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Text("Sending the private report to Obiente Support...", style = MaterialTheme.typography.bodySmall)
+                }
+                is SupportDiagnosticsSubmissionState.RetryableFailure -> {
+                    Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        OutlinedButton(onClick = { scope.launch { services.retrySupportDiagnosticsSubmission() } }) {
+                            Text("Retry safely")
+                        }
+                        TextButton(onClick = { services.cancelSupportDiagnosticsSubmission() }) {
+                            Text("Discard pending report")
+                        }
+                    }
+                }
+                is SupportDiagnosticsSubmissionState.Rejected -> Text(
+                    current.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                SupportDiagnosticsSubmissionState.Cancelled -> Text(
+                    "Private report submission cancelled.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                is SupportDiagnosticsSubmissionState.Submitted -> {
+                    Text(
+                        "Sent privately. Support code: ${current.supportCode}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                status = if (services.copyTextToClipboard("Obiente support code", current.supportCode)) {
+                                    "Support code copied."
+                                } else {
+                                    "The support code could not be copied."
+                                }
+                            },
+                        ) { Text("Copy support code") }
+                        TextButton(onClick = { services.openExternalUrl(current.statusUrl) }) {
+                            Text("Open private status")
+                        }
+                    }
+                }
+                is SupportDiagnosticsSubmissionState.Unsupported -> Text(
+                    current.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             status?.let { message ->
                 Text(
