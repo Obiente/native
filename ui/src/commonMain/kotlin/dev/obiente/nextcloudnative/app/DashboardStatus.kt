@@ -49,6 +49,7 @@ data class NativeDashboardSnapshot(
     val emptyContentMessagesByWidget: Map<String, String> = emptyMap(),
     val halfEmptyContentMessagesByWidget: Map<String, String> = emptyMap(),
     val failedWidgetIds: Set<String> = emptySet(),
+    val unsupportedWidgetIds: Set<String> = emptySet(),
 ) {
     init {
         val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
@@ -66,6 +67,12 @@ data class NativeDashboardSnapshot(
         }
         require(failedWidgetIds.all(widgetIds::contains)) {
             "Dashboard failures reference an unknown widget."
+        }
+        require(unsupportedWidgetIds.all(widgetIds::contains)) {
+            "Unsupported Dashboard widgets reference an unknown widget."
+        }
+        require(failedWidgetIds.intersect(unsupportedWidgetIds).isEmpty()) {
+            "A Dashboard widget cannot be failed and unsupported."
         }
     }
 
@@ -103,6 +110,21 @@ internal sealed interface DashboardItemsFetchResult {
     data class Failed(
         override val widgetIds: Set<String>,
     ) : DashboardItemsFetchResult
+}
+
+internal fun dashboardItemsFetchResult(
+    requestedWidgetIds: Set<String>,
+    payload: DashboardItemsPayload,
+): DashboardItemsFetchResult {
+    require(requestedWidgetIds.isNotEmpty()) { "A Dashboard item request must name a widget." }
+    require(payload.itemsByWidget.keys.all(requestedWidgetIds::contains)) {
+        "Dashboard items reference a widget outside the request."
+    }
+    return if (payload.itemsByWidget.keys.containsAll(requestedWidgetIds)) {
+        DashboardItemsFetchResult.Loaded(requestedWidgetIds, payload)
+    } else {
+        DashboardItemsFetchResult.Failed(requestedWidgetIds)
+    }
 }
 
 enum class NativeUserPresence(val wireValue: String) {
@@ -205,37 +227,40 @@ internal fun dashboardItemsRequestPlans(
     widgets: List<NativeDashboardWidget>,
     sinceIds: Map<String, String> = emptyMap(),
 ): List<DashboardItemsRequestPlan> {
-    val v2WidgetIds = widgets.filter { 2 in it.itemApiVersions }.mapTo(sortedSetOf(), NativeDashboardWidget::id)
-    val v1WidgetIds = widgets.filter {
-        1 in it.itemApiVersions && 2 !in it.itemApiVersions
-    }.mapTo(sortedSetOf(), NativeDashboardWidget::id)
-    return buildList {
-        if (v2WidgetIds.isNotEmpty()) {
-            add(
-                DashboardItemsRequestPlan(
-                    apiVersion = DashboardItemApiVersion.V2,
-                    widgetIds = v2WidgetIds,
-                    request = dashboardItemsRequest(
-                        apiVersion = DashboardItemApiVersion.V2,
-                        widgetIds = v2WidgetIds,
-                        sinceIds = sinceIds.filterKeys(v2WidgetIds::contains),
-                    ),
-                ),
-            )
-        }
-        if (v1WidgetIds.isNotEmpty()) {
-            add(
-                DashboardItemsRequestPlan(
-                    apiVersion = DashboardItemApiVersion.V1,
-                    widgetIds = v1WidgetIds,
-                    request = dashboardItemsRequest(
-                        apiVersion = DashboardItemApiVersion.V1,
-                        widgetIds = v1WidgetIds,
-                        sinceIds = sinceIds.filterKeys(v1WidgetIds::contains),
-                    ),
-                ),
-            )
-        }
+    return widgets.mapNotNull { widget ->
+        val apiVersion = when {
+            2 in widget.itemApiVersions -> DashboardItemApiVersion.V2
+            1 in widget.itemApiVersions -> DashboardItemApiVersion.V1
+            else -> null
+        } ?: return@mapNotNull null
+        val widgetIds = setOf(widget.id)
+        DashboardItemsRequestPlan(
+            apiVersion = apiVersion,
+            widgetIds = widgetIds,
+            request = dashboardItemsRequest(
+                apiVersion = apiVersion,
+                widgetIds = widgetIds,
+                sinceIds = sinceIds.filterKeys(widgetIds::contains),
+            ),
+        )
+    }
+}
+
+internal fun unsupportedDashboardWidgetIds(widgets: List<NativeDashboardWidget>): Set<String> =
+    widgets.filter { widget ->
+        widget.itemApiVersions.isNotEmpty() &&
+            widget.itemApiVersions.none { version -> version == 1 || version == 2 }
+    }.mapTo(mutableSetOf(), NativeDashboardWidget::id)
+
+internal fun dashboardItemsRequestWorkers(
+    plans: List<DashboardItemsRequestPlan>,
+    maximumWorkers: Int = MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS,
+): List<List<DashboardItemsRequestPlan>> {
+    require(maximumWorkers > 0) { "The Dashboard worker limit must be positive." }
+    if (plans.isEmpty()) return emptyList()
+    val workerCount = minOf(plans.size, maximumWorkers)
+    return List(workerCount) { workerIndex ->
+        plans.filterIndexed { index, _ -> index % workerCount == workerIndex }
     }
 }
 
@@ -349,6 +374,7 @@ internal fun mergeDashboardItemFetchResults(
     widgets: List<NativeDashboardWidget>,
     previousSnapshot: NativeDashboardSnapshot?,
     results: List<DashboardItemsFetchResult>,
+    unsupportedWidgetIds: Set<String> = emptySet(),
 ): NativeDashboardSnapshot {
     val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
     val resolvedWidgetIds = results.flatMap(DashboardItemsFetchResult::widgetIds)
@@ -357,6 +383,12 @@ internal fun mergeDashboardItemFetchResults(
     }
     require(resolvedWidgetIds.all(widgetIds::contains)) {
         "A dashboard item result references an unknown widget."
+    }
+    require(unsupportedWidgetIds.all(widgetIds::contains)) {
+        "An unsupported Dashboard widget result references an unknown widget."
+    }
+    require(resolvedWidgetIds.none(unsupportedWidgetIds::contains)) {
+        "An unsupported Dashboard widget cannot have an item result."
     }
 
     val loaded = results.filterIsInstance<DashboardItemsFetchResult.Loaded>()
@@ -403,6 +435,7 @@ internal fun mergeDashboardItemFetchResults(
             }
         },
         failedWidgetIds = failedWidgetIds,
+        unsupportedWidgetIds = unsupportedWidgetIds,
     )
 }
 
@@ -772,6 +805,7 @@ private const val MAX_DASHBOARD_TEXT_LENGTH = 4_096
 private const val MAX_DASHBOARD_LINK_LENGTH = 8_192
 private const val MAX_DASHBOARD_TYPE_LENGTH = 128
 private const val MAX_DASHBOARD_API_VERSION = 32
+private const val MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS = 4
 private const val MIN_DASHBOARD_RELOAD_SECONDS = 5
 private const val MAX_DASHBOARD_RELOAD_SECONDS = 86_400
 private const val MAX_PREDEFINED_STATUSES = 128

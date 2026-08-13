@@ -269,6 +269,7 @@ internal fun NativeDashboardPresentation(
                                 halfEmptyContentMessage = current.snapshot
                                     .halfEmptyContentMessagesByWidget[binding.widget.id],
                                 refreshFailed = binding.widget.id in current.snapshot.failedWidgetIds,
+                                apiUnsupported = binding.widget.id in current.snapshot.unsupportedWidgetIds,
                                 size = section.size,
                                 onOpenLink = onOpenLink,
                             )
@@ -326,36 +327,61 @@ internal fun rememberNativeDashboardState(
                     }
                 }
                 val widgets = widgetsDeferred.await()
-                val itemResults = dashboardItemsRequestPlans(widgets).map { plan ->
+                val unsupportedWidgetIds = unsupportedDashboardWidgetIds(widgets)
+                if (unsupportedWidgetIds.isNotEmpty()) {
+                    services.recordSupportDiagnostic(
+                        dashboardLoadFailureDiagnostic(
+                            stage = "widget_api_version",
+                            code = "DASHBOARD_WIDGET_API_UNSUPPORTED",
+                            cachedAvailable = cached != null,
+                            severity = SupportDiagnosticSeverity.Warning,
+                        ),
+                    )
+                }
+                val itemResults = dashboardItemsRequestWorkers(dashboardItemsRequestPlans(widgets)).map { worker ->
                     async {
-                        runCatching {
-                            val response = services.executeNextcloudApi(session, plan.request)
-                            val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
-                            val payload = when (plan.apiVersion) {
-                                DashboardItemApiVersion.V1 -> DashboardItemsPayload(
-                                    itemsByWidget = parseDashboardItems(response, selectedWidgets),
+                        worker.map { plan ->
+                            runCatching {
+                                val response = services.executeNextcloudApi(session, plan.request)
+                                val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
+                                val payload = when (plan.apiVersion) {
+                                    DashboardItemApiVersion.V1 -> DashboardItemsPayload(
+                                        itemsByWidget = parseDashboardItems(response, selectedWidgets),
+                                    )
+                                    DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
+                                }
+                                dashboardItemsFetchResult(plan.widgetIds, payload).also { result ->
+                                    if (result is DashboardItemsFetchResult.Failed) {
+                                        services.recordSupportDiagnostic(
+                                            dashboardLoadFailureDiagnostic(
+                                                stage = "widget_items_v${plan.apiVersion.wireValue}",
+                                                code = "DASHBOARD_WIDGET_ITEMS_OMITTED",
+                                                cachedAvailable = cached != null,
+                                                severity = SupportDiagnosticSeverity.Warning,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }.getOrElse { failure ->
+                                if (failure is CancellationException) throw failure
+                                services.recordSupportDiagnostic(
+                                    dashboardLoadFailureDiagnostic(
+                                        stage = "widget_items_v${plan.apiVersion.wireValue}",
+                                        code = "DASHBOARD_WIDGET_ITEMS_V${plan.apiVersion.wireValue}_FAILED",
+                                        cachedAvailable = cached != null,
+                                        severity = SupportDiagnosticSeverity.Warning,
+                                    ),
                                 )
-                                DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
+                                DashboardItemsFetchResult.Failed(plan.widgetIds)
                             }
-                            DashboardItemsFetchResult.Loaded(plan.widgetIds, payload)
-                        }.getOrElse { failure ->
-                            if (failure is CancellationException) throw failure
-                            services.recordSupportDiagnostic(
-                                dashboardLoadFailureDiagnostic(
-                                    stage = "widget_items_v${plan.apiVersion.wireValue}",
-                                    code = "DASHBOARD_WIDGET_ITEMS_V${plan.apiVersion.wireValue}_FAILED",
-                                    cachedAvailable = cached != null,
-                                    severity = SupportDiagnosticSeverity.Warning,
-                                ),
-                            )
-                            DashboardItemsFetchResult.Failed(plan.widgetIds)
                         }
                     }
-                }.map { it.await() }
+                }.flatMap { it.await() }
                 mergeDashboardItemFetchResults(
                     widgets = widgets,
                     previousSnapshot = cached?.dashboard,
                     results = itemResults,
+                    unsupportedWidgetIds = unsupportedWidgetIds,
                 ) to statusDeferred.await()
             }
         }.onSuccess { (snapshot, status) ->
@@ -827,6 +853,7 @@ private fun DashboardWidgetCard(
     emptyContentMessage: String?,
     halfEmptyContentMessage: String?,
     refreshFailed: Boolean,
+    apiUnsupported: Boolean,
     size: HomeSectionSize,
     onOpenLink: (String) -> Unit,
 ) {
@@ -870,6 +897,12 @@ private fun DashboardWidgetCard(
                 )
             }
             when {
+                apiUnsupported -> Text(
+                    "This section requires a newer Dashboard API than this app supports.",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 items.isEmpty() && refreshFailed -> Text(
                     "Could not load this section. Refresh to try again.",
                     modifier = Modifier.padding(top = NextcloudSpacing.Large),

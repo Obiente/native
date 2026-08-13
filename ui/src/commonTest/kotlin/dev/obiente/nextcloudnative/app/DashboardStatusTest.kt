@@ -61,12 +61,54 @@ class DashboardStatusTest {
             ),
         )
 
-        assertEquals(listOf(DashboardItemApiVersion.V2, DashboardItemApiVersion.V1), plans.map { it.apiVersion })
-        assertEquals(setOf("both", "v2-only"), plans.first().widgetIds)
+        assertEquals(
+            listOf(DashboardItemApiVersion.V2, DashboardItemApiVersion.V2, DashboardItemApiVersion.V1),
+            plans.map { it.apiVersion },
+        )
+        assertEquals(setOf("both"), plans.first().widgetIds)
         assertEquals("both-cursor", plans.first().request.queryParameters["sinceIds[both]"])
         assertEquals(setOf("v1-only"), plans.last().widgetIds)
         assertEquals("v1-cursor", plans.last().request.queryParameters["sinceIds[v1-only]"])
         assertFalse(plans.any { plan -> "embedded" in plan.widgetIds })
+    }
+
+    @Test
+    fun `dashboard item requests are distributed across a bounded worker pool`() {
+        val widgets = (1..11).map { index -> widget("widget-$index", setOf(2)) }
+        val plans = dashboardItemsRequestPlans(widgets)
+        val workers = dashboardItemsRequestWorkers(plans, maximumWorkers = 4)
+
+        assertEquals(4, workers.size)
+        assertEquals(plans.toSet(), workers.flatten().toSet())
+        assertEquals(plans.size, workers.sumOf { it.size })
+        assertTrue(workers.all(List<DashboardItemsRequestPlan>::isNotEmpty))
+        assertFailsWith<IllegalArgumentException> {
+            dashboardItemsRequestWorkers(plans, maximumWorkers = 0)
+        }
+    }
+
+    @Test
+    fun `unsupported advertised dashboard APIs remain distinguishable from embedded widgets`() {
+        val widgets = listOf(
+            widget("future", setOf(3)),
+            widget("mixed-future", setOf(2, 3)),
+            widget("embedded", emptySet()),
+        )
+
+        assertEquals(setOf("future"), unsupportedDashboardWidgetIds(widgets))
+        val snapshot = mergeDashboardItemFetchResults(
+            widgets = widgets,
+            previousSnapshot = null,
+            results = listOf(
+                DashboardItemsFetchResult.Loaded(
+                    setOf("mixed-future"),
+                    DashboardItemsPayload(mapOf("mixed-future" to emptyList())),
+                ),
+            ),
+            unsupportedWidgetIds = setOf("future"),
+        )
+        assertEquals(setOf("future"), snapshot.unsupportedWidgetIds)
+        assertTrue(snapshot.failedWidgetIds.isEmpty())
     }
 
     @Test
@@ -262,6 +304,21 @@ class DashboardStatusTest {
         assertTrue(merged.itemsByWidget.getValue("calendar").isEmpty())
         assertEquals("No events", merged.emptyContentMessagesByWidget["calendar"])
         assertTrue(merged.failedWidgetIds.isEmpty())
+    }
+
+    @Test
+    fun `omitted requested widget is a failed result rather than an empty success`() {
+        val omitted = dashboardItemsFetchResult(
+            requestedWidgetIds = setOf("calendar"),
+            payload = DashboardItemsPayload(emptyMap()),
+        )
+        val validEmpty = dashboardItemsFetchResult(
+            requestedWidgetIds = setOf("calendar"),
+            payload = DashboardItemsPayload(mapOf("calendar" to emptyList())),
+        )
+
+        assertTrue(omitted is DashboardItemsFetchResult.Failed)
+        assertTrue(validEmpty is DashboardItemsFetchResult.Loaded)
     }
 
     @Test
