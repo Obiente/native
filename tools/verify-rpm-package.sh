@@ -14,6 +14,12 @@ for required_command in rpm rpm2cpio cpio python3; do
     fi
 done
 
+if ! rpm -qp --requires "$package" |
+    grep -Eq '^libsecret([[:space:](]|$)'; then
+    printf 'RPM package must require libsecret for secure credential storage.\n' >&2
+    exit 1
+fi
+
 package_files="$(rpm2cpio "$package" | cpio -it --quiet | sed 's#^\./#/#')"
 build_id_paths="$({
     printf '%s\n' "$package_files" |

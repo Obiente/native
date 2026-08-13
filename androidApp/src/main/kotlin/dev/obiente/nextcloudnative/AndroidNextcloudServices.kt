@@ -730,7 +730,7 @@ internal class AndroidNextcloudServices(
         }
     }
 
-    override fun saveSession(session: NextcloudSession) {
+    override suspend fun saveSession(session: NextcloudSession) {
         registerSessionPrivateValues(session)
         val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
         val replacementAccountId = NextcloudDocumentIds.cacheAccountId(session)
