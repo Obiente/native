@@ -93,7 +93,9 @@ test("downloads use stable channel URLs and a privacy-safe live GitHub star coun
   assert.match(nginx, /releases\/download\/channel-nightly\/nextcloud-native-android\.apk/);
   assert.match(nginx, /location = \/api\/github-repository/);
   assert.match(nginx, /proxy_cache github_repository/);
-  assert.match(nginx, /proxy_cache_use_stale/);
+  assert.match(nginx, /proxy_set_header Cookie ""/);
+  assert.match(nginx, /proxy_cache_use_stale[^;]*http_403/);
+  assert.doesNotMatch(nginx, /proxy_cache_background_update on/);
   assert.match(app, /fetchGithubRepository/);
   assert.match(app, /setInterval\(refreshGithubRepository/);
   assert.match(app, /\.\/generated\/github-repository\.js/);
