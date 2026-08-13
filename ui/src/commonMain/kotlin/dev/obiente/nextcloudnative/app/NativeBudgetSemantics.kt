@@ -107,7 +107,7 @@ internal fun nativeBudgetDashboardReads(
                 !action.fallbackOnly &&
                 action.binding.path.endsWith(suffix) &&
                 action.binding.pathParameters.none { it.required } &&
-                action.binding.queryParameters.none { it.required }
+                action.binding.queryParameters.filter { it.required }.all { it.name in values }
         }?.let { action -> NativeBudgetDashboardRead(kind, action, values) }
     }
 }

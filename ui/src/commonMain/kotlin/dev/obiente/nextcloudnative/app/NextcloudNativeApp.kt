@@ -2620,15 +2620,15 @@ private fun AppInfoScreen(
             ErrorMessage("Dynamic contract failed: $message", ::retryDiscoveryAndServerInfo)
         }
         if (resolved == null) {
-            DynamicAppOpeningState(
-                appName = app.name,
-                message = if (discoveryError == null) {
-                    "Opening your workspace"
-                } else {
-                    "A native workspace is not available yet"
-                },
-                modifier = Modifier.weight(1f),
-            )
+            if (discoveryError == null) {
+                DynamicAppOpeningState(
+                    appName = app.name,
+                    message = "Opening your workspace",
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
         } else {
             if (resolved.versionStatus == DynamicContractVersionStatus.LastKnownReadOnly) {
                 LinearProgressIndicator(

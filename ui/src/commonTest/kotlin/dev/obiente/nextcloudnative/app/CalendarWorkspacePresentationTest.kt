@@ -85,6 +85,31 @@ class CalendarWorkspacePresentationTest {
     }
 
     @Test
+    fun `all day event end is exclusive when testing week overlap`() {
+        val sundayOnly = event(
+            calendarId = "team",
+            start = "20260802",
+            title = "Sunday event",
+            end = "20260803",
+            allDay = true,
+        )
+
+        assertFalse(sundayOnly.overlapsCalendarDateRange("20260803", "20260809"))
+    }
+
+    @Test
+    fun `timed event ending on the first range date remains visible`() {
+        val mondayMorning = event(
+            calendarId = "team",
+            start = "20260803T090000Z",
+            title = "Monday event",
+            end = "20260803T100000Z",
+        )
+
+        assertTrue(mondayMorning.overlapsCalendarDateRange("20260803", "20260809"))
+    }
+
+    @Test
     fun `padded calendar weeks always have unique positional keys`() {
         val month = CalendarMonth(2026, 2)
         assertEquals(6, (0 until 6).map { calendarMonthWeekKey(month, it) }.distinct().size)
@@ -113,6 +138,7 @@ class CalendarWorkspacePresentationTest {
         start: String,
         title: String,
         end: String? = null,
+        allDay: Boolean = false,
         location: String? = null,
         description: String? = null,
     ) = GroupwareCalendarEvent(
@@ -123,7 +149,7 @@ class CalendarWorkspacePresentationTest {
         title = title,
         start = start,
         end = end ?: start.take(8) + "T100000Z",
-        allDay = false,
+        allDay = allDay,
         location = location,
         description = description,
         rawCalendar = "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",

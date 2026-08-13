@@ -269,7 +269,7 @@ internal fun NativeBudgetDashboard(
             NativeBudgetMetricGrid(model)
         }
         item("cash-flow") {
-            NativeBudgetCashFlowCard(model, onOpenSection)
+            NativeBudgetCashFlowCard(model, "transactions" in availableSectionIds, onOpenSection)
         }
         if (model.accounts.isNotEmpty()) {
             item("accounts") {
@@ -467,6 +467,7 @@ private fun NativeBudgetMetricCard(
 @Composable
 private fun NativeBudgetCashFlowCard(
     model: NativeBudgetDashboardModel,
+    transactionsAvailable: Boolean,
     onOpenSection: (String) -> Unit,
 ) {
     val income = model.income?.value
@@ -474,8 +475,8 @@ private fun NativeBudgetCashFlowCard(
     val maximum = maxOf(income ?: 0.0, expenses ?: 0.0).takeIf { it > 0.0 } ?: 1.0
     NativeBudgetSectionCard(
         title = "Cash-flow trend",
-        actionLabel = "View",
-        onAction = { onOpenSection("transactions") },
+        actionLabel = "View".takeIf { transactionsAvailable },
+        onAction = ({ onOpenSection("transactions") }).takeIf { transactionsAvailable },
     ) {
         if (model.trends.size >= 2) {
             NativeBudgetTrendChart(model.trends, model.currency)
@@ -693,8 +694,8 @@ private fun NativeBudgetStatusCardContent(title: String, summary: String) {
 @Composable
 private fun NativeBudgetSectionCard(
     title: String,
-    actionLabel: String,
-    onAction: () -> Unit,
+    actionLabel: String?,
+    onAction: (() -> Unit)?,
     content: @Composable () -> Unit,
 ) {
     Card(
@@ -719,7 +720,9 @@ private fun NativeBudgetSectionCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                TextButton(onClick = onAction) { Text(actionLabel) }
+                if (actionLabel != null && onAction != null) {
+                    TextButton(onClick = onAction) { Text(actionLabel) }
+                }
             }
             content()
         }
