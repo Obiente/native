@@ -2,55 +2,8 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertNull
 
 class DashboardStatusPresentationTest {
-    private val session = NextcloudSession(
-        serverUrl = "https://cloud.example.test",
-        loginName = "person",
-        appPassword = "secret",
-    )
-
-    @Test
-    fun internalDashboardLinksResolveToInstalledAppHints() {
-        assertEquals(
-            "calendar",
-            dashboardAppIdForLink(session, "/index.php/apps/calendar/dayGridMonth/now"),
-        )
-        assertEquals(
-            "files",
-            dashboardAppIdForLink(session, "https://cloud.example.test/apps/files/?dir=/"),
-        )
-    }
-
-    @Test
-    fun foreignAbsoluteLinksNeverBecomeNativeAppHints() {
-        assertNull(dashboardAppIdForLink(session, "https://other.example/apps/files"))
-        assertNull(dashboardAppIdForLink(session, "https://cloud.example.test.evil/apps/files"))
-    }
-
-    @Test
-    fun malformedAppSegmentsAreRejected() {
-        assertNull(dashboardAppIdForLink(session, "/index.php/apps/not%2Fsafe"))
-        assertNull(dashboardAppIdForLink(session, "/index.php/apps/../settings"))
-    }
-
-    @Test
-    fun relativeBrowserLinksStayOnAuthenticatedServer() {
-        assertEquals(
-            "https://cloud.example.test/index.php/apps/deck",
-            dashboardBrowserUrl(session, "/index.php/apps/deck"),
-        )
-    }
-
-    @Test
-    fun browserHandoffRejectsNonHttpsAndNonRelativeLinks() {
-        assertFailsWith<IllegalArgumentException> {
-            dashboardBrowserUrl(session, "javascript:alert(1)")
-        }
-    }
-
     @Test
     fun busyPresenceOnlyAppearsWhenAdvertised() {
         val withoutBusy = availableUserPresences(

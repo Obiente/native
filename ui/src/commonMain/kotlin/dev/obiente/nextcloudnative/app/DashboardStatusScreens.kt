@@ -90,6 +90,7 @@ internal fun NativeDashboardScreen(
     session: NextcloudSession,
     installedApps: List<NextcloudAppEntry>,
     onOpenApp: (NextcloudAppEntry) -> Unit,
+    onOpenLink: (String) -> Unit,
     onOpenStatus: (() -> Unit)?,
     onBack: (() -> Unit)?,
     onSearch: (() -> Unit)? = null,
@@ -126,15 +127,7 @@ internal fun NativeDashboardScreen(
         },
         onOpenApp = onOpenApp,
         onOpenStatus = onOpenStatus,
-        onOpenLink = { link ->
-            val appId = dashboardAppIdForLink(session, link)
-            val nativeApp = installedApps.firstOrNull { it.id == appId }
-            if (nativeApp != null) {
-                onOpenApp(nativeApp)
-            } else {
-                services.openExternalUrl(dashboardBrowserUrl(session, link))
-            }
-        },
+        onOpenLink = onOpenLink,
         onBack = onBack,
         onRefresh = { refreshAttempt += 1 },
         onSearch = onSearch,

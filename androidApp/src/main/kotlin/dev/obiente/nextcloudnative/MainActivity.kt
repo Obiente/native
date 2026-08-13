@@ -18,12 +18,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
+import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
 import dev.obiente.nextcloudnative.app.ThemePreference
 
 class MainActivity : ComponentActivity() {
     private var appUpdateReviewRequest by mutableLongStateOf(0L)
     private var lastAppUpdateReviewEventId: Long? = null
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
+    private var incomingLinkSequence = 0L
+    private var incomingLinkRequest by mutableStateOf<NextcloudNativeLinkRequest?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,6 +42,13 @@ class MainActivity : ComponentActivity() {
             intentAction = intent?.action,
             intentEventId = intent.appUpdateReviewEventId(),
         ))
+        incomingLinkSequence = savedInstanceState?.getLong(KEY_INCOMING_LINK_SEQUENCE) ?: 0L
+        incomingLinkRequest = savedInstanceState
+            ?.getString(KEY_PENDING_INCOMING_LINK)
+            ?.let { savedUrl ->
+                runCatching { NextcloudNativeLinkRequest(incomingLinkSequence, savedUrl) }.getOrNull()
+            }
+        if (savedInstanceState == null) receiveIncomingLinkIntent(intent)
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         AndroidAppUpdateWork.schedule(
@@ -108,6 +118,10 @@ class MainActivity : ComponentActivity() {
                 services = services,
                 appUpdateReviewRequest = appUpdateReviewRequest,
                 platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                linkRequest = incomingLinkRequest,
+                onLinkRequestHandled = { sequence ->
+                    if (incomingLinkRequest?.sequence == sequence) incomingLinkRequest = null
+                },
             )
         }
     }
@@ -121,12 +135,17 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         receiveNotificationIntent(intent)
+        receiveIncomingLinkIntent(intent)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putLong(KEY_APP_UPDATE_REVIEW_REQUEST, appUpdateReviewRequest)
         lastAppUpdateReviewEventId?.let { eventId ->
             outState.putLong(KEY_APP_UPDATE_REVIEW_EVENT_ID, eventId)
+        }
+        outState.putLong(KEY_INCOMING_LINK_SEQUENCE, incomingLinkSequence)
+        incomingLinkRequest?.url?.let { url ->
+            outState.putString(KEY_PENDING_INCOMING_LINK, url)
         }
         super.onSaveInstanceState(outState)
     }
@@ -140,6 +159,17 @@ class MainActivity : ComponentActivity() {
         ))
     }
 
+    private fun receiveIncomingLinkIntent(intent: Intent?) {
+        val state = nextAndroidIncomingLinkState(
+            previousSequence = incomingLinkSequence,
+            action = intent?.action,
+            dataUrl = intent?.dataString,
+            sharedText = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString(),
+        )
+        incomingLinkSequence = state.sequence
+        if (state.request != null) incomingLinkRequest = state.request
+    }
+
     private fun applyAppUpdateReviewState(state: AppUpdateReviewState) {
         appUpdateReviewRequest = state.requestCount
         lastAppUpdateReviewEventId = state.lastEventId
@@ -148,6 +178,8 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val KEY_APP_UPDATE_REVIEW_REQUEST = "app-update-review-request"
         const val KEY_APP_UPDATE_REVIEW_EVENT_ID = "app-update-review-event-id"
+        const val KEY_INCOMING_LINK_SEQUENCE = "incoming-link-sequence"
+        const val KEY_PENDING_INCOMING_LINK = "pending-incoming-link"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)
     }
