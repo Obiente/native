@@ -55,7 +55,7 @@ test("nightly notes are useful, traceable, and omit internal fragments", () => {
   );
   assert.doesNotMatch(notes, /Release automation now emits richer nightly descriptions/);
   assert.match(notes, /\| Android \| \[APK\]\(.*android\.apk\) \|/);
-  assert.match(notes, /\| Linux \| \[DEB\]\(.*\.deb\) · \[RPM\]\(.*\.rpm\) \|/);
+  assert.match(notes, /\| Linux \| \[DEB\]\(.*\.deb\) \/ \[RPM\]\(.*\.rpm\) \|/);
   assert.match(notes, /\| Windows \| Unavailable \|/);
   assert.match(notes, new RegExp(`/commit/${sourceSha.replaceAll("/", "\\/")}`));
   assert.match(notes, /Updates are never downloaded or installed silently\./);

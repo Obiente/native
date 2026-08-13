@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,6 +37,7 @@ export function composeReleaseDownloadTable({ assetNames, repository, tag }) {
   const uniqueNames = [...new Set(assetNames)].sort();
   const baseUrl = `https://github.com/${repository}/releases/download/${tag}`;
   const lines = [
+    "<!-- quick-downloads:start -->",
     "## Quick downloads",
     "",
     "Choose the installer for your platform. Read the known limitations below before installing this early test release.",
@@ -49,11 +50,12 @@ export function composeReleaseDownloadTable({ assetNames, repository, tag }) {
       const name = uniqueNames.find((candidate) => pattern.test(candidate));
       return name ? [`[${label}](${baseUrl}/${encodeURIComponent(name)})`] : [];
     });
-    lines.push(`| ${row.platform} | ${links.length > 0 ? links.join(" · ") : "Unavailable"} |`);
+    lines.push(`| ${row.platform} | ${links.length > 0 ? links.join(" / ") : "Unavailable"} |`);
   }
   lines.push(
     "",
     `[Checksums and all release assets](${baseUrl.replace("/download/", "/tag/")})`,
+    "<!-- quick-downloads:end -->",
     "",
   );
   return lines.join("\n");
@@ -75,6 +77,18 @@ async function runCli() {
     tag: argument(args, "--tag"),
   });
   await writeFile(output, table, "utf8");
+  const replaceIn = args.includes("--replace-in")
+    ? path.resolve(argument(args, "--replace-in"))
+    : null;
+  if (replaceIn) {
+    const notes = await readFile(replaceIn, "utf8");
+    const updated = notes.replace(
+      /<!-- quick-downloads:start -->[\s\S]*?<!-- quick-downloads:end -->\n?/,
+      table,
+    );
+    if (updated === notes) fail("release notes do not contain a quick-download table.");
+    await writeFile(replaceIn, updated, "utf8");
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === modulePath) {

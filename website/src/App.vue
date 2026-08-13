@@ -32,6 +32,7 @@ import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
+import githubRepository from "../data/github-repository.json";
 import {
   guidePlatformHubForPath,
   guidePlatformHubs,
@@ -60,12 +61,10 @@ const props = defineProps({
 });
 
 const githubUrl = "https://github.com/Obiente/nc-native";
-const githubStars = ref(null);
-const githubStarLabel = computed(() =>
-  githubStars.value === null
-    ? "Star on GitHub"
-    : `${new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(githubStars.value)} stars`,
-);
+const githubStarLabel = `${new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+}).format(githubRepository.stargazersCount)} stars`;
 const downloadPlatforms = [
   {
     id: "android",
@@ -78,7 +77,7 @@ const downloadPlatforms = [
   {
     id: "windows",
     name: "Windows",
-    detail: "x86-64 · unsigned MSI",
+    detail: "x86-64 - unsigned MSI",
     format: "MSI",
     href: "/d/windows-latest",
     icon: WindowsLogo,
@@ -86,7 +85,7 @@ const downloadPlatforms = [
   {
     id: "linux-deb",
     name: "Linux",
-    detail: "Debian and Ubuntu · x86-64",
+    detail: "Debian and Ubuntu - x86-64",
     format: "DEB",
     href: "/d/linux-deb-latest",
     icon: LinuxLogo,
@@ -94,7 +93,7 @@ const downloadPlatforms = [
   {
     id: "linux-rpm",
     name: "Linux",
-    detail: "Fedora and RHEL · x86-64",
+    detail: "Fedora and RHEL - x86-64",
     format: "RPM",
     href: "/d/linux-rpm-latest",
     icon: LinuxLogo,
@@ -102,7 +101,7 @@ const downloadPlatforms = [
   {
     id: "macos",
     name: "macOS preview",
-    detail: "Intel · sign-in unavailable",
+    detail: "Intel - sign-in unavailable",
     format: "DMG",
     href: "/d/macos-latest",
     icon: AppleLogo,
@@ -156,17 +155,6 @@ onMounted(() => {
   systemTheme.value = themeMediaQuery.matches ? "light" : "dark";
   themeMediaQuery.addEventListener("change", themeMediaListener);
   applyDocumentTheme();
-
-  fetch("https://api.github.com/repos/Obiente/nc-native", {
-    headers: { Accept: "application/vnd.github+json" },
-  })
-    .then((response) => (response.ok ? response.json() : Promise.reject(new Error("GitHub unavailable"))))
-    .then((repository) => {
-      if (Number.isInteger(repository.stargazers_count)) {
-        githubStars.value = repository.stargazers_count;
-      }
-    })
-    .catch(() => {});
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   if (!reducedMotion.matches && "IntersectionObserver" in window) {

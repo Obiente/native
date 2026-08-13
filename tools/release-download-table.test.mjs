@@ -15,9 +15,9 @@ test("release download table links only assets that actually exist", () => {
     tag: "v0.1.0-alpha.2",
   });
 
-  assert.match(table, /^## Quick downloads/);
+  assert.match(table, /^<!-- quick-downloads:start -->\n## Quick downloads/);
   assert.match(table, /\| Android \| \[APK\]\(.*android\.apk\) \|/);
-  assert.match(table, /\| Linux \| \[DEB\]\(.*\.deb\) · \[RPM\]\(.*\.rpm\) \|/);
+  assert.match(table, /\| Linux \| \[DEB\]\(.*\.deb\) \/ \[RPM\]\(.*\.rpm\) \|/);
   assert.match(table, /\| Windows \| \[MSI \(x86-64\)\]\(.*\.msi\) \|/);
   assert.match(table, /\| macOS preview \| Unavailable \|/);
 });

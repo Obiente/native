@@ -30,7 +30,6 @@ find_single() {
 temporary="$(mktemp -d)"
 trap 'rm -r -- "$temporary"' EXIT
 declare -a uploads=()
-declare -A published_aliases=()
 for platform in android linux-deb linux-rpm windows macos; do
     case "$platform" in
         android) pattern='nextcloud-native-*-android.apk' ;;
@@ -43,7 +42,6 @@ for platform in android linux-deb linux-rpm windows macos; do
         destination="$temporary/${aliases[$platform]}"
         cp -- "$source" "$destination"
         uploads+=("$destination")
-        published_aliases["${aliases[$platform]}"]=true
     fi
 done
 [[ "${#uploads[@]}" -gt 0 ]]
@@ -61,12 +59,59 @@ pointer_state="$(
 )"
 test "$pointer_state" = $'false\ttrue\t'"$pointer_tag"
 
-existing_assets="$(
-    gh release view "$pointer_tag" --repo "$repository" --json assets --jq '.assets[].name'
-)"
-for alias in "${aliases[@]}"; do
-    if [[ -z "${published_aliases[$alias]:-}" ]] && grep -Fxq "$alias" <<<"$existing_assets"; then
-        gh release delete-asset "$pointer_tag" "$alias" --repo "$repository" --yes
-    fi
+mapfile -t candidate_codes < <(
+    find "$asset_directory" -maxdepth 1 -type f \
+        \( -name 'update-manifest.json' -o -name 'desktop-update-manifest.json' \) \
+        -print0 |
+        sort -z |
+        xargs -0 -r -n1 jq -er '.versionCode | select(type == "number" and floor == . and . > 0)'
+)
+[[ "${#candidate_codes[@]}" -gt 0 ]]
+candidate_code="${candidate_codes[0]}"
+for code in "${candidate_codes[@]}"; do
+    [[ "$code" == "$candidate_code" ]]
 done
+[[ "$candidate_code" =~ ^[1-9][0-9]*$ ]]
+
+mkdir -p "$temporary/existing"
+if gh release download "$pointer_tag" \
+    --repo "$repository" \
+    --pattern download-channel.json \
+    --dir "$temporary/existing" >/dev/null 2>&1; then
+    current_code="$(
+        jq -er \
+            --arg channel nightly-v1 \
+            '
+              select(keys == ["channel", "releaseNotesUrl", "schemaVersion", "versionCode", "versionName"]) |
+              select(.schemaVersion == 1 and .channel == $channel) |
+              select(.versionCode | type == "number" and floor == . and . > 0) |
+              select(.versionName | test("^nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8}$")) |
+              select(.releaseNotesUrl == "https://github.com/Obiente/nc-native/releases/tag/" + .versionName) |
+              .versionCode
+            ' \
+            "$temporary/existing/download-channel.json"
+    )"
+    [[ "$current_code" =~ ^[1-9][0-9]*$ ]]
+    if (( current_code > candidate_code )); then
+        printf 'Download channel already has newer version code %s.\n' "$current_code"
+        exit 0
+    fi
+fi
+
+jq -n \
+    --arg version_name "$immutable_tag" \
+    --argjson version_code "$candidate_code" \
+    '{
+      schemaVersion: 1,
+      channel: "nightly-v1",
+      versionName: $version_name,
+      versionCode: $version_code,
+      releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $version_name)
+    }' >"$temporary/download-channel.json"
+
+# Publish the monotonic marker first. If a package upload is interrupted, an
+# equal-version rerun can finish it while an older rerun remains unable to roll
+# already-updated aliases backward. Missing platforms retain their last verified alias.
+gh release upload "$pointer_tag" "$temporary/download-channel.json" \
+    --repo "$repository" --clobber
 gh release upload "$pointer_tag" "${uploads[@]}" --repo "$repository" --clobber
