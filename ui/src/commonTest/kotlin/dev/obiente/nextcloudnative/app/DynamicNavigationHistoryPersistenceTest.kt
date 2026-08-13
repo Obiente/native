@@ -14,6 +14,25 @@ import kotlin.test.assertTrue
 
 class DynamicNavigationHistoryPersistenceTest {
     @Test
+    fun `restored root view marks automatic landing as already consumed`() {
+        assertFalse(DynamicAppNavigationState().hasPersistedDynamicLocation())
+        assertTrue(
+            DynamicAppNavigationState(selectedViewId = "team.list")
+                .hasPersistedDynamicLocation(),
+        )
+        assertTrue(
+            DynamicAppNavigationState(
+                history = listOf(
+                    SavedDynamicNavigationSnapshot(
+                        viewId = "chores.list",
+                        resourceId = "chores",
+                    ),
+                ),
+            ).hasPersistedDynamicLocation(),
+        )
+    }
+
+    @Test
     fun `saved history is bounded and excludes complete record payloads`() {
         val largePayload = "private-record-payload-".repeat(2_000)
         val history = (0 until MAX_SAVED_DYNAMIC_NAVIGATION_HISTORY + 7).map { index ->

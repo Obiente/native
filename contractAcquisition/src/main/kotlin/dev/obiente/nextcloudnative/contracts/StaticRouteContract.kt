@@ -88,6 +88,14 @@ internal fun synthesizeReadOnlyRouteContract(
             controller = controller,
             controllerSource = controllerSourcesByName[route.controller.normalizedPhpName()],
         )
+        val verifiedChoresResponseSchema = verifiedChoresResponseSchema(
+            appId = appId,
+            appVersion = appVersion,
+            route = route,
+            fullPath = fullPath,
+            controller = controller,
+            controllerSource = controllerSourcesByName[route.controller.normalizedPhpName()],
+        )
         if (
             route.method.normalizedPhpName() !in controller.methods &&
             verifiedChoresWrite == null
@@ -190,11 +198,13 @@ internal fun synthesizeReadOnlyRouteContract(
             route.method.normalizedPhpName() in COLLECTION_READ_METHODS ||
                 fullPath.isLikelyPluralCollectionPath()
             )
-        val itemSchema = JSONObject().put("type", "object").put("additionalProperties", true)
-        val responseSchema = if (collection) {
-            JSONObject().put("type", "array").put("items", itemSchema)
-        } else {
-            itemSchema
+        val responseSchema = verifiedChoresResponseSchema ?: run {
+            val itemSchema = JSONObject().put("type", "object").put("additionalProperties", true)
+            if (collection) {
+                JSONObject().put("type", "array").put("items", itemSchema)
+            } else {
+                itemSchema
+            }
         }
         val operationId = listOf(
             if (route.ocs) "ocs" else "route",
@@ -627,6 +637,79 @@ private data class VerifiedChoresWrite(
     val required: Boolean = true,
 )
 
+private fun isVerifiedChoresController(
+    appId: String,
+    appVersion: String,
+    controller: StaticApiController,
+    controllerSource: String?,
+): Boolean =
+    appId == "chores" && appVersion == "0.1.0" &&
+        controller.normalizedName == "api" && controllerSource != null &&
+        controllerSource.sha256() == CHORES_0_1_0_API_CONTROLLER_SHA256
+
+/**
+ * Declares the exact identities and invitation bindings serialized by the pinned Chores
+ * controller. These response shapes are coupled to the same signed-source digest as the write
+ * adapter so record values can authorize mutations only while both sides of the contract match.
+ */
+private fun verifiedChoresResponseSchema(
+    appId: String,
+    appVersion: String,
+    route: StaticRoute,
+    fullPath: String,
+    controller: StaticApiController,
+    controllerSource: String?,
+): JSONObject? {
+    if (route.verb != "GET" || !isVerifiedChoresController(
+            appId = appId,
+            appVersion = appVersion,
+            controller = controller,
+            controllerSource = controllerSource,
+        )
+    ) {
+        return null
+    }
+    val inviteSchema = closedObjectSchema(
+        properties = mapOf(
+            "inviteId" to stringSchema(title = "Invitation"),
+            "teamId" to integerSchema(title = "Team"),
+            "teamName" to stringSchema(title = "Team name"),
+            "userId" to stringSchema(title = "User"),
+        ),
+        required = listOf("inviteId", "teamId", "teamName", "userId"),
+    )
+    return when (fullPath) {
+        "/apps/chores/api/v1.0/team",
+        "/apps/chores/api/v1.0/account/team",
+        -> closedObjectSchema(
+            properties = mapOf(
+                "id" to integerSchema(title = "Team"),
+                "name" to stringSchema(title = "Team name"),
+                "owner" to stringSchema(title = "Owner"),
+                "members" to JSONObject()
+                    .put("type", "array")
+                    .put(
+                        "items",
+                        closedObjectSchema(
+                            properties = mapOf(
+                                "team_id" to integerSchema(title = "Team"),
+                                "member" to stringSchema(title = "Member"),
+                                "displayName" to stringSchema(title = "Display name"),
+                                "points" to integerSchema(title = "Points"),
+                            ),
+                            required = listOf("team_id", "member", "displayName", "points"),
+                        ),
+                    ),
+                "invites" to JSONObject().put("type", "array").put("items", inviteSchema),
+            ),
+            required = listOf("id", "name", "owner", "members", "invites"),
+        )
+        "/apps/chores/api/v1.0/account/invites" ->
+            JSONObject().put("type", "array").put("items", inviteSchema)
+        else -> null
+    }
+}
+
 /**
  * Imports the mutation shapes from the exact signed Chores 0.1.0 controller audited alongside its
  * web client. These routes hide their JSON inputs behind IRequest, so the general scalar verifier
@@ -641,11 +724,7 @@ private fun verifiedChoresWrite(
     controller: StaticApiController,
     controllerSource: String?,
 ): VerifiedChoresWrite? {
-    if (
-        appId != "chores" || appVersion != "0.1.0" ||
-        controller.normalizedName != "api" || controllerSource == null ||
-        controllerSource.sha256() != CHORES_0_1_0_API_CONTROLLER_SHA256
-    ) {
+    if (!isVerifiedChoresController(appId, appVersion, controller, controllerSource)) {
         return null
     }
     return when (route.verb to fullPath) {
@@ -767,6 +846,10 @@ private fun stringSchema(title: String, format: String? = null): JSONObject = JS
     .put("type", "string")
     .put("title", title)
     .also { schema -> format?.let { schema.put("format", it) } }
+
+private fun integerSchema(title: String): JSONObject = JSONObject()
+    .put("type", "integer")
+    .put("title", title)
 
 private fun choresRepeatScheduleSchema(): JSONObject {
     val choices = linkedMapOf(

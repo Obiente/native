@@ -723,12 +723,7 @@ private fun HomeWorkspaceSurface(
 
     fun layoutWithDraggedSectionAt(position: Offset): HomeWorkspaceLayout {
         val sourceId = draggingSectionId ?: return layout
-        val targetId = sectionBounds.entries.firstOrNull { (_, bounds) ->
-            bounds.contains(position)
-        }?.key ?: return layout
-        if (targetId == sourceId) return layout
-        val destinationIndex = layout.sections.indexOfFirst { it.id == targetId }
-        return if (destinationIndex >= 0) layout.move(sourceId, destinationIndex) else layout
+        return homeWorkspaceLayoutAtDragPosition(layout, sourceId, position, sectionBounds)
     }
 
     fun moveDraggedSectionAcrossAdjacentMidpoint(position: Offset, movementY: Float) {
@@ -769,7 +764,12 @@ private fun HomeWorkspaceSurface(
                 dragPosition?.let { current ->
                     val position = current + delta
                     dragPosition = position
-                    moveDraggedSectionAcrossAdjacentMidpoint(position, delta.y)
+                    if (layout.scope.formFactor == HomeFormFactor.Phone) {
+                        moveDraggedSectionAcrossAdjacentMidpoint(position, delta.y)
+                    } else {
+                        val movedLayout = layoutWithDraggedSectionAt(position)
+                        if (movedLayout != layout) onLayoutChanged(movedLayout, false)
+                    }
                 }
             },
             onDragEnd = {
@@ -851,6 +851,20 @@ private fun HomeWorkspaceSurface(
             )
         }
     }
+}
+
+internal fun homeWorkspaceLayoutAtDragPosition(
+    layout: HomeWorkspaceLayout,
+    sourceId: HomeSectionId,
+    position: Offset,
+    sectionBounds: Map<HomeSectionId, Rect>,
+): HomeWorkspaceLayout {
+    val targetId = sectionBounds.entries.firstOrNull { (_, bounds) ->
+        bounds.contains(position)
+    }?.key ?: return layout
+    if (targetId == sourceId) return layout
+    val destinationIndex = layout.sections.indexOfFirst { section -> section.id == targetId }
+    return if (destinationIndex >= 0) layout.move(sourceId, destinationIndex) else layout
 }
 
 @Composable

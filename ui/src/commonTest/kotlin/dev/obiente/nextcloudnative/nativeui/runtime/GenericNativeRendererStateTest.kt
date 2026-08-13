@@ -51,6 +51,8 @@ class GenericNativeRendererStateTest {
         assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "week"))
         assertEquals(listOf("d:1", "w:1", "m:1"), nativeEnumOptionsMatchingQuery(field, "every"))
         assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "w:1"))
+        assertEquals("Every week", nativeEnumOptionLabel(field, "w:1"))
+        assertEquals("Custom Value", nativeEnumOptionLabel(field, "custom-value"))
     }
 
     @Test

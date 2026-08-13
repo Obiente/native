@@ -42,6 +42,10 @@ class ChoresLiveContractCompatibilityTest {
         val teamRead = descriptor.action(HttpMethod.GET, "/apps/chores/api/v1.0/team")
         val choreRead = descriptor.action(HttpMethod.GET, "/apps/chores/api/v1.0/team/{teamId}/chores")
         val workRead = descriptor.action(HttpMethod.GET, "/apps/chores/api/v1.0/team/{teamId}/work")
+        val invitationsRead = descriptor.action(
+            HttpMethod.GET,
+            "/apps/chores/api/v1.0/account/invites",
+        )
         val choreDelete = descriptor.action(
             HttpMethod.DELETE,
             "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}",
@@ -77,6 +81,13 @@ class ChoresLiveContractCompatibilityTest {
         assertEquals(ActionIntent.create, createTeam.intent)
         assertEquals(ActionIntent.create, createChore.intent)
         assertEquals(ActionIntent.update, editChore.intent)
+        assertEquals(ActionIntent.execute, acceptInvitation.intent)
+        assertTrue("id" in teamRead.responseFieldIds, "team fields=${teamRead.responseFieldIds}")
+        assertTrue(
+            setOf("inviteId", "teamId", "teamName", "userId")
+                .all(invitationsRead.responseFieldIds::contains),
+            "invitation fields=${invitationsRead.responseFieldIds}",
+        )
         assertTrue(listOf(createTeam, inviteMember, acceptInvitation, createChore, editChore, completeChore).all {
             it.binding.body != null && it.provenance.any { evidence ->
                 evidence.kind == ProvenanceKind.verifiedAppPackage
@@ -144,6 +155,35 @@ class ChoresLiveContractCompatibilityTest {
         assertTrue(
             root.any { destination -> destination.actionId == teamRead.id },
             "root=${root.map { destination -> destination.actionId }}",
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation().rootFormActions.none { form ->
+                form.actionId == acceptInvitation.id
+            },
+        )
+        val invitationLayout = assertNotNull(
+            descriptor.layouts.singleOrNull { layout ->
+                layout.sourceActionId == invitationsRead.id
+            },
+        )
+        val invitationPlan = descriptor.planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = invitationsRead.resourceId,
+                recordId = "invite-7",
+                fieldValues = mapOf(
+                    "inviteId" to "invite-7",
+                    "teamId" to "42",
+                    "teamName" to "Home",
+                    "userId" to "alice",
+                ),
+                currentLayoutId = invitationLayout.id,
+            ),
+        )
+        assertEquals(
+            mapOf("teamId" to "42"),
+            invitationPlan.contextualFormActions
+                .single { form -> form.actionId == acceptInvitation.id }
+                .pathParameterValues,
         )
         val teamPlan = descriptor.planDynamicNavigation(
             DynamicResourceRecordContext(

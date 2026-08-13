@@ -10721,7 +10721,7 @@ private fun GenericEnumField(
                 }
                 Text(
                     value.takeIf(String::isNotBlank)?.let { selected ->
-                        field.enumLabels?.get(selected) ?: selected.dynamicSettingLabel()
+                        nativeEnumOptionLabel(field, selected)
                     } ?: "Choose an option",
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Start,
@@ -10759,12 +10759,13 @@ private fun GenericEnumField(
                     )
                 }
                 visibleOptions.forEach { option ->
+                    val optionLabel = nativeEnumOptionLabel(field, option)
                     val optionIcon = option.takeIf { field.isNativeVisualIconField() }
                         ?.let(NextcloudIcons::semanticOrFallback)
                     val optionColor = option.nativeFormColorOrNull(field)
                     DropdownMenuItem(
                         modifier = Modifier.semantics {
-                            contentDescription = "Choose $automationFieldId option $option"
+                            contentDescription = "Choose $automationFieldId option $optionLabel"
                         },
                         leadingIcon = if (optionIcon != null || optionColor != null) {
                             {
@@ -10776,7 +10777,7 @@ private fun GenericEnumField(
                         } else {
                             null
                         },
-                        text = { Text(field.enumLabels?.get(option) ?: option.dynamicSettingLabel()) },
+                        text = { Text(optionLabel) },
                         onClick = {
                             expanded = false
                             query = ""
@@ -10796,6 +10797,9 @@ private fun GenericEnumField(
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
 }
+
+internal fun nativeEnumOptionLabel(field: FieldSpec, option: String): String =
+    field.enumLabels?.get(option) ?: option.dynamicSettingLabel()
 
 internal fun nativeEnumOptionsMatchingQuery(field: FieldSpec, query: String): List<String> {
     val options = field.enumValues.orEmpty()

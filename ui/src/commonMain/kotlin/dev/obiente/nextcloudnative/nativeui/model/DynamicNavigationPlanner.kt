@@ -394,6 +394,15 @@ fun DynamicAppDescriptor.planDynamicNavigation(
     val rootForms = forms.mapNotNull { form ->
         val action = actionsById[form.actionId] ?: return@mapNotNull null
         if (action.binding.method == HttpMethod.GET || action.binding.pathParameters.isNotEmpty()) return@mapNotNull null
+        val rootResponseFieldIds = rootDestinations
+            .asSequence()
+            .filter { destination -> destination.resourceId.sameResourceAs(form.resourceId) }
+            .mapNotNull { destination -> actionsById[destination.actionId] }
+            .flatMap { readAction -> readAction.responseFieldIds.asSequence() }
+            .toSet()
+        if (action.canBindExecuteBodyFromSelectedRecord(form, rootResponseFieldIds)) {
+            return@mapNotNull null
+        }
         if (
             action.effect == ActionEffect.upload &&
             !action.isVerifiedCompiledUploadForm(form)
@@ -471,10 +480,21 @@ fun DynamicAppDescriptor.planDynamicNavigation(
             ) {
                 return@mapNotNull null
             }
+            val selectedRecordResponseFieldIds = layouts
+                .singleOrNull { layout -> layout.id == selectedRecord.currentLayoutId }
+                ?.sourceActionId
+                ?.let(actionsById::get)
+                ?.takeIf { readAction ->
+                    readAction.resourceId.sameResourceAs(selectedRecord.resourceId)
+                }
+                ?.responseFieldIds
+                ?.toSet()
+                .orEmpty()
             val values = action.resolveContextualFormValues(
                 form = form,
                 context = selectedRecord,
                 parentLinks = actionLinks,
+                selectedRecordResponseFieldIds = selectedRecordResponseFieldIds,
             ) ?: return@mapNotNull null
             if (!selectedRecord.permitsContextualForm(action, resources)) return@mapNotNull null
             DynamicNavigationFormAction(
@@ -663,6 +683,7 @@ private fun DynamicAction.resolveContextualFormValues(
     form: DynamicForm,
     context: DynamicResourceRecordContext,
     parentLinks: List<NavigationLinkEdge>,
+    selectedRecordResponseFieldIds: Set<String>,
 ): Map<String, String>? {
     val routeResolution = resolveNavigationParameters(context, allowEphemeralIdentity = false)
     // A same-named field is contextual data, not proof that this mutation targets the selected
@@ -671,6 +692,13 @@ private fun DynamicAction.resolveContextualFormValues(
         return routeResolution.values
     }
     if (!routeResolution.complete || routeResolution.usedContext) return null
+    val requiredBodyFieldIds = requiredBodyFieldIds()
+    if (canBindExecuteBodyFromSelectedRecord(form, selectedRecordResponseFieldIds)) {
+        val recordBodyValues = requiredBodyFieldIds.associateWith { fieldId ->
+            context.exactValue(fieldId) ?: return null
+        }
+        return routeResolution.values + recordBodyValues
+    }
     if (intent != ActionIntent.create || risk != ActionRisk.mutating) return null
     if (!context.actionSafeIdentity || !context.actionBindingProvenanceValid) return null
 
@@ -678,10 +706,6 @@ private fun DynamicAction.resolveContextualFormValues(
         edge.action.resourceId.sameResourceAs(resourceId)
     } ?: return null
 
-    val requiredBodyFieldIds = ((binding.body?.schema as? JsonObject)?.get("required") as? JsonArray)
-        ?.mapNotNull { element -> (element as? JsonPrimitive)?.contentOrNull }
-        ?.toSet()
-        .orEmpty()
     if (requiredBodyFieldIds.isEmpty()) return null
     val bodyFieldNames = form.fields
         .asSequence()
@@ -703,6 +727,37 @@ private fun DynamicAction.resolveContextualFormValues(
         ?: return null
     return routeResolution.values + (parentFieldId to parentValue)
 }
+
+/**
+ * A verified execute action may be selected from a record when every required body field is
+ * declared by that record's active read contract. The values remain hidden form bindings and are
+ * never inferred from display-only or response-observed data.
+ */
+private fun DynamicAction.canBindExecuteBodyFromSelectedRecord(
+    form: DynamicForm,
+    responseFieldIds: Set<String>,
+): Boolean {
+    val requiredBodyFieldIds = requiredBodyFieldIds()
+    if (requiredBodyFieldIds.isEmpty()) return false
+    val requiredFormFieldIds = form.fields
+        .filter(FormField::required)
+        .mapTo(linkedSetOf(), FormField::fieldId)
+    return intent == ActionIntent.execute &&
+        risk == ActionRisk.mutating &&
+        binding.pathParameters.isEmpty() &&
+        binding.queryParameters.none(HttpParameter::required) &&
+        resourceId.sameResourceAs(form.resourceId) &&
+        hasVerifiedDynamicContractEvidence() &&
+        form.hasVerifiedDynamicContractEvidence() &&
+        requiredBodyFieldIds.all(responseFieldIds::contains) &&
+        requiredBodyFieldIds.all(requiredFormFieldIds::contains)
+}
+
+private fun DynamicAction.requiredBodyFieldIds(): Set<String> =
+    ((binding.body?.schema as? JsonObject)?.get("required") as? JsonArray)
+        ?.mapNotNull { element -> (element as? JsonPrimitive)?.contentOrNull }
+        ?.toSet()
+        .orEmpty()
 
 private fun String.normalizedActionLabel(): String = lowercase()
     .replace(Regex("^\\[api\\s+v?[0-9.]+]\\s*"), "")

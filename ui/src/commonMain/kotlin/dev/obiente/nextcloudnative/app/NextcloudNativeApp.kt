@@ -2858,7 +2858,13 @@ private fun DynamicDiscoveredAppScreen(
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
-    var openedDefaultChores by remember(descriptor) { mutableStateOf(false) }
+    var openedDefaultChores by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        descriptor.app.id,
+    ) {
+        mutableStateOf(restoredNavigation.hasPersistedDynamicLocation())
+    }
     val hasRestoredMailLocation = restoredNavigation.selectedViewId != null ||
         restoredNavigation.selectedRecord != null ||
         restoredNavigation.history.isNotEmpty()
@@ -5400,6 +5406,9 @@ internal data class DynamicAppNavigationState(
     val pathParameterValues: Map<String, String> = emptyMap(),
     val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
+
+internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
+    selectedViewId != null || selectedRecord != null || history.isNotEmpty()
 
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
