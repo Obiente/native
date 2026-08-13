@@ -12757,79 +12757,87 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     ) { Text("Clear history") }
                 }
             }
-            when (val current = submissionState) {
-                SupportDiagnosticsSubmissionState.Idle -> Unit
-                SupportDiagnosticsSubmissionState.Packaging -> {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)
-                }
-                is SupportDiagnosticsSubmissionState.Uploading -> {
-                    if (current.progress == null) {
+            Column(
+                modifier = Modifier.fillMaxWidth().semantics {
+                    liveRegion = LiveRegionMode.Polite
+                },
+            ) {
+                when (val current = submissionState) {
+                    SupportDiagnosticsSubmissionState.Idle -> Unit
+                    SupportDiagnosticsSubmissionState.Packaging -> {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    } else {
-                        LinearProgressIndicator(
-                            progress = { current.progress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)
                     }
-                    Text("Sending the private report to Obiente Support...", style = MaterialTheme.typography.bodySmall)
-                }
-                is SupportDiagnosticsSubmissionState.RetryableFailure -> {
-                    Text(
+                    is SupportDiagnosticsSubmissionState.Uploading -> {
+                        if (current.progress == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { current.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Text("Sending the private report to Obiente Support...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    is SupportDiagnosticsSubmissionState.RetryableFailure -> {
+                        Text(
+                            current.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            OutlinedButton(onClick = { scope.launch { services.retrySupportDiagnosticsSubmission() } }) {
+                                Text("Retry safely")
+                            }
+                            TextButton(onClick = { services.cancelSupportDiagnosticsSubmission() }) {
+                                Text("Discard pending report")
+                            }
+                        }
+                    }
+                    is SupportDiagnosticsSubmissionState.Rejected -> Text(
                         current.message,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        OutlinedButton(onClick = { scope.launch { services.retrySupportDiagnosticsSubmission() } }) {
-                            Text("Retry safely")
-                        }
-                        TextButton(onClick = { services.cancelSupportDiagnosticsSubmission() }) {
-                            Text("Discard pending report")
-                        }
-                    }
-                }
-                is SupportDiagnosticsSubmissionState.Rejected -> Text(
-                    current.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                SupportDiagnosticsSubmissionState.Cancelled -> Text(
-                    "Private report submission cancelled.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                is SupportDiagnosticsSubmissionState.Submitted -> {
-                    Text(
-                        "Sent privately. Support code: ${current.supportCode}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
+                    SupportDiagnosticsSubmissionState.Cancelled -> Text(
+                        "Private report submission cancelled.",
+                        style = MaterialTheme.typography.bodySmall,
                     )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                status = if (services.copyTextToClipboard("Obiente support code", current.supportCode)) {
-                                    "Support code copied."
-                                } else {
-                                    "The support code could not be copied."
-                                }
-                            },
-                        ) { Text("Copy support code") }
-                        TextButton(onClick = { services.openExternalUrl(current.statusUrl) }) {
-                            Text("Open private status")
+                    is SupportDiagnosticsSubmissionState.Submitted -> {
+                        Text(
+                            "Sent privately. Support code: ${current.supportCode}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    status = if (
+                                        services.copyTextToClipboard("Obiente support code", current.supportCode)
+                                    ) {
+                                        "Support code copied."
+                                    } else {
+                                        "The support code could not be copied."
+                                    }
+                                },
+                            ) { Text("Copy support code") }
+                            TextButton(onClick = { services.openExternalUrl(current.statusUrl) }) {
+                                Text("Open private status")
+                            }
                         }
                     }
+                    is SupportDiagnosticsSubmissionState.Unsupported -> Text(
+                        current.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                is SupportDiagnosticsSubmissionState.Unsupported -> Text(
-                    current.reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
             status?.let { message ->
                 Text(

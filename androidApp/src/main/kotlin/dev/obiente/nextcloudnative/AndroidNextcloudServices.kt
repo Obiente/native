@@ -415,7 +415,7 @@ internal class AndroidNextcloudServices(
     )
     private val supportIntake = JvmSupportIntake(
         diagnostics = supportDiagnostics,
-        temporaryRoot = File(appContext.cacheDir, "support-submissions"),
+        temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions"),
         environment = androidSupportDiagnosticsEnvironment(),
         client = httpClient.newBuilder().retryOnConnectionFailure(false).build(),
     )

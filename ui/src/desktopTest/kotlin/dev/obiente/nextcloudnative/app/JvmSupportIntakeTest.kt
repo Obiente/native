@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -105,7 +106,7 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun cancellingRetainedSubmissionDeletesPrivateTemporaryFiles() = runBlocking {
+    fun cancellingAmbiguousSubmissionRequiresDeletionReconciliation() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
@@ -114,6 +115,12 @@ class JvmSupportIntakeTest {
 
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
             assertTrue(fixture.intake.cancel())
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            fixture.intake.retry()
+
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
@@ -141,6 +148,150 @@ class JvmSupportIntakeTest {
             assertEquals("DELETE", deletion.method)
             assertTrue(deletion.url.encodedPath.startsWith("/api/v1/reports/"))
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun doesNotForwardPrivateReceiptKeyAcrossRedirects() = runBlocking {
+        MockWebServer().use { redirectedServer ->
+            redirectedServer.start()
+            testFixture().use { fixture ->
+                fixture.server.enqueue(
+                    MockResponse.Builder().code(307)
+                        .addHeader("Location", redirectedServer.url("/capture"))
+                        .build(),
+                )
+
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+                assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+                assertEquals(1, fixture.server.requestCount)
+                assertEquals(0, redirectedServer.requestCount)
+            }
+        }
+    }
+
+    @Test
+    fun removesOrphanedArchiveWhenPendingDescriptorIsUnreadable() = runBlocking {
+        testFixture().use { fixture ->
+            require(fixture.temporaryRoot.isDirectory || fixture.temporaryRoot.mkdirs())
+            val orphan = File(fixture.temporaryRoot, "support-${UUID.randomUUID()}.zip")
+            orphan.writeBytes(byteArrayOf(1, 2, 3))
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            descriptor.writeText("not-json")
+
+            fixture.newIntake()
+
+            assertFalse(orphan.exists())
+            assertFalse(descriptor.exists())
+        }
+    }
+
+    @Test
+    fun serializesConcurrentSubmissionAttempts() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(fixture.statusUrl).newBuilder().headersDelay(1, TimeUnit.SECONDS).build(),
+            )
+
+            val first = launch(Dispatchers.Default) {
+                fixture.intake.submit("The first refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val second = launch(Dispatchers.Default) {
+                fixture.intake.submit("The second refresh failed.", "nightly", emptyList())
+            }
+            second.join()
+            first.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(1, fixture.server.requestCount)
+        }
+    }
+
+    @Test
+    fun preservesCancellationIntentAcrossRestart() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val firstReconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", firstReconciliation.method)
+            fixture.intake.close()
+
+            val restored = fixture.newIntake()
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            val retryReconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val deletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], retryReconciliation.headers["Idempotency-Key"])
+            assertEquals("GET", retryReconciliation.method)
+            assertEquals("DELETE", deletion.method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun retainsThrottledSubmissionAndHonorsRetryAfter() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                MockResponse.Builder().code(429)
+                    .addHeader("Retry-After", "1")
+                    .body("""{"message":"Try later."}""")
+                    .build(),
+            )
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val first = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.intake.retry()
+            assertEquals(1, fixture.server.requestCount)
+
+            Thread.sleep(1_100)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(first.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
+        }
+    }
+
+    @Test
+    fun reconcilesRequestTimeoutBeforeRetrying() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(408).build())
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], reconciliation.headers["Idempotency-Key"])
+            assertEquals("GET", reconciliation.method)
+
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.retry()
+
+            val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            Unit
         }
     }
 
