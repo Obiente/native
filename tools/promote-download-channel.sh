@@ -109,9 +109,49 @@ jq -n \
       releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $version_name)
     }' >"$temporary/download-channel.json"
 
-# Publish the monotonic marker first. If a package upload is interrupted, an
-# equal-version rerun can finish it while an older rerun remains unable to roll
-# already-updated aliases backward. Missing platforms retain their last verified alias.
-gh release upload "$pointer_tag" "$temporary/download-channel.json" \
-    --repo "$repository" --clobber
-gh release upload "$pointer_tag" "${uploads[@]}" --repo "$repository" --clobber
+# gh implements --clobber by deleting the old asset before uploading its
+# replacement. Back up every affected pointer asset so a failed publication can
+# restore the complete previously verified channel rather than leaving a stable
+# download URL missing or partially advanced.
+publish_files=("$temporary/download-channel.json" "${uploads[@]}")
+rollback_directory="$temporary/rollback"
+mkdir -p "$rollback_directory"
+mapfile -t pointer_assets < <(
+    gh release view "$pointer_tag" --repo "$repository" --json assets --jq '.assets[].name'
+)
+declare -A had_existing=()
+for file in "${publish_files[@]}"; do
+    name="$(basename "$file")"
+    if printf '%s\n' "${pointer_assets[@]}" | grep -Fxq -- "$name"; then
+        had_existing["$name"]=1
+        gh release download "$pointer_tag" \
+            --repo "$repository" \
+            --pattern "$name" \
+            --dir "$rollback_directory" >/dev/null
+    else
+        had_existing["$name"]=0
+    fi
+done
+
+if ! gh release upload "$pointer_tag" "${publish_files[@]}" \
+    --repo "$repository" --clobber; then
+    restore_failed=0
+    for file in "${publish_files[@]}"; do
+        name="$(basename "$file")"
+        if [[ "${had_existing[$name]}" == 1 ]]; then
+            if ! gh release upload "$pointer_tag" "$rollback_directory/$name" \
+                --repo "$repository" --clobber; then
+                restore_failed=1
+            fi
+        else
+            gh release delete-asset "$pointer_tag" "$name" \
+                --repo "$repository" --yes >/dev/null 2>&1 || true
+        fi
+    done
+    if (( restore_failed )); then
+        printf 'Download channel upload failed and at least one previous alias could not be restored.\n' >&2
+    else
+        printf 'Download channel upload failed; previous aliases were restored.\n' >&2
+    fi
+    exit 1
+fi

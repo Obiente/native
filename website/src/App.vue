@@ -692,10 +692,10 @@ const frequentlyAsked = [
                   <p>Platform status</p>
                   <ul>
                     <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
-                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS</span></li>
+                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS<span class="sr-only"> preview</span></span></li>
                     <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
                     <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
-                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS</span></li>
+                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS<span class="sr-only"> unavailable</span></span></li>
                   </ul>
                 </div>
               </div>

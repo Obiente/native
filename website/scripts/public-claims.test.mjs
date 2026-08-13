@@ -26,8 +26,8 @@ test("machine-readable product claims match current supported platforms and alph
   assert.doesNotMatch(app, /releases\/latest/);
   assert.match(app, /Your Nextcloud deserves/);
   assert.match(app, /Platform status/);
-  assert.match(app, /class="platform-pending"[^>]*>.*<span>macOS<\/span>/);
-  assert.match(app, /class="platform-pending"[^>]*>.*<span>iOS<\/span>/);
+  assert.match(app, /<span>macOS<span class="sr-only"> preview<\/span><\/span>/);
+  assert.match(app, /<span>iOS<span class="sr-only"> unavailable<\/span><\/span>/);
   assert.doesNotMatch(app, /short links|moves to a curated Stable release/i);
   assert.match(app, /AGPL-3\.0-or-later/);
   assert.doesNotMatch(app, /No Obiente account|No hosted intermediary|Obiente never carries your data/);
