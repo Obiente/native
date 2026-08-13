@@ -48,7 +48,7 @@ internal fun nativeChoresWorkspaceKind(
     schema: NativeAppSchema,
     view: ViewSpec,
 ): NativeChoresWorkspaceKind? {
-    if (schema.app.id != "chores") return null
+    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return null
     val action = schema.action(view.sourceActionId) ?: return null
     if (
         action.confidence !in setOf(Confidence.high, Confidence.verified) ||

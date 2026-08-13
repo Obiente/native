@@ -9,6 +9,8 @@ import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT
+import dev.obiente.nextcloudnative.nativeui.model.Evidence
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
@@ -2094,6 +2096,142 @@ class NativeRecordActionsTest {
             plan.request(confirmed = false)
         }
         assertTrue(plan.request(confirmed = true).confirmed)
+    }
+
+    @Test
+    fun `verified Chores completion derives protocol fields and requires confirmation`() {
+        val workSpec = RepeatableObjectInputSpec(
+            minimumItems = 1,
+            maximumItems = 1,
+            fields = listOf(
+                RepeatableObjectInputFieldSpec(
+                    "id",
+                    "Completion id",
+                    RepeatableObjectInputScalarKind.String,
+                    required = true,
+                    format = "uuid",
+                ),
+                RepeatableObjectInputFieldSpec(
+                    "work_time",
+                    "Completed at",
+                    RepeatableObjectInputScalarKind.String,
+                    required = true,
+                    format = "date-time",
+                ),
+                RepeatableObjectInputFieldSpec(
+                    "chore_id",
+                    "Chore",
+                    RepeatableObjectInputScalarKind.Integer,
+                    required = true,
+                ),
+                RepeatableObjectInputFieldSpec(
+                    "member",
+                    "Member",
+                    RepeatableObjectInputScalarKind.String,
+                    required = true,
+                ),
+            ),
+        )
+        val workSchema = Json.parseToJsonElement(
+            """{"type":"array","format":"$DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT","minItems":1,"maxItems":1,"items":{"type":"object","additionalProperties":false,"required":["id","work_time","chore_id","member"],"properties":{"id":{"type":"string","format":"uuid","title":"Completion id"},"work_time":{"type":"string","format":"date-time","title":"Completed at"},"chore_id":{"type":"integer","title":"Chore"},"member":{"type":"string","title":"Member"}}}}""",
+        )
+        val bodySchema = JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("object"),
+                "properties" to JsonObject(mapOf("work" to workSchema)),
+                "required" to JsonArray(listOf(JsonPrimitive("work"))),
+            ),
+        )
+        val chores = resource(
+            id = "chores",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("name", "Name", FieldKind.string, readOnly = true),
+                field("work", "Work", FieldKind.objectValue, repeatableObjectInput = workSpec),
+            ),
+        )
+        val team = resource(
+            id = "team",
+            fields = listOf(field("members", "Members", FieldKind.objectValue, readOnly = true)),
+        )
+        val completion = ActionSpec(
+            id = "route-api-submitwork",
+            label = "Mark as done",
+            resourceId = chores.id,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/apps/chores/api/v1.0/team/{teamId}/work",
+                operationId = "route-api-submitwork",
+                pathParameterNames = listOf("teamId"),
+                requiredPathParameterNames = listOf("teamId"),
+                bodyFieldNames = listOf("work"),
+                requiredBodyFieldNames = listOf("work"),
+                bodyContentType = "application/json",
+                bodySchema = bodySchema,
+            ),
+            intent = ActionIntent.execute,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            effect = ActionEffect.unspecified,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores 0.1.0 package")),
+        )
+        val nativeSchema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(chores, team),
+            actions = listOf(completion),
+        )
+        val member = NativeStructuredValue.ObjectValue(
+            listOf(
+                NativeStructuredEntry(
+                    "member",
+                    "Member",
+                    NativeStructuredValue.Scalar("alex", NativeStructuredScalarKind.string),
+                ),
+            ),
+        )
+        val authority = NativeDatasetContext(
+            parentResourceId = team.id,
+            parentRecord = NativeRecord(
+                id = "4",
+                values = mapOf("id" to "4"),
+                structuredValues = mapOf("members" to NativeStructuredValue.ListValue(listOf(member))),
+            ),
+            currentUserId = "alex",
+        ).nativeRecordAuthorityContext(nativeSchema)
+        val plan = nativeRecordActions(
+            schema = nativeSchema,
+            resource = chores,
+            record = NativeRecord("23", mapOf("id" to "23", "name" to "Kitchen")),
+            navigationContext = mapOf("teamId" to "4"),
+            authorityContext = authority,
+            completionValueSource = NativeRecordCompletionValueSource(
+                memberUserId = "alex",
+                completionId = { "123e4567-e89b-42d3-a456-426614174000" },
+                completedAt = { "2026-08-13T10:15:30Z" },
+            ),
+        ).commands.single()
+
+        assertTrue(plan.requiresConfirmation)
+        assertFailsWith<IllegalArgumentException> { plan.request() }
+        assertEquals(
+            mapOf(
+                "teamId" to "4",
+                "work" to "[{\"id\":\"123e4567-e89b-42d3-a456-426614174000\",\"work_time\":\"2026-08-13T10:15:30Z\",\"chore_id\":23,\"member\":\"alex\"}]",
+            ),
+            plan.request(confirmed = true).values,
+        )
+        assertTrue(
+            nativeRecordActions(
+                schema = nativeSchema.copy(app = nativeSchema.app.copy(version = "0.1.1")),
+                resource = chores,
+                record = NativeRecord("23", mapOf("id" to "23")),
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority,
+            ).commands.isEmpty(),
+        )
     }
 
     @Test

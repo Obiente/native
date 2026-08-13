@@ -34,6 +34,12 @@ class NativeChoresWorkspaceTest {
                 fixture.teamView,
             ),
         )
+        assertNull(
+            nativeChoresWorkspaceKind(
+                fixture.schema.copy(app = fixture.schema.app.copy(version = "0.1.1")),
+                fixture.teamView,
+            ),
+        )
         val inferred = fixture.schema.actions.first().copy(
             id = "inferred",
             confidence = Confidence.medium,

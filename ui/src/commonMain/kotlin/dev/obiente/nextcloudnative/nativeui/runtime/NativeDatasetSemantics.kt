@@ -192,6 +192,7 @@ internal fun validateNativeCellEdit(field: FieldSpec, value: String): String? {
 data class NativeDatasetContext(
     val parentResourceId: String? = null,
     val parentRecord: NativeRecord? = null,
+    val currentUserId: String? = null,
     /**
      * Exact values already resolved by descriptor-driven navigation.
      *

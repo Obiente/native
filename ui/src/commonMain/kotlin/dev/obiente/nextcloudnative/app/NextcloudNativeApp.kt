@@ -4328,6 +4328,11 @@ private fun DynamicDiscoveredAppScreen(
             ?: return
         actionMenuExpanded = false
         contextualMenuOpen = false
+        if (nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team) {
+            selectedRecord = null
+            selectedRecordResourceId = null
+            navigationHistory = emptyList()
+        }
         selectedPathParameterValues = destination.pathParameterValues
         selectedViewId = view.id
         paginationState = null
@@ -4658,6 +4663,7 @@ private fun DynamicDiscoveredAppScreen(
             val rendererDatasetContext = NativeDatasetContext(
                 parentResourceId = selectedRecordResourceId,
                 parentRecord = selectedRecord,
+                currentUserId = session.loginName,
                 bindingValues = datasetBindingValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,

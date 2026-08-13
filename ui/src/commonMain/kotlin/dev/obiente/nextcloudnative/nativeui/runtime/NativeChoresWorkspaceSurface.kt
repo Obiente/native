@@ -1,8 +1,8 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,20 +30,29 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 
 @Composable
 internal fun NativeChoresWorkspaceSurface(
     presentation: NativeChoresPresentation,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    recordActions: (NativeRecord) -> List<NextcloudCardAction>,
     navigationItems: List<NativeWorkspaceNavigationItem>,
     onNavigate: ((String) -> Unit)?,
     createLabel: String?,
@@ -57,6 +66,7 @@ internal fun NativeChoresWorkspaceSurface(
                 ChoresContent(
                     presentation,
                     onSelectRecord,
+                    recordActions,
                     Modifier.weight(1f),
                     showHeader = true,
                     createLabel = createLabel,
@@ -71,6 +81,7 @@ internal fun NativeChoresWorkspaceSurface(
                 ChoresContent(
                     presentation,
                     onSelectRecord,
+                    recordActions,
                     Modifier.weight(1f),
                     showHeader = true,
                     createLabel = createLabel,
@@ -107,7 +118,11 @@ private fun ChoresSidebar(
             Row(
                 modifier = Modifier.fillMaxWidth()
                     .background(color, RoundedCornerShape(NextcloudRadii.Small))
-                    .clickable(enabled = !destination.selected) { onNavigate(destination.id) }
+                    .selectable(
+                        selected = destination.selected,
+                        role = Role.Tab,
+                        onClick = { if (!destination.selected) onNavigate(destination.id) },
+                    )
                     .padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -149,7 +164,11 @@ private fun ChoresCompactNavigation(
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
                 shape = RoundedCornerShape(NextcloudRadii.Pill),
-                modifier = Modifier.clickable(enabled = !destination.selected) { onNavigate(destination.id) },
+                modifier = Modifier.selectable(
+                    selected = destination.selected,
+                    role = Role.Tab,
+                    onClick = { if (!destination.selected) onNavigate(destination.id) },
+                ),
             ) {
                 Text(
                     destination.label,
@@ -165,6 +184,7 @@ private fun ChoresCompactNavigation(
 private fun ChoresContent(
     presentation: NativeChoresPresentation,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    recordActions: (NativeRecord) -> List<NextcloudCardAction>,
     modifier: Modifier,
     showHeader: Boolean,
     createLabel: String?,
@@ -217,7 +237,7 @@ private fun ChoresContent(
                     Button(onClick = onCreate) { Text(createLabel) }
                 }
             }
-            is NativeChoresContent.Ready -> ChoresList(content.items, onSelectRecord)
+            is NativeChoresContent.Ready -> ChoresList(content.items, onSelectRecord, recordActions)
         }
     }
 }
@@ -226,6 +246,7 @@ private fun ChoresContent(
 private fun ChoresList(
     chores: List<NativeChoresItem>,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    recordActions: (NativeRecord) -> List<NextcloudCardAction>,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -238,7 +259,7 @@ private fun ChoresList(
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
     ) {
         items(chores, key = { it.record.id }) { chore ->
-            ChoreRow(chore, onSelectRecord)
+            ChoreRow(chore, onSelectRecord, recordActions(chore.record))
         }
     }
 }
@@ -247,11 +268,16 @@ private fun ChoresList(
 private fun ChoreRow(
     chore: NativeChoresItem,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    actions: List<NextcloudCardAction>,
 ) {
+    var actionsExpanded by rememberSaveable(chore.record.id) { mutableStateOf(false) }
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = onSelectRecord != null) {
-            onSelectRecord?.invoke(chore.record)
-        },
+        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+            onOpen = onSelectRecord?.let { callback -> { callback(chore.record) } },
+            onShowActions = if (actions.isNotEmpty()) ({ actionsExpanded = true }) else null,
+            openLabel = "Open ${chore.title}",
+            actionsLabel = "Show actions for ${chore.title}",
+        ),
         shape = RoundedCornerShape(NextcloudRadii.Card),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
     ) {
@@ -303,6 +329,12 @@ private fun ChoreRow(
             if (onSelectRecord != null) {
                 Icon(NextcloudIcons.ChevronRight, contentDescription = "Open ${chore.title}")
             }
+            NextcloudCardOverflow(
+                itemLabel = chore.title,
+                actions = actions,
+                expanded = actionsExpanded,
+                onExpandedChange = { expanded -> actionsExpanded = expanded },
+            )
         }
     }
 }

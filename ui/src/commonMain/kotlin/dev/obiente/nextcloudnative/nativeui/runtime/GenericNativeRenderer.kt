@@ -276,10 +276,14 @@ fun GenericNativeAppScreen(
     val choresWorkspace = presentedResource?.let { resourceSpec ->
         nativeChoresPresentation(schema, view, resourceSpec, presentedState)
     }
-    val rosterPresentation = (presentedState as? NativeScreenState.Ready)
-        ?.records
-        ?.singleOrNull()
-        ?.let(::nativeRosterPresentation)
+    val rosterPresentation = choresWorkspace
+        ?.takeIf { presentation -> presentation.kind == NativeChoresWorkspaceKind.Team }
+        ?.let {
+            (presentedState as? NativeScreenState.Ready)
+                ?.records
+                ?.singleOrNull()
+                ?.let(::nativeRosterPresentation)
+        }
     val presentedSurface = when {
         showSelectedRecordDetail &&
             selectedRecordId != null &&
@@ -488,6 +492,7 @@ fun GenericNativeAppScreen(
         datasetContext.bindingValues,
         datasetContext.parentResourceId,
         datasetContext.parentRecord,
+        datasetContext.currentUserId,
         onLoadMore,
         presentedSurface,
         nestedBoard,
@@ -753,6 +758,22 @@ fun GenericNativeAppScreen(
             choresWorkspace != null && !showSelectedRecordDetail -> NativeChoresWorkspaceSurface(
                 presentation = choresWorkspace,
                 onSelectRecord = onSelectRecord,
+                recordActions = { record ->
+                    nativeRecordCardActions(
+                        capabilities = nativeRecordActions(
+                            schema = schema,
+                            resource = presentedResource,
+                            record = record,
+                            navigationContext = datasetContext.bindingValues,
+                            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+                        ),
+                        record = record,
+                        onEditRecord = openRecordEdit,
+                        onDeleteRecord = openRecordDelete,
+                        onCommandRecord = executeRecordCommand,
+                        onCommandFormRecord = openRecordCommandForm,
+                    )
+                },
                 navigationItems = workspaceNavigationItems,
                 onNavigate = onWorkspaceNavigate,
                 createLabel = collectionCreatePlan?.action?.label,
@@ -2492,7 +2513,11 @@ private fun GenericRecordCommandActionDialog(
     onActionSucceeded: (ActionSpec) -> Unit,
     onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
-    val ui = nativeRecordCommandUi(pending.plan.effect, pending.itemLabel)
+    val ui = nativeRecordCommandUi(
+        effect = pending.plan.effect,
+        itemLabel = pending.itemLabel,
+        actionLabel = pending.plan.action.label,
+    )
     var error by remember(pending) { mutableStateOf(pending.initialError) }
     var failureOutcome by remember(pending) { mutableStateOf(pending.initialFailureOutcome) }
     var executing by remember(pending) { mutableStateOf(false) }
@@ -5517,7 +5542,7 @@ internal fun nativeRecordCardActions(
         )
     }
     capabilities.commands.forEach { plan ->
-        val ui = nativeRecordCommandUi(plan.effect, record.id)
+        val ui = nativeRecordCommandUi(plan.effect, record.id, plan.action.label)
         add(
             NextcloudCardAction(
                 label = ui.label,
@@ -5571,6 +5596,7 @@ internal fun NativeActionFailureOutcome.allowsGenericDeleteRetry(): Boolean =
 internal fun nativeRecordCommandUi(
     effect: ActionEffect,
     itemLabel: String,
+    actionLabel: String? = null,
 ): NativeRecordCommandUi = when (effect) {
     ActionEffect.archive -> NativeRecordCommandUi(label = "Archive", destructive = false)
     ActionEffect.unarchive -> NativeRecordCommandUi(label = "Unarchive", destructive = false)
@@ -5593,6 +5619,12 @@ internal fun nativeRecordCommandUi(
         destructive = true,
         confirmationTitle = "Leave $itemLabel?",
         confirmationMessage = "You may lose access to this item after leaving.",
+    )
+    ActionEffect.execute -> NativeRecordCommandUi(
+        label = actionLabel?.takeIf(String::isNotBlank) ?: "Run",
+        destructive = false,
+        confirmationTitle = "${actionLabel?.takeIf(String::isNotBlank) ?: "Run action"}: $itemLabel?",
+        confirmationMessage = "This records the action on the server.",
     )
     else -> error("Unsupported record command effect: $effect")
 }
