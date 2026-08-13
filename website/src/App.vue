@@ -692,10 +692,10 @@ const frequentlyAsked = [
                   <p>Platform status</p>
                   <ul>
                     <li><WindowsLogo :size="21" weight="fill" aria-hidden="true" /><span>Windows</span></li>
-                    <li class="platform-pending"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span>macOS<span class="sr-only"> preview</span></span></li>
+                    <li class="platform-pending" aria-label="macOS preview"><AppleLogo :size="21" weight="fill" aria-hidden="true" /><span aria-hidden="true">macOS</span></li>
                     <li><LinuxLogo :size="21" weight="fill" aria-hidden="true" /><span>Linux</span></li>
                     <li><AndroidLogo :size="21" weight="fill" aria-hidden="true" /><span>Android</span></li>
-                    <li class="platform-pending"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span>iOS<span class="sr-only"> unavailable</span></span></li>
+                    <li class="platform-pending" aria-label="iOS unavailable"><DeviceMobile :size="21" weight="fill" aria-hidden="true" /><span aria-hidden="true">iOS</span></li>
                   </ul>
                 </div>
               </div>
@@ -729,10 +729,6 @@ const frequentlyAsked = [
             <div class="section-heading compact">
               <p class="eyebrow">Get the current build</p>
               <h2>Download for your platform.</h2>
-              <p>
-                Nightly is the current release path. Choose the package
-                that matches your operating system and distribution.
-              </p>
             </div>
             <div class="download-grid">
               <a
