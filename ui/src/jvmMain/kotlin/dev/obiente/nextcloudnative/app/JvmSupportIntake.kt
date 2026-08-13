@@ -158,8 +158,8 @@ class JvmSupportIntake(
                 )
                 return@withContext
             }
-            if (System.currentTimeMillis() - submission.createdAtEpochMillis !in 0L..SUPPORT_TEMPORARY_MAX_AGE_MILLIS) {
-                finishRejected(submission, "The pending private report expired and was removed from this device.")
+            if (submission.recoveryExpired(System.currentTimeMillis())) {
+                finishRejected(submission, "The private report recovery capability expired and was removed from this device.")
                 return@withContext
             }
             if (submission.cancellationPending) {
@@ -180,6 +180,13 @@ class JvmSupportIntake(
                 state.value = SupportDiagnosticsSubmissionState.RetryableFailure(
                     "Obiente Support asked the app to wait before retrying. Try again shortly.",
                     submission.outcomeAmbiguous,
+                )
+                return@withContext
+            }
+            if (submission.outcomeAmbiguous) {
+                reconcileAfterAmbiguousResult(
+                    submission,
+                    IOException("The previous upload result still needs to be reconciled."),
                 )
                 return@withContext
             }
@@ -352,7 +359,7 @@ class JvmSupportIntake(
                     else -> retainForRetry(
                         submission,
                         "Obiente Support is temporarily unavailable.",
-                        ambiguous = response.code in 300..399,
+                        ambiguous = response.code in 300..399 || response.code in 500..599,
                         retryNotBeforeEpochMillis = response.retryNotBeforeEpochMillis(),
                     )
                 }
@@ -463,10 +470,15 @@ class JvmSupportIntake(
         try {
             call.execute().use { response ->
                 response.readBoundedText()
-                if (response.isSuccessful || response.code == 404) {
-                    finishCancelled(submission)
-                } else {
-                    retainCancellationForRetry(
+                when {
+                    response.code in TERMINAL_DELETION_STATUS_CODES || response.code == 404 ->
+                        finishCancelled(submission)
+                    response.isSuccessful -> verifyDeletionAfterAccepted(
+                        submission,
+                        receipt,
+                        capability,
+                    )
+                    else -> retainCancellationForRetry(
                         submission,
                         receipt,
                         "Deletion could not be confirmed. Retry safely to delete the private report.",
@@ -478,6 +490,42 @@ class JvmSupportIntake(
                 submission,
                 receipt,
                 "Deletion could not be confirmed. Check your connection, then retry safely.",
+            )
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+    }
+
+    private fun verifyDeletionAfterAccepted(
+        submission: PendingSubmission,
+        receipt: SupportIntakeReceipt,
+        capability: String,
+    ) {
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
+            .header("Accept", "application/json")
+            .get()
+            .build()
+        val call = client.newCall(request)
+        activeCall.set(call)
+        try {
+            call.execute().use { response ->
+                response.readBoundedText()
+                if (response.code == 404) {
+                    finishCancelled(submission)
+                } else {
+                    retainCancellationForRetry(
+                        submission,
+                        receipt,
+                        "Deletion is still being processed. Retry safely to verify the private report was removed.",
+                    )
+                }
+            }
+        } catch (_: IOException) {
+            retainCancellationForRetry(
+                submission,
+                receipt,
+                "Deletion was accepted but could not be verified. Check your connection, then retry safely.",
             )
         } finally {
             activeCall.compareAndSet(call, null)
@@ -682,7 +730,8 @@ class JvmSupportIntake(
         )
         require(persisted.archiveName == null || persisted.archiveName.matches(SUPPORT_TEMPORARY_FILE_PATTERN))
         require(persisted.idempotencyKey.matches(SUPPORT_IDEMPOTENCY_PATTERN))
-        require(System.currentTimeMillis() - persisted.createdAtEpochMillis in 0L..SUPPORT_TEMPORARY_MAX_AGE_MILLIS)
+        val nowEpochMillis = System.currentTimeMillis()
+        require(nowEpochMillis >= persisted.createdAtEpochMillis)
         require(
             persisted.retryNotBeforeEpochMillis == null ||
                 persisted.retryNotBeforeEpochMillis <= System.currentTimeMillis() + MAX_SUPPORT_RETRY_AFTER_MILLIS,
@@ -691,13 +740,22 @@ class JvmSupportIntake(
             require(persisted.cancellationPending)
             validateReceipt(receipt)
         }
+        val recoveryDeadlineEpochMillis = persisted.receipt
+            ?.let { receipt -> Instant.parse(receipt.retentionUntil).toEpochMilli() }
+            ?: persisted.createdAtEpochMillis + SUPPORT_RECOVERY_MAX_AGE_MILLIS
+        require(nowEpochMillis <= recoveryDeadlineEpochMillis)
+        val archiveIsRetained = nowEpochMillis - persisted.createdAtEpochMillis <= SUPPORT_TEMPORARY_MAX_AGE_MILLIS
         val archive = persisted.archiveName?.let { archiveName ->
             File(temporaryRoot, archiveName).absoluteFile.normalize().also { candidate ->
                 require(candidate.parentFile == temporaryRoot.absoluteFile.normalize())
-                require(candidate.isFile && candidate.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
-                restrictOwnerOnlyFile(candidate)
+                if (archiveIsRetained) {
+                    require(candidate.isFile && candidate.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
+                    restrictOwnerOnlyFile(candidate)
+                } else {
+                    candidate.delete()
+                }
             }
-        }
+        }?.takeIf { archiveIsRetained }
         PendingSubmission(
             archive = archive,
             metadata = persisted.metadata,
@@ -726,7 +784,15 @@ class JvmSupportIntake(
         var outcomeAmbiguous: Boolean = false,
         var retryNotBeforeEpochMillis: Long? = null,
         var receipt: SupportIntakeReceipt? = null,
-    )
+    ) {
+        fun recoveryExpired(nowEpochMillis: Long): Boolean {
+            if (nowEpochMillis < createdAtEpochMillis) return true
+            val deadline = receipt
+                ?.let { value -> runCatching { Instant.parse(value.retentionUntil).toEpochMilli() }.getOrNull() }
+                ?: (createdAtEpochMillis + SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+            return nowEpochMillis > deadline
+        }
+    }
 
     @Serializable
     private data class PersistedPendingSubmission(
@@ -835,13 +901,15 @@ private val SUPPORT_TEMPORARY_FILE_PATTERN = Regex("support-[0-9a-f-]{36}\\.zip"
 private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.pending-[A-Za-z0-9._-]+\\.tmp")
 private val SUPPORT_IDEMPOTENCY_PATTERN = Regex("[A-Za-z0-9_-]{43}")
 private val RETRYABLE_CLIENT_STATUS_CODES = setOf(425, 429)
+private val TERMINAL_DELETION_STATUS_CODES = setOf(200, 204)
 private const val MAX_SUPPORT_INTAKE_MESSAGE_LENGTH = 240
 private const val MAX_SUPPORT_INTAKE_RESPONSE_BYTES = 64 * 1024
 private const val MAX_SUPPORT_INTAKE_DESCRIPTION_BYTES = 8_000
 private const val MIN_SUPPORT_INTAKE_DESCRIPTION_BYTES = 10
-private const val MAX_PENDING_DESCRIPTOR_BYTES = 32L * 1024L
+private const val MAX_PENDING_DESCRIPTOR_BYTES = 4L * 1024L * 1024L
 private const val MAX_SUPPORT_ARCHIVE_BYTES = 4L * 1024L * 1024L
 private const val SUPPORT_PENDING_DESCRIPTOR = "pending.json"
 private const val SUPPORT_TEMPORARY_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L
+private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L
 private const val MAX_SUPPORT_RETRY_AFTER_MILLIS = MAX_SUPPORT_RETRY_AFTER_SECONDS * 1_000L

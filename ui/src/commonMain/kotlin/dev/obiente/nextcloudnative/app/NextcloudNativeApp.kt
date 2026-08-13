@@ -12506,11 +12506,12 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     LaunchedEffect(services, diagnosticsRevision, refresh) {
         summary = services.loadSupportDiagnosticsSummary()
     }
-    var reproductionSteps by remember { mutableStateOf("") }
+    var reproductionSteps by rememberSaveable { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var confirmSend by rememberSaveable { mutableStateOf(false) }
+    var confirmDiscard by rememberSaveable { mutableStateOf(false) }
     var showPreview by rememberSaveable { mutableStateOf(false) }
     val submissionState by remember(services) {
         services.supportDiagnosticsSubmissionStates()
@@ -12578,6 +12579,30 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             dismissButton = {
                 TextButton(enabled = !submissionBusy, onClick = { confirmSend = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard this pending report?") },
+            text = {
+                Text(
+                    "This permanently removes the report prepared on this device. If its upload result is uncertain, the app will first reconcile it and request deletion from Obiente Support.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        confirmDiscard = false
+                        services.cancelSupportDiagnosticsSubmission()
+                    },
+                ) { Text("Discard report") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Keep report") }
             },
         )
     }
@@ -12792,7 +12817,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                             OutlinedButton(onClick = { scope.launch { services.retrySupportDiagnosticsSubmission() } }) {
                                 Text("Retry safely")
                             }
-                            TextButton(onClick = { services.cancelSupportDiagnosticsSubmission() }) {
+                            TextButton(onClick = { confirmDiscard = true }) {
                                 Text("Discard pending report")
                             }
                         }

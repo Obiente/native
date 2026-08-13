@@ -4,6 +4,8 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
@@ -125,6 +127,32 @@ class JvmSupportIntakeTest {
             fixture.intake.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun serverFailureRemainsAmbiguousUntilDiscardReconcilesAndDeletes() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(retryable.outcomeAmbiguous)
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+
+            fixture.intake.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val deletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], reconciliation.headers["Idempotency-Key"])
+            assertEquals("GET", reconciliation.method)
+            assertEquals("DELETE", deletion.method)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
@@ -322,12 +350,20 @@ class JvmSupportIntakeTest {
 
             val restored = fixture.newIntake()
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+
+            restored.retry()
+
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", reconciliation.method)
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
             fixture.server.enqueue(receiptResponse(fixture.statusUrl))
 
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
             val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("POST", retry.method)
             assertEquals(firstUpload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
             val body = retry.body?.utf8().orEmpty()
             assertFalse(body.contains("private.example.test"))
@@ -364,6 +400,78 @@ class JvmSupportIntakeTest {
             val retriedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertEquals("DELETE", retriedDeletion.method)
             assertEquals(4, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun acceptedDeletionKeepsReceiptUntilStatusConfirmsRemoval() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(202).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val acceptedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val statusCheck = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", reconciliation.method)
+            assertEquals("DELETE", acceptedDeletion.method)
+            assertEquals("GET", statusCheck.method)
+
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.intake.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun keepsDeletionCapabilityAfterTheLocalArchiveRetentionWindow() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.intake.close()
+
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            val agedCreatedAt = Instant.now().minus(25, ChronoUnit.DAYS).toEpochMilli()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    Regex("\"createdAtEpochMillis\":\\d+"),
+                    "\"createdAtEpochMillis\":$agedCreatedAt",
+                ),
+            )
+            val restored = fixture.newIntake()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            assertTrue(descriptor.isFile)
+            assertFalse(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
@@ -429,19 +537,23 @@ class JvmSupportIntakeTest {
         )
     }
 
-    private fun receiptResponse(statusUrl: String): MockResponse = MockResponse.Builder().code(201).body(
-        """
-            {
-              "contractVersion": 1,
-              "supportCode": "OBI-ABCDE-23456",
-              "status": "new",
-              "statusUrl": "$statusUrl",
-              "deletionUrl": "$statusUrl",
-              "createdAt": "2026-08-13T12:00:00Z",
-              "retentionUntil": "2026-09-12T12:00:00Z"
-            }
-        """.trimIndent(),
-    ).build()
+    private fun receiptResponse(statusUrl: String): MockResponse {
+        val createdAt = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val retentionUntil = createdAt.plus(30, ChronoUnit.DAYS)
+        return MockResponse.Builder().code(201).body(
+            """
+                {
+                  "contractVersion": 1,
+                  "supportCode": "OBI-ABCDE-23456",
+                  "status": "new",
+                  "statusUrl": "$statusUrl",
+                  "deletionUrl": "$statusUrl",
+                  "createdAt": "$createdAt",
+                  "retentionUntil": "$retentionUntil"
+                }
+            """.trimIndent(),
+        ).build()
+    }
 
     private data class Fixture(
         val root: File,

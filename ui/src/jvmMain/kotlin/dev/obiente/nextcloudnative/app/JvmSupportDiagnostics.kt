@@ -227,9 +227,14 @@ class JvmSupportDiagnostics(
     ): PreparedSupportSubmissionContext = synchronized(lock) {
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
+        val confirmedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L)
+        discardedHistoryBytes += pruneEvents(confirmedAtEpochMillis)
+        if (discardedHistoryBytes > 0L) persistHistory()
         PreparedSupportSubmissionContext(
             sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
             featureState = sanitizer.sanitizeFields(featureState),
+            confirmedAtEpochMillis = confirmedAtEpochMillis,
+            events = visibleEvents(),
         )
     }
 
@@ -237,18 +242,18 @@ class JvmSupportDiagnostics(
         destination: File,
         context: PreparedSupportSubmissionContext,
     ): PreparedSupportDiagnosticsBundle = synchronized(lock) {
-        check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(context.featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
         require(context.sanitizedReproductionSteps.orEmpty().length <= MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
+        require(context.confirmedAtEpochMillis >= 0L)
+        require(context.events.size <= MAX_SUPPORT_DIAGNOSTIC_EVENTS)
         require(context.featureState.all { field ->
             SUPPORT_DIAGNOSTIC_FIELD_NAME.matches(field.name) &&
                 field.value.length <= MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH &&
                 field.value.none(Char::isISOControl)
         })
-        val createdAt = nowEpochMillis().coerceAtLeast(0L)
-        discardedHistoryBytes += pruneEvents(createdAt)
-        if (discardedHistoryBytes > 0L) persistHistory()
-        val snapshot = visibleEvents()
+        require(context.events.sumOf(::encodedEventBytes) <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
+        val createdAt = context.confirmedAtEpochMillis
+        val snapshot = context.events
         val report = SupportBundleReport(
             createdAtEpochMillis = createdAt,
             environment = environment.safeForReport(),
@@ -431,6 +436,8 @@ internal data class PreparedSupportDiagnosticsBundle(
 internal data class PreparedSupportSubmissionContext(
     val sanitizedReproductionSteps: String?,
     val featureState: List<SupportDiagnosticField>,
+    val confirmedAtEpochMillis: Long,
+    val events: List<SupportDiagnosticEvent>,
 )
 
 fun Throwable.toSupportDiagnosticExceptionDraft(
