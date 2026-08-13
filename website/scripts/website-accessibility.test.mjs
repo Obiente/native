@@ -75,8 +75,9 @@ test("roadmap links and indexed details remain available with truthful fallback 
 });
 
 test("downloads use stable channel URLs and a privacy-safe live GitHub star count", async () => {
-  const [app, nginx] = await Promise.all([
+  const [app, dockerfile, nginx] = await Promise.all([
     readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
+    readFile(path.join(websiteRoot, "Dockerfile"), "utf8"),
     readFile(path.join(websiteRoot, "nginx.conf"), "utf8"),
   ]);
 
@@ -92,10 +93,17 @@ test("downloads use stable channel URLs and a privacy-safe live GitHub star coun
   }
   assert.match(nginx, /releases\/download\/channel-nightly\/nextcloud-native-android\.apk/);
   assert.match(nginx, /location = \/api\/github-repository/);
+  assert.match(nginx, /resolver \$\{NGINX_LOCAL_RESOLVERS\} valid=300s/);
+  assert.match(nginx, /resolver_timeout 5s/);
+  assert.match(nginx, /proxy_pass https:\/\/\$github_repository_upstream/);
   assert.match(nginx, /proxy_cache github_repository/);
   assert.match(nginx, /proxy_set_header Cookie ""/);
+  assert.match(nginx, /proxy_set_header X-GitHub-Api-Version "2022-11-28"/);
   assert.match(nginx, /proxy_cache_use_stale[^;]*http_403/);
+  assert.doesNotMatch(nginx, /proxy_cache_valid any/);
   assert.doesNotMatch(nginx, /proxy_cache_background_update on/);
+  assert.match(dockerfile, /NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1/);
+  assert.match(dockerfile, /COPY website\/nginx\.conf \/etc\/nginx\/templates\/default\.conf\.template/);
   assert.match(app, /fetchGithubRepository/);
   assert.match(app, /setInterval\(refreshGithubRepository/);
   assert.match(app, /\.\/generated\/github-repository\.js/);

@@ -143,7 +143,10 @@ refresh the displayed star count without a deployment. Nginx refreshes the
 upstream response at most once every ten minutes and can serve its last cached
 response during temporary GitHub failures. The prerendered count remains the
 fallback before the first successful request. Production must therefore allow
-outbound HTTPS from the website container to `api.github.com`.
+outbound HTTPS from the website container to `api.github.com`. The container
+derives its upstream resolvers from `/etc/resolv.conf` and resolves GitHub only
+when this optional endpoint is requested, so upstream DNS failures do not stop
+the static website from starting.
 
 ### IndexNow
 
