@@ -137,6 +137,14 @@ For a local check, `docker compose -f website/compose.yml up --build` provides
 the same image. In production, place the container behind the Obiente reverse
 proxy and terminate TLS there.
 
+The container exposes `/api/github-repository` as a cached, same-origin proxy
+for the public `Obiente/nc-native` repository metadata. The website uses it to
+refresh the displayed star count without a deployment. Nginx refreshes the
+upstream response at most once every ten minutes and can serve its last cached
+response during temporary GitHub failures. The prerendered count remains the
+fallback before the first successful request. Production must therefore allow
+outbound HTTPS from the website container to `api.github.com`.
+
 ### IndexNow
 
 Production images prepare an IndexNow payload from the canonical sitemap and

@@ -74,7 +74,7 @@ test("roadmap links and indexed details remain available with truthful fallback 
   assert.match(app, /v-html="currentDoc\.html"/);
 });
 
-test("downloads use stable channel URLs and a privacy-safe GitHub star snapshot", async () => {
+test("downloads use stable channel URLs and a privacy-safe live GitHub star count", async () => {
   const [app, nginx] = await Promise.all([
     readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
     readFile(path.join(websiteRoot, "nginx.conf"), "utf8"),
@@ -91,7 +91,13 @@ test("downloads use stable channel URLs and a privacy-safe GitHub star snapshot"
     assert.match(nginx, new RegExp(`location = /d/${route}`));
   }
   assert.match(nginx, /releases\/download\/channel-nightly\/nextcloud-native-android\.apk/);
-  assert.match(app, /githubRepository\.stargazersCount/);
+  assert.match(nginx, /location = \/api\/github-repository/);
+  assert.match(nginx, /proxy_cache github_repository/);
+  assert.match(nginx, /proxy_cache_use_stale/);
+  assert.match(app, /fetchGithubRepository/);
+  assert.match(app, /setInterval\(refreshGithubRepository/);
+  assert.match(app, /\.\/generated\/github-repository\.js/);
+  assert.match(app, /currentGithubRepository\.value\.stargazersCount/);
   assert.doesNotMatch(app, /api\.github\.com/);
   assert.match(app, /href: "\/d\/android-latest"/);
   assert.match(app, /id="downloads"/);
