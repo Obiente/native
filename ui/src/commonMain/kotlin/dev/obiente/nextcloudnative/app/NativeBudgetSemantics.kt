@@ -294,10 +294,12 @@ private val budgetDestinationSemantics = mapOf(
 internal fun nativeBudgetVisibleRootResourceIds(
     appId: String,
     resourceIds: List<String>,
+    writableResourceIds: Set<String> = emptySet(),
 ): Set<String> {
     if (!isNativeBudgetApp(appId)) return resourceIds.toSet()
     val hasBudgetReport = resourceIds.any { it.normalizedBudgetResourceId() == "budget" }
     return resourceIds.filterNot { resourceId ->
-        hasBudgetReport && resourceId.normalizedBudgetResourceId() == "recurring-budgets"
+        hasBudgetReport && resourceId.normalizedBudgetResourceId() == "recurring-budgets" &&
+            resourceId !in writableResourceIds
     }.toSet()
 }

@@ -3581,9 +3581,16 @@ private fun GenericRecordCollection(
     }
     if (financialAccounts != null) {
         GenericFinancialAccountCollection(
+            schema = schema,
             resource = resource,
             rows = financialAccounts,
+            navigationContext = datasetContext.bindingValues,
+            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
             onSelectRecord = onSelectRecord,
+            onEditRecord = onEditRecord,
+            onDeleteRecord = onDeleteRecord,
+            onCommandRecord = onCommandRecord,
+            onCommandFormRecord = onCommandFormRecord,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -4100,9 +4107,16 @@ private fun GenericCategoryCollection(
 
 @Composable
 private fun GenericFinancialAccountCollection(
+    schema: NativeAppSchema,
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeFinancialAccountPresentation>>,
+    navigationContext: Map<String, String>,
+    authorityContext: NativeRecordAuthorityContext?,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
+    onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
+    onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
+    onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
@@ -4228,7 +4242,8 @@ private fun GenericFinancialAccountCollection(
                 item(key = "$key-header") {
                     val subtotal = sectionRows.filterNot { (_, account) -> account.excludedFromReports }
                         .mapNotNull { (_, account) -> convertedBalance(account) }
-                        .sumOf { amount -> if (key == "liabilities") kotlin.math.abs(amount) else amount }
+                        .sum()
+                        .let { amount -> if (key == "liabilities") nativeFinanceLiabilityTotal(amount) else amount }
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(top = NextcloudSpacing.XSmall),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -4243,7 +4258,22 @@ private fun GenericFinancialAccountCollection(
                     }
                 }
                 items(sectionRows, key = { (record, _) -> record.id }) { (record, account) ->
-                    FinancialAccountCard(resource, account, onSelectRecord?.let { callback -> { callback(record) } })
+                    val actions = remember(schema, resource, record, navigationContext, authorityContext) {
+                        nativeRecordActions(schema, resource, record, navigationContext, authorityContext)
+                    }
+                    FinancialAccountCard(
+                        resource = resource,
+                        account = account,
+                        onClick = onSelectRecord?.let { callback -> { callback(record) } },
+                        secondaryActions = nativeRecordCardActions(
+                            capabilities = actions,
+                            record = record,
+                            onEditRecord = onEditRecord,
+                            onDeleteRecord = onDeleteRecord,
+                            onCommandRecord = onCommandRecord,
+                            onCommandFormRecord = onCommandFormRecord,
+                        ),
+                    )
                 }
             }
             section("assets", "Assets", assets)
@@ -4290,8 +4320,9 @@ private fun FinancialAccountCard(
     resource: ResourceSpec,
     account: NativeFinancialAccountPresentation,
     onClick: (() -> Unit)?,
+    secondaryActions: List<NextcloudCardAction>,
 ) {
-    val interaction = onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
+    var actionsExpanded by rememberSaveable(account.name) { mutableStateOf(false) }
     val liability = account.kind == NativeFinancialAccountKind.Liability
     val displayedBalance = if (liability) kotlin.math.abs(account.balance) else account.balance
     val balanceLabel = when {
@@ -4300,7 +4331,12 @@ private fun FinancialAccountCard(
         else -> "Balance"
     }
     Card(
-        modifier = interaction.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+            onOpen = onClick,
+            onShowActions = if (secondaryActions.isNotEmpty()) ({ actionsExpanded = true }) else null,
+            openLabel = "Open ${account.name}",
+            actionsLabel = "Show actions for ${account.name}",
+        ),
         colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
@@ -4352,6 +4388,14 @@ private fun FinancialAccountCard(
                             Color(0xFF3F8F50)
                         },
                         maxLines = 1,
+                    )
+                }
+                if (secondaryActions.isNotEmpty()) {
+                    NextcloudCardOverflow(
+                        itemLabel = account.name,
+                        actions = secondaryActions,
+                        expanded = actionsExpanded,
+                        onExpandedChange = { actionsExpanded = it },
                     )
                 }
             }

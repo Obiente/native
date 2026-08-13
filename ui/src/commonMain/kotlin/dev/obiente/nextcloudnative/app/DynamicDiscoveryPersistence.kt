@@ -24,6 +24,11 @@ fun encodePersistedDynamicDiscovery(discovery: DynamicDescriptorDiscovery): Stri
         return null
     }
     val bounded = discovery.copy(
+        descriptor = discovery.descriptor.copy(
+            endpointPolicy = discovery.descriptor.endpointPolicy.copy(
+                serverOrigin = PERSISTED_DYNAMIC_DISCOVERY_ORIGIN,
+            ),
+        ),
         diagnostics = discovery.diagnostics
             .map { diagnostic -> diagnostic.take(MAX_PERSISTED_DYNAMIC_DIAGNOSTIC_LENGTH) }
             .take(MAX_PERSISTED_DYNAMIC_DIAGNOSTICS),
@@ -40,6 +45,7 @@ fun encodePersistedDynamicDiscovery(discovery: DynamicDescriptorDiscovery): Stri
 fun decodePersistedDynamicDiscovery(
     encoded: String,
     expectedAppId: String,
+    activeServerOrigin: String,
 ): DynamicDescriptorDiscovery? {
     if (
         encoded.isBlank() ||
@@ -54,7 +60,14 @@ fun decodePersistedDynamicDiscovery(
             discovery.descriptor.app.id == expectedAppId &&
                 discovery.acquisition != DynamicDescriptorAcquisition.MetadataFallback
         }
-        ?.copy(versionStatus = DynamicContractVersionStatus.LastKnownReadOnly)
+        ?.let { discovery ->
+            discovery.copy(
+                descriptor = discovery.descriptor.copy(
+                    endpointPolicy = discovery.descriptor.endpointPolicy.copy(serverOrigin = activeServerOrigin),
+                ),
+                versionStatus = DynamicContractVersionStatus.LastKnownReadOnly,
+            )
+        }
 }
 
 internal fun cachedDynamicDiscoveryMatchesInstalledVersion(
@@ -72,3 +85,4 @@ fun String.isSafeDynamicDiscoveryCacheAppId(): Boolean =
 
 private const val MAX_PERSISTED_DYNAMIC_DIAGNOSTICS = 24
 private const val MAX_PERSISTED_DYNAMIC_DIAGNOSTIC_LENGTH = 1_024
+private const val PERSISTED_DYNAMIC_DISCOVERY_ORIGIN = "https://persisted.invalid"

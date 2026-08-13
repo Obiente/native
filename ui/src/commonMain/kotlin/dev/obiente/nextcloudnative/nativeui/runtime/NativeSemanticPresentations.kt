@@ -614,7 +614,7 @@ internal fun nativeFinancialAccountPresentation(
         type = type,
         kind = kind,
         institution = values.string("institution", "bank", "provider"),
-        accountNumber = values.string("accountnumber", "number", "ibanmasked", "maskednumber"),
+        accountNumber = values.string("ibanmasked", "maskednumber"),
         lastReconciled = values.string("lastreconciled", "lastreconciledat")
             ?.compactSemanticDateTime(),
         convertedBalance = values.number("convertedbalance", "basebalance"),

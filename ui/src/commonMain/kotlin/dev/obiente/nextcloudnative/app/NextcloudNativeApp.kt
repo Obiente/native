@@ -3740,10 +3740,12 @@ private fun DynamicDiscoveredAppScreen(
     // technical or trash collections in the small header popup makes them unreachable on compact
     // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
     // automatic child; it must not hide an explicitly verified user destination.
-    val visibleRootResourceIds = remember(descriptor.app.id, navigationDestinations) {
+    val visibleRootResourceIds = remember(descriptor.app.id, navigationDestinations, schema.actions) {
         nativeBudgetVisibleRootResourceIds(
             descriptor.app.id,
             navigationDestinations.map { (destination, _) -> destination.resourceId },
+            schema.actions.filter { action -> action.risk != ActionRisk.readOnly }
+                .mapTo(hashSetOf(), ActionSpec::resourceId),
         )
     }
     val primaryNavigationDestinations = navigationDestinations.filter { (destination, _) ->
@@ -6019,17 +6021,20 @@ private fun ActivityScreen(
 
     LaunchedEffect(session, activityInstalled, selectedServerFilterId, loadAttempt) {
         if (!activityInstalled) return@LaunchedEffect
+        val filterId = selectedServerFilterId
         timeline = timeline.beginActivityRefresh()
         runCatching {
-            loadNextcloudActivityPage(filterId = selectedServerFilterId) { request ->
+            loadNextcloudActivityPage(filterId = filterId) { request ->
                 services.executeNextcloudApi(session, request)
             }
         }
             .onSuccess { page ->
+                if (selectedServerFilterId != filterId) return@onSuccess
                 timeline = timeline.applyActivityRefresh(page)
-                ActivityWorkspaceMemoryCache.store(session, selectedServerFilterId, timeline)
+                ActivityWorkspaceMemoryCache.store(session, filterId, timeline)
             }
             .onFailure { failure ->
+                if (selectedServerFilterId != filterId || failure is CancellationException) return@onFailure
                 timeline = timeline.failActivityLoad(failure.message ?: "Could not load your activity.")
             }
     }

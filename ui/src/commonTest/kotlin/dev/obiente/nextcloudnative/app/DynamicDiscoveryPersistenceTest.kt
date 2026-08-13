@@ -18,9 +18,12 @@ class DynamicDiscoveryPersistenceTest {
         val discovery = verifiedDiscovery()
 
         val encoded = assertNotNull(encodePersistedDynamicDiscovery(discovery))
-        val restored = assertNotNull(decodePersistedDynamicDiscovery(encoded, "tables"))
+        assertFalse("cloud.example.test" in encoded)
+        val restored = assertNotNull(
+            decodePersistedDynamicDiscovery(encoded, "tables", "https://active.example.test"),
+        )
 
-        assertEquals(discovery.descriptor, restored.descriptor)
+        assertEquals("https://active.example.test", restored.descriptor.endpointPolicy.serverOrigin)
         assertEquals(DynamicContractVersionStatus.LastKnownReadOnly, restored.versionStatus)
     }
 
@@ -42,7 +45,7 @@ class DynamicDiscoveryPersistenceTest {
     fun cacheEntryCannotBeReusedForAnotherApp() {
         val encoded = assertNotNull(encodePersistedDynamicDiscovery(verifiedDiscovery()))
 
-        assertNull(decodePersistedDynamicDiscovery(encoded, "mail"))
+        assertNull(decodePersistedDynamicDiscovery(encoded, "mail", "https://active.example.test"))
     }
 
     @Test

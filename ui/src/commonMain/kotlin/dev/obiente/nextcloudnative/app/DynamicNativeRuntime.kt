@@ -2121,7 +2121,7 @@ private fun String.matchesApiPrefix(prefix: String): Boolean {
     return this == normalized || startsWith("$normalized/")
 }
 
-private fun String.httpOrigin(): String {
+internal fun String.httpOrigin(): String {
     val match = Regex("^(https?://[^/?#]+)").find(this.trim())
         ?: error("The Nextcloud server URL is invalid.")
     return match.groupValues[1]

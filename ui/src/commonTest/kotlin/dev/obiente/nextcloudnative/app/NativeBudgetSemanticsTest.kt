@@ -66,6 +66,18 @@ class NativeBudgetSemanticsTest {
     }
 
     @Test
+    fun editableRecurringBudgetsRemainReachableBesideTheReport() {
+        assertEquals(
+            setOf("budget", "recurring-budgets"),
+            nativeBudgetVisibleRootResourceIds(
+                "budget",
+                listOf("budget", "recurring-budgets"),
+                setOf("recurring-budgets"),
+            ),
+        )
+    }
+
+    @Test
     fun coversEveryVerifiedBudgetRootFromTheSignedContract() {
         val resources = setOf(
             "accounts", "alerts", "assets", "balances", "banking-institutions", "bills",

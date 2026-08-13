@@ -368,6 +368,8 @@ class NativeSemanticPresentationsTest {
                         "currency" to "EUR",
                         "type" to "checking",
                         "institution" to "Example Bank",
+                        "accountNumber" to "NL91ABNA0417164300",
+                        "ibanMasked" to "NL91 **** 4300",
                         "excludedFromReports" to "false",
                     ),
                 ),
@@ -393,6 +395,7 @@ class NativeSemanticPresentationsTest {
 
         assertEquals(NativeFinancialAccountKind.Asset, checking.kind)
         assertEquals("Example Bank", checking.institution)
+        assertEquals("NL91 **** 4300", checking.accountNumber)
         assertEquals(NativeFinancialAccountKind.Liability, card.kind)
         assertEquals(-295.8, card.convertedBalance)
         assertEquals("EUR", card.baseCurrency)
