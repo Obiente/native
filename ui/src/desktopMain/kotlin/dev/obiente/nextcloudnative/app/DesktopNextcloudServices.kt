@@ -8,7 +8,6 @@ import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
 import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
-import java.awt.Desktop
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
@@ -997,6 +996,7 @@ class DesktopNextcloudServices(
         executeNextcloudApi(session, request)
     }
     private val externalFileHandoff = DesktopExternalFileHandoff()
+    private val externalUrlLauncher = DesktopExternalUrlLauncher()
 
     init {
         require(providedSupportDiagnostics == null || supportDiagnosticsRoot == null)
@@ -3626,7 +3626,24 @@ class DesktopNextcloudServices(
     }
 
     override fun openExternalUrl(url: String) {
-        Desktop.getDesktop().browse(URI(url))
+        serviceScope.launch {
+            runCatching { openExternalUrlNow(url) }
+        }
+    }
+
+    override suspend fun openLoginUrl(url: String) = withContext(Dispatchers.IO) {
+        openExternalUrlNow(url)
+    }
+
+    private fun openExternalUrlNow(url: String) {
+        try {
+            externalUrlLauncher.open(url)
+        } catch (failure: DesktopExternalUrlLaunchException) {
+            runCatching {
+                recordSupportDiagnostic(desktopExternalUrlFailureDiagnostic(failure))
+            }
+            throw failure
+        }
     }
 
     override suspend fun handoffFileToExternalApp(
