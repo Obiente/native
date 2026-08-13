@@ -61,6 +61,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -263,6 +264,11 @@ internal fun NativeDashboardPresentation(
                             DashboardWidgetCard(
                                 widget = binding.widget,
                                 items = current.snapshot.itemsByWidget[binding.widget.id].orEmpty(),
+                                emptyContentMessage = current.snapshot
+                                    .emptyContentMessagesByWidget[binding.widget.id],
+                                halfEmptyContentMessage = current.snapshot
+                                    .halfEmptyContentMessagesByWidget[binding.widget.id],
+                                refreshFailed = binding.widget.id in current.snapshot.failedWidgetIds,
                                 size = section.size,
                                 onOpenLink = onOpenLink,
                             )
@@ -285,29 +291,72 @@ internal fun rememberNativeDashboardState(
     }
     LaunchedEffect(session, refreshAttempt) {
         val now = currentDashboardEpochSeconds()
-        sharedDashboardStatusMemoryCache.get(session, now)?.let { cached ->
+        val cached = sharedDashboardStatusMemoryCache.get(session, now)
+        cached?.let {
             state = DashboardSurfaceState.Available(cached.dashboard, cached.status)
         }
         runCatching {
             coroutineScope {
                 val widgetsDeferred = async {
-                    parseDashboardWidgets(
-                        services.executeNextcloudApi(session, dashboardWidgetsRequest()),
-                    )
+                    runCatching {
+                        parseDashboardWidgets(
+                            services.executeNextcloudApi(session, dashboardWidgetsRequest()),
+                        )
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        services.recordSupportDiagnostic(
+                            dashboardLoadFailureDiagnostic(
+                                stage = "widgets",
+                                code = "DASHBOARD_WIDGETS_FAILED",
+                                cachedAvailable = cached != null,
+                                severity = SupportDiagnosticSeverity.Error,
+                            ),
+                        )
+                        throw failure
+                    }
                 }
                 val statusDeferred = async {
                     runCatching {
                         parseCurrentUserStatus(
                             services.executeNextcloudApi(session, currentUserStatusRequest()),
                         )
-                    }.getOrNull()
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        null
+                    }
                 }
                 val widgets = widgetsDeferred.await()
-                val items = parseDashboardItems(
-                    services.executeNextcloudApi(session, dashboardItemsRequest()),
-                    widgets,
-                )
-                NativeDashboardSnapshot(widgets, items) to statusDeferred.await()
+                val itemResults = dashboardItemsRequestPlans(widgets).map { plan ->
+                    async {
+                        runCatching {
+                            val response = services.executeNextcloudApi(session, plan.request)
+                            val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
+                            val payload = when (plan.apiVersion) {
+                                DashboardItemApiVersion.V1 -> DashboardItemsPayload(
+                                    itemsByWidget = parseDashboardItems(response, selectedWidgets),
+                                )
+                                DashboardItemApiVersion.V2 -> parseDashboardItemsV2(response, selectedWidgets)
+                            }
+                            DashboardItemsFetchResult.Loaded(plan.widgetIds, payload)
+                        }.getOrElse { failure ->
+                            if (failure is CancellationException) throw failure
+                            services.recordSupportDiagnostic(
+                                dashboardLoadFailureDiagnostic(
+                                    stage = "widget_items_v${plan.apiVersion.wireValue}",
+                                    code = "DASHBOARD_WIDGET_ITEMS_V${plan.apiVersion.wireValue}_FAILED",
+                                    cachedAvailable = cached != null,
+                                    severity = SupportDiagnosticSeverity.Warning,
+                                ),
+                            )
+                            DashboardItemsFetchResult.Failed(plan.widgetIds)
+                        }
+                    }
+                }.map { it.await() }
+                mergeDashboardItemFetchResults(
+                    widgets = widgets,
+                    previousSnapshot = cached?.dashboard,
+                    results = itemResults,
+                ) to statusDeferred.await()
             }
         }.onSuccess { (snapshot, status) ->
             sharedDashboardStatusMemoryCache.store(
@@ -318,9 +367,10 @@ internal fun rememberNativeDashboardState(
             )
             state = DashboardSurfaceState.Available(snapshot, status)
         }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
             if (state !is DashboardSurfaceState.Available) {
                 state = DashboardSurfaceState.Failed(
-                    failure.message ?: "The dashboard could not be loaded.",
+                    "The dashboard could not be loaded. Try again.",
                 )
             }
         }
@@ -774,6 +824,9 @@ private fun HomeSectionSize.nextHomeSectionSize(): HomeSectionSize =
 private fun DashboardWidgetCard(
     widget: NativeDashboardWidget,
     items: List<NativeDashboardItem>,
+    emptyContentMessage: String?,
+    halfEmptyContentMessage: String?,
+    refreshFailed: Boolean,
     size: HomeSectionSize,
     onOpenLink: (String) -> Unit,
 ) {
@@ -816,31 +869,54 @@ private fun DashboardWidgetCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (items.isEmpty()) {
-                Text(
-                    "Nothing new",
+            when {
+                items.isEmpty() && refreshFailed -> Text(
+                    "Could not load this section. Refresh to try again.",
+                    modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                items.isEmpty() -> Text(
+                    emptyContentMessage ?: "Nothing new",
                     modifier = Modifier.padding(top = NextcloudSpacing.Large),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else {
-                visibleItems.forEachIndexed { index, item ->
-                    if (index > 0) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = NextcloudSpacing.Small),
-                            color = MaterialTheme.colorScheme.outlineVariant,
+                else -> {
+                    if (refreshFailed) {
+                        Text(
+                            "Could not refresh. Showing recently loaded items.",
+                            modifier = Modifier.padding(top = NextcloudSpacing.Large),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    DashboardItemRow(item = item, onOpenLink = onOpenLink)
-                }
-                if (items.size > collapsedItemCount) {
-                    TextButton(onClick = { expanded = !expanded }) {
+                    visibleItems.forEachIndexed { index, item ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = NextcloudSpacing.Small),
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                            )
+                        }
+                        DashboardItemRow(item = item, onOpenLink = onOpenLink)
+                    }
+                    if (items.size > collapsedItemCount) {
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(
+                                if (expanded) {
+                                    "Show less"
+                                } else {
+                                    "Show ${items.size - collapsedItemCount} more"
+                                },
+                            )
+                        }
+                    }
+                    halfEmptyContentMessage?.let { message ->
                         Text(
-                            if (expanded) {
-                                "Show less"
-                            } else {
-                                "Show ${items.size - collapsedItemCount} more"
-                            },
+                            message,
+                            modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }

@@ -46,13 +46,26 @@ data class NativeDashboardItem(
 data class NativeDashboardSnapshot(
     val widgets: List<NativeDashboardWidget>,
     val itemsByWidget: Map<String, List<NativeDashboardItem>>,
+    val emptyContentMessagesByWidget: Map<String, String> = emptyMap(),
+    val halfEmptyContentMessagesByWidget: Map<String, String> = emptyMap(),
+    val failedWidgetIds: Set<String> = emptySet(),
 ) {
     init {
+        val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
         require(widgets.map(NativeDashboardWidget::id).distinct().size == widgets.size) {
             "The dashboard contains duplicate widget IDs."
         }
-        require(itemsByWidget.keys.all { id -> widgets.any { it.id == id } }) {
+        require(itemsByWidget.keys.all(widgetIds::contains)) {
             "Dashboard items reference an unknown widget."
+        }
+        require(emptyContentMessagesByWidget.keys.all(widgetIds::contains)) {
+            "Dashboard empty messages reference an unknown widget."
+        }
+        require(halfEmptyContentMessagesByWidget.keys.all(widgetIds::contains)) {
+            "Dashboard half-empty messages reference an unknown widget."
+        }
+        require(failedWidgetIds.all(widgetIds::contains)) {
+            "Dashboard failures reference an unknown widget."
         }
     }
 
@@ -60,6 +73,36 @@ data class NativeDashboardSnapshot(
     val latestSinceIds: Map<String, String> = itemsByWidget.mapNotNull { (widgetId, items) ->
         items.firstOrNull()?.sinceId?.let { widgetId to it }
     }.toMap()
+}
+
+internal enum class DashboardItemApiVersion(val wireValue: Int) {
+    V1(1),
+    V2(2),
+}
+
+internal data class DashboardItemsPayload(
+    val itemsByWidget: Map<String, List<NativeDashboardItem>>,
+    val emptyContentMessagesByWidget: Map<String, String> = emptyMap(),
+    val halfEmptyContentMessagesByWidget: Map<String, String> = emptyMap(),
+)
+
+internal data class DashboardItemsRequestPlan(
+    val apiVersion: DashboardItemApiVersion,
+    val widgetIds: Set<String>,
+    val request: NextcloudApiRequest,
+)
+
+internal sealed interface DashboardItemsFetchResult {
+    val widgetIds: Set<String>
+
+    data class Loaded(
+        override val widgetIds: Set<String>,
+        val payload: DashboardItemsPayload,
+    ) : DashboardItemsFetchResult
+
+    data class Failed(
+        override val widgetIds: Set<String>,
+    ) : DashboardItemsFetchResult
 }
 
 enum class NativeUserPresence(val wireValue: String) {
@@ -113,20 +156,42 @@ fun dashboardWidgetsRequest(): NextcloudApiRequest = NextcloudApiRequest(
 ).requireSafe()
 
 fun dashboardItemsRequest(sinceIds: Map<String, String> = emptyMap()): NextcloudApiRequest {
+    return dashboardItemsRequest(
+        apiVersion = DashboardItemApiVersion.V1,
+        widgetIds = emptySet(),
+        sinceIds = sinceIds,
+    )
+}
+
+internal fun dashboardItemsRequest(
+    apiVersion: DashboardItemApiVersion,
+    widgetIds: Set<String>,
+    sinceIds: Map<String, String> = emptyMap(),
+): NextcloudApiRequest {
+    require(widgetIds.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard widget set is too large." }
     require(sinceIds.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard cursor set is too large." }
+    widgetIds.forEach { widgetId ->
+        require(widgetId.isDashboardIdentifier()) { "The dashboard widget ID is invalid." }
+    }
     sinceIds.forEach { (widgetId, sinceId) ->
         require(widgetId.isDashboardIdentifier()) { "The dashboard widget cursor ID is invalid." }
+        require(widgetIds.isEmpty() || widgetId in widgetIds) {
+            "The dashboard cursor does not belong to a requested widget."
+        }
         require(sinceId.isSafeDashboardText(MAX_DASHBOARD_CURSOR_LENGTH)) {
             "The dashboard cursor is invalid."
         }
     }
     return NextcloudApiRequest(
         method = NextcloudApiMethod.GET,
-        relativePath = "/ocs/v2.php/apps/dashboard/api/v1/widget-items",
+        relativePath = "/ocs/v2.php/apps/dashboard/api/v${apiVersion.wireValue}/widget-items",
         // Nextcloud documents this GET with a JSON request body, but Android/OkHttp correctly
         // rejects GET bodies. PHP's request binder accepts the equivalent bracketed query shape.
         queryParameters = buildMap {
             put("format", "json")
+            widgetIds.toSortedSet().forEachIndexed { index, widgetId ->
+                put("widgets[$index]", widgetId)
+            }
             sinceIds.toSortedMap().forEach { (widgetId, sinceId) ->
                 put("sinceIds[$widgetId]", sinceId)
             }
@@ -134,6 +199,44 @@ fun dashboardItemsRequest(sinceIds: Map<String, String> = emptyMap()): Nextcloud
         ocsApiRequest = true,
         maximumResponseBytes = DASHBOARD_RESPONSE_LIMIT_BYTES,
     ).requireSafe()
+}
+
+internal fun dashboardItemsRequestPlans(
+    widgets: List<NativeDashboardWidget>,
+    sinceIds: Map<String, String> = emptyMap(),
+): List<DashboardItemsRequestPlan> {
+    val v2WidgetIds = widgets.filter { 2 in it.itemApiVersions }.mapTo(sortedSetOf(), NativeDashboardWidget::id)
+    val v1WidgetIds = widgets.filter {
+        1 in it.itemApiVersions && 2 !in it.itemApiVersions
+    }.mapTo(sortedSetOf(), NativeDashboardWidget::id)
+    return buildList {
+        if (v2WidgetIds.isNotEmpty()) {
+            add(
+                DashboardItemsRequestPlan(
+                    apiVersion = DashboardItemApiVersion.V2,
+                    widgetIds = v2WidgetIds,
+                    request = dashboardItemsRequest(
+                        apiVersion = DashboardItemApiVersion.V2,
+                        widgetIds = v2WidgetIds,
+                        sinceIds = sinceIds.filterKeys(v2WidgetIds::contains),
+                    ),
+                ),
+            )
+        }
+        if (v1WidgetIds.isNotEmpty()) {
+            add(
+                DashboardItemsRequestPlan(
+                    apiVersion = DashboardItemApiVersion.V1,
+                    widgetIds = v1WidgetIds,
+                    request = dashboardItemsRequest(
+                        apiVersion = DashboardItemApiVersion.V1,
+                        widgetIds = v1WidgetIds,
+                        sinceIds = sinceIds.filterKeys(v1WidgetIds::contains),
+                    ),
+                ),
+            )
+        }
+    }
 }
 
 fun currentUserStatusRequest(): NextcloudApiRequest = NextcloudApiRequest(
@@ -202,30 +305,123 @@ fun parseDashboardItems(
     response: NextcloudApiResponse,
     widgets: List<NativeDashboardWidget>,
 ): Map<String, List<NativeDashboardItem>> {
-    val data = response.requireOcsData("dashboard items")
-    require(data is JsonObject) { "The dashboard item response is not an object." }
+    val data = response.requireDashboardItemsObject("dashboard v1 items")
     require(data.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard returned too many item groups." }
     val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
     return data.mapValues { (widgetId, value) ->
         require(widgetId in widgetIds) { "The dashboard returned items for an unknown widget." }
         val items = value as? JsonArray ?: error("Dashboard items for $widgetId are not an array.")
-        require(items.size <= MAX_DASHBOARD_ITEMS_PER_WIDGET) {
-            "The dashboard widget returned too many items."
-        }
-        items.mapIndexed { index, element ->
-            val item = element as? JsonObject ?: error("Dashboard item $index is not an object.")
-            NativeDashboardItem(
-                widgetId = widgetId,
-                title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
-                subtitle = item.optionalDashboardText("subtitle", MAX_DASHBOARD_TEXT_LENGTH),
-                link = item.optionalDashboardLink("link"),
-                iconUrl = item.optionalDashboardLink("iconUrl"),
-                overlayIconUrl = item.optionalDashboardLink("overlayIconUrl"),
-                sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
-            )
-        }
+        items.parseDashboardItemList(widgetId)
     }
 }
+
+internal fun parseDashboardItemsV2(
+    response: NextcloudApiResponse,
+    widgets: List<NativeDashboardWidget>,
+): DashboardItemsPayload {
+    val data = response.requireDashboardItemsObject("dashboard v2 items")
+    require(data.size <= MAX_DASHBOARD_WIDGETS) { "The dashboard returned too many item groups." }
+    val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
+    val itemsByWidget = mutableMapOf<String, List<NativeDashboardItem>>()
+    val emptyMessages = mutableMapOf<String, String>()
+    val halfEmptyMessages = mutableMapOf<String, String>()
+    data.forEach { (widgetId, value) ->
+        require(widgetId in widgetIds) { "The dashboard returned items for an unknown widget." }
+        val group = value as? JsonObject ?: error("Dashboard items for $widgetId are not an object.")
+        val items = group["items"] as? JsonArray
+            ?: error("Dashboard items for $widgetId have no item list.")
+        itemsByWidget[widgetId] = items.parseDashboardItemList(widgetId)
+        group.optionalDashboardText("emptyContentMessage", MAX_DASHBOARD_TEXT_LENGTH)?.let {
+            emptyMessages[widgetId] = it
+        }
+        group.optionalDashboardText("halfEmptyContentMessage", MAX_DASHBOARD_TEXT_LENGTH)?.let {
+            halfEmptyMessages[widgetId] = it
+        }
+    }
+    return DashboardItemsPayload(
+        itemsByWidget = itemsByWidget,
+        emptyContentMessagesByWidget = emptyMessages,
+        halfEmptyContentMessagesByWidget = halfEmptyMessages,
+    )
+}
+
+internal fun mergeDashboardItemFetchResults(
+    widgets: List<NativeDashboardWidget>,
+    previousSnapshot: NativeDashboardSnapshot?,
+    results: List<DashboardItemsFetchResult>,
+): NativeDashboardSnapshot {
+    val widgetIds = widgets.mapTo(mutableSetOf(), NativeDashboardWidget::id)
+    val resolvedWidgetIds = results.flatMap(DashboardItemsFetchResult::widgetIds)
+    require(resolvedWidgetIds.distinct().size == resolvedWidgetIds.size) {
+        "A dashboard widget was loaded more than once."
+    }
+    require(resolvedWidgetIds.all(widgetIds::contains)) {
+        "A dashboard item result references an unknown widget."
+    }
+
+    val loaded = results.filterIsInstance<DashboardItemsFetchResult.Loaded>()
+    val failedWidgetIds = results.filterIsInstance<DashboardItemsFetchResult.Failed>()
+        .flatMapTo(mutableSetOf(), DashboardItemsFetchResult.Failed::widgetIds)
+    val loadedItems = loaded.flatMap { result -> result.payload.itemsByWidget.entries }
+        .associate { it.toPair() }
+    val loadedEmptyMessages = loaded.flatMap { result -> result.payload.emptyContentMessagesByWidget.entries }
+        .associate { it.toPair() }
+    val loadedHalfEmptyMessages = loaded
+        .flatMap { result -> result.payload.halfEmptyContentMessagesByWidget.entries }
+        .associate { it.toPair() }
+
+    return NativeDashboardSnapshot(
+        widgets = widgets,
+        itemsByWidget = buildMap {
+            widgets.forEach { widget ->
+                val items = if (widget.id in failedWidgetIds) {
+                    previousSnapshot?.itemsByWidget?.get(widget.id).orEmpty()
+                } else {
+                    loadedItems[widget.id].orEmpty()
+                }
+                put(widget.id, items)
+            }
+        },
+        emptyContentMessagesByWidget = buildMap {
+            widgets.forEach { widget ->
+                val message = if (widget.id in failedWidgetIds) {
+                    previousSnapshot?.emptyContentMessagesByWidget?.get(widget.id)
+                } else {
+                    loadedEmptyMessages[widget.id]
+                }
+                message?.let { put(widget.id, it) }
+            }
+        },
+        halfEmptyContentMessagesByWidget = buildMap {
+            widgets.forEach { widget ->
+                val message = if (widget.id in failedWidgetIds) {
+                    previousSnapshot?.halfEmptyContentMessagesByWidget?.get(widget.id)
+                } else {
+                    loadedHalfEmptyMessages[widget.id]
+                }
+                message?.let { put(widget.id, it) }
+            }
+        },
+        failedWidgetIds = failedWidgetIds,
+    )
+}
+
+internal fun dashboardLoadFailureDiagnostic(
+    stage: String,
+    code: String,
+    cachedAvailable: Boolean,
+    severity: SupportDiagnosticSeverity,
+): SupportDiagnosticEventDraft = SupportDiagnosticEventDraft(
+    severity = severity,
+    component = SupportDiagnosticComponent.App,
+    operation = "dashboard.load",
+    outcome = "failed",
+    code = code,
+    fields = listOf(
+        SupportDiagnosticFieldDraft("stage", stage),
+        SupportDiagnosticFieldDraft("cached_available", cachedAvailable.toString()),
+    ),
+)
 
 fun parseUserStatusCapabilities(response: NextcloudApiResponse): NativeUserStatusCapabilities {
     val capabilities = response.requireOcsData("capabilities").jsonObject["capabilities"] as? JsonObject
@@ -438,6 +634,35 @@ private fun NextcloudApiResponse.requireOcsData(label: String): JsonElement {
     val statusCode = (meta["statuscode"] as? JsonPrimitive)?.intOrNull
     require(statusCode == 200 || statusCode == 100) { "The $label OCS request failed." }
     return ocs["data"] ?: error("The $label response has no data.")
+}
+
+private fun NextcloudApiResponse.requireDashboardItemsObject(label: String): JsonObject {
+    return when (val data = requireOcsData(label)) {
+        is JsonObject -> data
+        is JsonArray -> {
+            require(data.isEmpty()) { "The dashboard item response is not an object." }
+            JsonObject(emptyMap())
+        }
+        else -> error("The dashboard item response is not an object.")
+    }
+}
+
+private fun JsonArray.parseDashboardItemList(widgetId: String): List<NativeDashboardItem> {
+    require(size <= MAX_DASHBOARD_ITEMS_PER_WIDGET) {
+        "The dashboard widget returned too many items."
+    }
+    return mapIndexed { index, element ->
+        val item = element as? JsonObject ?: error("Dashboard item $index is not an object.")
+        NativeDashboardItem(
+            widgetId = widgetId,
+            title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
+            subtitle = item.optionalDashboardText("subtitle", MAX_DASHBOARD_TEXT_LENGTH),
+            link = item.optionalDashboardLink("link"),
+            iconUrl = item.optionalDashboardLink("iconUrl"),
+            overlayIconUrl = item.optionalDashboardLink("overlayIconUrl"),
+            sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
+        )
+    }
 }
 
 private fun maximumResponseForLabel(label: String): Long =
