@@ -930,6 +930,7 @@ class DesktopNextcloudServices(
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
     supportDiagnosticsRoot: File? = null,
     providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
+    mutationRecoveryRoot: File = defaultDesktopDurableMutationRecoveryRoot(),
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
     private val ownsTemporarySupportDiagnosticsRoot = providedSupportDiagnostics == null && supportDiagnosticsRoot == null
@@ -942,6 +943,7 @@ class DesktopNextcloudServices(
         requireNotNull(resolvedSupportDiagnosticsRoot),
     )
     private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
+    private val durableMutationRecovery = DesktopDurableMutationRecoveryStore(mutationRecoveryRoot)
     private val secretStore = defaultDesktopSecretStore()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
@@ -3386,6 +3388,22 @@ class DesktopNextcloudServices(
     override fun saveLastOpenedAppId(appId: String) {
         preferences.put(KEY_LAST_OPENED_APP, appId)
     }
+
+    override fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = durableMutationRecovery.load(accountScope, kind)
+
+    override fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = durableMutationRecovery.save(accountScope, kind, encoded)
+
+    override fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): Boolean = durableMutationRecovery.clear(accountScope, kind)
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,

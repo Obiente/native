@@ -89,7 +89,7 @@ class GroupwareDavTest {
             loginName = "person",
             appPassword = "secret",
         )
-        val accountScope = groupwareMutationAccountScope(session, "person-id")
+        val accountScope = durableMutationAccountScope(session)
         assertEquals(64, accountScope.length)
         assertTrue(accountScope.all { it in '0'..'9' || it in 'a'..'f' })
         assertFalse(accountScope.contains("cloud.example.test"))
@@ -111,7 +111,7 @@ class GroupwareDavTest {
             email = "  alex@example.test  ",
             phone = "  +31 6 123  ",
             organization = "  Example  ",
-            address = "  Main Street 1  ",
+            address = "  Suite A; Building B  ",
             notes = "  Planning contact  ",
         )
         val response = NextcloudApiResponse(
@@ -137,6 +137,15 @@ class GroupwareDavTest {
                 previousEtag = "\"old\"",
                 draft = draft,
             ).isSatisfiedBy(response),
+        )
+        assertEquals(
+            "Suite A; Building B",
+            parseGroupwareContact(
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                href = href,
+                etag = response.etag,
+                content = response.body.decodeToString(),
+            )?.address,
         )
     }
 

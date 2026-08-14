@@ -431,7 +431,7 @@ fun parseGroupwareContact(
         CalendarProperty(declaration, line.substring(separator + 1))
     }
     fun property(name: String): CalendarProperty? = properties(name).firstOrNull()
-    val fallbackName = property("N")?.value?.split(';')?.filter(String::isNotBlank)
+    val fallbackName = property("N")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
         ?.joinToString(" ")?.decodeCalendarText()
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
@@ -447,7 +447,7 @@ fun parseGroupwareContact(
         phones = properties("TEL").map { it.value.trim().decodeCalendarText() }
             .filter(String::isNotBlank).distinct(),
         organization = property("ORG")?.value?.decodeCalendarText()?.trimEnd(';')?.takeIf(String::isNotBlank),
-        address = property("ADR")?.value?.split(';')?.filter(String::isNotBlank)
+        address = property("ADR")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
             ?.joinToString(", ")?.decodeCalendarText()?.takeIf(String::isNotBlank),
         birthday = property("BDAY")?.value?.trim()?.takeIf(String::isNotBlank),
         notes = property("NOTE")?.value?.decodeCalendarText()?.takeIf(String::isNotBlank),
@@ -1067,6 +1067,21 @@ private fun String.decodeCalendarText(): String = replace("\\n", "\n", ignoreCas
     .replace("\\,", ",")
     .replace("\\;", ";")
     .replace("\\\\", "\\")
+
+private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<String> {
+    val components = mutableListOf<String>()
+    var componentStart = 0
+    var precedingBackslashes = 0
+    forEachIndexed { index, character ->
+        if (character == delimiter && precedingBackslashes % 2 == 0) {
+            components += substring(componentStart, index)
+            componentStart = index + 1
+        }
+        precedingBackslashes = if (character == '\\') precedingBackslashes + 1 else 0
+    }
+    components += substring(componentStart)
+    return components
+}
 
 private fun String.isCalendarDateValue(allDay: Boolean): Boolean =
     if (allDay) length == 8 && all(Char::isDigit)

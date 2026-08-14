@@ -11,6 +11,14 @@ enum class ThemePreference {
     Dark,
 }
 
+enum class DurableMutationRecoveryKind(val storageKey: String) {
+    Calendar("calendar-v1"),
+    Contacts("contacts-v1"),
+    NoteDeletion("note-deletion-v1"),
+}
+
+internal const val MAX_DURABLE_MUTATION_RECOVERY_BYTES = 1024 * 1024
+
 enum class PlatformCapability {
     Notifications,
     Camera,
@@ -541,6 +549,28 @@ interface NextcloudPlatformServices {
     fun loadLastOpenedAppId(): String
 
     fun saveLastOpenedAppId(appId: String)
+
+    /**
+     * Loads one account-scoped mutation intent from app-private durable storage.
+     *
+     * Callers persist the intent before contacting the server and clear it only after an
+     * authoritative response or a follow-up read proves the postcondition.
+     */
+    fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = null
+
+    fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = false
+
+    fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): Boolean = false
 
     /** Loads an account-scoped verified app contract without any cached user records. */
     suspend fun loadCachedDynamicAppDiscovery(

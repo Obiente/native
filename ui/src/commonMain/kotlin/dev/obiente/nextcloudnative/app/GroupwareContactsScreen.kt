@@ -93,8 +93,8 @@ fun NativeGroupwareContactsScreen(
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
-    val accountScope = remember(session.serverUrl, session.loginName, userId) {
-        groupwareMutationAccountScope(session, userId)
+    val accountScope = remember(session.serverUrl, session.loginName) {
+        durableMutationAccountScope(session)
     }
     var state by remember(session, userId) {
         mutableStateOf<ContactsLoadState>(
@@ -111,26 +111,51 @@ fun NativeGroupwareContactsScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
-    var mutationRecoveryState by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var mutationRecoveryState by remember(accountScope, services) {
+        mutableStateOf(
+            services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts),
+        )
+    }
     val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
         mutationRecoveryState?.let { decodeContactMutationRecoveryState(it, accountScope) }
     }
     val mutationInProgress = mutationOperationInProgress || mutationPostcondition != null
     val scope = rememberCoroutineScope()
 
-    fun retainMutationRecovery(postcondition: ContactMutationPostcondition) {
+    fun retainMutationRecovery(postcondition: ContactMutationPostcondition): Boolean {
         check(mutationRecoveryState == null && !mutationOperationInProgress) {
             "Another contact change is still awaiting server verification."
         }
-        mutationRecoveryState = ContactMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
+        val encoded = ContactMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
+        if (!services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts, encoded)) {
+            mutationError = "The contact change could not be safely recorded. Check local storage and try again."
+            return false
+        }
+        mutationRecoveryState = encoded
         mutationOperationInProgress = true
         onMutationInProgressChanged(true)
+        return true
     }
 
-    fun clearMutationRecovery() {
+    fun clearMutationRecovery(): Boolean {
+        if (!services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)) {
+            mutationError = "The verified contact recovery record could not be cleared. Free local storage and refresh."
+            return false
+        }
         mutationRecoveryState = null
         mutationOperationInProgress = false
         onMutationInProgressChanged(false)
+        return true
+    }
+
+    LaunchedEffect(accountScope, mutationRecoveryState, mutationPostcondition) {
+        if (mutationRecoveryState != null && mutationPostcondition == null) {
+            if (services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)) {
+                mutationRecoveryState = null
+            } else {
+                mutationError = "A damaged contact recovery record could not be cleared. Free local storage and retry."
+            }
+        }
     }
 
     LaunchedEffect(mutationInProgress) {
@@ -191,6 +216,7 @@ fun NativeGroupwareContactsScreen(
             ContactsWorkspaceMemoryCache.store(session, userId, loaded)
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
+                    if (!clearMutationRecovery()) return@onSuccess
                     when (mutationPostcondition) {
                         is ContactMutationPostcondition.Upsert -> {
                             if (mutationPostcondition.previousEtag == null) creating = false
@@ -199,7 +225,6 @@ fun NativeGroupwareContactsScreen(
                         }
                         is ContactMutationPostcondition.Delete -> selectedContactHref = null
                     }
-                    clearMutationRecovery()
                 } else {
                     refreshError = "The contact change has not appeared on the server yet. Refresh to verify it before leaving."
                 }
@@ -337,7 +362,7 @@ fun NativeGroupwareContactsScreen(
             navigationRequest = navigationRequest,
             onNavigationConfirmed = onNavigationConfirmed,
             onNavigationCancelled = onNavigationCancelled,
-            onSave = { draft, addressBook ->
+            onSave = save@{ draft, addressBook ->
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                 val objectHref = "${addressBook.href}$uid.vcf"
                 val request = GroupwareDavMutationSpec(
@@ -349,7 +374,7 @@ fun NativeGroupwareContactsScreen(
                         draft.organization, draft.address, draft.notes,
                     ),
                 ).toGroupwareDavRequest()
-                retainMutationRecovery(
+                if (!retainMutationRecovery(
                     ContactMutationPostcondition.Upsert(
                         href = objectHref,
                         addressBookHref = addressBook.href,
@@ -357,15 +382,16 @@ fun NativeGroupwareContactsScreen(
                         previousEtag = null,
                         draft = draft,
                     ),
-                )
+                )) return@save
                 scope.launch {
                     mutationError = null
                     try {
                         val response = services.executeGroupwareDav(session, request)
                         if (response.status !in 200..299) {
                             if (groupwareMutationResponseProvesRejection(response.status)) {
-                                clearMutationRecovery()
-                                mutationError = "Creating the contact failed (HTTP ${response.status})."
+                                if (clearMutationRecovery()) {
+                                    mutationError = "Creating the contact failed (HTTP ${response.status})."
+                                }
                             } else {
                                 mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                                 loadAttempt += 1
@@ -397,7 +423,7 @@ fun NativeGroupwareContactsScreen(
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationCancelled = onNavigationCancelled,
-                onSave = { draft, _ ->
+                onSave = save@{ draft, _ ->
                     val request = GroupwareDavMutationSpec(
                         kind = GroupwareDavKind.Contact,
                         mutation = GroupwareDavMutation.Update,
@@ -408,7 +434,7 @@ fun NativeGroupwareContactsScreen(
                             draft.organization, draft.address, draft.notes,
                         ),
                     ).toGroupwareDavRequest()
-                    retainMutationRecovery(
+                    if (!retainMutationRecovery(
                         ContactMutationPostcondition.Upsert(
                             href = contact.href,
                             addressBookHref = contact.addressBookHref,
@@ -416,15 +442,16 @@ fun NativeGroupwareContactsScreen(
                             previousEtag = contact.etag,
                             draft = draft,
                         ),
-                    )
+                    )) return@save
                     scope.launch {
                         mutationError = null
                         try {
                             val response = services.executeGroupwareDav(session, request)
                             if (response.status !in 200..299) {
                                 if (groupwareMutationResponseProvesRejection(response.status)) {
-                                    clearMutationRecovery()
-                                    mutationError = "Saving the contact failed (HTTP ${response.status})."
+                                    if (clearMutationRecovery()) {
+                                        mutationError = "Saving the contact failed (HTTP ${response.status})."
+                                    }
                                 } else {
                                     mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                                     loadAttempt += 1
@@ -461,22 +488,25 @@ fun NativeGroupwareContactsScreen(
                 confirmButton = {
                     TextButton(
                         enabled = !mutationInProgress,
-                        onClick = {
-                            confirmDelete = false
+                        onClick = delete@{
                             val request = GroupwareDavMutationSpec(
                                 kind = GroupwareDavKind.Contact,
                                 mutation = GroupwareDavMutation.Delete,
                                 objectHref = contact.href,
                                 etag = contact.etag,
                             ).toGroupwareDavRequest()
-                            retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))
+                            if (!retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))) {
+                                return@delete
+                            }
+                            confirmDelete = false
                             scope.launch {
                                 try {
                                     val response = services.executeGroupwareDav(session, request)
                                     if (response.status !in 200..299) {
                                         if (groupwareMutationResponseProvesRejection(response.status)) {
-                                            clearMutationRecovery()
-                                            mutationError = "Deleting the contact failed (HTTP ${response.status})."
+                                            if (clearMutationRecovery()) {
+                                                mutationError = "Deleting the contact failed (HTTP ${response.status})."
+                                            }
                                         } else {
                                             mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
                                             loadAttempt += 1

@@ -22,6 +22,7 @@ import dev.obiente.nextcloudnative.app.DeckCardDraftKey
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
+import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
@@ -655,6 +656,43 @@ internal class AndroidNextcloudServices(
     override fun saveLastOpenedAppId(appId: String) {
         preferences.edit().putString(KEY_LAST_OPENED_APP, appId).apply()
     }
+
+    override fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return null
+        return preferences.getString(durableMutationRecoveryKey(accountScope, kind), null)
+            ?.takeIf { encoded ->
+                encoded.isNotEmpty() && encoded.encodeToByteArray().size <= MAX_ANDROID_MUTATION_RECOVERY_BYTES
+            }
+    }
+
+    override fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return false
+        if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) return false
+        return preferences.edit()
+            .putString(durableMutationRecoveryKey(accountScope, kind), encoded)
+            .commit()
+    }
+
+    override fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): Boolean {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return false
+        val key = durableMutationRecoveryKey(accountScope, kind)
+        return preferences.edit().remove(key).commit() && !preferences.contains(key)
+    }
+
+    private fun durableMutationRecoveryKey(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String = "durable-mutation-${kind.storageKey}-$accountScope"
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
@@ -3550,6 +3588,11 @@ private fun NextcloudFile.isNativeTiffPreviewFormat(): Boolean {
     val mime = mimeType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT).orEmpty()
     return extension in setOf("tif", "tiff") || mime in setOf("image/tif", "image/tiff")
 }
+
+private const val MAX_ANDROID_MUTATION_RECOVERY_BYTES = 1024 * 1024
+
+private fun String.isCanonicalAndroidMutationAccountScope(): Boolean =
+    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
 
 internal sealed interface NativeTiffRangeReadPlan {
     val fileId: Long

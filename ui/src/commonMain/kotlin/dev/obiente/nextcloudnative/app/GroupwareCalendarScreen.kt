@@ -137,8 +137,8 @@ fun NativeGroupwareCalendarScreen(
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
-    val accountScope = remember(session.serverUrl, session.loginName, userId) {
-        groupwareMutationAccountScope(session, userId)
+    val accountScope = remember(session.serverUrl, session.loginName) {
+        durableMutationAccountScope(session)
     }
     val initialMonth = remember { currentCalendarMonth() }
     var monthYear by rememberSaveable { mutableStateOf(initialMonth.year) }
@@ -165,7 +165,11 @@ fun NativeGroupwareCalendarScreen(
     var deleting by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
     var deletingInProgress by remember { mutableStateOf(false) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
-    var mutationRecoveryState by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var mutationRecoveryState by remember(accountScope, services) {
+        mutableStateOf(
+            services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar),
+        )
+    }
     val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
         mutationRecoveryState?.let { decodeCalendarMutationRecoveryState(it, accountScope) }
     }
@@ -175,19 +179,40 @@ fun NativeGroupwareCalendarScreen(
     val scope = rememberCoroutineScope()
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
 
-    fun retainMutationRecovery(postcondition: CalendarMutationPostcondition) {
+    fun retainMutationRecovery(postcondition: CalendarMutationPostcondition): Boolean {
         check(mutationRecoveryState == null && !mutationOperationInProgress) {
             "Another calendar change is still awaiting server verification."
         }
-        mutationRecoveryState = CalendarMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
+        val encoded = CalendarMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
+        if (!services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar, encoded)) {
+            mutationError = "The calendar change could not be safely recorded. Check local storage and try again."
+            return false
+        }
+        mutationRecoveryState = encoded
         mutationOperationInProgress = true
         onMutationInProgressChanged(true)
+        return true
     }
 
-    fun clearMutationRecovery() {
+    fun clearMutationRecovery(): Boolean {
+        if (!services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)) {
+            mutationError = "The verified calendar recovery record could not be cleared. Free local storage and refresh."
+            return false
+        }
         mutationRecoveryState = null
         mutationOperationInProgress = false
         onMutationInProgressChanged(false)
+        return true
+    }
+
+    LaunchedEffect(accountScope, mutationRecoveryState, mutationPostcondition) {
+        if (mutationRecoveryState != null && mutationPostcondition == null) {
+            if (services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)) {
+                mutationRecoveryState = null
+            } else {
+                mutationError = "A damaged calendar recovery record could not be cleared. Free local storage and retry."
+            }
+        }
     }
 
     LaunchedEffect(mutationInProgress) {
@@ -271,6 +296,7 @@ fun NativeGroupwareCalendarScreen(
             CalendarWorkspaceMemoryCache.store(session, userId, loaded)
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
+                    if (!clearMutationRecovery()) return@onSuccess
                     when (mutationPostcondition) {
                         is CalendarMutationPostcondition.Upsert -> {
                             if (mutationPostcondition.previousEtag == null) creating = false
@@ -283,7 +309,6 @@ fun NativeGroupwareCalendarScreen(
                             selectedEventId = null
                         }
                     }
-                    clearMutationRecovery()
                 } else {
                     refreshError = "The calendar change has not appeared on the server yet. Refresh to verify it before leaving."
                 }
@@ -477,7 +502,7 @@ fun NativeGroupwareCalendarScreen(
             onNavigationConfirmed = onNavigationConfirmed,
             onNavigationCancelled = onNavigationCancelled,
             mutationInProgress = mutationInProgress,
-            onSave = { draft, calendar ->
+            onSave = save@{ draft, calendar ->
                 mutationError = null
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                 val objectHref = "${calendar.href}$uid.ics"
@@ -496,7 +521,7 @@ fun NativeGroupwareCalendarScreen(
                         recurrenceRule = draft.recurrenceRule,
                     ),
                 ).toGroupwareDavRequest()
-                retainMutationRecovery(
+                if (!retainMutationRecovery(
                     CalendarMutationPostcondition.Upsert(
                         href = objectHref,
                         calendarHref = calendar.href,
@@ -504,14 +529,15 @@ fun NativeGroupwareCalendarScreen(
                         previousEtag = null,
                         draft = draft,
                     ),
-                )
+                )) return@save
                 scope.launch {
                     try {
                         val response = services.executeGroupwareDav(session, request)
                         if (response.status !in 200..299) {
                             if (groupwareMutationResponseProvesRejection(response.status)) {
-                                clearMutationRecovery()
-                                mutationError = "Creating the event failed (HTTP ${response.status})."
+                                if (clearMutationRecovery()) {
+                                    mutationError = "Creating the event failed (HTTP ${response.status})."
+                                }
                             } else {
                                 mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
                                 loadAttempt += 1
@@ -547,7 +573,7 @@ fun NativeGroupwareCalendarScreen(
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationCancelled = onNavigationCancelled,
                 mutationInProgress = mutationInProgress,
-                onSave = { draft, _ ->
+                onSave = save@{ draft, _ ->
                     mutationError = null
                     val updated = updateGroupwareCalendarEventContent(
                         event = event,
@@ -566,7 +592,7 @@ fun NativeGroupwareCalendarScreen(
                         etag = event.etag,
                         content = updated,
                     ).toGroupwareDavRequest()
-                    retainMutationRecovery(
+                    if (!retainMutationRecovery(
                         CalendarMutationPostcondition.Upsert(
                             href = event.href,
                             calendarHref = event.calendarHref,
@@ -574,14 +600,15 @@ fun NativeGroupwareCalendarScreen(
                             previousEtag = event.etag,
                             draft = draft,
                         ),
-                    )
+                    )) return@save
                     scope.launch {
                         try {
                             val response = services.executeGroupwareDav(session, request)
                             if (response.status !in 200..299) {
                                 if (groupwareMutationResponseProvesRejection(response.status)) {
-                                    clearMutationRecovery()
-                                    mutationError = "Saving the event failed (HTTP ${response.status})."
+                                    if (clearMutationRecovery()) {
+                                        mutationError = "Saving the event failed (HTTP ${response.status})."
+                                    }
                                 } else {
                                     mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
                                     loadAttempt += 1
@@ -662,14 +689,18 @@ fun NativeGroupwareCalendarScreen(
                             objectHref = event.href,
                             etag = event.etag,
                         ).toGroupwareDavRequest()
-                        retainMutationRecovery(CalendarMutationPostcondition.Delete(event.href))
+                        if (!retainMutationRecovery(CalendarMutationPostcondition.Delete(event.href))) {
+                            deletingInProgress = false
+                            return@Button
+                        }
                         scope.launch {
                             try {
                                 val response = services.executeGroupwareDav(session, request)
                                 if (response.status !in 200..299) {
                                     if (groupwareMutationResponseProvesRejection(response.status)) {
-                                        clearMutationRecovery()
-                                        mutationError = "Deleting the event failed (HTTP ${response.status})."
+                                        if (clearMutationRecovery()) {
+                                            mutationError = "Deleting the event failed (HTTP ${response.status})."
+                                        }
                                     } else {
                                         mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
                                         loadAttempt += 1
@@ -1244,9 +1275,9 @@ private val calendarMutationRecoveryJson = Json {
     ignoreUnknownKeys = true
 }
 
-internal fun groupwareMutationAccountScope(session: NextcloudSession, userId: String): String =
+internal fun durableMutationAccountScope(session: NextcloudSession): String =
     publicContentSha256(
-        listOf(session.serverUrl.trimEnd('/'), session.loginName, userId)
+        listOf(session.serverUrl.trimEnd('/'), session.loginName)
             .joinToString("|") { value -> "${value.length}:$value" }
             .encodeToByteArray(),
     )

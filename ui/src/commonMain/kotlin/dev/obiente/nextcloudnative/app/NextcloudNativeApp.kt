@@ -1802,7 +1802,11 @@ private fun AuthenticatedApp(
         }
     }
 
-    fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
+    fun openApp(
+        app: NextcloudAppEntry,
+        from: NextcloudDestination,
+        restoreRememberedState: Boolean = true,
+    ) {
         if (groupwareMutationInProgress) return
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
@@ -1835,7 +1839,11 @@ private fun AuthenticatedApp(
         } else {
             val switched = appWorkspaceNavigation
                 .retainCurrent(screen)
-                .switchTo(app.id, initialScreen)
+                .switchTo(
+                    appId = app.id,
+                    initialState = initialScreen,
+                    restoreRememberedState = restoreRememberedState,
+                )
             appWorkspaceNavigation = switched.memory
             screen = switched.restoredState
         }
@@ -2006,7 +2014,7 @@ private fun AuthenticatedApp(
             is NextcloudLinkDestination.App -> {
                 val app = serverInfo?.apps?.firstOrNull { installed -> installed.id == target.appId }
                 if (app != null) {
-                    openApp(app, destination)
+                    openApp(app, destination, restoreRememberedState = false)
                     return NextcloudLinkNavigationResult.Completed
                 } else if (serverInfo == null && source == NextcloudLinkSource.OperatingSystem) {
                     showLinkFailure(
@@ -2617,6 +2625,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         is Screen.Chat -> ChatScreen(
             services = services,

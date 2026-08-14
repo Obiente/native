@@ -267,7 +267,7 @@ class CalendarWorkspacePresentationTest {
             loginName = "person",
             appPassword = "secret",
         )
-        val accountScope = groupwareMutationAccountScope(session, "person-id")
+        val accountScope = durableMutationAccountScope(session)
         assertEquals(64, accountScope.length)
         assertTrue(accountScope.all { it in '0'..'9' || it in 'a'..'f' })
         assertFalse(accountScope.contains("cloud.example.test"))
