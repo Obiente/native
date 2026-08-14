@@ -12520,6 +12520,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
     val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Initializing ||
         submissionState is SupportDiagnosticsSubmissionState.Packaging ||
+        submissionState is SupportDiagnosticsSubmissionState.Cancelling ||
         submissionState is SupportDiagnosticsSubmissionState.Uploading
     val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
         submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
@@ -12812,6 +12813,10 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     SupportDiagnosticsSubmissionState.Packaging -> {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    SupportDiagnosticsSubmissionState.Cancelling -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Finishing private report cancellation...", style = MaterialTheme.typography.bodySmall)
                     }
                     is SupportDiagnosticsSubmissionState.Uploading -> {
                         if (current.progress == null) {

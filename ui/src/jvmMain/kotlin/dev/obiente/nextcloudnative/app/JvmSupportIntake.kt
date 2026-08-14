@@ -23,8 +23,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,6 +57,7 @@ class JvmSupportIntake(
     private val environment: SupportDiagnosticsEnvironment,
     client: OkHttpClient,
     supportBaseUrl: String = DEFAULT_OBIENTE_SUPPORT_URL,
+    private val supportMutationsAllowed: () -> Boolean = { true },
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -81,6 +84,7 @@ class JvmSupportIntake(
     private var actualStateAccountIdentity: String? = null
     private var pending: PendingSubmission? = null
     private var completedSubmissions: List<CompletedSubmission> = emptyList()
+    private var completedExpiryJob: Job? = null
 
     init {
         scope.launch {
@@ -92,6 +96,7 @@ class JvmSupportIntake(
                 synchronized(lock) {
                     pending = restored
                     completedSubmissions = restoredCompleted
+                    scheduleCompletedExpiryLocked()
                     val visibleCompleted = latestCompletedFor(activeAccountIdentity)
                     publishStateLocked(
                         restored?.let {
@@ -133,7 +138,11 @@ class JvmSupportIntake(
         featureState: List<SupportDiagnosticFieldDraft>,
     ) = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!operationActive.compareAndSet(false, true)) return@withContext
+        if (!supportMutationsAreAllowed()) {
+            publishState(SupportDiagnosticsSubmissionState.Unsupported(READ_ONLY_SUPPORT_MESSAGE))
+            return@withContext
+        }
+        if (!beginOperation()) return@withContext
         try {
             val existing = synchronized(lock) { pending }
             if (existing != null) {
@@ -197,13 +206,26 @@ class JvmSupportIntake(
             if (!packageSubmission(submission)) return@withContext
             upload(submission)
         } finally {
-            operationActive.set(false)
+            endOperation()
         }
     }
 
     suspend fun retry() = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!operationActive.compareAndSet(false, true)) return@withContext
+        if (!supportMutationsAreAllowed()) {
+            val existing = synchronized(lock) { pending }
+            publishState(
+                existing?.let {
+                    SupportDiagnosticsSubmissionState.RetryableFailure(
+                        READ_ONLY_SUPPORT_MESSAGE,
+                        outcomeAmbiguous = it.outcomeAmbiguous,
+                    )
+                } ?: SupportDiagnosticsSubmissionState.Unsupported(READ_ONLY_SUPPORT_MESSAGE),
+                existing?.originAccountIdentity,
+            )
+            return@withContext
+        }
+        if (!beginOperation()) return@withContext
         try {
             val submission = synchronized(lock) { pending }
             if (submission == null) {
@@ -260,6 +282,24 @@ class JvmSupportIntake(
             }
             upload(submission)
         } finally {
+            endOperation()
+        }
+    }
+
+    private fun beginOperation(): Boolean = synchronized(lock) {
+        operationActive.compareAndSet(false, true)
+    }
+
+    private fun supportMutationsAreAllowed(): Boolean = runCatching(supportMutationsAllowed).getOrDefault(false)
+
+    private fun endOperation() {
+        synchronized(lock) {
+            if (actualState is SupportDiagnosticsSubmissionState.Cancelling && pending == null) {
+                publishStateLocked(
+                    SupportDiagnosticsSubmissionState.Cancelled,
+                    actualStateAccountIdentity,
+                )
+            }
             operationActive.set(false)
         }
     }
@@ -376,6 +416,15 @@ class JvmSupportIntake(
             finishCancelled(submission)
             return
         }
+        val mutationAllowedBeforePreparation = supportMutationsAreAllowed()
+        if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
+            finishCancelled(submission)
+            return
+        }
+        if (!mutationAllowedBeforePreparation) {
+            retainForRetry(submission, READ_ONLY_SUPPORT_MESSAGE, ambiguous = false)
+            return
+        }
         submission.outcomeAmbiguous = true
         if (!persistPendingSafely(submission)) {
             finishRejected(submission, "The private support submission could not be retained safely on this device.")
@@ -405,6 +454,15 @@ class JvmSupportIntake(
             .header("Idempotency-Key", submission.idempotencyKey)
             .post(body)
             .build()
+        val mutationAllowedAtTransport = supportMutationsAreAllowed()
+        if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
+            finishCancelled(submission)
+            return
+        }
+        if (!mutationAllowedAtTransport) {
+            retainForRetry(submission, READ_ONLY_SUPPORT_MESSAGE, ambiguous = false)
+            return
+        }
         publishState(SupportDiagnosticsSubmissionState.Uploading(0f))
         val call = client.newCall(request)
         activeCall.set(call)
@@ -536,6 +594,10 @@ class JvmSupportIntake(
             .header("Accept", "application/json")
             .delete()
             .build()
+        if (!supportMutationsAreAllowed()) {
+            retainCancellationForRetry(submission, receipt, READ_ONLY_SUPPORT_MESSAGE)
+            return
+        }
         val call = client.newCall(request)
         activeCall.set(call)
         try {
@@ -621,7 +683,10 @@ class JvmSupportIntake(
             )
             return
         }
-        synchronized(lock) { completedSubmissions = completedSubmissions + completedSubmission }
+        synchronized(lock) {
+            completedSubmissions = completedSubmissions + completedSubmission
+            scheduleCompletedExpiryLocked()
+        }
         finishTerminal(submission)
         publishState(submittedStateFor(submission.originAccountIdentity), submission.originAccountIdentity)
     }
@@ -669,7 +734,7 @@ class JvmSupportIntake(
         }
         submission.archive?.delete()
         synchronized(persistenceLock) {
-            pendingDescriptor().delete()
+            deletePrivateDescriptorDurably(pendingDescriptor())
         }
     }
 
@@ -680,7 +745,14 @@ class JvmSupportIntake(
 
     private fun finishCancelled(submission: PendingSubmission) {
         finishTerminal(submission)
-        publishState(SupportDiagnosticsSubmissionState.Cancelled, submission.originAccountIdentity)
+        publishState(
+            if (operationActive.get()) {
+                SupportDiagnosticsSubmissionState.Cancelling
+            } else {
+                SupportDiagnosticsSubmissionState.Cancelled
+            },
+            submission.originAccountIdentity,
+        )
     }
 
     private fun retainForRetry(
@@ -890,6 +962,13 @@ class JvmSupportIntake(
         }
     }
 
+    private fun deletePrivateDescriptorDurably(descriptor: File) {
+        val parent = descriptor.parentFile ?: return
+        if (Files.deleteIfExists(descriptor.toPath())) {
+            syncDirectoryEntry(parent)
+        }
+    }
+
     private fun restorePendingSubmission(): PendingSubmission? = runCatching {
         val descriptor = pendingDescriptor()
         if (!descriptor.isFile) return@runCatching null
@@ -940,7 +1019,7 @@ class JvmSupportIntake(
             receipt = persisted.receipt,
         )
     }.getOrElse {
-        pendingDescriptor().delete()
+        runCatching { deletePrivateDescriptorDurably(pendingDescriptor()) }
         null
     }
 
@@ -964,7 +1043,7 @@ class JvmSupportIntake(
         require(System.currentTimeMillis() <= Instant.parse(persisted.receipt.retentionUntil).toEpochMilli())
         CompletedSubmission(recordId, persisted.originAccountIdentity, persisted.receipt)
     }.getOrElse {
-        descriptor.delete()
+        runCatching { deletePrivateDescriptorDurably(descriptor) }
         null
     }
 
@@ -999,7 +1078,12 @@ class JvmSupportIntake(
         val recordId: String,
         val originAccountIdentity: String,
         val receipt: SupportIntakeReceipt,
-    )
+    ) {
+        val retentionUntilEpochMillis: Long
+            get() = Instant.parse(receipt.retentionUntil).toEpochMilli()
+
+        fun isRetained(nowEpochMillis: Long): Boolean = nowEpochMillis <= retentionUntilEpochMillis
+    }
 
     @Serializable
     private data class PersistedPendingSubmission(
@@ -1034,6 +1118,9 @@ class JvmSupportIntake(
         next: SupportDiagnosticsSubmissionState,
         accountIdentity: String? = pending?.originAccountIdentity,
     ) {
+        if (pruneExpiredCompletedLocked()) {
+            scheduleCompletedExpiryLocked()
+        }
         actualState = next
         actualStateAccountIdentity = accountIdentity
         state.value = if (accountIdentity != null && accountIdentity != activeAccountIdentity) {
@@ -1062,13 +1149,17 @@ class JvmSupportIntake(
     }
 
     private fun latestCompletedFor(accountIdentity: String?): CompletedSubmission? =
-        completedSubmissions.filter { it.originAccountIdentity == accountIdentity }
+        completedSubmissions.filter {
+            it.originAccountIdentity == accountIdentity && it.isRetained(System.currentTimeMillis())
+        }
             .maxByOrNull { Instant.parse(it.receipt.createdAt) }
 
     private fun submittedStateFor(accountIdentity: String): SupportDiagnosticsSubmissionState.Submitted =
         SupportDiagnosticsSubmissionState.Submitted(
             completedSubmissions
-                .filter { it.originAccountIdentity == accountIdentity }
+                .filter {
+                    it.originAccountIdentity == accountIdentity && it.isRetained(System.currentTimeMillis())
+                }
                 .sortedWith(
                     compareByDescending<CompletedSubmission> { Instant.parse(it.receipt.createdAt) }
                         .thenByDescending(CompletedSubmission::recordId),
@@ -1081,6 +1172,57 @@ class JvmSupportIntake(
                     )
                 },
         )
+
+    private fun scheduleCompletedExpiryLocked() {
+        completedExpiryJob?.cancel()
+        val nextExpiry = completedSubmissions.minOfOrNull(CompletedSubmission::retentionUntilEpochMillis)
+        if (nextExpiry == null) {
+            completedExpiryJob = null
+            return
+        }
+        val now = System.currentTimeMillis()
+        val waitMillis = if (nextExpiry <= now) {
+            1L
+        } else {
+            (nextExpiry - now).takeIf { it > 0L } ?: Long.MAX_VALUE
+        }
+        completedExpiryJob = scope.launch {
+            delay(waitMillis)
+            synchronized(lock) {
+                completedExpiryJob = null
+                pruneExpiredCompletedLocked()
+                refreshVisibleStateLocked()
+                scheduleCompletedExpiryLocked()
+            }
+        }
+    }
+
+    private fun pruneExpiredCompletedLocked(nowEpochMillis: Long = System.currentTimeMillis()): Boolean {
+        val expired = completedSubmissions.filterNot { it.isRetained(nowEpochMillis) }
+        if (expired.isEmpty()) return false
+        completedSubmissions = completedSubmissions.filter { it.isRetained(nowEpochMillis) }
+        if (actualState is SupportDiagnosticsSubmissionState.Submitted) {
+            actualState = latestCompletedFor(actualStateAccountIdentity)
+                ?.let { submittedStateFor(it.originAccountIdentity) }
+                ?: SupportDiagnosticsSubmissionState.Idle
+        }
+        scope.launch { deleteCompletedDescriptorsWithRetry(expired) }
+        return true
+    }
+
+    private suspend fun deleteCompletedDescriptorsWithRetry(submissions: List<CompletedSubmission>) {
+        var remaining = submissions
+        while (remaining.isNotEmpty()) {
+            remaining = synchronized(persistenceLock) {
+                remaining.filterNot { submission ->
+                    runCatching {
+                        deletePrivateDescriptorDurably(completedDescriptor(submission.recordId))
+                    }.isSuccess
+                }
+            }
+            if (remaining.isNotEmpty()) delay(SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS)
+        }
+    }
 }
 
 private fun Long.saturatingAdd(increment: Long): Long =
@@ -1196,5 +1338,8 @@ private const val SUPPORT_TEMPORARY_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
+private const val SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS = 60L * 1_000L
 private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L
 private const val MAX_SUPPORT_RETRY_AFTER_MILLIS = MAX_SUPPORT_RETRY_AFTER_SECONDS * 1_000L
+private const val READ_ONLY_SUPPORT_MESSAGE =
+    "Private support uploads are unavailable while the shared read-only audit session is active."

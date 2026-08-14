@@ -92,6 +92,7 @@ internal object AndroidSupportIntakeCoordinator {
             temporaryRoot = File(appContext.noBackupFilesDir, "support-submissions"),
             environment = androidSupportDiagnosticsEnvironment(),
             client = client.newBuilder().retryOnConnectionFailure(false).build(),
+            supportMutationsAllowed = appContext.cloudMutationGate(),
         ).also { instance = it }
     }
 }

@@ -189,6 +189,7 @@ sealed interface SupportDiagnosticsSubmissionState {
     data object Idle : SupportDiagnosticsSubmissionState
     data class BlockedByAnotherAccount(val message: String) : SupportDiagnosticsSubmissionState
     data object Packaging : SupportDiagnosticsSubmissionState
+    data object Cancelling : SupportDiagnosticsSubmissionState
     data class Uploading(val progress: Float?) : SupportDiagnosticsSubmissionState {
         init {
             require(progress == null || progress in 0f..1f)

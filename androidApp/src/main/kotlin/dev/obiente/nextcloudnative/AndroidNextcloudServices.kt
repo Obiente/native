@@ -744,12 +744,12 @@ internal class AndroidNextcloudServices(
                 }.getOrNull()
             },
             accountIdOf = NextcloudDocumentIds::accountKey,
-        )?.also { session ->
-            registerSessionPrivateValues(session)
-            val accountIdentity = NextcloudDocumentIds.accountKey(session)
-            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-            supportIntake.setActiveAccountIdentity(accountIdentity)
-        }
+            publishAccount = { session, accountIdentity ->
+                session?.let(::registerSessionPrivateValues)
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            },
+        )
     }
 
     override suspend fun saveSession(session: NextcloudSession) {
@@ -784,13 +784,14 @@ internal class AndroidNextcloudServices(
                     .apply()
             },
             cancelAll = scheduler::cancelAll,
+            publishAccount = { accountIdentity ->
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            },
         )
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
-        val accountIdentity = NextcloudDocumentIds.accountKey(session)
-        supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-        supportIntake.setActiveAccountIdentity(accountIdentity)
         notifyDocumentsRootsChanged()
     }
 
@@ -827,11 +828,13 @@ internal class AndroidNextcloudServices(
                         .apply()
                 },
                 cancelAll = scheduler::cancelAll,
+                clearPublishedAccount = {
+                    supportDiagnostics.setActiveAccountIdentity(null)
+                    supportIntake.setActiveAccountIdentity(null)
+                },
             )
             accountId?.let(nativeMediaPreviewCache::clearAccount)
             notifyDocumentsRootsChanged()
-            supportDiagnostics.setActiveAccountIdentity(null)
-            supportIntake.setActiveAccountIdentity(null)
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
                 SupportDiagnosticEventDraft(

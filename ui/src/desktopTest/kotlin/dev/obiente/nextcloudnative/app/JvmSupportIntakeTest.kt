@@ -7,6 +7,7 @@ import java.nio.file.attribute.PosixFilePermission
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -15,8 +16,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
@@ -257,6 +261,94 @@ class JvmSupportIntakeTest {
             )
             assertTrue(retryable.outcomeAmbiguous)
             assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            assertTrue(fixture.completedDescriptors().isEmpty())
+        }
+    }
+
+    @Test
+    fun rejectsSupportUploadWhenThePlatformMutationGateIsClosed() = runBlocking {
+        var mutationsAllowed = false
+        testFixture(supportMutationsAllowed = { mutationsAllowed }).use { fixture ->
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Unsupported>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+
+            mutationsAllowed = true
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(1, fixture.server.requestCount)
+        }
+    }
+
+    @Test
+    fun rechecksThePlatformMutationGateAtTheUploadBoundary() = runBlocking {
+        var gateChecks = 0
+        testFixture(supportMutationsAllowed = { ++gateChecks == 1 }).use { fixture ->
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(
+                fixture.intake.states().value,
+            )
+            assertFalse(retryable.outcomeAmbiguous)
+            assertEquals(0, fixture.server.requestCount)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+        }
+    }
+
+    @Test
+    fun keepsCancellationBusyUntilTheActiveOperationStops() = runBlocking {
+        val transportGateEntered = CountDownLatch(1)
+        val allowTransportGateToFinish = CountDownLatch(1)
+        var gateChecks = 0
+        testFixture(
+            supportMutationsAllowed = {
+                gateChecks += 1
+                if (gateChecks == 1) {
+                    true
+                } else {
+                    transportGateEntered.countDown()
+                    check(allowTransportGateToFinish.await(5, TimeUnit.SECONDS))
+                    true
+                }
+            },
+        ).use { fixture ->
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertTrue(transportGateEntered.await(5, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            assertIs<SupportDiagnosticsSubmissionState.Cancelling>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+
+            allowTransportGateToFinish.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun expiresCompletedReceiptWhileTheProcessRemainsOpen() = runBlocking {
+        testFixture().use { fixture ->
+            val retentionUntil = Instant.now().plusSeconds(2)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionUntil = retentionUntil))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(1, fixture.completedDescriptors().size)
+            withTimeout(5_000) {
+                fixture.intake.states().first { it is SupportDiagnosticsSubmissionState.Idle }
+            }
+            withTimeout(5_000) {
+                while (fixture.completedDescriptors().isNotEmpty()) delay(10)
+            }
             assertTrue(fixture.completedDescriptors().isEmpty())
         }
     }
@@ -826,7 +918,9 @@ class JvmSupportIntakeTest {
         }
     }
 
-    private fun testFixture(): Fixture {
+    private fun testFixture(
+        supportMutationsAllowed: () -> Boolean = { true },
+    ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
         val temporaryRoot = File(root, "submissions")
@@ -853,6 +947,7 @@ class JvmSupportIntakeTest {
             diagnostics = diagnostics,
             environment = environment,
             server = server,
+            supportMutationsAllowed = supportMutationsAllowed,
         )
     }
 
@@ -861,9 +956,10 @@ class JvmSupportIntakeTest {
         supportCode: String = "OBI-ABCDE-23456",
         retentionDays: Long = 30,
         createdAtOffsetDays: Long = 0,
+        retentionUntil: Instant? = null,
     ): MockResponse {
         val createdAt = Instant.now().plus(createdAtOffsetDays, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS)
-        val retentionUntil = createdAt.plus(retentionDays, ChronoUnit.DAYS)
+        val resolvedRetentionUntil = retentionUntil ?: createdAt.plus(retentionDays, ChronoUnit.DAYS)
         return MockResponse.Builder().code(201).body(
             """
                 {
@@ -873,7 +969,7 @@ class JvmSupportIntakeTest {
                   "statusUrl": "$statusUrl",
                   "deletionUrl": "$statusUrl",
                   "createdAt": "$createdAt",
-                  "retentionUntil": "$retentionUntil"
+                  "retentionUntil": "$resolvedRetentionUntil"
                 }
             """.trimIndent(),
         ).build()
@@ -885,6 +981,7 @@ class JvmSupportIntakeTest {
         val diagnostics: AsyncJvmSupportDiagnostics,
         val environment: SupportDiagnosticsEnvironment,
         val server: MockWebServer,
+        val supportMutationsAllowed: () -> Boolean,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -898,6 +995,7 @@ class JvmSupportIntakeTest {
             environment = environment,
             client = OkHttpClient.Builder().retryOnConnectionFailure(false).build(),
             supportBaseUrl = server.url("/").toString(),
+            supportMutationsAllowed = supportMutationsAllowed,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }
