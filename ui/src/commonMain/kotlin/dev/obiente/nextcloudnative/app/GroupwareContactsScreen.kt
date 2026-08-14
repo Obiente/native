@@ -860,6 +860,7 @@ private fun ContactEditorDialog(
     val addressBook = addressBooks.firstOrNull { it.href == selectedAddressBookHref }
         ?: addressBooks.firstOrNull()
     val currentDraft = ContactDraft(name, email, phone, organization, address, notes)
+    val emailIsSingleValue = groupwareContactEmailIsSingleValue(email)
     val dirty = contactDraftIsDirty(
         initialDraft,
         currentDraft,
@@ -882,7 +883,20 @@ private fun ContactEditorDialog(
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 item { OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    OutlinedTextField(
+                        email,
+                        { email = it },
+                        label = { Text("Email") },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = !emailIsSingleValue,
+                        supportingText = if (!emailIsSingleValue) {
+                            { Text("Use one email address without line breaks.") }
+                        } else {
+                            null
+                        },
+                    )
+                }
                 item { OutlinedTextField(phone, { phone = it }, label = { Text("Phone") }, modifier = Modifier.fillMaxWidth()) }
                 item {
                     OutlinedTextField(
@@ -914,7 +928,10 @@ private fun ContactEditorDialog(
         },
         confirmButton = {
             Button(
-                enabled = name.isNotBlank() && addressBook != null && !mutationInProgress,
+                enabled = name.isNotBlank() &&
+                    emailIsSingleValue &&
+                    addressBook != null &&
+                    !mutationInProgress,
                 onClick = {
                     onSave(
                         currentDraft,

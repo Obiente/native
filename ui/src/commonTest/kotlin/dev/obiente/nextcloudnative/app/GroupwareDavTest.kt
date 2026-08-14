@@ -163,6 +163,24 @@ class GroupwareDavTest {
     }
 
     @Test
+    fun `contact writer rejects email values that can inject vcard properties`() {
+        assertFalse(groupwareContactEmailIsSingleValue("alex@example.test\nTEL:+31 6 123"))
+        assertFalse(groupwareContactEmailIsSingleValue("alex@example.test\u2028TEL:+31 6 123"))
+        assertTrue(groupwareContactEmailIsSingleValue("alex@example.test"))
+        assertFailsWith<IllegalArgumentException> {
+            createGroupwareContactContent(
+                uid = "alex",
+                displayName = "Alex Example",
+                email = "alex@example.test\r\nTEL:+31 6 123",
+                phone = null,
+                organization = null,
+                address = null,
+                notes = null,
+            )
+        }
+    }
+
+    @Test
     fun `vcard text decoding consumes escapes once and preserves literal organization semicolons`() {
         val href = "/remote.php/dav/addressbooks/users/person/contacts/escape.vcf"
         val notes = "Path C:\\new, archive; ready"

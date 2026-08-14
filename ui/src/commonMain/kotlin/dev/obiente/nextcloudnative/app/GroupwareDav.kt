@@ -473,6 +473,9 @@ fun createGroupwareContactContent(
 ): String {
     require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The contact id is invalid." }
     require(displayName.isNotBlank()) { "A contact name is required." }
+    require(groupwareContactEmailIsSingleValue(email.orEmpty())) {
+        "The contact email must be a single property value."
+    }
     return buildList {
         add("BEGIN:VCARD")
         add("VERSION:4.0")
@@ -498,6 +501,9 @@ fun updateGroupwareContactContent(
     notes: String?,
 ): String {
     require(displayName.isNotBlank()) { "A contact name is required." }
+    require(groupwareContactEmailIsSingleValue(email.orEmpty())) {
+        "The contact email must be a single property value."
+    }
     val lines = contact.rawVCard.unfoldCalendarLines().toMutableList()
     fun replaceSingle(name: String, replacement: String?, removeAdditional: Boolean = true) {
         val indexes = lines.indices.filter { index ->
@@ -533,6 +539,11 @@ fun updateGroupwareContactContent(
     replaceSingle("NOTE", notes?.trim()?.takeIf(String::isNotBlank)?.let { "NOTE:${it.escapeCalendarText()}" })
     return lines.joinToString("\r\n", postfix = "\r\n")
 }
+
+internal fun groupwareContactEmailIsSingleValue(email: String): Boolean =
+    email.none { character ->
+        character.isISOControl() || character == '\u2028' || character == '\u2029'
+    }
 
 fun parseGroupwareCalendarEvents(
     calendarHref: String,
