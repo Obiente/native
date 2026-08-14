@@ -201,11 +201,24 @@ data class FileSyncConflictSummary(
     val relativePath: String,
     val reason: FileSyncDecisionReason,
     val choices: Set<FileSyncDecisionChoice>,
+    val local: FileSyncConflictSideSummary? = null,
+    val remote: FileSyncConflictSideSummary? = null,
 ) {
     init {
         require(workId > 0L)
         requireValidSyncPath(relativePath)
         require(choices.isNotEmpty())
+    }
+}
+
+data class FileSyncConflictSideSummary(
+    val kind: SyncEntryKind,
+    val sizeBytes: Long? = null,
+    val modifiedEpochMillis: Long? = null,
+) {
+    init {
+        require(sizeBytes == null || sizeBytes >= 0L)
+        require(modifiedEpochMillis == null || modifiedEpochMillis >= 0L)
     }
 }
 
@@ -279,6 +292,20 @@ fun FileSyncPair.toCenterSummary(
                         relativePath = work.relativePath,
                         reason = decision.reason,
                         choices = decision.choices,
+                        local = work.observedLocal?.let { local ->
+                            FileSyncConflictSideSummary(
+                                kind = local.kind,
+                                sizeBytes = local.size,
+                                modifiedEpochMillis = local.modifiedEpochMillis,
+                            )
+                        },
+                        remote = work.observedRemote?.let { remote ->
+                            FileSyncConflictSideSummary(
+                                kind = remote.kind,
+                                sizeBytes = remote.size,
+                                modifiedEpochMillis = remote.modifiedEpochMillis,
+                            )
+                        },
                     )
                 }
         },

@@ -6,9 +6,47 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFails
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class DesktopFileSyncEngineTest {
+    @Test
+    fun `resolved conflict guard rejects a replacement operation`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Notes",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        var state = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "local-1")),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val resolvedWorkId = state.pairs.single().workItems.single().id
+        state = resolveFileSyncDecision(
+            state,
+            pair.id,
+            resolvedWorkId,
+            FileSyncDecisionChoice.UseLocal,
+        )
+        assertTrue(state.pairs.single().retainsResolvedFileSyncDecision(resolvedWorkId))
+
+        state = scanFileSyncPair(
+            state,
+            pair.id,
+            localEntries = emptyList(),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 20L,
+        )
+
+        assertFalse(state.pairs.single().retainsResolvedFileSyncDecision(resolvedWorkId))
+        assertIs<FileSyncOperation.Download>(state.pairs.single().workItems.single().operation)
+    }
+
     @Test
     fun `baseline capacity is checked before executing expanding operations`() {
         val baselines = setOf("existing.jpg", "second.jpg")

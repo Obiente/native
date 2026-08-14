@@ -119,6 +119,7 @@ private data class LocalSyncEntrySnapshotV1(
     val revision: String,
     val size: Long?,
     val contentHash: String? = null,
+    val modifiedEpochMillis: Long? = null,
 )
 
 @Serializable
@@ -128,6 +129,7 @@ private data class RemoteSyncEntrySnapshotV1(
     val etag: String,
     val size: Long?,
     val contentHash: String? = null,
+    val modifiedEpochMillis: Long? = null,
 )
 
 @Serializable
@@ -225,6 +227,7 @@ private fun LocalSyncEntry.toSnapshot(): LocalSyncEntrySnapshotV1 = LocalSyncEnt
     revision = revision,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
 )
 
 private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry(
@@ -233,6 +236,7 @@ private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry
     revision = revision,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
 )
 
 private fun RemoteSyncEntry.toSnapshot(): RemoteSyncEntrySnapshotV1 = RemoteSyncEntrySnapshotV1(
@@ -241,6 +245,7 @@ private fun RemoteSyncEntry.toSnapshot(): RemoteSyncEntrySnapshotV1 = RemoteSync
     etag = etag,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
 )
 
 private fun RemoteSyncEntrySnapshotV1.toDomain(): RemoteSyncEntry = RemoteSyncEntry(
@@ -249,6 +254,7 @@ private fun RemoteSyncEntrySnapshotV1.toDomain(): RemoteSyncEntry = RemoteSyncEn
     etag = etag,
     size = size,
     contentHash = contentHash,
+    modifiedEpochMillis = modifiedEpochMillis,
 )
 
 private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWorkSnapshotV1(

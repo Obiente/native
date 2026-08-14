@@ -244,17 +244,20 @@ fun scanFileSyncPair(
     require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) {
         "The sync snapshot requires too many operations. Narrow the selected folders."
     }
-    fun stableExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
+    fun reconciledExistingWork(operation: FileSyncOperation): FileSyncWorkItem? {
         val path = operation.relativePath
-        return existingWorkByPath[path]?.takeIf { current ->
-            current.sameGeneration(operation, localByPath[path], remoteByPath[path], baselineByPath[path])
-        }
+        val current = existingWorkByPath[path] ?: return null
+        val local = localByPath[path]
+        val remote = remoteByPath[path]
+        val baseline = baselineByPath[path]
+        return current.takeIf { it.sameGeneration(operation, local, remote, baseline) }
+            ?: current.rebindResolvedSourceGeneration(operation, local, remote, baseline)
     }
     val operationComparator = fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath)
     val sortedOperations = plan.operations.sortedWith { left, right ->
         operationComparator.compare(
-            stableExistingWork(left)?.operation ?: left,
-            stableExistingWork(right)?.operation ?: right,
+            reconciledExistingWork(left)?.operation ?: left,
+            reconciledExistingWork(right)?.operation ?: right,
         )
     }
     val selectedOperations = if (reservedNonExecutableWorkItems == 0) {
@@ -267,7 +270,7 @@ fun scanFileSyncPair(
         val retainedOther = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         val newSkipped = ArrayList<FileSyncOperation>(reservedNonExecutableWorkItems)
         sortedOperations.forEach { operation ->
-            val existing = stableExistingWork(operation)
+            val existing = reconciledExistingWork(operation)
             val effectiveOperation = existing?.operation ?: operation
             val canRunAutomatically = effectiveOperation.isExecutable() &&
                 (existing == null || existing.canRunAutomatically())
@@ -295,7 +298,7 @@ fun scanFileSyncPair(
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        stableExistingWork(operation) ?: FileSyncWorkItem(
+        reconciledExistingWork(operation) ?: FileSyncWorkItem(
             id = nextId.also {
                 require(it < Long.MAX_VALUE) { "The sync work ID space is exhausted." }
                 nextId += 1
@@ -667,6 +670,111 @@ private fun FileSyncWorkItem.sameGeneration(
             decision?.reason == planned.reason
         decision != null -> false
         else -> operation == planned
+    }
+}
+
+/**
+ * Keeps a directional user choice when only its source advanced before execution.
+ *
+ * The destination and baseline must remain exactly as reviewed, and the source must retain its
+ * type. Destructive targets, keep-both, skip, and previously attempted work deliberately fall
+ * back to a fresh decision instead of inheriting stale intent.
+ */
+private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
+    planned: FileSyncOperation,
+    local: LocalSyncEntry?,
+    remote: RemoteSyncEntry?,
+    baseline: FileSyncBaseline?,
+): FileSyncWorkItem? {
+    if (
+        state != FileSyncExecutionState.Ready ||
+        attemptCount != 0 ||
+        failureMessage != null ||
+        observedBaseline != baseline
+    ) {
+        return null
+    }
+    val currentDecision = decision ?: return null
+    val choice = (currentDecision.state as? FileSyncDecisionState.Resolved)?.choice ?: return null
+
+    return when (choice) {
+        FileSyncDecisionChoice.UseLocal -> if (
+            (planned as? FileSyncOperation.NeedsDecision)?.reason != currentDecision.reason
+        ) {
+            null
+        } else {
+            local
+                ?.takeIf {
+                    observedLocal != null &&
+                        it != observedLocal &&
+                        it.kind == observedLocal.kind &&
+                        remote == observedRemote
+                }
+                ?.let { latestLocal ->
+                    copy(
+                        observedLocal = latestLocal,
+                        operation = FileSyncOperation.Upload(relativePath, remote?.etag),
+                    )
+                }
+        }
+        FileSyncDecisionChoice.UseRemote -> if (
+            (planned as? FileSyncOperation.NeedsDecision)?.reason != currentDecision.reason
+        ) {
+            null
+        } else {
+            remote
+                ?.takeIf {
+                    observedRemote != null &&
+                        it != observedRemote &&
+                        it.kind == observedRemote.kind &&
+                        local == observedLocal
+                }
+                ?.let { latestRemote ->
+                    copy(
+                        observedRemote = latestRemote,
+                        operation = FileSyncOperation.Download(relativePath, local?.revision),
+                    )
+                }
+        }
+        FileSyncDecisionChoice.RestoreMissing -> when (currentDecision.reason) {
+            FileSyncDecisionReason.LocalDeletion -> remote
+                ?.takeIf {
+                    planned is FileSyncOperation.Download &&
+                        planned.expectedLocalRevision == null &&
+                    local == null &&
+                        observedLocal == null &&
+                        observedRemote != null &&
+                        it != observedRemote &&
+                        it.kind == observedRemote.kind
+                }
+                ?.let { latestRemote ->
+                    copy(
+                        observedRemote = latestRemote,
+                        operation = FileSyncOperation.Download(relativePath, expectedLocalRevision = null),
+                    )
+                }
+            FileSyncDecisionReason.RemoteDeletion -> local
+                ?.takeIf {
+                    planned is FileSyncOperation.Upload &&
+                        planned.expectedRemoteEtag == null &&
+                    remote == null &&
+                        observedRemote == null &&
+                        observedLocal != null &&
+                        it != observedLocal &&
+                        it.kind == observedLocal.kind
+                }
+                ?.let { latestLocal ->
+                    copy(
+                        observedLocal = latestLocal,
+                        operation = FileSyncOperation.Upload(relativePath, expectedRemoteEtag = null),
+                    )
+                }
+            else -> null
+        }
+        FileSyncDecisionChoice.KeepBoth,
+        FileSyncDecisionChoice.PropagateDeletion,
+        FileSyncDecisionChoice.Skip,
+        -> null
     }
 }
 

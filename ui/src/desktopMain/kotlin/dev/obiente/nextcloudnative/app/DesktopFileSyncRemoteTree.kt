@@ -719,15 +719,17 @@ private class DesktopDavResponseBuilder {
         val path = decoded.substringAfter("/files/$userId/", "").trim('/')
         if (path.isBlank()) return null
         val revision = etag?.takeIf(String::isNotBlank) ?: error("A server item has no usable revision.")
+        val modifiedEpochMillis = lastModified?.let(::parseDesktopSyncDavTimestamp)
         return DesktopRemoteSyncDocument(
             RemoteSyncEntry(
                 relativePath = path,
                 kind = if (isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
                 etag = revision,
                 size = contentLength?.toLongOrNull()?.takeIf { !isDirectory },
+                modifiedEpochMillis = modifiedEpochMillis,
             ),
             isDirectory,
-            lastModifiedEpochMillis = lastModified?.let(::parseDesktopSyncDavTimestamp),
+            lastModifiedEpochMillis = modifiedEpochMillis,
         )
     }
 }

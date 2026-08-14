@@ -226,6 +226,11 @@ internal class DesktopFileSyncEngine(
                     "This folder sync pair belongs to another account.",
                 )
             }
+            if (pair.workItems.none { it.id == workId }) {
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    "That conflict no longer exists. Scan again.",
+                )
+            }
             val resolved = runCatching {
                 resolveFileSyncDecision(current.coordinator, pairId, workId, choice)
             }.getOrElse { failure ->
@@ -241,6 +246,7 @@ internal class DesktopFileSyncEngine(
                 onProgress,
                 shouldContinue,
                 resetExhaustedFailures = true,
+                expectedResolvedWorkId = workId,
             )
         }
     }
@@ -252,6 +258,7 @@ internal class DesktopFileSyncEngine(
         onProgress: (DesktopFileSyncProgressEvent) -> Unit,
         shouldContinue: () -> Boolean,
         resetExhaustedFailures: Boolean,
+        expectedResolvedWorkId: Long? = null,
     ): FileSyncCenterActionResult {
         reclaimDesktopFileSyncStages(stagingRoot)
         var persisted = store.loadPair(pairId)
@@ -290,7 +297,15 @@ internal class DesktopFileSyncEngine(
                 maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
             ),
         )
-        val plannedPair = persisted.coordinator.pairs.single().prepareForDesktopExecution(resetExhaustedFailures)
+        val scannedPair = persisted.coordinator.pairs.single()
+        if (expectedResolvedWorkId != null && !scannedPair.retainsResolvedFileSyncDecision(expectedResolvedWorkId)) {
+            store.savePair(persisted, pairId)
+            return FileSyncCenterActionResult.Rejected(
+                "The conflict changed while you reviewed it. Review the latest device and " +
+                    "Nextcloud details before choosing again.",
+            )
+        }
+        val plannedPair = scannedPair.prepareForDesktopExecution(resetExhaustedFailures)
         persisted = persisted.copy(coordinator = FileSyncCoordinatorState(listOf(plannedPair)))
         store.savePair(persisted, pairId)
 
@@ -707,6 +722,13 @@ internal class DesktopFileSyncEngine(
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
 }
+
+internal fun FileSyncPair.retainsResolvedFileSyncDecision(workId: Long): Boolean =
+    workItems.any { work ->
+        work.id == workId &&
+            work.state == FileSyncExecutionState.Ready &&
+            work.decision?.state is FileSyncDecisionState.Resolved
+    }
 
 internal fun FileSyncPair.prepareForDesktopExecution(resetExhaustedFailures: Boolean): FileSyncPair =
     copy(

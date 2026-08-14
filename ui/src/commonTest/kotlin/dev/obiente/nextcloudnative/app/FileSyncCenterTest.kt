@@ -115,8 +115,20 @@ class FileSyncCenterTest {
                 FileSyncWorkItem(
                     id = 1,
                     relativePath = "note.md",
-                    observedLocal = LocalSyncEntry("note.md", SyncEntryKind.File, "local"),
-                    observedRemote = RemoteSyncEntry("note.md", SyncEntryKind.File, "remote"),
+                    observedLocal = LocalSyncEntry(
+                        "note.md",
+                        SyncEntryKind.File,
+                        "local",
+                        size = 120L,
+                        modifiedEpochMillis = 1_000L,
+                    ),
+                    observedRemote = RemoteSyncEntry(
+                        "note.md",
+                        SyncEntryKind.File,
+                        "remote",
+                        size = 140L,
+                        modifiedEpochMillis = 2_000L,
+                    ),
                     observedBaseline = null,
                     operation = FileSyncOperation.NeedsDecision(
                         "note.md",
@@ -145,6 +157,14 @@ class FileSyncCenterTest {
 
         assertEquals("Vault", summary.localDisplayName)
         assertEquals(1, summary.conflicts.size)
+        assertEquals(
+            FileSyncConflictSideSummary(SyncEntryKind.File, 120L, 1_000L),
+            summary.conflicts.single().local,
+        )
+        assertEquals(
+            FileSyncConflictSideSummary(SyncEntryKind.File, 140L, 2_000L),
+            summary.conflicts.single().remote,
+        )
         assertEquals(0, summary.failedCount)
     }
 

@@ -58,7 +58,7 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
-    fun `changed observations replace a stale resolved decision`() {
+    fun `changed destination replaces a stale resolved decision`() {
         var state = state(baselines = listOf(baseline("note.md", "l1", "r1")))
         state = scanFileSyncPair(
             state,
@@ -82,6 +82,168 @@ class FileSyncCoordinatorTest {
         assertTrue(replacement.id > staleId)
         assertEquals(FileSyncExecutionState.AwaitingDecision, replacement.state)
         assertEquals(FileSyncDecisionState.Pending, replacement.decision?.state)
+    }
+
+    @Test
+    fun `use local follows a newer same-kind source while destination stays unchanged`() {
+        var state = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("note.md", "l1")),
+            listOf(remote("note.md", "r1")),
+            10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.UseLocal)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(local("note.md", "l2")),
+            listOf(remote("note.md", "r1")),
+            20,
+        )
+
+        val rebound = state.pair().workItems.single()
+        assertEquals(workId, rebound.id)
+        assertEquals(FileSyncExecutionState.Ready, rebound.state)
+        assertEquals("l2", rebound.observedLocal?.revision)
+        assertEquals("r1", assertIs<FileSyncOperation.Upload>(rebound.operation).expectedRemoteEtag)
+        assertEquals(
+            FileSyncDecisionState.Resolved(FileSyncDecisionChoice.UseLocal),
+            rebound.decision?.state,
+        )
+    }
+
+    @Test
+    fun `use remote follows a newer same-kind source while destination stays unchanged`() {
+        var state = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("note.md", "l1")),
+            listOf(remote("note.md", "r1")),
+            10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.UseRemote)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(local("note.md", "l1")),
+            listOf(remote("note.md", "r2")),
+            20,
+        )
+
+        val rebound = state.pair().workItems.single()
+        assertEquals(workId, rebound.id)
+        assertEquals(FileSyncExecutionState.Ready, rebound.state)
+        assertEquals("r2", rebound.observedRemote?.etag)
+        assertEquals("l1", assertIs<FileSyncOperation.Download>(rebound.operation).expectedLocalRevision)
+    }
+
+    @Test
+    fun `restore local follows the latest surviving remote source`() {
+        var state = scanFileSyncPair(
+            state(baselines = listOf(baseline("note.md", "l1", "r1"))),
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(remote("note.md", "r1")),
+            nowEpochMillis = 10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.RestoreMissing)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(remote("note.md", "r2")),
+            nowEpochMillis = 20,
+        )
+
+        val rebound = state.pair().workItems.single()
+        assertEquals(workId, rebound.id)
+        assertEquals("r2", rebound.observedRemote?.etag)
+        assertNull(assertIs<FileSyncOperation.Download>(rebound.operation).expectedLocalRevision)
+    }
+
+    @Test
+    fun `restore remote follows the latest surviving local source`() {
+        var state = scanFileSyncPair(
+            state(baselines = listOf(baseline("note.md", "l1", "r1"))),
+            PAIR_ID,
+            localEntries = listOf(local("note.md", "l1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.RestoreMissing)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = listOf(local("note.md", "l2")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 20,
+        )
+
+        val rebound = state.pair().workItems.single()
+        assertEquals(workId, rebound.id)
+        assertEquals("l2", rebound.observedLocal?.revision)
+        assertNull(assertIs<FileSyncOperation.Upload>(rebound.operation).expectedRemoteEtag)
+    }
+
+    @Test
+    fun `keep both requires renewed review when either source changes`() {
+        var state = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("note.md", "l1")),
+            listOf(remote("note.md", "r1")),
+            10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.KeepBoth)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(local("note.md", "l2")),
+            listOf(remote("note.md", "r1")),
+            20,
+        )
+
+        val replacement = state.pair().workItems.single()
+        assertTrue(replacement.id > workId)
+        assertEquals(FileSyncExecutionState.AwaitingDecision, replacement.state)
+        assertEquals(FileSyncDecisionState.Pending, replacement.decision?.state)
+    }
+
+    @Test
+    fun `directional choice requires renewed review when selected source changes type`() {
+        var state = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("note.md", "l1")),
+            listOf(remote("note.md", "r1")),
+            10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.UseLocal)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(LocalSyncEntry("note.md", SyncEntryKind.Directory, "local-directory")),
+            listOf(remote("note.md", "r1")),
+            20,
+        )
+
+        val replacement = state.pair().workItems.single()
+        assertTrue(replacement.id > workId)
+        assertEquals(FileSyncExecutionState.AwaitingDecision, replacement.state)
+        assertEquals(FileSyncDecisionReason.TypeChanged, replacement.decision?.reason)
     }
 
     @Test

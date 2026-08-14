@@ -18,6 +18,7 @@ class FileSyncCoordinatorSnapshotTest {
                     SyncEntryKind.File,
                     "local-2",
                     contentHash = "sha256:" + "11".repeat(32),
+                    modifiedEpochMillis = 1_000L,
                 ),
             ),
             listOf(
@@ -26,6 +27,7 @@ class FileSyncCoordinatorSnapshotTest {
                     SyncEntryKind.File,
                     "remote-2",
                     contentHash = "sha256:" + "22".repeat(32),
+                    modifiedEpochMillis = 2_000L,
                 ),
             ),
             100,

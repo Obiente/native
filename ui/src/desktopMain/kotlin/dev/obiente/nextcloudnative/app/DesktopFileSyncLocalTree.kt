@@ -101,6 +101,7 @@ internal class DesktopFileSyncLocalTree(
                             revision = revision(metadata.value, contentDigest),
                             size = attrs.size().takeIf { kind == SyncEntryKind.File },
                             contentHash = contentDigest?.let { "sha256:$it" },
+                            modifiedEpochMillis = attrs.lastModifiedTime().toMillis(),
                         ),
                         path,
                     )
@@ -134,6 +135,7 @@ internal class DesktopFileSyncLocalTree(
                 revision(metadata.value, contentDigest),
                 attrs.size().takeIf { kind == SyncEntryKind.File },
                 contentDigest?.let { "sha256:$it" },
+                attrs.lastModifiedTime().toMillis(),
             ),
             path,
         )
