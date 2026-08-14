@@ -395,6 +395,34 @@ class DynamicNavigationParameterInheritanceTest {
     }
 
     @Test
+    fun `detail cache merge keeps the live paginated mailbox collection`() {
+        val liveMessages = listOf(
+            NativeRecord("message-3", emptyMap()),
+            NativeRecord("message-2", emptyMap()),
+            NativeRecord("message-1", emptyMap()),
+        )
+        val cachedMessages = listOf(NativeRecord("message-1", emptyMap()))
+        val cachedBody = listOf(NativeRecord("body-1", emptyMap()))
+
+        val merged = mergeDynamicRelatedRecordsPreservingResource(
+            currentRecords = mapOf("messages" to liveMessages),
+            incomingRecords = mapOf("messages" to cachedMessages, "messageBody" to cachedBody),
+            preservedResourceId = "messages",
+        )
+
+        assertEquals(liveMessages, merged["messages"])
+        assertEquals(cachedBody, merged["messageBody"])
+        assertEquals(
+            mapOf("messages" to cachedMessages, "messageBody" to cachedBody),
+            mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = mapOf("messages" to liveMessages),
+                incomingRecords = mapOf("messages" to cachedMessages, "messageBody" to cachedBody),
+                preservedResourceId = null,
+            ),
+        )
+    }
+
+    @Test
     fun `mailbox summary state is cleared before a different mailbox summary loads`() {
         assertTrue(
             shouldRetainDynamicMailboxSummaryState(

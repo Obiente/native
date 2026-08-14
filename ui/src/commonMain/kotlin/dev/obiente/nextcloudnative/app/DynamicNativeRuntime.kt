@@ -1461,6 +1461,7 @@ internal data class DynamicPaginationSpec(
     val expectedPageSize: Int?,
     val recordCursorFieldNames: List<String> = emptyList(),
     val initialPageNumber: Int = 1,
+    val initialOffset: Int = 0,
 ) {
     fun nextValue(
         nextPageNumber: Int,
@@ -1468,7 +1469,7 @@ internal data class DynamicPaginationSpec(
         lastPage: List<NativeRecord> = emptyList(),
     ): String? = when (mode) {
         DynamicPaginationMode.PageNumber -> nextPageNumber.toString()
-        DynamicPaginationMode.Offset -> loadedRecordCount.toString()
+        DynamicPaginationMode.Offset -> (initialOffset.toLong() + loadedRecordCount).toString()
         DynamicPaginationMode.RecordCursor -> lastPage.lastOrNull()?.let { record ->
             recordCursorFieldNames.firstNotNullOfOrNull { expectedName ->
                 (record.values + record.displayValues).entries.firstOrNull { (fieldName, value) ->
@@ -1523,11 +1524,17 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
     } else {
         1
     }
+    val initialOffset = if (mode == DynamicPaginationMode.Offset) {
+        pagingParameter.declaredInitialOffset() ?: return null
+    } else {
+        0
+    }
     return DynamicPaginationSpec(
         parameterName = pagingParameter.name,
         mode = mode,
         expectedPageSize = pageSize,
         initialPageNumber = initialPageNumber,
+        initialOffset = initialOffset,
     )
 }
 
@@ -1585,7 +1592,11 @@ private fun DynamicAction.verifiedRecordCursorPaginationSpec(): DynamicPaginatio
     )
 }
 
-private fun HttpParameter.declaredInitialPageNumber(): Int? {
+private fun HttpParameter.declaredInitialPageNumber(): Int? = declaredInitialInteger(fallback = 1)
+
+private fun HttpParameter.declaredInitialOffset(): Int? = declaredInitialInteger(fallback = 0)
+
+private fun HttpParameter.declaredInitialInteger(fallback: Int): Int? {
     val objectSchema = schema as? JsonObject ?: return null
     fun exactInteger(name: String): Int? {
         val element = objectSchema[name] ?: return null
@@ -1613,7 +1624,7 @@ private fun HttpParameter.declaredInitialPageNumber(): Int? {
     }
     val declaredDefault = exactInteger("default")
     val declaredMinimum = exactInteger("minimum")
-    val start = declaredDefault ?: 1
+    val start = declaredDefault ?: fallback
     val declaredMaximum = exactInteger("maximum")
     if (start < 0) return null
     if (declaredMinimum != null && start < declaredMinimum) return null

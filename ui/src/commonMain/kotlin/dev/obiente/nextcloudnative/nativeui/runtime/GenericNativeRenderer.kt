@@ -10484,6 +10484,12 @@ private fun GenericRelationPagingItem(paging: NativeRelatedRecordPaging?) {
             onClick = loadMore,
         )
     }
+    paging.retry?.let { retry ->
+        DropdownMenuItem(
+            text = { Text("Retry loading choices") },
+            onClick = retry,
+        )
+    }
     paging.returnToFirstPage?.let { returnToFirstPage ->
         DropdownMenuItem(
             text = {

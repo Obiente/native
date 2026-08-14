@@ -829,6 +829,34 @@ class DynamicNativeRuntimeTest {
         assertEquals(DynamicPaginationMode.Offset, offset.mode)
         assertEquals("75", offset.nextValue(nextPageNumber = 3, loadedRecordCount = 75))
         assertTrue(offset.canContinue(lastPageSize = 20))
+        val nonzeroOffset = requireNotNull(
+            offsetAction.copy(
+                binding = offsetAction.binding.copy(
+                    queryParameters = listOf(
+                        integerParameter("offset").copy(
+                            schema = json.parseToJsonElement(
+                                """{"type":"integer","default":100,"minimum":0}""",
+                            ),
+                        ),
+                    ),
+                ),
+            ).dynamicPaginationSpec(),
+        )
+        assertEquals(100, nonzeroOffset.initialOffset)
+        assertEquals("150", nonzeroOffset.nextValue(nextPageNumber = 2, loadedRecordCount = 50))
+        assertNull(
+            offsetAction.copy(
+                binding = offsetAction.binding.copy(
+                    queryParameters = listOf(
+                        integerParameter("offset").copy(
+                            schema = json.parseToJsonElement(
+                                """{"type":"integer","minimum":50}""",
+                            ),
+                        ),
+                    ),
+                ),
+            ).dynamicPaginationSpec(),
+        )
         assertNull(
             readAction().copy(
                 binding = readAction().binding.copy(queryParameters = listOf(integerParameter("cursor"))),

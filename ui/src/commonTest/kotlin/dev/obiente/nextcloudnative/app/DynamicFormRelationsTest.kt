@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.withCollectionBatchRelationR
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -342,6 +343,34 @@ class DynamicFormRelationsTest {
 
         assertEquals(1, firstPage.continuation(request)?.nextPageNumber)
         assertEquals("1", firstPage.continuation(request)?.nextRequestValue)
+    }
+
+    @Test
+    fun `partial first relation page offers a retry without a continuation`() {
+        assertTrue(
+            shouldOfferInitialDynamicRelationRetry(
+                hasContinuation = false,
+                loading = false,
+                error = "Could not load every choice.",
+                discardedRecordCount = 0,
+            ),
+        )
+        assertFalse(
+            shouldOfferInitialDynamicRelationRetry(
+                hasContinuation = true,
+                loading = false,
+                error = "Could not load more choices.",
+                discardedRecordCount = 0,
+            ),
+        )
+        assertFalse(
+            shouldOfferInitialDynamicRelationRetry(
+                hasContinuation = false,
+                loading = true,
+                error = "Could not load every choice.",
+                discardedRecordCount = 0,
+            ),
+        )
     }
 
     @Test

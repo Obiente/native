@@ -633,6 +633,13 @@ internal data class DynamicFormRelationContinuation(
     val loadedRecordCount: Int,
 )
 
+internal fun shouldOfferInitialDynamicRelationRetry(
+    hasContinuation: Boolean,
+    loading: Boolean,
+    error: String?,
+    discardedRecordCount: Int,
+): Boolean = error != null && !hasContinuation && !loading && discardedRecordCount == 0
+
 private data class DynamicFormRelationLoadResult(
     val records: List<NativeRecord>,
     val pagination: DynamicPaginationSpec?,
@@ -3876,11 +3883,11 @@ private fun DynamicDiscoveredAppScreen(
             null
         }
         if (freshSnapshot != null) {
-            recordsByResourceId = if (retainedMailPagination == null) {
-                freshSnapshot.relatedRecords
-            } else {
-                recordsByResourceId + freshSnapshot.relatedRecords
-            }
+            recordsByResourceId = mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = recordsByResourceId,
+                incomingRecords = freshSnapshot.relatedRecords,
+                preservedResourceId = retainedMailPagination?.resourceId,
+            )
             viewState = NativeScreenState.Ready(freshSnapshot.records)
             if (retainedMailPagination == null) {
                 paginationState = freshSnapshot.pagination?.let { checkpoint ->
@@ -3903,11 +3910,11 @@ private fun DynamicDiscoveredAppScreen(
         }
         val staleSnapshot = if (loadAttempt == 0) sharedDynamicNativeMemoryCache.screen(cacheKey) else null
         if (staleSnapshot != null) {
-            recordsByResourceId = if (retainedMailPagination == null) {
-                staleSnapshot.relatedRecords
-            } else {
-                recordsByResourceId + staleSnapshot.relatedRecords
-            }
+            recordsByResourceId = mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = recordsByResourceId,
+                incomingRecords = staleSnapshot.relatedRecords,
+                preservedResourceId = retainedMailPagination?.resourceId,
+            )
             viewState = NativeScreenState.Ready(staleSnapshot.records)
         }
         val composite = view.compositeDataGrid
@@ -4170,6 +4177,45 @@ private fun DynamicDiscoveredAppScreen(
             val loading = request.cacheKey in loadingFormRelationPageKeys
             val discardedRecordCount = formRelationCache.discardedRecordCount(request)
             val error = formRelationPageErrors[request.cacheKey]
+            val reloadInitialPage = {
+                if (request.cacheKey !in loadingFormRelationPageKeys) {
+                    loadingFormRelationPageKeys += request.cacheKey
+                    formRelationPageErrors -= request.cacheKey
+                    formRelationPageScope.launch {
+                        runCatching {
+                            loadInitialDynamicFormRelationRecords(
+                                services = services,
+                                session = session,
+                                descriptor = descriptor,
+                                request = request,
+                                values = formRelationValues,
+                                cachePolicy = dynamicReadCachePolicy,
+                            )
+                        }.onSuccess { result ->
+                            formRelationCache = formRelationCache.loadSucceeded(
+                                request = request,
+                                records = result.records,
+                                pagination = result.pagination,
+                            )
+                            formRelationPageErrors = if (result.partialFailureMessage == null) {
+                                formRelationPageErrors - request.cacheKey
+                            } else {
+                                formRelationPageErrors.putBounded(
+                                    request.cacheKey,
+                                    result.partialFailureMessage,
+                                )
+                            }
+                        }.onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            formRelationPageErrors = formRelationPageErrors.putBounded(
+                                request.cacheKey,
+                                failure.message ?: "Could not reload choices.",
+                            )
+                        }
+                        loadingFormRelationPageKeys -= request.cacheKey
+                    }
+                }
+            }
             if (
                 continuation == null &&
                 error == null &&
@@ -4225,47 +4271,15 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     }
                 },
-                returnToFirstPage = discardedRecordCount.takeIf { count -> count > 0 && !loading }?.let {
-                    {
-                        if (request.cacheKey !in loadingFormRelationPageKeys) {
-                            loadingFormRelationPageKeys += request.cacheKey
-                            formRelationPageErrors -= request.cacheKey
-                            formRelationPageScope.launch {
-                                runCatching {
-                                    loadInitialDynamicFormRelationRecords(
-                                        services = services,
-                                        session = session,
-                                        descriptor = descriptor,
-                                        request = request,
-                                        values = formRelationValues,
-                                        cachePolicy = dynamicReadCachePolicy,
-                                    )
-                                }.onSuccess { result ->
-                                    formRelationCache = formRelationCache.loadSucceeded(
-                                        request = request,
-                                        records = result.records,
-                                        pagination = result.pagination,
-                                    )
-                                    formRelationPageErrors = if (result.partialFailureMessage == null) {
-                                        formRelationPageErrors - request.cacheKey
-                                    } else {
-                                        formRelationPageErrors.putBounded(
-                                            request.cacheKey,
-                                            result.partialFailureMessage,
-                                        )
-                                    }
-                                }.onFailure { failure ->
-                                    if (failure is CancellationException) throw failure
-                                    formRelationPageErrors = formRelationPageErrors.putBounded(
-                                        request.cacheKey,
-                                        failure.message ?: "Could not return to the first choices.",
-                                    )
-                                }
-                                loadingFormRelationPageKeys -= request.cacheKey
-                            }
-                        }
-                    }
+                retry = reloadInitialPage.takeIf {
+                    shouldOfferInitialDynamicRelationRetry(
+                        hasContinuation = continuation != null,
+                        loading = loading,
+                        error = error,
+                        discardedRecordCount = discardedRecordCount,
+                    )
                 },
+                returnToFirstPage = reloadInitialPage.takeIf { discardedRecordCount > 0 && !loading },
             )
         }.toMap()
     }
@@ -6780,6 +6794,17 @@ internal fun preferredDynamicPartialRefreshRecords(
 ): List<NativeRecord> = staleRecords
     ?.takeIf { records -> partialFailureMessage != null && records.isNotEmpty() }
     ?: freshRecords
+
+internal fun mergeDynamicRelatedRecordsPreservingResource(
+    currentRecords: Map<String, List<NativeRecord>>,
+    incomingRecords: Map<String, List<NativeRecord>>,
+    preservedResourceId: String?,
+): Map<String, List<NativeRecord>> {
+    if (preservedResourceId == null) return incomingRecords
+    val preservedRecords = currentRecords[preservedResourceId]
+        ?: return currentRecords + incomingRecords
+    return currentRecords + incomingRecords + (preservedResourceId to preservedRecords)
+}
 
 private fun DynamicPaginationState.toCheckpoint(): DynamicPaginationCheckpoint = DynamicPaginationCheckpoint(
     nextPageNumber = nextPageNumber,

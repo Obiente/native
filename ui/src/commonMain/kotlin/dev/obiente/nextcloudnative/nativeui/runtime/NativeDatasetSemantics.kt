@@ -221,6 +221,7 @@ data class NativeRelatedRecordPaging(
     val error: String? = null,
     val discardedChoiceCount: Int = 0,
     val loadMore: (() -> Unit)? = null,
+    val retry: (() -> Unit)? = null,
     val returnToFirstPage: (() -> Unit)? = null,
 ) {
     init {
