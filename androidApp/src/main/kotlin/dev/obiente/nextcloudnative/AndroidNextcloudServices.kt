@@ -740,7 +740,7 @@ internal class AndroidNextcloudServices(
         if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) {
             return@withContext false
         }
-        synchronized(durableMutationRecoveryLock) {
+        synchronized(androidDurableMutationRecoveryLock) {
             val key = durableMutationRecoveryKey(accountScope, kind)
             if (preferences.contains(key)) return@synchronized false
             preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
@@ -757,7 +757,7 @@ internal class AndroidNextcloudServices(
             expectedEncoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES
         ) return@withContext false
         val key = durableMutationRecoveryKey(accountScope, kind)
-        synchronized(durableMutationRecoveryLock) {
+        synchronized(androidDurableMutationRecoveryLock) {
             val actual = preferences.getString(key, null) ?: return@synchronized true
             if (actual != expectedEncoded) return@synchronized false
             preferences.edit().remove(key).commit() && !preferences.contains(key)
@@ -768,8 +768,6 @@ internal class AndroidNextcloudServices(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): String = "durable-mutation-${kind.storageKey}-$accountScope"
-
-    private val durableMutationRecoveryLock = Any()
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
@@ -4047,6 +4045,7 @@ private fun org.w3c.dom.Node.systemTagFirstText(namespace: String, localName: St
 private const val SYSTEM_TAG_DAV_NAMESPACE = "DAV:"
 private const val SYSTEM_TAG_OC_NAMESPACE = "http://owncloud.org/ns"
 private const val SYSTEM_TAG_NC_NAMESPACE = "http://nextcloud.org/ns"
+private val androidDurableMutationRecoveryLock = Any()
 private const val MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 64
 private const val MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 4_096
         private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v4"
