@@ -783,11 +783,12 @@ internal data class ContactDraft(
     val notes: String,
 ) {
     fun normalizedForDav(): ContactDraft = copy(
+        name = name.normalizeGroupwareTextLineEndings(),
         email = email.trim(),
-        phone = phone.trim(),
-        organization = organization.trim(),
-        address = address.trim(),
-        notes = notes.trim(),
+        phone = phone.trim().normalizeGroupwareTextLineEndings(),
+        organization = organization.trim().normalizeGroupwareTextLineEndings(),
+        address = address.trim().normalizeGroupwareTextLineEndings(),
+        notes = notes.trim().normalizeGroupwareTextLineEndings(),
     )
 }
 
@@ -804,7 +805,7 @@ internal sealed interface ContactMutationPostcondition {
         val previousEtag: String?,
         val draft: ContactDraft,
         val expectedPrimaryEmail: String = draft.email.trim(),
-        val expectedPrimaryPhone: String = draft.phone.trim(),
+        val expectedPrimaryPhone: String = draft.phone.trim().normalizeGroupwareTextLineEndings(),
     ) : ContactMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false

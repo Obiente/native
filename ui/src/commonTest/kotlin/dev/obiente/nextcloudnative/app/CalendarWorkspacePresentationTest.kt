@@ -273,6 +273,31 @@ class CalendarWorkspacePresentationTest {
             body = overrideBeforeMasterLines.joinToString("\r\n", postfix = "\r\n").encodeToByteArray(),
         )
         assertTrue(upsert.isSatisfiedBy(overrideBeforeUpdatedMaster))
+        val normalizedLineEndingDraft = draft.copy(
+            title = "Planning\rseries",
+            location = "Team\r\nroom",
+            description = "Line one\r\nLine two\rLine three",
+        )
+        val normalizedLineEndingResponse = updated.copy(
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = normalizedLineEndingDraft.title,
+                start = normalizedLineEndingDraft.startValue(),
+                end = normalizedLineEndingDraft.endValue(),
+                allDay = normalizedLineEndingDraft.allDay,
+                location = normalizedLineEndingDraft.location,
+                description = normalizedLineEndingDraft.description,
+            ).encodeToByteArray(),
+        )
+        assertTrue(
+            CalendarMutationPostcondition.Upsert(
+                href,
+                "/remote.php/dav/calendars/synthetic/team/",
+                "planning",
+                "\"old\"",
+                normalizedLineEndingDraft,
+            ).isSatisfiedBy(normalizedLineEndingResponse),
+        )
         val blankOptionalDraft = draft.copy(location = "   ", description = "\t")
         val blankOptionalResponse = updated.copy(
             body = createGroupwareCalendarEventContent(

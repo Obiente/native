@@ -1115,7 +1115,11 @@ private fun String.unfoldCalendarLines(): List<String> {
     return result
 }
 
-private fun String.escapeCalendarText(): String = replace("\\", "\\\\")
+internal fun String.normalizeGroupwareTextLineEndings(): String =
+    replace("\r\n", "\n").replace('\r', '\n')
+
+private fun String.escapeCalendarText(): String = normalizeGroupwareTextLineEndings()
+    .replace("\\", "\\\\")
     .replace("\n", "\\n")
     .replace(",", "\\,")
     .replace(";", "\\;")

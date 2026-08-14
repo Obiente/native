@@ -123,9 +123,9 @@ class GroupwareDavTest {
             name = "Alex Example",
             email = "  alex@example.test  ",
             phone = "  +31 6 123  ",
-            organization = "  Example  ",
-            address = "  Suite A; Building B  ",
-            notes = "  Planning contact  ",
+            organization = "  Example\r\nStudio  ",
+            address = "  Suite A; Building B\rFloor 2  ",
+            notes = "  Planning\r\ncontact\rFollow-up  ",
         )
         val response = NextcloudApiResponse(
             status = 200,
@@ -152,13 +152,22 @@ class GroupwareDavTest {
             ).isSatisfiedBy(response),
         )
         assertEquals(
-            "Suite A; Building B",
+            "Suite A; Building B\nFloor 2",
             parseGroupwareContact(
                 addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
                 href = href,
                 etag = response.etag,
                 content = response.body.decodeToString(),
             )?.address,
+        )
+        assertEquals(
+            "Planning\ncontact\nFollow-up",
+            parseGroupwareContact(
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                href = href,
+                etag = response.etag,
+                content = response.body.decodeToString(),
+            )?.notes,
         )
     }
 

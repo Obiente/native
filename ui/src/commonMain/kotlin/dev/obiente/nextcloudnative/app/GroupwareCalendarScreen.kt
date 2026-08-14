@@ -1347,8 +1347,9 @@ internal data class EventDraft(
     val recurrenceRule: String?,
 ) {
     fun normalizedForDav(): EventDraft = copy(
-        location = location.takeUnless(String::isBlank).orEmpty(),
-        description = description.takeUnless(String::isBlank).orEmpty(),
+        title = title.normalizeGroupwareTextLineEndings(),
+        location = location.takeUnless(String::isBlank).orEmpty().normalizeGroupwareTextLineEndings(),
+        description = description.takeUnless(String::isBlank).orEmpty().normalizeGroupwareTextLineEndings(),
         recurrenceRule = recurrenceRule?.trim()?.takeUnless(String::isBlank),
     )
 
