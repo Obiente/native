@@ -5339,10 +5339,30 @@ class DesktopNextcloudServices(
         }
 
     override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val result = loadNoteConditionally(session, noteId, expectedEtag = null)) {
-            is NextcloudConditionalRead.Modified -> result.value
-            NextcloudConditionalRead.NotModified -> error("An unconditional note read returned not modified.")
+        when (val presence = inspectNotePresence(session, noteId)) {
+            NextcloudNotePresence.Absent -> error("The note no longer exists.")
+            is NextcloudNotePresence.Present -> presence.note
         }
+
+    override suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
+        require(noteId >= 0L) { "The note ID is invalid." }
+        val response = request(
+            "GET",
+            session.serverUrl + notesDetailRelativePath(noteId),
+            session,
+        )
+        if (response.status == 404 || response.status == 410) {
+            return@withContext NextcloudNotePresence.Absent
+        }
+        check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
+        val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
+            "The note response is invalid."
+        }
+        NextcloudNotePresence.Present(note)
+    }
 
     override suspend fun loadNoteConditionally(
         session: NextcloudSession,

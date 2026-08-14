@@ -384,6 +384,11 @@ data class NextcloudNote(
     val isShared: Boolean = false,
 )
 
+sealed interface NextcloudNotePresence {
+    data class Present(val note: NextcloudNote) : NextcloudNotePresence
+    data object Absent : NextcloudNotePresence
+}
+
 sealed interface NextcloudConditionalRead<out T> {
     data class Modified<T>(
         val value: T,
@@ -1420,6 +1425,12 @@ interface NextcloudPlatformServices {
         NextcloudConditionalRead.Modified(listNotes(session), responseEtag = null)
 
     suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote
+
+    /** Returns [Absent] only when an authoritative detail request answers 404 or 410. */
+    suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = NextcloudNotePresence.Present(loadNote(session, noteId))
 
     suspend fun loadNoteConditionally(
         session: NextcloudSession,

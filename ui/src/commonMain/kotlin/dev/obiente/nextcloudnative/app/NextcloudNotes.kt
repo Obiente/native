@@ -170,18 +170,17 @@ internal fun NextcloudNotesScreen(
         error = null
         refreshing = true
         val cachedEtag = notes?.let { sharedNextcloudNotesCache.listEtag(session) }
-        runCatching { services.listNotesConditionally(session, cachedEtag) }
-            .onSuccess { result ->
-                when (result) {
-                    is NextcloudConditionalRead.Modified -> {
-                        notes = result.value
-                        sharedNextcloudNotesCache.storeList(session, result.value, result.responseEtag)
-                    }
-                    NextcloudConditionalRead.NotModified -> Unit
+        runCatching {
+            when (val result = services.listNotesConditionally(session, cachedEtag)) {
+                is NextcloudConditionalRead.Modified -> {
+                    notes = result.value
+                    sharedNextcloudNotesCache.storeList(session, result.value, result.responseEtag)
                 }
-                deletionRecovery?.let { recovery ->
-                    val pending = notes.orEmpty().firstOrNull { note -> note.id == recovery.noteId }
-                    if (pending == null) {
+                NextcloudConditionalRead.NotModified -> Unit
+            }
+            deletionRecovery?.let { recovery ->
+                when (val presence = services.inspectNotePresence(session, recovery.noteId)) {
+                    NextcloudNotePresence.Absent -> {
                         if (services.clearDurableMutationRecovery(
                                 accountScope,
                                 DurableMutationRecoveryKind.NoteDeletion,
@@ -192,13 +191,17 @@ internal fun NextcloudNotesScreen(
                         } else {
                             error = "The verified note-deletion recovery record could not be cleared. Free local storage and retry."
                         }
-                    } else {
-                        onOpenNote(pending)
+                    }
+                    is NextcloudNotePresence.Present -> {
+                        sharedNextcloudNotesCache.storeDetail(session, presence.note)
+                        onOpenNote(presence.note)
                     }
                 }
             }
-            .onFailure {
-                error = it.message ?: "Could not load Notes."
+        }
+            .onFailure { failure ->
+                if (failure is CancellationException) throw failure
+                error = failure.message ?: "Could not load Notes."
                 if (deletionRecoveryState != null) showRecoveryOptions = true
             }
         refreshing = false
@@ -869,26 +872,28 @@ internal fun NextcloudNoteEditor(
         showDeleteConfirmation = true
         deleting = true
         try {
-            val remoteNotes = services.listNotes(session)
-            sharedNextcloudNotesCache.storeList(session, remoteNotes)
-            if (remoteNotes.none { remote -> remote.id == recovery.noteId }) {
-                if (services.clearDurableMutationRecovery(
-                        accountScope,
-                        DurableMutationRecoveryKind.NoteDeletion,
-                    )
-                ) {
-                    deletionRecoveryState = null
-                    sharedNextcloudNotesCache.remove(session, recovery.noteId)
-                    completeVerifiedNoteDeletion(
-                        onDeletingChanged = { deleting = it },
-                        onMutationInProgressChanged = onMutationInProgressChanged,
-                        onBack = onBack,
-                    )
-                } else {
-                    deleteError = "The verified note-deletion recovery record could not be cleared. Free local storage and retry."
+            when (val presence = services.inspectNotePresence(session, recovery.noteId)) {
+                NextcloudNotePresence.Absent -> {
+                    if (services.clearDurableMutationRecovery(
+                            accountScope,
+                            DurableMutationRecoveryKind.NoteDeletion,
+                        )
+                    ) {
+                        deletionRecoveryState = null
+                        sharedNextcloudNotesCache.remove(session, recovery.noteId)
+                        completeVerifiedNoteDeletion(
+                            onDeletingChanged = { deleting = it },
+                            onMutationInProgressChanged = onMutationInProgressChanged,
+                            onBack = onBack,
+                        )
+                    } else {
+                        deleteError = "The verified note-deletion recovery record could not be cleared. Free local storage and retry."
+                    }
                 }
-            } else {
-                deleteError = "The previous deletion was not confirmed by the server. Retry it before leaving this note."
+                is NextcloudNotePresence.Present -> {
+                    sharedNextcloudNotesCache.storeDetail(session, presence.note)
+                    deleteError = "The previous deletion was not confirmed by the server. Retry it before leaving this note."
+                }
             }
         } catch (failure: CancellationException) {
             throw failure
@@ -1313,29 +1318,31 @@ internal fun NextcloudNoteEditor(
                                 requestFailure = failure.message ?: "The delete request did not complete."
                             }
                             try {
-                                val remoteNotes = services.listNotes(session)
-                                sharedNextcloudNotesCache.storeList(session, remoteNotes)
-                                if (remoteNotes.none { remote -> remote.id == loaded.id }) {
-                                    if (!services.clearDurableMutationRecovery(
-                                            accountScope,
-                                            DurableMutationRecoveryKind.NoteDeletion,
+                                when (val presence = services.inspectNotePresence(session, loaded.id)) {
+                                    NextcloudNotePresence.Absent -> {
+                                        if (!services.clearDurableMutationRecovery(
+                                                accountScope,
+                                                DurableMutationRecoveryKind.NoteDeletion,
+                                            )
+                                        ) {
+                                            deleteError = "The deletion was verified, but its recovery record could not be cleared. Free local storage and retry."
+                                            return@launch
+                                        }
+                                        deletionRecoveryState = null
+                                        sharedNextcloudNotesCache.remove(session, note.id)
+                                        showDeleteConfirmation = false
+                                        completeVerifiedNoteDeletion(
+                                            onDeletingChanged = { deleting = it },
+                                            onMutationInProgressChanged = onMutationInProgressChanged,
+                                            onBack = onBack,
                                         )
-                                    ) {
-                                        deleteError = "The deletion was verified, but its recovery record could not be cleared. Free local storage and retry."
-                                        return@launch
                                     }
-                                    deletionRecoveryState = null
-                                    sharedNextcloudNotesCache.remove(session, note.id)
-                                    showDeleteConfirmation = false
-                                    completeVerifiedNoteDeletion(
-                                        onDeletingChanged = { deleting = it },
-                                        onMutationInProgressChanged = onMutationInProgressChanged,
-                                        onBack = onBack,
-                                    )
-                                } else {
-                                    deleteError = requestFailure
-                                        ?: "The deletion has not appeared on the server yet. Retry it before leaving this note."
-                                    loadAttempt += 1
+                                    is NextcloudNotePresence.Present -> {
+                                        sharedNextcloudNotesCache.storeDetail(session, presence.note)
+                                        deleteError = requestFailure
+                                            ?: "The deletion has not appeared on the server yet. Retry it before leaving this note."
+                                        loadAttempt += 1
+                                    }
                                 }
                             } catch (failure: CancellationException) {
                                 throw failure

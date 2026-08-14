@@ -159,11 +159,14 @@ private data class ResolvedAccountLink(
 private data class ParsedWebUrl(
     val scheme: String,
     val authority: String,
+    val normalizedAuthority: String,
     val path: String,
     val suffix: String,
 ) {
-    val origin: String = "$scheme://${normalizedAuthority(scheme, authority)}"
+    val origin: String = "$scheme://$normalizedAuthority"
 }
+
+private data class ParsedAuthority(val host: String, val port: Int?)
 
 private data class ParsedRelativeAccountLink(
     val pathSegments: List<String>,
@@ -200,11 +203,23 @@ private fun resolveAccountLink(serverUrl: String, link: String): ResolvedAccount
     val serverPath = server.path.trimEnd('/').takeUnless { it == "/" }.orEmpty()
     if (link.startsWith('/')) {
         if (link.startsWith("//")) return null
-        val relative = link
+        val linkPath = link.substringBefore('?').substringBefore('#')
+        val linkSuffix = link.removePrefix(linkPath)
+        val alreadyIncludesServerPath = serverPath.isNotEmpty() &&
+            (linkPath == serverPath || linkPath.startsWith("$serverPath/"))
+        val relative = if (alreadyIncludesServerPath) {
+            linkPath.removePrefix(serverPath).ifEmpty { "/" } + linkSuffix
+        } else {
+            link
+        }
         return ResolvedAccountLink(
             sameAccount = true,
             relativeUrl = relative,
-            browserUrl = "${server.scheme}://${server.authority}$serverPath$relative",
+            browserUrl = if (alreadyIncludesServerPath) {
+                "${server.scheme}://${server.authority}$link"
+            } else {
+                "${server.scheme}://${server.authority}$serverPath$link"
+            },
         )
     }
 
@@ -239,20 +254,62 @@ private fun parseWebUrl(value: String): ParsedWebUrl? {
         .let { if (it < 0) value.length else it }
     val authority = value.substring(authorityStart, authorityEnd)
     if (authority.isBlank() || '@' in authority || authority == "." || authority == "..") return null
+    val parsedAuthority = parseAuthority(authority) ?: return null
     val remainder = value.substring(authorityEnd)
     val path = remainder.substringBefore('?').substringBefore('#').ifEmpty { "/" }
     if (!path.startsWith('/')) return null
     val suffix = remainder.removePrefix(path.takeUnless { remainder.startsWith('?') || remainder.startsWith('#') }.orEmpty())
-    return ParsedWebUrl(scheme, authority, path, suffix)
+    return ParsedWebUrl(
+        scheme = scheme,
+        authority = authority,
+        normalizedAuthority = normalizedAuthority(scheme, parsedAuthority),
+        path = path,
+        suffix = suffix,
+    )
 }
 
-private fun normalizedAuthority(scheme: String, authority: String): String {
-    val lowered = authority.lowercase()
-    return when {
-        scheme == "https" && lowered.endsWith(":443") -> lowered.removeSuffix(":443")
-        scheme == "http" && lowered.endsWith(":80") -> lowered.removeSuffix(":80")
-        else -> lowered
+private fun parseAuthority(authority: String): ParsedAuthority? {
+    val host: String
+    val portText: String?
+    if (authority.startsWith('[')) {
+        val closingBracket = authority.indexOf(']')
+        if (closingBracket <= 1 || authority.indexOf('[', startIndex = 1) >= 0) return null
+        host = authority.substring(0, closingBracket + 1)
+        val remainder = authority.substring(closingBracket + 1)
+        portText = when {
+            remainder.isEmpty() -> null
+            remainder.startsWith(':') -> remainder.drop(1).takeIf(String::isNotEmpty)
+            else -> return null
+        }
+        val literal = host.substring(1, host.lastIndex)
+        if (literal.any { character ->
+                character !in '0'..'9' && character.lowercaseChar() !in 'a'..'f' &&
+                    character != ':' && character != '.'
+            }
+        ) return null
+    } else {
+        if ('[' in authority || ']' in authority || authority.count { it == ':' } > 1) return null
+        val separator = authority.indexOf(':')
+        host = if (separator >= 0) authority.substring(0, separator) else authority
+        portText = if (separator >= 0) authority.substring(separator + 1).takeIf(String::isNotEmpty) else null
+        if (separator >= 0 && portText == null) return null
+        if (host.isBlank() || host.startsWith('.') || host.endsWith('.') || ".." in host) return null
+        if (host.any { it.isWhitespace() || it.isISOControl() || it == '/' || it == '\\' }) return null
     }
+    val port = portText?.takeIf { text -> text.all(Char::isDigit) }
+        ?.toIntOrNull()
+        ?.takeIf { it in 1..65_535 }
+        ?: if (portText == null) null else return null
+    return ParsedAuthority(host.lowercase(), port)
+}
+
+private fun normalizedAuthority(scheme: String, authority: ParsedAuthority): String {
+    val defaultPort = when (scheme) {
+        "https" -> 443
+        "http" -> 80
+        else -> null
+    }
+    return authority.host + authority.port?.takeUnless { it == defaultPort }?.let { ":$it" }.orEmpty()
 }
 
 private fun parseRelativeAccountLink(value: String): ParsedRelativeAccountLink? {

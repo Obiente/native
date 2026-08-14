@@ -93,6 +93,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileMutation
 import dev.obiente.nextcloudnative.app.NextcloudFileMutationResult
 import dev.obiente.nextcloudnative.app.NativeMediaCollectionTransportRequest
 import dev.obiente.nextcloudnative.app.NextcloudNote
+import dev.obiente.nextcloudnative.app.NextcloudNotePresence
 import dev.obiente.nextcloudnative.app.createNoteRequest
 import dev.obiente.nextcloudnative.app.deleteNoteRequest
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
@@ -2935,17 +2936,30 @@ internal class AndroidNextcloudServices(
             }.sortedWith(compareByDescending<NextcloudNote> { it.favorite }.thenByDescending { it.modified })
         }
 
-    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        withContext(Dispatchers.IO) {
+    override suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
             require(noteId >= 0L) { "The note ID is invalid." }
             val response = request(
                 method = "GET",
                 url = session.serverUrl + "/index.php/apps/notes/api/v1/notes/$noteId",
                 session = session,
             )
-            check(response.status != 404) { "The note no longer exists." }
+            if (response.status == 404 || response.status == 410) {
+                return@withContext NextcloudNotePresence.Absent
+            }
             check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
-            requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) { "The note response is invalid." }
+            val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
+                "The note response is invalid."
+            }
+            NextcloudNotePresence.Present(note)
+        }
+
+    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
+        when (val presence = inspectNotePresence(session, noteId)) {
+            NextcloudNotePresence.Absent -> error("The note no longer exists.")
+            is NextcloudNotePresence.Present -> presence.note
         }
 
     override suspend fun updateNote(

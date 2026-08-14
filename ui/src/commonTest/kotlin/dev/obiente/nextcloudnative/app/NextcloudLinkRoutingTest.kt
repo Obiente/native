@@ -21,6 +21,22 @@ class NextcloudLinkRoutingTest {
     }
 
     @Test
+    fun webrootPrefixedRelativeLinksAreNotPrefixedTwice() {
+        val destination = assertIs<NextcloudLinkDestination.App>(
+            nextcloudLinkDestination(
+                session,
+                "/nextcloud/index.php/apps/calendar/",
+            ),
+        )
+
+        assertEquals("calendar", destination.appId)
+        assertEquals(
+            "https://cloud.example.test/nextcloud/index.php/apps/calendar/",
+            destination.browserUrl,
+        )
+    }
+
+    @Test
     fun shortFileLinksWithServerDefinedSuffixesRetainBrowserFallbacks() {
         listOf(
             "/f/904?download=1",
@@ -197,10 +213,32 @@ class NextcloudLinkRoutingTest {
             "/index.php//apps/calendar/",
             "https://cloud.example.test/nextcloud/f//42",
             "https://person@cloud.example.test/nextcloud/f/42",
+            "https://cloud.example.test:443:8443/nextcloud/f/42",
             "javascript:alert(1)",
         ).forEach { link ->
             assertIs<NextcloudLinkDestination.Rejected>(nextcloudLinkDestination(session, link), link)
         }
+    }
+
+    @Test
+    fun malformedAuthoritiesCannotNormalizeToCustomPortAccounts() {
+        val customPortSession = session.copy(serverUrl = "https://cloud.example.test:8443/nextcloud")
+
+        assertIs<NextcloudLinkDestination.Rejected>(
+            nextcloudLinkDestination(
+                customPortSession,
+                "https://cloud.example.test:8443:443/nextcloud/f/42",
+            ),
+        )
+        assertEquals(
+            42L,
+            assertIs<NextcloudLinkDestination.FileId>(
+                nextcloudLinkDestination(
+                    customPortSession,
+                    "https://cloud.example.test:8443/nextcloud/f/42",
+                ),
+            ).value,
+        )
     }
 
     @Test
