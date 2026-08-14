@@ -573,7 +573,7 @@ class DynamicNavigationPlannerTest {
     fun `verified record execute binds declared body identity only after record selection`() {
         val listInvitations = action(
             id = "list-invitations",
-            resourceId = "invitations",
+            resourceId = "invites",
             intent = ActionIntent.list,
         ).copy(
             confidence = Confidence.verified,
@@ -638,12 +638,15 @@ class DynamicNavigationPlannerTest {
             ),
             confidence = Confidence.verified,
         )
-        val invitationLayout = layout("invitations", listInvitations.id).copy(
+        val invitationLayout = layout("invites", listInvitations.id).copy(
             confidence = Confidence.verified,
         )
         val descriptor = hierarchyDescriptor().copy(
             app = AppIdentity("chores", "Chores", "0.1.0"),
-            resources = listOf(resource("invitations").copy(confidence = Confidence.verified)),
+            resources = listOf(
+                resource("invites").copy(confidence = Confidence.verified),
+                resource("invitations").copy(confidence = Confidence.verified),
+            ),
             layouts = listOf(invitationLayout),
             links = emptyList(),
             forms = listOf(invitationForm),
@@ -655,7 +658,7 @@ class DynamicNavigationPlannerTest {
             descriptor.copy(app = AppIdentity("shared-work", "Shared work", "test"))
                 .planDynamicNavigation(
                     DynamicResourceRecordContext(
-                        resourceId = "invitations",
+                        resourceId = "invites",
                         recordId = "invite-7",
                         fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
                         currentLayoutId = invitationLayout.id,
@@ -664,7 +667,7 @@ class DynamicNavigationPlannerTest {
         )
         val contextual = descriptor.planDynamicNavigation(
             DynamicResourceRecordContext(
-                resourceId = "invitations",
+                resourceId = "invites",
                 recordId = "invite-7",
                 fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
                 currentLayoutId = invitationLayout.id,
@@ -681,7 +684,7 @@ class DynamicNavigationPlannerTest {
                 ),
             ).planDynamicNavigation(
                 DynamicResourceRecordContext(
-                    resourceId = "invitations",
+                    resourceId = "invites",
                     recordId = "invite-7",
                     fieldValues = mapOf("teamId" to "42"),
                     currentLayoutId = invitationLayout.id,

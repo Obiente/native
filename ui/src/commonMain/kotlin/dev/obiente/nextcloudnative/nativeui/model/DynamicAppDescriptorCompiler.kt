@@ -2583,6 +2583,8 @@ private fun fieldKind(id: String, schema: JsonObject): FieldKind {
         value.string("type") == "string" && value.string("format") == "binary" -> FieldKind.file
         value.string("type") == "string" && value.string("format") == "date" -> FieldKind.date
         value.string("type") == "string" && value.string("format") == "date-time" -> FieldKind.dateTime
+        value.string("type") == "string" && value.string("format") == "nextcloud-user-id" ->
+            FieldKind.userReference
         value.string("type") == "integer" -> FieldKind.integer
         value.string("type") == "number" -> FieldKind.decimal
         value.string("type") == "boolean" -> FieldKind.boolean

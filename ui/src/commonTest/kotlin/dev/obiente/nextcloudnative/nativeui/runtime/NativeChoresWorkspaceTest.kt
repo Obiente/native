@@ -8,6 +8,8 @@ import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.Evidence
 import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
@@ -163,6 +165,76 @@ class NativeChoresWorkspaceTest {
         assertTrue(team.people.single { it.userId == "alex" }.owner)
         assertEquals(8, team.people.single { it.userId == "alex" }.score)
         assertEquals(listOf("taylor"), team.invitations.map(NativeRosterInvitation::userId))
+    }
+
+    @Test
+    fun `verified team roster becomes typed assignee choices`() {
+        val fixture = fixture()
+        val chores = fixture.choresResource.copy(
+            fields = listOf(
+                FieldSpec(
+                    id = "assignee",
+                    label = "Assignee",
+                    kind = FieldKind.userReference,
+                    required = false,
+                    readOnly = false,
+                ),
+            ),
+        )
+        val edit = ActionSpec(
+            id = "edit-chore",
+            label = "Edit chore",
+            resourceId = chores.id,
+            binding = ApiBinding(
+                method = HttpMethod.PATCH,
+                path = "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}",
+                operationId = "edit-chore",
+                bodyFieldNames = listOf("assignee"),
+            ),
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores package")),
+        )
+        fun scalar(value: String) = NativeStructuredValue.Scalar(value, NativeStructuredScalarKind.string)
+        fun member(userId: String, displayName: String) = NativeStructuredValue.ObjectValue(
+            entries = listOf(
+                NativeStructuredEntry("member", "Member", scalar(userId)),
+                NativeStructuredEntry("displayName", "Display name", scalar(displayName)),
+            ),
+        )
+        val team = NativeRecord(
+            id = "12",
+            values = mapOf("id" to "12", "name" to "Home"),
+            structuredValues = mapOf(
+                "members" to NativeStructuredValue.ListValue(
+                    listOf(member("sam", "Sam"), member("alex", "Alex")),
+                ),
+            ),
+        )
+        val schema = fixture.schema.copy(
+            resources = fixture.schema.resources.map { resource ->
+                if (resource.id == chores.id) chores else resource
+            },
+            actions = fixture.schema.actions + edit,
+        )
+
+        assertEquals(
+            mapOf(
+                "assignee" to listOf(
+                    NativeFieldChoice("sam", "Sam", "Member of Home"),
+                    NativeFieldChoice("alex", "Alex", "Member of Home"),
+                ),
+            ),
+            nativeChoresMemberFieldChoices(schema, team),
+        )
+        assertTrue(
+            nativeChoresMemberFieldChoices(
+                schema.copy(app = schema.app.copy(version = "0.1.1")),
+                team,
+            ).isEmpty(),
+        )
     }
 
     private fun fixture(): Fixture {

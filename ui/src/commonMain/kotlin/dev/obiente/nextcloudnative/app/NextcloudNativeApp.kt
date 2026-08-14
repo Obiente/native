@@ -143,8 +143,11 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.planDynamicNavigation
 import dev.obiente.nextcloudnative.nativeui.model.preferredSemanticContextualChild
@@ -160,6 +163,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationKey
 import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationStore
+import dev.obiente.nextcloudnative.nativeui.runtime.NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresCompletionPostcondition
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
@@ -173,6 +178,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresMemberFieldChoices
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
@@ -3595,7 +3601,7 @@ private fun DynamicDiscoveredAppScreen(
             onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
         )
     }
-    val pendingMutationStore = remember(services, session, descriptor.app.id) {
+    val pendingMutationStore = remember(services, session, descriptor, schema) {
         object : NativePendingMutationStore {
             override suspend fun load(key: NativePendingMutationKey): Map<String, String>? =
                 services.loadPendingDynamicMutation(
@@ -3613,6 +3619,48 @@ private fun DynamicDiscoveredAppScreen(
                     targetRecordId = key.targetRecordId,
                     values = values,
                 )
+            }
+
+            override suspend fun postconditionSatisfied(
+                key: NativePendingMutationKey,
+                values: Map<String, String>,
+            ): Boolean {
+                if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                val postcondition = nativeChoresCompletionPostcondition(key, values) ?: return false
+                val commandActionId = key.actionId.removePrefix(
+                    "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:",
+                )
+                val command = schema.action(commandActionId)?.takeIf { action ->
+                    action.binding.method == HttpMethod.POST &&
+                        action.binding.path.substringBefore('?').trimEnd('/') ==
+                        "/apps/chores/api/v1.0/team/{teamId}/work" &&
+                        action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+                } ?: return false
+                if (key.actionId != "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:${command.id}") return false
+                val history = descriptor.actions.singleOrNull { action ->
+                    action.binding.method == HttpMethod.GET &&
+                        action.binding.path.substringBefore('?').trimEnd('/') ==
+                        "/apps/chores/api/v1.0/team/{teamId}/work" &&
+                        "id" in action.responseFieldIds &&
+                        action.provenance.any { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
+                } ?: return false
+                delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                return runCatching {
+                    loadDynamicRecords(
+                        services = services,
+                        session = session,
+                        descriptor = descriptor,
+                        actionId = history.id,
+                        values = mapOf("teamId" to postcondition.teamId),
+                        runtimeContext = mapOf("teamId" to postcondition.teamId),
+                        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                    ).any { record ->
+                        record.actionSafeIdentity && record.values["id"] == postcondition.completionId
+                    }
+                }.getOrElse { failure ->
+                    if (failure is CancellationException) throw failure
+                    false
+                }
             }
 
             override suspend fun clear(key: NativePendingMutationKey) {
@@ -4756,6 +4804,7 @@ private fun DynamicDiscoveredAppScreen(
                 bindingValues = datasetBindingValues + retainedChoresTeamActionValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
+                fieldChoices = nativeChoresMemberFieldChoices(schema, retainedChoresTeamRecord),
             )
             val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->
                 val records = (viewState as? NativeScreenState.Ready)?.records.orEmpty()

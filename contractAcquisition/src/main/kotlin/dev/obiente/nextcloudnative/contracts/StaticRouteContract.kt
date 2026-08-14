@@ -724,6 +724,22 @@ private fun verifiedChoresResponseSchema(
                     required = listOf("id", "name", "points", "due", "repeat"),
                 ),
             )
+        "/apps/chores/api/v1.0/team/{teamId}/work" ->
+            JSONObject().put(
+                "type",
+                "array",
+            ).put(
+                "items",
+                closedObjectSchema(
+                    properties = mapOf(
+                        "id" to stringSchema(title = "Completion id", format = "uuid"),
+                        "work_time" to stringSchema(title = "Completed at", format = "date-time"),
+                        "chore_id" to integerSchema(title = "Chore"),
+                        "member" to stringSchema(title = "Member"),
+                    ),
+                    required = listOf("id", "work_time", "chore_id", "member"),
+                ),
+            )
         else -> null
     }
 }
@@ -803,7 +819,7 @@ private fun verifiedChoresWrite(
             bodySchema = closedObjectSchema(
                 properties = mapOf(
                     "name" to stringSchema(title = "Chore name"),
-                    "assignee" to stringSchema(title = "Assignee"),
+                    "assignee" to stringSchema(title = "Assignee", format = "nextcloud-user-id"),
                     "points" to JSONObject().put("type", "integer").put("minimum", 0).put("title", "Points"),
                     "due" to stringSchema(title = "Due", format = "date-time"),
                     "repeat" to choresRepeatScheduleSchema(),

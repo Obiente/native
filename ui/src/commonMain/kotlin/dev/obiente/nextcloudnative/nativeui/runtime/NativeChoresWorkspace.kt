@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
@@ -109,6 +110,44 @@ internal fun nativeChoresPresentation(
         }
     }
     return NativeChoresPresentation(kind, title, subtitle, content)
+}
+
+/**
+ * Projects the exact signed Chores team roster into hidden-ID choices for the audited assignee
+ * field. The generic form renderer consumes these contextual choices on every screen size.
+ */
+internal fun nativeChoresMemberFieldChoices(
+    schema: NativeAppSchema,
+    teamRecord: NativeRecord?,
+): Map<String, List<NativeFieldChoice>> {
+    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return emptyMap()
+    val authoritativeTeam = teamRecord?.takeIf { record ->
+        record.actionSafeIdentity && record.actionBindingProvenanceValid
+    } ?: return emptyMap()
+    val editAction = schema.actions.singleOrNull { action ->
+        action.binding.method == HttpMethod.PATCH &&
+            action.binding.path.substringBefore('?').trimEnd('/') ==
+            "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}" &&
+            "assignee" in action.binding.bodyFieldNames &&
+            action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+    } ?: return emptyMap()
+    val assignee = schema.resource(editAction.resourceId)
+        ?.fields
+        ?.singleOrNull { field ->
+            field.id == "assignee" && !field.readOnly && field.kind == FieldKind.userReference
+        }
+        ?: return emptyMap()
+    val roster = nativeRosterPresentation(authoritativeTeam) ?: return emptyMap()
+    if (roster.omittedPeople != 0) return emptyMap()
+    return mapOf(
+        assignee.id to roster.people.map { person ->
+            NativeFieldChoice(
+                value = person.userId,
+                label = person.displayName,
+                supportingText = "Member of ${roster.name}",
+            )
+        },
+    )
 }
 
 private fun nativeChoresItem(

@@ -1124,6 +1124,66 @@ class GenericNativeRendererStateTest {
     }
 
     @Test
+    fun contextualTypedChoicesRenderHiddenUserIdsWithoutADeclaredTopLevelResource() {
+        val chores = ResourceSpec(
+            id = "chores",
+            name = "Chores",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec(
+                    id = "assignee",
+                    label = "Assignee",
+                    kind = FieldKind.userReference,
+                    required = false,
+                    readOnly = false,
+                ),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(chores),
+        )
+        val context = NativeDatasetContext(
+            fieldChoices = mapOf(
+                "assignee" to listOf(
+                    NativeFieldChoice("sam", "Sam", "Team member"),
+                    NativeFieldChoice("alex", "Alex", "Team member"),
+                ),
+            ),
+        )
+
+        assertTrue(nativeRelationFieldRequiresChoice(chores.fields.single(), chores, schema, context))
+        assertTrue(nativeRelationChoicesLoaded(chores.fields.single(), chores, schema, context))
+        assertTrue(nativeRelationChoiceSourceHasRecords(chores.fields.single(), chores, schema, context))
+        assertNull(nativeRelationChoiceUnavailableReason(chores.fields.single(), chores, schema, context))
+        assertEquals(
+            listOf(
+                NativeRelationOption("alex", "Alex", "Team member"),
+                NativeRelationOption("sam", "Sam", "Team member"),
+            ),
+            nativeRelationOptions(chores.fields.single(), chores, schema, context),
+        )
+        assertEquals(
+            NativeRelationChoiceUnavailableReason.duplicateValue,
+            nativeRelationChoiceUnavailableReason(
+                chores.fields.single(),
+                chores,
+                schema,
+                context.copy(
+                    fieldChoices = mapOf(
+                        "assignee" to listOf(
+                            NativeFieldChoice("alex", "Alex"),
+                            NativeFieldChoice("alex", "Alex duplicate"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun relationshipChoiceFallsBackToRecordIdentityWithoutADeclaredLabelField() {
         val collections = ResourceSpec(
             id = "collections",

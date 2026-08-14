@@ -202,6 +202,14 @@ data class NativeDatasetContext(
     val bindingValues: Map<String, String> = emptyMap(),
     val relatedRecords: Map<String, List<NativeRecord>> = emptyMap(),
     val relatedRecordPaging: Map<String, NativeRelatedRecordPaging> = emptyMap(),
+    /** Exact typed choices projected from an already-verified active record or embedded relation. */
+    val fieldChoices: Map<String, List<NativeFieldChoice>> = emptyMap(),
+)
+
+data class NativeFieldChoice(
+    val value: String,
+    val label: String,
+    val supportingText: String? = null,
 )
 
 data class NativeRelatedRecordPaging(

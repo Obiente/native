@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -27,7 +28,11 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 
 @Composable
-internal fun NativeRosterSurface(roster: NativeRosterPresentation) {
+internal fun NativeRosterSurface(
+    roster: NativeRosterPresentation,
+    createLabel: String? = null,
+    onCreate: (() -> Unit)? = null,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -38,7 +43,23 @@ internal fun NativeRosterSurface(roster: NativeRosterPresentation) {
         ),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
-        item { Text(roster.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    roster.name,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (createLabel != null && onCreate != null) {
+                    Button(onClick = onCreate) { Text(createLabel) }
+                }
+            }
+        }
         if (roster.omittedPeople > 0 || roster.omittedInvitations > 0) {
             item {
                 Surface(

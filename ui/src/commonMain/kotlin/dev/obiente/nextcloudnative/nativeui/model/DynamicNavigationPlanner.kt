@@ -744,8 +744,9 @@ private fun DynamicAction.hasTypedExecuteRecordRelationship(
 
 /**
  * Chores 0.1.0 accepts an invitation through a body-scoped command whose controller and payload
- * are imported only from the exact signed package. The upstream route exposes no OpenAPI link, so
- * this version-pinned adapter is the typed relationship between an invitation record and Accept.
+ * are imported only from the exact signed package. Its read route compiles as `invites`, while the
+ * command compiles as `invitations`, and upstream exposes no OpenAPI link between them. This
+ * version-pinned adapter is the typed relationship between an invitation record and Accept.
  */
 private fun DynamicAction.isPinnedChoresInvitationAccept(
     app: AppIdentity,
@@ -753,7 +754,8 @@ private fun DynamicAction.isPinnedChoresInvitationAccept(
 ): Boolean =
     app.id == "chores" &&
         app.version == "0.1.0" &&
-        context.resourceId.sameResourceAs(resourceId) &&
+        context.resourceId.sameResourceAs("invites") &&
+        resourceId.sameResourceAs("invitations") &&
         binding.method == HttpMethod.POST &&
         binding.path == "/apps/chores/api/v1.0/account/invites/accept" &&
         requiredBodyFieldIds() == setOf("teamId") &&

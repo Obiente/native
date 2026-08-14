@@ -196,24 +196,81 @@ internal suspend fun executeNativeRecordCommand(
     pendingMutationStore: NativePendingMutationStore?,
 ): NativeActionExecutionResult {
     val pendingKey = plan.pendingMutationKey(targetRecordId)
-    val stagedValues = pendingKey?.let { key ->
+    val durableStore = pendingKey?.let {
         requireNotNull(pendingMutationStore) {
             "Crash-safe staging is unavailable for this action."
-        }.load(key)
+        }
+    }
+    val stagedValues = pendingKey?.let { key ->
+        durableStore?.load(key)
+    }
+    if (pendingKey != null && stagedValues != null) {
+        if (runCatching { durableStore?.postconditionSatisfied(pendingKey, stagedValues) == true }.getOrDefault(false)) {
+            runCatching { durableStore?.clear(pendingKey) }
+            return NativeActionExecutionResult.Success("The earlier action is confirmed by the server.")
+        }
+        return NativeActionExecutionResult.Failure(
+            message = "The earlier action is still awaiting authoritative server confirmation.",
+            outcome = NativeActionFailureOutcome.Unknown,
+        )
     }
     val request = plan.request(confirmed = confirmed, persistedValues = stagedValues)
     if (pendingKey != null && stagedValues == null) {
-        requireNotNull(pendingMutationStore).save(pendingKey, request.values)
+        durableStore?.save(pendingKey, request.values)
     }
-    return actionExecutor.execute(request).also { result ->
-        if (
-            pendingKey != null &&
-            (result is NativeActionExecutionResult.Success ||
-                (result as? NativeActionExecutionResult.Failure)?.outcome == NativeActionFailureOutcome.Rejected)
-        ) {
-            runCatching { pendingMutationStore?.clear(pendingKey) }
+    val result = actionExecutor.execute(request)
+    if (pendingKey == null) return result
+    if ((result as? NativeActionExecutionResult.Failure)?.outcome == NativeActionFailureOutcome.Rejected) {
+        runCatching { durableStore?.clear(pendingKey) }
+        return result
+    }
+    if (result is NativeActionExecutionResult.Success) {
+        val reconciled = runCatching {
+            durableStore?.postconditionSatisfied(pendingKey, request.values) == true
+        }.getOrDefault(false)
+        if (reconciled) {
+            runCatching { durableStore?.clear(pendingKey) }
+            return result
         }
+        return NativeActionExecutionResult.Failure(
+            message = "The server accepted the action, but refreshed data does not confirm it yet.",
+            outcome = NativeActionFailureOutcome.Unknown,
+        )
     }
+    return result
+}
+
+internal const val NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE = "chores-completion-v1"
+
+internal data class NativeChoresCompletionPostcondition(
+    val teamId: String,
+    val completionId: String,
+)
+
+internal fun nativeChoresCompletionPostcondition(
+    key: NativePendingMutationKey,
+    values: Map<String, String>,
+): NativeChoresCompletionPostcondition? {
+    if (!key.actionId.startsWith("$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:")) return null
+    val teamId = values["teamId"]?.trim()?.takeIf(String::isSafeRecordBodyValue) ?: return null
+    val work = values["work"]?.let { encoded ->
+        runCatching { Json.parseToJsonElement(encoded) as? JsonArray }.getOrNull()
+    }?.singleOrNull() as? JsonObject ?: return null
+    val completionId = (work["id"] as? JsonPrimitive)?.contentOrNull
+        ?.trim()
+        ?.takeIf(String::isNativeUuidValue)
+        ?: return null
+    val choreId = (work["chore_id"] as? JsonPrimitive)?.contentOrNull?.trim()
+        ?.takeIf { value -> value == key.targetRecordId }
+        ?: return null
+    if (choreId.toLongOrNull()?.let { value -> value >= 0L } != true) return null
+    return NativeChoresCompletionPostcondition(teamId, completionId)
+}
+
+private fun String.isNativeUuidValue(): Boolean {
+    val segments = split('-')
+    return segments.map(String::length) == listOf(8, 4, 4, 4, 12) &&
+        segments.all { segment -> segment.all { character -> character.isDigit() || character.lowercaseChar() in 'a'..'f' } }
 }
 
 internal data class NativeRecordCompletionValueSource(
@@ -786,7 +843,7 @@ private fun ActionSpec.verifiedChoresCompletionCommandPlan(
         effect = ActionEffect.execute,
         bindingValues = resolved,
         forceConfirmation = true,
-        durableMutationNamespace = "chores-completion-v1",
+        durableMutationNamespace = NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE,
         derivedValues = {
             val completionId = valueSource.completionId().trim()
             val completedAt = valueSource.completedAt().trim()

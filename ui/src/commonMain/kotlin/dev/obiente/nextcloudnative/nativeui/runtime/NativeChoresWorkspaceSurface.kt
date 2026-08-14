@@ -244,7 +244,11 @@ private fun ChoresContent(
             is NativeChoresContent.Ready -> if (
                 presentation.kind == NativeChoresWorkspaceKind.Team && roster != null
             ) {
-                NativeRosterSurface(roster)
+                NativeRosterSurface(
+                    roster = roster,
+                    createLabel = createLabel,
+                    onCreate = onCreate,
+                )
             } else {
                 ChoresList(content.items, onSelectRecord, recordActions)
             }

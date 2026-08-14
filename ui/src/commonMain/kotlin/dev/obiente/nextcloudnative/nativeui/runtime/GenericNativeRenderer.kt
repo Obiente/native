@@ -213,6 +213,7 @@ internal fun NativeDatasetContext.withCollectionBatchRelationRecords(
     // parent or an earlier form and therefore must never satisfy this dialog accidentally.
     relatedRecords = recordsByResourceId,
     relatedRecordPaging = emptyMap(),
+    fieldChoices = emptyMap(),
 )
 
 /**
@@ -2132,11 +2133,13 @@ private fun GenericRecordActionFormDialog(
     val scalarFields = remember(pending.fields) {
         pending.fields.filter { field -> field.repeatableObjectInput == null }
     }
-    val displayFields = remember(pending.fields, pending.resource, schema) {
+    val displayFields = remember(pending.fields, pending.resource, pending.datasetContext, schema) {
         nativeFormDisplayFields(
             fields = pending.fields,
             relationFieldIds = pending.fields
-                .filter { field -> nativeRelationFieldRequiresChoice(field, pending.resource, schema) }
+                .filter { field ->
+                    nativeRelationFieldRequiresChoice(field, pending.resource, schema, pending.datasetContext)
+                }
                 .mapTo(linkedSetOf(), FieldSpec::id),
         )
     }
@@ -2284,7 +2287,14 @@ private fun GenericRecordActionFormDialog(
                                 schema = schema,
                                 context = pending.datasetContext,
                             )
-                            if (nativeRelationFieldRequiresChoice(field, pending.resource, schema)) {
+                            if (
+                                nativeRelationFieldRequiresChoice(
+                                    field,
+                                    pending.resource,
+                                    schema,
+                                    pending.datasetContext,
+                                )
+                            ) {
                                 GenericRelationshipField(
                                     field = field,
                                     value = values[field.id].orEmpty(),
@@ -8955,7 +8965,9 @@ private fun GenericNativeForm(
             nativeFormDisplayFields(
                 fields = editableFields,
                 relationFieldIds = editableFields
-                    .filter { field -> nativeRelationFieldRequiresChoice(field, formResource, schema) }
+                    .filter { field ->
+                        nativeRelationFieldRequiresChoice(field, formResource, schema, datasetContext)
+                    }
                     .mapTo(linkedSetOf(), FieldSpec::id),
             )
         }
@@ -9045,7 +9057,7 @@ private fun GenericNativeForm(
                         fields.forEach { field ->
                             val relationOptions =
                                 nativeRelationOptions(field, formResource, schema, datasetContext)
-                            if (nativeRelationFieldRequiresChoice(field, formResource, schema)) {
+                            if (nativeRelationFieldRequiresChoice(field, formResource, schema, datasetContext)) {
                                 GenericRelationshipField(
                                     field = field,
                                     value = draft.values[field.id].orEmpty(),

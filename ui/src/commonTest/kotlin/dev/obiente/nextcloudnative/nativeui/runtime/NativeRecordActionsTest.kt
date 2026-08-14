@@ -2233,6 +2233,22 @@ class NativeRecordActionsTest {
             plan.pendingMutationKey("23"),
         )
         assertEquals(
+            NativeChoresCompletionPostcondition(
+                teamId = "4",
+                completionId = "123e4567-e89b-42d3-a456-426614174000",
+            ),
+            nativeChoresCompletionPostcondition(
+                requireNotNull(plan.pendingMutationKey("23")),
+                firstRequest.values,
+            ),
+        )
+        assertNull(
+            nativeChoresCompletionPostcondition(
+                requireNotNull(plan.pendingMutationKey("different-chore")),
+                firstRequest.values,
+            ),
+        )
+        assertEquals(
             firstRequest.values,
             plan.request(confirmed = true, persistedValues = firstRequest.values).values,
         )
@@ -2244,6 +2260,7 @@ class NativeRecordActionsTest {
         }
         val persistenceEvents = mutableListOf<String>()
         var stagedValues: Map<String, String>? = null
+        var postconditionVerified = false
         val pendingStore = object : NativePendingMutationStore {
             override suspend fun load(key: NativePendingMutationKey): Map<String, String>? {
                 persistenceEvents += "load"
@@ -2253,6 +2270,15 @@ class NativeRecordActionsTest {
             override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
                 persistenceEvents += "save"
                 stagedValues = values
+            }
+
+            override suspend fun postconditionSatisfied(
+                key: NativePendingMutationKey,
+                values: Map<String, String>,
+            ): Boolean {
+                persistenceEvents += "reconcile"
+                assertEquals(stagedValues, values)
+                return postconditionVerified
             }
 
             override suspend fun clear(key: NativePendingMutationKey) {
@@ -2276,19 +2302,53 @@ class NativeRecordActionsTest {
         val retainedValues = requireNotNull(stagedValues)
 
         persistenceEvents.clear()
-        val success = executeNativeRecordCommand(
+        val awaitingReconciliation = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor {
+                persistenceEvents += "execute"
+                error("A staged unknown mutation must not be submitted again.")
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertEquals(
+            NativeActionFailureOutcome.Unknown,
+            (awaitingReconciliation as NativeActionExecutionResult.Failure).outcome,
+        )
+        assertEquals(listOf("load", "reconcile"), persistenceEvents)
+        assertEquals(retainedValues, stagedValues)
+
+        persistenceEvents.clear()
+        postconditionVerified = true
+        val reconciled = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor {
+                persistenceEvents += "execute"
+                error("A reconciled mutation must not be submitted again.")
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertTrue(reconciled is NativeActionExecutionResult.Success)
+        assertEquals(listOf("load", "reconcile", "clear"), persistenceEvents)
+        assertNull(stagedValues)
+
+        persistenceEvents.clear()
+        val verifiedSuccess = executeNativeRecordCommand(
             plan = plan,
             targetRecordId = "23",
             confirmed = true,
             actionExecutor = NativeActionExecutor { request ->
                 persistenceEvents += "execute"
-                assertEquals(retainedValues, (request as NativeActionRequest.Submit).values)
+                assertEquals(stagedValues, (request as NativeActionRequest.Submit).values)
                 NativeActionExecutionResult.Success()
             },
             pendingMutationStore = pendingStore,
         )
-        assertTrue(success is NativeActionExecutionResult.Success)
-        assertEquals(listOf("load", "execute", "clear"), persistenceEvents)
+        assertTrue(verifiedSuccess is NativeActionExecutionResult.Success)
+        assertEquals(listOf("load", "save", "execute", "reconcile", "clear"), persistenceEvents)
         assertNull(stagedValues)
         assertTrue(
             nativeRecordActions(

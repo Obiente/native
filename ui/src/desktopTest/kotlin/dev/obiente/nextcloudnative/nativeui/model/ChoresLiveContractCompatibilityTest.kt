@@ -85,6 +85,10 @@ class ChoresLiveContractCompatibilityTest {
         assertTrue("id" in teamRead.responseFieldIds, "team fields=${teamRead.responseFieldIds}")
         assertTrue("id" in choreRead.responseFieldIds, "chore fields=${choreRead.responseFieldIds}")
         assertTrue(
+            setOf("id", "work_time", "chore_id", "member").all(workRead.responseFieldIds::contains),
+            "work fields=${workRead.responseFieldIds}",
+        )
+        assertTrue(
             setOf("inviteId", "teamId", "teamName", "userId")
                 .all(invitationsRead.responseFieldIds::contains),
             "invitation fields=${invitationsRead.responseFieldIds}",
@@ -104,6 +108,12 @@ class ChoresLiveContractCompatibilityTest {
 
         val nativeSchema = descriptor.toNativeAppSchema()
         val nativeChores = nativeSchema.resources.single { resource -> resource.id == choreRead.resourceId }
+        val assignee = assertNotNull(
+            nativeChores.fields.singleOrNull { field -> field.id == "assignee" },
+            "chore fields=${nativeChores.fields.map { field -> field.id to field.kind }}; " +
+                "edit resource=${editChore.resourceId}; read resource=${choreRead.resourceId}",
+        )
+        assertEquals(FieldKind.userReference, assignee.kind)
         val createPlan = nativeRecordActions(
             schema = nativeSchema,
             resource = nativeChores,
@@ -180,12 +190,15 @@ class ChoresLiveContractCompatibilityTest {
                 currentLayoutId = invitationLayout.id,
             ),
         )
-        assertEquals(
-            mapOf("teamId" to "42"),
+        val acceptInvitationForm = assertNotNull(
             invitationPlan.contextualFormActions
-                .single { form -> form.actionId == acceptInvitation.id }
-                .pathParameterValues,
+                .singleOrNull { form -> form.actionId == acceptInvitation.id },
+            "accept=${acceptInvitation.id}; forms=" +
+                invitationPlan.contextualFormActions.map { form ->
+                    form.actionId to form.pathParameterValues
+                },
         )
+        assertEquals(mapOf("teamId" to "42"), acceptInvitationForm.pathParameterValues)
         val teamPlan = descriptor.planDynamicNavigation(
             DynamicResourceRecordContext(
                 resourceId = teamRead.resourceId,

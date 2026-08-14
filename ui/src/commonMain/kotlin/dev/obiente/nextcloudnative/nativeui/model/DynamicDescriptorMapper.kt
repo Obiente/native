@@ -25,6 +25,10 @@ fun DynamicAppDescriptor.toNativeAppSchema(): NativeAppSchema {
             } else {
                 val existing = fields[index]
                 fields[index] = existing.copy(
+                    kind = input.kind.takeIf { candidate ->
+                        existing.kind == FieldKind.unknown ||
+                            existing.kind == FieldKind.string && candidate == FieldKind.userReference
+                    } ?: existing.kind,
                     readOnly = false,
                     format = input.format ?: existing.format,
                     enumValues = input.enumValues ?: existing.enumValues,
