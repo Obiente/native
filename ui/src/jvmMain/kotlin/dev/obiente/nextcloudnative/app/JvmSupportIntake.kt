@@ -58,6 +58,8 @@ class JvmSupportIntake(
     client: OkHttpClient,
     supportBaseUrl: String = DEFAULT_OBIENTE_SUPPORT_URL,
     private val supportMutationsAllowed: () -> Boolean = { true },
+    private val directorySync: (File) -> Unit = ::syncPosixDirectoryEntry,
+    private val descriptorCleanupRetryMillis: Long = SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS,
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -85,21 +87,26 @@ class JvmSupportIntake(
     private var pending: PendingSubmission? = null
     private var completedSubmissions: List<CompletedSubmission> = emptyList()
     private var completedExpiryJob: Job? = null
+    private var storageUnavailableMessage: String? = null
 
     init {
+        require(descriptorCleanupRetryMillis > 0L)
         scope.launch {
             try {
-                val storageReady = runCatching { preparePrivateStorage() }.isSuccess
-                val restored = if (storageReady) restorePendingSubmission() else null
-                val restoredCompleted = if (storageReady) restoreCompletedSubmissions() else emptyList()
-                if (storageReady) pruneTemporaryReports(restored?.archive)
+                val storageFailure = runCatching { preparePrivateStorage() }.exceptionOrNull()
+                val restored = if (storageFailure == null) restorePendingSubmission() else null
+                val restoredCompleted = if (storageFailure == null) restoreCompletedSubmissions() else emptyList()
+                if (storageFailure == null) pruneTemporaryReports(restored?.archive)
                 synchronized(lock) {
+                    storageUnavailableMessage = storageFailure?.let { SUPPORT_STORAGE_UNAVAILABLE_MESSAGE }
                     pending = restored
                     completedSubmissions = restoredCompleted
                     scheduleCompletedExpiryLocked()
                     val visibleCompleted = latestCompletedFor(activeAccountIdentity)
                     publishStateLocked(
-                        restored?.let {
+                        storageFailure?.let {
+                            SupportDiagnosticsSubmissionState.Unsupported(SUPPORT_STORAGE_UNAVAILABLE_MESSAGE)
+                        } ?: restored?.let {
                             SupportDiagnosticsSubmissionState.RetryableFailure(
                                 if (restored.cancellationPending) {
                                     "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
@@ -138,6 +145,10 @@ class JvmSupportIntake(
         featureState: List<SupportDiagnosticFieldDraft>,
     ) = withContext(Dispatchers.IO) {
         awaitInitialization()
+        synchronized(lock) { storageUnavailableMessage }?.let { message ->
+            publishState(SupportDiagnosticsSubmissionState.Unsupported(message))
+            return@withContext
+        }
         if (!supportMutationsAreAllowed()) {
             publishState(SupportDiagnosticsSubmissionState.Unsupported(READ_ONLY_SUPPORT_MESSAGE))
             return@withContext
@@ -212,6 +223,10 @@ class JvmSupportIntake(
 
     suspend fun retry() = withContext(Dispatchers.IO) {
         awaitInitialization()
+        synchronized(lock) { storageUnavailableMessage }?.let { message ->
+            publishState(SupportDiagnosticsSubmissionState.Unsupported(message))
+            return@withContext
+        }
         if (!supportMutationsAreAllowed()) {
             val existing = synchronized(lock) { pending }
             publishState(
@@ -732,9 +747,33 @@ class JvmSupportIntake(
         synchronized(lock) {
             if (pending === submission) pending = null
         }
-        submission.archive?.delete()
+        runCatching { submission.archive?.delete() }
+        if (!cleanupPendingDescriptorSafely(submission)) {
+            scope.launch { retryPendingDescriptorCleanup(submission) }
+        }
+    }
+
+    private fun cleanupPendingDescriptorSafely(submission: PendingSubmission): Boolean =
         synchronized(persistenceLock) {
-            deletePrivateDescriptorDurably(pendingDescriptor())
+            runCatching {
+                val descriptor = pendingDescriptor()
+                if (descriptor.isFile) {
+                    val persistedIdempotencyKey = runCatching {
+                        json.decodeFromString(
+                            PersistedPendingSubmission.serializer(),
+                            descriptor.readText(Charsets.UTF_8),
+                        ).idempotencyKey
+                    }.getOrNull()
+                    if (persistedIdempotencyKey != submission.idempotencyKey) return@synchronized true
+                }
+                deletePrivateDescriptorDurably(descriptor)
+            }.isSuccess
+        }
+
+    private suspend fun retryPendingDescriptorCleanup(submission: PendingSubmission) {
+        while (!shutdownRequested.get()) {
+            delay(descriptorCleanupRetryMillis)
+            if (cleanupPendingDescriptorSafely(submission)) return
         }
     }
 
@@ -956,17 +995,13 @@ class JvmSupportIntake(
     }
 
     private fun syncDirectoryEntry(directory: File) {
-        if (Files.getFileAttributeView(directory.toPath(), PosixFileAttributeView::class.java) == null) return
-        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
-            channel.force(true)
-        }
+        directorySync(directory)
     }
 
     private fun deletePrivateDescriptorDurably(descriptor: File) {
         val parent = descriptor.parentFile ?: return
-        if (Files.deleteIfExists(descriptor.toPath())) {
-            syncDirectoryEntry(parent)
-        }
+        Files.deleteIfExists(descriptor.toPath())
+        syncDirectoryEntry(parent)
     }
 
     private fun restorePendingSubmission(): PendingSubmission? = runCatching {
@@ -1225,6 +1260,13 @@ class JvmSupportIntake(
     }
 }
 
+private fun syncPosixDirectoryEntry(directory: File) {
+    if (Files.getFileAttributeView(directory.toPath(), PosixFileAttributeView::class.java) == null) return
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+        channel.force(true)
+    }
+}
+
 private fun Long.saturatingAdd(increment: Long): Long =
     if (this > Long.MAX_VALUE - increment) Long.MAX_VALUE else this + increment
 
@@ -1343,3 +1385,6 @@ private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L
 private const val MAX_SUPPORT_RETRY_AFTER_MILLIS = MAX_SUPPORT_RETRY_AFTER_SECONDS * 1_000L
 private const val READ_ONLY_SUPPORT_MESSAGE =
     "Private support uploads are unavailable while the shared read-only audit session is active."
+private const val SUPPORT_STORAGE_UNAVAILABLE_MESSAGE =
+    "Private support submission storage is unavailable on this device. " +
+        "Check available storage and app permissions, then restart the app."

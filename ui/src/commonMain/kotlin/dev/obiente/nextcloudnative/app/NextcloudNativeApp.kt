@@ -12524,6 +12524,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
         submissionState is SupportDiagnosticsSubmissionState.Uploading
     val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
         submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
+    val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported
 
     LaunchedEffect(submissionBusy, submissionPending) {
         if (submissionBusy || submissionPending) confirmClear = false
@@ -12580,7 +12581,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             confirmButton = {
                 TextButton(
-                    enabled = !submissionBusy,
+                    enabled = !submissionBusy && !submissionUnavailable,
                     onClick = {
                         confirmSend = false
                         scope.launch { services.submitSupportDiagnostics(reproductionSteps) }
@@ -12743,7 +12744,8 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
                 Button(
-                    enabled = summary.available && !exporting && !submissionBusy && !submissionPending,
+                    enabled = summary.available && !exporting && !submissionBusy && !submissionPending &&
+                        !submissionUnavailable,
                     onClick = { confirmSend = true },
                 ) {
                     Text("Send to support")

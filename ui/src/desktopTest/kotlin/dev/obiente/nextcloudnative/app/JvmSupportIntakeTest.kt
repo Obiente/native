@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -350,6 +351,51 @@ class JvmSupportIntakeTest {
                 while (fixture.completedDescriptors().isNotEmpty()) delay(10)
             }
             assertTrue(fixture.completedDescriptors().isEmpty())
+        }
+    }
+
+    @Test
+    fun keepsSubmittedStateWhenTerminalDirectorySyncNeedsARetry() = runBlocking {
+        var cleanupSyncAttempts = 0
+        testFixture(
+            directorySync = { directory ->
+                if (!File(directory, "pending.json").exists()) {
+                    cleanupSyncAttempts += 1
+                    if (cleanupSyncAttempts == 1) throw IOException("Synthetic directory sync failure.")
+                }
+            },
+            descriptorCleanupRetryMillis = 10L,
+        ).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(1, fixture.completedDescriptors().size)
+            withTimeout(5_000) {
+                while (cleanupSyncAttempts < 2) delay(10)
+            }
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
+        }
+    }
+
+    @Test
+    fun reportsUnavailableSubmissionStorageDuringInitialization() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.intake.close()
+            assertTrue(fixture.temporaryRoot.deleteRecursively())
+            fixture.temporaryRoot.writeText("unavailable")
+
+            fixture.newIntake().use { unavailable ->
+                val state = assertIs<SupportDiagnosticsSubmissionState.Unsupported>(unavailable.states().value)
+                assertTrue(state.reason.contains("storage is unavailable"))
+
+                unavailable.submit("A refresh failed.", "nightly", emptyList())
+
+                assertIs<SupportDiagnosticsSubmissionState.Unsupported>(unavailable.states().value)
+                assertEquals(0, fixture.server.requestCount)
+            }
         }
     }
 
@@ -920,6 +966,8 @@ class JvmSupportIntakeTest {
 
     private fun testFixture(
         supportMutationsAllowed: () -> Boolean = { true },
+        directorySync: (File) -> Unit = {},
+        descriptorCleanupRetryMillis: Long = 60_000L,
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
@@ -948,6 +996,8 @@ class JvmSupportIntakeTest {
             environment = environment,
             server = server,
             supportMutationsAllowed = supportMutationsAllowed,
+            directorySync = directorySync,
+            descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
         )
     }
 
@@ -982,6 +1032,8 @@ class JvmSupportIntakeTest {
         val environment: SupportDiagnosticsEnvironment,
         val server: MockWebServer,
         val supportMutationsAllowed: () -> Boolean,
+        val directorySync: (File) -> Unit,
+        val descriptorCleanupRetryMillis: Long,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -996,6 +1048,8 @@ class JvmSupportIntakeTest {
             client = OkHttpClient.Builder().retryOnConnectionFailure(false).build(),
             supportBaseUrl = server.url("/").toString(),
             supportMutationsAllowed = supportMutationsAllowed,
+            directorySync = directorySync,
+            descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }

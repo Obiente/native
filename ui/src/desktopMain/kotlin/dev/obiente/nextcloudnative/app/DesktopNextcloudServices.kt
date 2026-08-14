@@ -917,6 +917,12 @@ internal fun combinedAutomaticCacheExcess(
     return (total - maximumBytes).coerceAtLeast(0L)
 }
 
+internal class DesktopSessionPublicationGuard {
+    private val monitor = Any()
+
+    fun <Result> serialize(action: () -> Result): Result = synchronized(monitor, action)
+}
+
 internal fun closeVirtualFileProviderForReplacement(
     provider: AutoCloseable?,
     detach: () -> Unit,
@@ -948,6 +954,7 @@ class DesktopNextcloudServices(
         ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
         ?: Files.createTempDirectory("nextcloud-native-test-support-intake").toFile()
     private val secretStore = defaultDesktopSecretStore()
+    private val sessionPublicationGuard = DesktopSessionPublicationGuard()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
@@ -3464,51 +3471,55 @@ class DesktopNextcloudServices(
     }
 
     override fun loadSession(): NextcloudSession? {
-        val server = preferences.get(KEY_SERVER, null) ?: return null
-        val login = preferences.get(KEY_LOGIN, null) ?: return null
-        val password = secretStore.load(desktopSessionSecretReference(server, login))
-            ?.decodeToString()
-            ?.takeIf(String::isNotBlank)
-            ?: return null
-        listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
-        return NextcloudSession(server, login, password).also { session ->
-            val accountIdentity = desktopFileCacheAccountId(session)
-            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-            supportIntake.setActiveAccountIdentity(accountIdentity)
+        return sessionPublicationGuard.serialize {
+            val server = preferences.get(KEY_SERVER, null) ?: return@serialize null
+            val login = preferences.get(KEY_LOGIN, null) ?: return@serialize null
+            val password = secretStore.load(desktopSessionSecretReference(server, login))
+                ?.decodeToString()
+                ?.takeIf(String::isNotBlank)
+                ?: return@serialize null
+            listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
+            NextcloudSession(server, login, password).also { session ->
+                val accountIdentity = desktopFileCacheAccountId(session)
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            }
         }
     }
 
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        listOf(session.serverUrl, session.loginName, session.appPassword)
-            .forEach(supportDiagnostics::registerPrivateValue)
-        try {
-            secretStore.save(
-                reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
-                username = session.loginName,
-                secret = session.appPassword.encodeToByteArray(),
-            )
-        } catch (failure: Throwable) {
-            recordSupportDiagnostic(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Authentication,
-                    operation = "credentials.save",
-                    outcome = "failed",
-                    code = if (failure is DesktopSecretStoreUnavailableException) {
-                        "DESKTOP_SECRET_STORE_UNAVAILABLE"
-                    } else {
-                        "DESKTOP_SECRET_STORE_FAILED"
-                    },
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            throw failure
+        sessionPublicationGuard.serialize {
+            listOf(session.serverUrl, session.loginName, session.appPassword)
+                .forEach(supportDiagnostics::registerPrivateValue)
+            try {
+                secretStore.save(
+                    reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
+                    username = session.loginName,
+                    secret = session.appPassword.encodeToByteArray(),
+                )
+            } catch (failure: Throwable) {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Error,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "credentials.save",
+                        outcome = "failed",
+                        code = if (failure is DesktopSecretStoreUnavailableException) {
+                            "DESKTOP_SECRET_STORE_UNAVAILABLE"
+                        } else {
+                            "DESKTOP_SECRET_STORE_FAILED"
+                        },
+                        exception = failure.toSupportDiagnosticExceptionDraft(),
+                    ),
+                )
+                throw failure
+            }
+            preferences.put(KEY_SERVER, session.serverUrl)
+            preferences.put(KEY_LOGIN, session.loginName)
+            val accountIdentity = desktopFileCacheAccountId(session)
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
         }
-        preferences.put(KEY_SERVER, session.serverUrl)
-        preferences.put(KEY_LOGIN, session.loginName)
-        val accountIdentity = desktopFileCacheAccountId(session)
-        supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-        supportIntake.setActiveAccountIdentity(accountIdentity)
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
@@ -3642,10 +3653,12 @@ class DesktopNextcloudServices(
                     ),
                 )
             }
-            preferences.remove(KEY_SERVER)
-            preferences.remove(KEY_LOGIN)
-            supportDiagnostics.setActiveAccountIdentity(null)
-            supportIntake.setActiveAccountIdentity(null)
+            sessionPublicationGuard.serialize {
+                preferences.remove(KEY_SERVER)
+                preferences.remove(KEY_LOGIN)
+                supportDiagnostics.setActiveAccountIdentity(null)
+                supportIntake.setActiveAccountIdentity(null)
+            }
             cleared = true
         } finally {
             if (!cleared) {
