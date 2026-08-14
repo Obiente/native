@@ -900,6 +900,11 @@ internal suspend fun executeDynamicReadWithFallbackOutcome(
     var bestFailureSpecificity = -1
     var successfulEmptyResult: List<NativeRecord>? = null
     var pagedFallbackUnavailable = false
+    val continuationRequested = resolvedPagination?.let { pagination ->
+        boundValues.entries.any { (name, value) ->
+            name.equals(pagination.parameterName, ignoreCase = true) && value.isNotBlank()
+        }
+    } == true
     candidates.forEach { candidate ->
         if (candidate.binding.method != HttpMethod.GET) return@forEach
         val attempt = runCatching {
@@ -927,18 +932,28 @@ internal suspend fun executeDynamicReadWithFallbackOutcome(
             }
         }
         val records = attempt.getOrNull() ?: return@forEach
-        if (candidate in pagedFallbacks && records.isEmpty()) pagedFallbackUnavailable = true
+        if (candidate in pagedFallbacks && records.isEmpty()) {
+            if (continuationRequested) return DynamicRecordLoadOutcome(emptyList())
+            pagedFallbackUnavailable = true
+        }
         if (records.isNotEmpty()) {
             return DynamicRecordLoadOutcome(
                 records = records,
                 partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
-                    candidate.id == preferred.id && pagedFallbackUnavailable
+                    candidate !in pagedFallbacks && pagedFallbackUnavailable
                 },
             )
         }
         successfulEmptyResult = records
     }
-    successfulEmptyResult?.let { return DynamicRecordLoadOutcome(it) }
+    successfulEmptyResult?.let { records ->
+        return DynamicRecordLoadOutcome(
+            records = records,
+            partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
+                pagedFallbackUnavailable
+            },
+        )
+    }
     throw bestFailure ?: error("No usable declared read action was available.")
 }
 

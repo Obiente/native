@@ -2563,6 +2563,65 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun `paged fallback failure marks an empty sparse preferred read as partial`() = runBlocking {
+        val page = HttpParameter(
+            name = "page",
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(page)),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+
+        val outcome = executeDynamicReadWithFallbackOutcome(descriptor, preferred.id) { candidate ->
+            if (candidate.id == fallback.id) {
+                response("unavailable", status = 503, contentType = "text/plain")
+            } else {
+                response("""{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}}""")
+            }
+        }
+
+        assertTrue(outcome.records.isEmpty())
+        assertEquals(DYNAMIC_PAGED_READ_PARTIAL_FAILURE, outcome.partialFailureMessage)
+    }
+
+    @Test
+    fun `empty continuation page ends pagination without retrying the sparse route`() = runBlocking {
+        val page = HttpParameter(
+            name = "page",
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(page)),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val attempts = mutableListOf<String>()
+
+        val outcome = executeDynamicReadWithFallbackOutcome(
+            descriptor = descriptor,
+            actionId = preferred.id,
+            boundValues = mapOf("page" to "2"),
+        ) { candidate ->
+            attempts += candidate.id
+            response("""{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}}""")
+        }
+
+        assertEquals(listOf(fallback.id), attempts)
+        assertTrue(outcome.records.isEmpty())
+        assertNull(outcome.partialFailureMessage)
+    }
+
+    @Test
     fun `bound optional filter keeps the preferred read ahead of a paged fallback`() = runBlocking {
         fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
             name = name,

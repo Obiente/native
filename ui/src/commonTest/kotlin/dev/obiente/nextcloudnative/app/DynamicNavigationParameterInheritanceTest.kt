@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DynamicNavigationParameterInheritanceTest {
@@ -259,6 +260,54 @@ class DynamicNavigationParameterInheritanceTest {
                 destinations = listOf(messages, stats),
                 primaryContentTarget = null,
                 preferredCollectionChild = messages,
+            ),
+        )
+    }
+
+    @Test
+    fun `mail detail retains the adjacent mailbox pagination scope`() {
+        val mailboxSnapshot = DynamicNavigationSnapshot(
+            viewId = "messages.collection",
+            resourceId = "messages",
+            record = NativeRecord("inbox", mapOf("id" to "9")),
+            recordResourceId = "mailboxes",
+            pathParameterValues = mapOf("mailboxId" to "9"),
+        )
+        val detail = ViewSpec(
+            id = "message.detail",
+            title = "Message",
+            resourceId = "messageBody",
+            component = NativeComponent.detail,
+            sourceActionId = "message.read",
+            confidence = Confidence.verified,
+        )
+
+        assertEquals(
+            mailboxSnapshot,
+            retainedMailPaginationSnapshot(
+                hasMailWorkspaceSemantics = true,
+                paginationViewId = "messages.collection",
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                navigationHistory = listOf(mailboxSnapshot),
+            ),
+        )
+        assertNull(
+            retainedMailPaginationSnapshot(
+                hasMailWorkspaceSemantics = false,
+                paginationViewId = "messages.collection",
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                navigationHistory = listOf(mailboxSnapshot),
+            ),
+        )
+        assertNull(
+            retainedMailPaginationSnapshot(
+                hasMailWorkspaceSemantics = true,
+                paginationViewId = "other.collection",
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                navigationHistory = listOf(mailboxSnapshot),
             ),
         )
     }

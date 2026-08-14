@@ -3719,6 +3719,13 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         val view = selectedView ?: return@LaunchedEffect
+        val retainedMailPagination = retainedMailPaginationSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            paginationViewId = paginationState?.viewId,
+            selectedView = view,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
         if (loadAttempt > 0) {
             // Some app controllers acknowledge a mutation just before the corresponding GET
             // projection becomes visible. Debounce the forced authoritative reload so that an
@@ -3726,7 +3733,7 @@ private fun DynamicDiscoveredAppScreen(
             delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
             currentCoroutineContext().ensureActive()
         }
-        if (!screenCacheAllowed) recordsByResourceId = emptyMap()
+        if (!screenCacheAllowed && retainedMailPagination == null) recordsByResourceId = emptyMap()
         val cacheKey = dynamicScreenCacheKey(
             session = session,
             appId = descriptor.app.id,
@@ -3756,9 +3763,11 @@ private fun DynamicDiscoveredAppScreen(
                 dynamicRefreshError = message
             }
         }
-        paginationState = null
-        loadingMore = false
-        loadMoreError = null
+        if (retainedMailPagination == null) {
+            paginationState = null
+            loadingMore = false
+            loadMoreError = null
+        }
         try {
         if (view.component == NativeComponent.form) {
             val values = formRelationValues
@@ -3863,28 +3872,38 @@ private fun DynamicDiscoveredAppScreen(
             null
         }
         if (freshSnapshot != null) {
-            recordsByResourceId = freshSnapshot.relatedRecords
+            recordsByResourceId = if (retainedMailPagination == null) {
+                freshSnapshot.relatedRecords
+            } else {
+                recordsByResourceId + freshSnapshot.relatedRecords
+            }
             viewState = NativeScreenState.Ready(freshSnapshot.records)
-            paginationState = freshSnapshot.pagination?.let { checkpoint ->
-                descriptor.resolvedDynamicPaginationSpec(
-                    actionId = view.sourceActionId,
-                    boundValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() +
-                        selectedPathParameterValues,
-                )
-                    ?.let { spec ->
-                        DynamicPaginationState(
-                            viewId = view.id,
-                            spec = spec,
-                            nextPageNumber = checkpoint.nextPageNumber,
-                            nextRequestValue = checkpoint.nextRequestValue,
-                        )
-                    }
+            if (retainedMailPagination == null) {
+                paginationState = freshSnapshot.pagination?.let { checkpoint ->
+                    descriptor.resolvedDynamicPaginationSpec(
+                        actionId = view.sourceActionId,
+                        boundValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() +
+                            selectedPathParameterValues,
+                    )
+                        ?.let { spec ->
+                            DynamicPaginationState(
+                                viewId = view.id,
+                                spec = spec,
+                                nextPageNumber = checkpoint.nextPageNumber,
+                                nextRequestValue = checkpoint.nextRequestValue,
+                            )
+                        }
+                }
             }
             return@LaunchedEffect
         }
         val staleSnapshot = if (loadAttempt == 0) sharedDynamicNativeMemoryCache.screen(cacheKey) else null
         if (staleSnapshot != null) {
-            recordsByResourceId = staleSnapshot.relatedRecords
+            recordsByResourceId = if (retainedMailPagination == null) {
+                staleSnapshot.relatedRecords
+            } else {
+                recordsByResourceId + staleSnapshot.relatedRecords
+            }
             viewState = NativeScreenState.Ready(staleSnapshot.records)
         }
         val composite = view.compositeDataGrid
@@ -3991,7 +4010,9 @@ private fun DynamicDiscoveredAppScreen(
                     selectedRecord = authoritative
                 }
             }
-            paginationState = nextPagination
+            if (retainedMailPagination == null) {
+                paginationState = nextPagination
+            }
             if (outcome.partialFailureMessage == null) {
                 sharedDynamicNativeMemoryCache.storeScreen(
                     cacheKey,
@@ -4885,17 +4906,41 @@ private fun DynamicDiscoveredAppScreen(
     }
     val dynamicActionScope = rememberCoroutineScope()
 
-    val activePagination = paginationState?.takeIf { pagination -> pagination.viewId == selectedView.id }
+    val adjacentMailPaginationSnapshot = paginationState?.let { pagination ->
+        retainedMailPaginationSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            paginationViewId = pagination.viewId,
+            selectedView = selectedView,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
+    }
+    val activePagination = paginationState?.takeIf { pagination ->
+        pagination.viewId == selectedView.id || adjacentMailPaginationSnapshot != null
+    }
     val onLoadMore = activePagination?.let { pagination ->
         {
             if (!loadingMore) {
                 loadingMore = true
                 loadMoreError = null
-                val pagingView = selectedView
-                val existingRecords = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
-                val pagingSelection = selectedScreenIdentity
-                val pagingPathParameters = selectedPathParameterValues.toMap()
-                val pagingCacheable = screenCacheAllowed
+                val pagingView = schema.views.single { view -> view.id == pagination.viewId }
+                val pagingRecord = adjacentMailPaginationSnapshot?.record ?: selectedRecord
+                val pagingRecordResourceId = adjacentMailPaginationSnapshot?.recordResourceId
+                    ?: selectedRecordResourceId
+                val pagingSelection = dynamicScreenSelectionIdentity(
+                    resourceId = pagingRecordResourceId,
+                    recordId = pagingRecord?.id,
+                    recordScope = pagingRecord?.dynamicScreenCacheScope().orEmpty(),
+                )
+                val pagingPathParameters = adjacentMailPaginationSnapshot?.pathParameterValues
+                    ?: selectedPathParameterValues.toMap()
+                val pagingCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
+                    nativeMailScreenCacheScopeIsSafe(schema, pagingRecordResourceId, pagingRecord)
+                val existingRecords = recordsByResourceId[pagingView.resourceId].orEmpty().ifEmpty {
+                    (viewState as? NativeScreenState.Ready)?.records.orEmpty()
+                        .takeIf { pagingView.id == selectedView.id }
+                        .orEmpty()
+                }
                 val pagingRequestIdentity = dynamicPaginationRequestIdentity(
                     session = session,
                     appId = descriptor.app.id,
@@ -4905,23 +4950,35 @@ private fun DynamicDiscoveredAppScreen(
                     pathParameters = pagingPathParameters,
                     cacheable = pagingCacheable,
                 )
-                val pagingRuntimeValues = selectedRecord?.toDynamicRuntimeValues().orEmpty().toMap()
+                val pagingRuntimeValues = pagingRecord?.toDynamicRuntimeValues().orEmpty().toMap()
                 val values = pagingRuntimeValues +
                     pagingPathParameters +
                     (pagination.spec.parameterName to pagination.nextRequestValue)
                 fun isPagingRequestCurrent(): Boolean {
-                    val activeView = schema.views.firstOrNull { view -> view.id == selectedViewId }
+                    val currentView = schema.views.firstOrNull { view -> view.id == selectedViewId }
                         ?: return false
-                    val activeRecord = selectedRecord
+                    val retainedSnapshot = retainedMailPaginationSnapshot(
+                        hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+                        paginationViewId = pagination.viewId,
+                        selectedView = currentView,
+                        selectedRecordResourceId = selectedRecordResourceId,
+                        navigationHistory = navigationHistory,
+                    )
+                    val activeView = if (retainedSnapshot == null) currentView else pagingView
+                    val activeRecord = retainedSnapshot?.record ?: selectedRecord
+                    val activeRecordResourceId = retainedSnapshot?.recordResourceId
+                        ?: selectedRecordResourceId
+                    val activePathParameters = retainedSnapshot?.pathParameterValues
+                        ?: selectedPathParameterValues
                     val activeSelection = dynamicScreenSelectionIdentity(
-                        resourceId = selectedRecordResourceId,
+                        resourceId = activeRecordResourceId,
                         recordId = activeRecord?.id,
                         recordScope = activeRecord?.dynamicScreenCacheScope().orEmpty(),
                     )
                     val activeCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
                         nativeMailScreenCacheScopeIsSafe(
                             schema,
-                            selectedRecordResourceId,
+                            activeRecordResourceId,
                             activeRecord,
                         )
                     val activeIdentity = dynamicPaginationRequestIdentity(
@@ -4930,7 +4987,7 @@ private fun DynamicDiscoveredAppScreen(
                         viewId = activeView.id,
                         resourceId = activeView.resourceId,
                         selection = activeSelection,
-                        pathParameters = selectedPathParameterValues,
+                        pathParameters = activePathParameters,
                         cacheable = activeCacheable,
                     )
                     return pagingRequestIdentity.isCurrentDynamicPaginationRequest(activeIdentity)
@@ -4958,7 +5015,9 @@ private fun DynamicDiscoveredAppScreen(
                             }
                         val mergedRecords = existingRecords + novelRecords
                         val updatedRecords = recordsByResourceId + (pagingView.resourceId to mergedRecords)
-                        viewState = NativeScreenState.Ready(mergedRecords)
+                        if (selectedViewId == pagingView.id) {
+                            viewState = NativeScreenState.Ready(mergedRecords)
+                        }
                         val nextPagination = pagination.spec.toDynamicPaginationState(
                             viewId = pagingView.id,
                             lastPage = pageRecords,
@@ -5745,7 +5804,9 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     },
                     mediaArtworkResolver = mediaArtworkResolver,
-                    onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
+                    onLoadMore = onLoadMore.takeUnless {
+                        showFallbackRecordDetail && adjacentMailPaginationSnapshot == null
+                    },
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
@@ -6565,6 +6626,26 @@ private data class DynamicPaginationState(
     val nextPageNumber: Int = 2,
     val nextRequestValue: String,
 )
+
+internal fun retainedMailPaginationSnapshot(
+    hasMailWorkspaceSemantics: Boolean,
+    paginationViewId: String?,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): DynamicNavigationSnapshot? {
+    if (
+        !hasMailWorkspaceSemantics ||
+        paginationViewId == null ||
+        selectedView.component != NativeComponent.detail ||
+        !selectedRecordResourceId.isDynamicMessageResource()
+    ) {
+        return null
+    }
+    return navigationHistory.lastOrNull()?.takeIf { snapshot ->
+        snapshot.viewId == paginationViewId && snapshot.resourceId.isDynamicMessageResource()
+    }
+}
 
 private fun DynamicPaginationState.toCheckpoint(): DynamicPaginationCheckpoint = DynamicPaginationCheckpoint(
     nextPageNumber = nextPageNumber,
