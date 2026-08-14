@@ -68,10 +68,14 @@ private enum class NoteViewMode { Edit, Preview }
 internal data class NoteDeletionRecoveryState(
     val accountScope: String,
     val noteId: Long,
+    val originalEtag: String? = null,
+    val originalPreconditionRecorded: Boolean = false,
 ) {
     init {
         require(accountScope.isCanonicalGroupwareMutationAccountScope())
         require(noteId >= 0L)
+        require(originalEtag == null || originalEtag.length <= 4_096 && originalEtag.none(Char::isISOControl))
+        require(originalPreconditionRecorded || originalEtag == null)
     }
 }
 
@@ -1233,8 +1237,14 @@ internal fun NextcloudNoteEditor(
                         deleting = true
                         deleteError = null
                         scope.launch {
+                            var deletionEtag = loaded.etag
                             if (deletionRecoveryState == null) {
-                                val encoded = NoteDeletionRecoveryState(accountScope, loaded.id)
+                                val encoded = NoteDeletionRecoveryState(
+                                    accountScope = accountScope,
+                                    noteId = loaded.id,
+                                    originalEtag = loaded.etag,
+                                    originalPreconditionRecorded = true,
+                                )
                                     .encodeForDurableStorage()
                                 val saved = try {
                                     services.saveDurableMutationRecovery(
@@ -1253,10 +1263,19 @@ internal fun NextcloudNoteEditor(
                                     return@launch
                                 }
                                 deletionRecoveryState = encoded
+                            } else {
+                                val recovery = deletionRecovery
+                                if (recovery == null || !recovery.originalPreconditionRecorded) {
+                                    deleteError = "This recovery record predates safe delete retries. Check the server, then use Recovery options."
+                                    showRecoveryOptions = true
+                                    deleting = false
+                                    return@launch
+                                }
+                                deletionEtag = recovery.originalEtag
                             }
                             var requestFailure: String? = null
                             try {
-                                services.deleteNote(session, loaded.id, loaded.etag)
+                                services.deleteNote(session, loaded.id, deletionEtag)
                             } catch (failure: CancellationException) {
                                 throw failure
                             } catch (failure: Exception) {

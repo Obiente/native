@@ -153,6 +153,66 @@ class GroupwareDavTest {
     }
 
     @Test
+    fun `vcard text decoding consumes escapes once and preserves literal organization semicolons`() {
+        val href = "/remote.php/dav/addressbooks/users/person/contacts/escape.vcf"
+        val notes = "Path C:\\new, archive; ready"
+        val organization = "Example;"
+        val content = createGroupwareContactContent(
+            uid = "escape",
+            displayName = "Escape Example",
+            email = null,
+            phone = null,
+            organization = organization,
+            address = null,
+            notes = notes,
+        )
+
+        val parsed = requireNotNull(
+            parseGroupwareContact(
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                href = href,
+                etag = "\"new\"",
+                content = content,
+            ),
+        )
+
+        assertEquals(notes, parsed.notes)
+        assertEquals(organization, parsed.organization)
+        assertEquals(
+            "Example",
+            parseGroupwareContact(
+                addressBookHref = parsed.addressBookHref,
+                href = href,
+                etag = parsed.etag,
+                content = content.replace("ORG:Example\\;", "ORG:Example;"),
+            )?.organization,
+        )
+        assertTrue(
+            ContactMutationPostcondition.Upsert(
+                href = href,
+                addressBookHref = parsed.addressBookHref,
+                expectedUid = parsed.uid,
+                previousEtag = "\"old\"",
+                draft = ContactDraft(
+                    name = parsed.displayName,
+                    email = "",
+                    phone = "",
+                    organization = organization,
+                    address = "",
+                    notes = notes,
+                ),
+            ).isSatisfiedBy(
+                NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/vcard",
+                    etag = parsed.etag,
+                    body = content.encodeToByteArray(),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `carddav discovery and contact report become native semantic records`() {
         val discovery = NextcloudApiResponse(
             status = 207,

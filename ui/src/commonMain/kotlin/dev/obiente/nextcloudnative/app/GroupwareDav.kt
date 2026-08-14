@@ -448,7 +448,12 @@ fun parseGroupwareContact(
         emails = properties("EMAIL").map { it.value.trim() }.filter(String::isNotBlank).distinct(),
         phones = properties("TEL").map { it.value.trim().decodeCalendarText() }
             .filter(String::isNotBlank).distinct(),
-        organization = property("ORG")?.value?.decodeCalendarText()?.trimEnd(';')?.takeIf(String::isNotBlank),
+        organization = property("ORG")?.value
+            ?.splitUnescapedCalendarComponents(';')
+            ?.dropLastWhile(String::isEmpty)
+            ?.joinToString(";")
+            ?.decodeCalendarText()
+            ?.takeIf(String::isNotBlank),
         address = property("ADR")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
             ?.joinToString(", ")?.decodeCalendarText()?.takeIf(String::isNotBlank),
         birthday = property("BDAY")?.value?.trim()?.takeIf(String::isNotBlank),
@@ -1065,10 +1070,27 @@ private fun String.escapeCalendarText(): String = replace("\\", "\\\\")
     .replace(",", "\\,")
     .replace(";", "\\;")
 
-private fun String.decodeCalendarText(): String = replace("\\n", "\n", ignoreCase = true)
-    .replace("\\,", ",")
-    .replace("\\;", ";")
-    .replace("\\\\", "\\")
+private fun String.decodeCalendarText(): String = buildString(length) {
+    var index = 0
+    while (index < this@decodeCalendarText.length) {
+        val character = this@decodeCalendarText[index]
+        if (character != '\\' || index == this@decodeCalendarText.lastIndex) {
+            append(character)
+            index += 1
+            continue
+        }
+        val escaped = this@decodeCalendarText[index + 1]
+        when (escaped) {
+            'n', 'N' -> append('\n')
+            '\\', ',', ';' -> append(escaped)
+            else -> {
+                append('\\')
+                append(escaped)
+            }
+        }
+        index += 2
+    }
+}
 
 private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<String> {
     val components = mutableListOf<String>()
