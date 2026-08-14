@@ -12853,27 +12853,42 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     )
                     is SupportDiagnosticsSubmissionState.Submitted -> {
                         Text(
-                            "Sent privately. Support code: ${current.supportCode}",
+                            if (current.reports.size == 1) {
+                                "Sent privately. Your report remains available until its retention period ends."
+                            } else {
+                                "${current.reports.size} private reports remain available until their retention periods end."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    status = if (
-                                        services.copyTextToClipboard("Obiente support code", current.supportCode)
-                                    ) {
-                                        "Support code copied."
-                                    } else {
-                                        "The support code could not be copied."
+                        current.reports.forEach { report ->
+                            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                Text(
+                                    "Support code: ${report.supportCode}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            status = if (
+                                                services.copyTextToClipboard(
+                                                    "Obiente support code",
+                                                    report.supportCode,
+                                                )
+                                            ) {
+                                                "Support code copied."
+                                            } else {
+                                                "The support code could not be copied."
+                                            }
+                                        },
+                                    ) { Text("Copy support code") }
+                                    TextButton(onClick = { services.openExternalUrl(report.statusUrl) }) {
+                                        Text("Open private status")
                                     }
-                                },
-                            ) { Text("Copy support code") }
-                            TextButton(onClick = { services.openExternalUrl(current.statusUrl) }) {
-                                Text("Open private status")
+                                }
                             }
                         }
                     }

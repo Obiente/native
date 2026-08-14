@@ -205,22 +205,27 @@ class JvmSupportIntakeTest {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-ABCDE-23456"))
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-MNPQR-34567"))
+            fixture.intake.submit("A second refresh failed.", "nightly", emptyList())
 
             fixture.intake.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
             fixture.diagnostics.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-FGHJK-6789A"))
             fixture.intake.submit("B refresh failed.", "nightly", emptyList())
 
-            assertEquals(2, fixture.completedDescriptors().size)
+            assertEquals(3, fixture.completedDescriptors().size)
             fixture.intake.close()
             val restored = fixture.newIntake()
             val accountA = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
-            assertEquals("OBI-ABCDE-23456", accountA.supportCode)
+            assertEquals(
+                setOf("OBI-ABCDE-23456", "OBI-MNPQR-34567"),
+                accountA.reports.map { it.supportCode }.toSet(),
+            )
 
             restored.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
 
             val accountB = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
-            assertEquals("OBI-FGHJK-6789A", accountB.supportCode)
+            assertEquals(listOf("OBI-FGHJK-6789A"), accountB.reports.map { it.supportCode })
         }
     }
 

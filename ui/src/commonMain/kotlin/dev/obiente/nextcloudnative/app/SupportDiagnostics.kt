@@ -198,11 +198,20 @@ sealed interface SupportDiagnosticsSubmissionState {
         SupportDiagnosticsSubmissionState
     data class Rejected(val message: String) : SupportDiagnosticsSubmissionState
     data object Cancelled : SupportDiagnosticsSubmissionState
-    data class Submitted(
+    data class SubmittedReport(
         val supportCode: String,
         val statusUrl: String,
         val retentionUntil: String,
-    ) : SupportDiagnosticsSubmissionState
+    )
+    data class Submitted(val reports: List<SubmittedReport>) : SupportDiagnosticsSubmissionState {
+        init {
+            require(reports.isNotEmpty())
+        }
+
+        val supportCode: String get() = reports.first().supportCode
+        val statusUrl: String get() = reports.first().statusUrl
+        val retentionUntil: String get() = reports.first().retentionUntil
+    }
     data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
 }
 

@@ -105,7 +105,8 @@ class JvmSupportIntake(
                                 },
                                 outcomeAmbiguous = restored.outcomeAmbiguous,
                             )
-                        } ?: visibleCompleted?.toSubmissionState() ?: SupportDiagnosticsSubmissionState.Idle,
+                        } ?: visibleCompleted?.let { submittedStateFor(it.originAccountIdentity) }
+                            ?: SupportDiagnosticsSubmissionState.Idle,
                         restored?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
                     )
                 }
@@ -622,7 +623,7 @@ class JvmSupportIntake(
         }
         synchronized(lock) { completedSubmissions = completedSubmissions + completedSubmission }
         finishTerminal(submission)
-        publishState(completedSubmission.toSubmissionState(), submission.originAccountIdentity)
+        publishState(submittedStateFor(submission.originAccountIdentity), submission.originAccountIdentity)
     }
 
     private fun validateReceipt(
@@ -998,13 +999,7 @@ class JvmSupportIntake(
         val recordId: String,
         val originAccountIdentity: String,
         val receipt: SupportIntakeReceipt,
-    ) {
-        fun toSubmissionState() = SupportDiagnosticsSubmissionState.Submitted(
-            supportCode = receipt.supportCode,
-            statusUrl = receipt.statusUrl,
-            retentionUntil = receipt.retentionUntil,
-        )
-    }
+    )
 
     @Serializable
     private data class PersistedPendingSubmission(
@@ -1060,7 +1055,8 @@ class JvmSupportIntake(
             actualState is SupportDiagnosticsSubmissionState.Initializing -> state.value = actualState
             pendingSubmission != null -> publishStateLocked(actualState, pendingSubmission.originAccountIdentity)
             actualStateAccountIdentity == activeAccountIdentity -> state.value = actualState
-            else -> state.value = latestCompletedFor(activeAccountIdentity)?.toSubmissionState()
+            else -> state.value = latestCompletedFor(activeAccountIdentity)
+                ?.let { submittedStateFor(it.originAccountIdentity) }
                 ?: SupportDiagnosticsSubmissionState.Idle
         }
     }
@@ -1068,6 +1064,23 @@ class JvmSupportIntake(
     private fun latestCompletedFor(accountIdentity: String?): CompletedSubmission? =
         completedSubmissions.filter { it.originAccountIdentity == accountIdentity }
             .maxByOrNull { Instant.parse(it.receipt.createdAt) }
+
+    private fun submittedStateFor(accountIdentity: String): SupportDiagnosticsSubmissionState.Submitted =
+        SupportDiagnosticsSubmissionState.Submitted(
+            completedSubmissions
+                .filter { it.originAccountIdentity == accountIdentity }
+                .sortedWith(
+                    compareByDescending<CompletedSubmission> { Instant.parse(it.receipt.createdAt) }
+                        .thenByDescending(CompletedSubmission::recordId),
+                )
+                .map { completed ->
+                    SupportDiagnosticsSubmissionState.SubmittedReport(
+                        supportCode = completed.receipt.supportCode,
+                        statusUrl = completed.receipt.statusUrl,
+                        retentionUntil = completed.receipt.retentionUntil,
+                    )
+                },
+        )
 }
 
 private fun Long.saturatingAdd(increment: Long): Long =
