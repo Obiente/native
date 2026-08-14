@@ -165,6 +165,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationKey
 import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationStore
 import dev.obiente.nextcloudnative.nativeui.runtime.NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresCompletionPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeCreateMutationPostcondition
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
@@ -3625,6 +3626,42 @@ private fun DynamicDiscoveredAppScreen(
                 key: NativePendingMutationKey,
                 values: Map<String, String>,
             ): Boolean {
+                val createPostcondition = nativeCreateMutationPostcondition(key, values)
+                if (createPostcondition != null) {
+                    val create = schema.action(createPostcondition.actionId)?.takeIf { action ->
+                        action.intent == ActionIntent.create &&
+                            action.binding.method == HttpMethod.POST &&
+                            action.resourceId == createPostcondition.resourceId &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    val read = schema.action(createPostcondition.readActionId)?.takeIf { action ->
+                        action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.binding.method == HttpMethod.GET &&
+                            action.resourceId == createPostcondition.resourceId &&
+                            action.binding.path.substringBefore('?').trimEnd('/') ==
+                            create.binding.path.substringBefore('?').trimEnd('/') &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                    return runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = read.id,
+                            values = createPostcondition.bindingValues,
+                            runtimeContext = createPostcondition.bindingValues,
+                            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                        ).any(createPostcondition::matches)
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        false
+                    }
+                }
                 if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
                 val postcondition = nativeChoresCompletionPostcondition(key, values) ?: return false
                 val commandActionId = key.actionId.removePrefix(
@@ -4297,33 +4334,22 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     LaunchedEffect(
-        selectedView.id,
-        viewState,
-        openedDefaultChores,
-    ) {
-        if (nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team) {
-            return@LaunchedEffect
-        }
-        val records = (viewState as? NativeScreenState.Ready)?.records ?: return@LaunchedEffect
-        retainedChoresTeamRecord = records.singleOrNull()
-            ?.takeIf { record -> record.actionSafeIdentity && record.actionBindingProvenanceValid }
-        if (records.size == 1 && selectedRecord == null && !openedDefaultChores) {
-            openedDefaultChores = true
-            selectDynamicRecord(records.single())
-        }
-    }
-
-    LaunchedEffect(
         descriptor,
         selectedView.id,
         loadAttempt,
     ) {
         val kind = nativeChoresWorkspaceKind(schema, selectedView)
-        if (kind !in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History)) {
+        if (
+            kind !in setOf(
+                NativeChoresWorkspaceKind.Team,
+                NativeChoresWorkspaceKind.Chores,
+                NativeChoresWorkspaceKind.History,
+            )
+        ) {
             return@LaunchedEffect
         }
-        // Child reads and team authority can change independently. Clear the retained authority
-        // before every child refresh so writes stay unavailable until a fresh Team read succeeds.
+        // Cached Team content remains useful to paint, but it never authorizes a write. Clear the
+        // retained authority on Team and child entry until this exact force-network read succeeds.
         retainedChoresTeamRecord = null
         val teamView = schema.views.singleOrNull { candidate ->
             nativeChoresWorkspaceKind(schema, candidate) == NativeChoresWorkspaceKind.Team &&
@@ -4346,6 +4372,15 @@ private fun DynamicDiscoveredAppScreen(
             }
             retainedChoresTeamRecord = team
             recordsByResourceId = recordsByResourceId + (teamView.resourceId to records)
+            if (
+                kind == NativeChoresWorkspaceKind.Team &&
+                records.size == 1 &&
+                selectedRecord == null &&
+                !openedDefaultChores
+            ) {
+                openedDefaultChores = true
+                selectDynamicRecord(records.single())
+            }
         }.onFailure { failure ->
             if (failure is CancellationException) throw failure
         }

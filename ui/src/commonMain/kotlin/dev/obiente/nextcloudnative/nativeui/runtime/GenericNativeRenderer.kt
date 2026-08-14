@@ -477,7 +477,7 @@ fun GenericNativeAppScreen(
             }
         }
     }
-    val collectionCreatePlan = presentedResource
+    val collectionCreateCandidate = presentedResource
         ?.takeIf { showCollectionCreateAction }
         ?.let { resource ->
         nativeRecordActions(
@@ -485,6 +485,23 @@ fun GenericNativeAppScreen(
             resource = resource,
             navigationContext = datasetContext.bindingValues,
         ).create
+    }
+    val collectionCreateRecoveryPlan = collectionCreateCandidate?.let { createPlan ->
+        val activeReadAction = schema.action(view.sourceActionId) ?: return@let null
+        nativeCreateMutationRecoveryPlan(
+            schema = schema,
+            activeReadAction = activeReadAction,
+            resource = presentedResource,
+            createPlan = createPlan,
+            records = presentedRecords,
+            navigationContext = datasetContext.bindingValues,
+            collectionComplete = onLoadMore == null,
+        )
+    }
+    // Non-idempotent creates remain unavailable until the active collection supplies the exact
+    // complete baseline and request shape needed for durable postcondition reconciliation.
+    val collectionCreatePlan = collectionCreateCandidate?.takeIf {
+        collectionCreateRecoveryPlan != null
     }
     val openCollectionCreate: (() -> Unit)? = collectionCreatePlan?.let { plan ->
         val actionResource = presentedResource
@@ -604,6 +621,13 @@ fun GenericNativeAppScreen(
                 intent = plan.action.intent,
                 recordId = record?.id,
             ) ?: return@pending null
+            val createMutationRecoveryPlan = if (plan.kind == NativeRecordFormActionKind.Create) {
+                collectionCreateRecoveryPlan?.takeIf { recoveryPlan ->
+                    recoveryPlan.action.id == plan.action.id
+                } ?: return@pending null
+            } else {
+                null
+            }
             PendingNativeRecordFormAction(
                 plan = plan,
                 itemLabel = record
@@ -613,6 +637,7 @@ fun GenericNativeAppScreen(
                 datasetContext = datasetContext,
                 restoreKey = pendingRecordFormActionToken.orEmpty(),
                 mutationRecoveryOwner = mutationRecoveryOwner,
+                createMutationRecoveryPlan = createMutationRecoveryPlan,
             )
         }
     val pendingRecordCommandFormAction = pendingRecordCommandFormActionToken
@@ -1033,6 +1058,7 @@ fun GenericNativeAppScreen(
             schema = schema,
             actionExecutor = actionExecutor,
             filePicker = filePicker,
+            pendingMutationStore = pendingMutationStore,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
                 activeMutationOwners += owner
@@ -1061,6 +1087,7 @@ fun GenericNativeAppScreen(
             schema = schema,
             actionExecutor = actionExecutor,
             filePicker = filePicker,
+            pendingMutationStore = pendingMutationStore,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
                 activeMutationOwners += owner
@@ -1994,6 +2021,7 @@ private data class PendingNativeRecordFormAction(
     override val datasetContext: NativeDatasetContext,
     override val restoreKey: String,
     override val mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
+    val createMutationRecoveryPlan: NativeCreateMutationRecoveryPlan?,
 ) : PendingNativeRecordActionForm {
     override val action: ActionSpec
         get() = plan.action
@@ -2180,6 +2208,7 @@ private fun GenericRecordActionFormDialog(
     schema: NativeAppSchema,
     actionExecutor: NativeActionExecutor,
     filePicker: NativeFileFieldPicker?,
+    pendingMutationStore: NativePendingMutationStore?,
     mutationRecovery: NativeFormMutationRecoveryState?,
     onMutationStarted: (NativeFormMutationRecoveryOwner) -> Unit,
     onMutationFinished: (NativeFormMutationRecoveryOwner, NativeActionExecutionResult) -> Unit,
@@ -2269,7 +2298,26 @@ private fun GenericRecordActionFormDialog(
         error = null
         onMutationStarted(pending.mutationRecoveryOwner)
         scope.launch {
-            val result = actionExecutor.execute(request)
+            val createRecoveryPlan = (pending as? PendingNativeRecordFormAction)
+                ?.createMutationRecoveryPlan
+            val result = if (createRecoveryPlan != null) {
+                val store = pendingMutationStore
+                if (store == null) {
+                    NativeActionExecutionResult.Failure(
+                        "Crash-safe create staging is unavailable on this platform.",
+                        NativeActionFailureOutcome.Rejected,
+                    )
+                } else {
+                    executeNativeCreateMutation(
+                        plan = createRecoveryPlan,
+                        request = request,
+                        actionExecutor = actionExecutor,
+                        pendingMutationStore = store,
+                    )
+                }
+            } else {
+                actionExecutor.execute(request)
+            }
             onMutationFinished(pending.mutationRecoveryOwner, result)
             when (result) {
                 is NativeActionExecutionResult.Success -> onActionSucceeded(pending.action)
