@@ -72,6 +72,8 @@ class JvmSupportIntake(
     private val completedDescriptorRead: (File) -> String = { descriptor ->
         descriptor.readText(Charsets.UTF_8)
     },
+    private val cancellationReconcileWindowMillis: Long = SUPPORT_CANCELLATION_RECONCILE_WINDOW_MILLIS,
+    private val cancellationReconcilePollMillis: Long = SUPPORT_CANCELLATION_RECONCILE_POLL_MILLIS,
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -106,6 +108,8 @@ class JvmSupportIntake(
 
     init {
         require(descriptorCleanupRetryMillis > 0L)
+        require(cancellationReconcileWindowMillis in 0L..MAX_CANCELLATION_RECONCILE_WINDOW_MILLIS)
+        require(cancellationReconcilePollMillis > 0L)
         scope.launch {
             try {
                 val storageFailure = runCatching { preparePrivateStorage() }.exceptionOrNull()
@@ -622,7 +626,7 @@ class JvmSupportIntake(
         return true
     }
 
-    private fun upload(submission: PendingSubmission) {
+    private suspend fun upload(submission: PendingSubmission) {
         if (cancellationRequested.get()) {
             finishCancelled(submission)
             return
@@ -735,54 +739,94 @@ class JvmSupportIntake(
         }
     }
 
-    private fun reconcileAfterAmbiguousResult(submission: PendingSubmission, uploadFailure: IOException) {
+    private suspend fun reconcileAfterAmbiguousResult(
+        submission: PendingSubmission,
+        uploadFailure: IOException,
+    ) {
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments("api/v1/receipts").build())
             .header("Accept", "application/json")
             .header("Idempotency-Key", submission.idempotencyKey)
             .get()
             .build()
-        val call = client.newCall(request)
-        if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
-            call.cancel()
-            if (synchronized(lock) { pending === submission }) {
+        var cancellationDeadlineNanos: Long? = null
+        while (true) {
+            val call = client.newCall(request)
+            if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
+                call.cancel()
+                if (synchronized(lock) { pending === submission }) {
+                    retainForRetry(
+                        submission,
+                        "The upload result still needs to be reconciled. You can retry it safely.",
+                        ambiguous = true,
+                    )
+                }
+                return
+            }
+            val responseResult = try {
+                call.execute().use { response ->
+                    response.code to response.readBoundedText()
+                }
+            } catch (_: IOException) {
                 retainForRetry(
                     submission,
-                    "The upload result still needs to be reconciled. You can retry it safely.",
-                    ambiguous = true,
+                    if (cancellationRequested.get()) {
+                        "Cancellation could not be confirmed. Reconcile the private submission before retrying."
+                    } else uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
+                        ?.takeIf(String::isNotBlank)
+                        ?: "The upload result is uncertain. Check your connection before retrying.",
+                    true,
                 )
-            }
-            return
-        }
-        try {
-            call.execute().use { response ->
-                val responseText = response.readBoundedText()
+                return
+            } finally {
                 activeCall.compareAndSet(call, null)
-                when {
-                    response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
-                    response.code == 404 && cancellationRequested.get() -> finishCancelled(submission)
-                    response.code == 404 -> retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
-                    else -> retainForRetry(
+            }
+            val (responseCode, responseText) = responseResult
+            when {
+                responseCode in 200..299 -> {
+                    try {
+                        finishReceived(submission, decodeReceipt(responseText))
+                    } catch (_: IOException) {
+                        retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
+                    } catch (_: IllegalArgumentException) {
+                        retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
+                    }
+                    return
+                }
+                responseCode == 404 && cancellationRequested.get() -> {
+                    val nowNanos = System.nanoTime()
+                    val deadlineNanos = cancellationDeadlineNanos
+                        ?: nowNanos.saturatingAdd(cancellationReconcileWindowMillis * NANOS_PER_MILLISECOND)
+                            .also { cancellationDeadlineNanos = it }
+                    val remainingNanos = deadlineNanos - nowNanos
+                    if (remainingNanos > 0L) {
+                        val delayMillis = minOf(
+                            cancellationReconcilePollMillis,
+                            (remainingNanos / NANOS_PER_MILLISECOND).coerceAtLeast(1L),
+                        )
+                        delay(delayMillis)
+                        continue
+                    }
+                    retainForRetry(
+                        submission,
+                        "Support has not confirmed receipt yet. Retry again to finish deleting the private report safely.",
+                        ambiguous = true,
+                    )
+                    return
+                }
+                responseCode == 404 -> {
+                    retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
+                    return
+                }
+                else -> {
+                    retainForRetry(
                         submission,
                         "The upload result is uncertain. Check your connection before retrying.",
                         true,
                     )
+                    return
                 }
             }
-        } catch (_: IOException) {
-            retainForRetry(
-                submission,
-                if (cancellationRequested.get()) {
-                    "Cancellation could not be confirmed. Reconcile the private submission before retrying."
-                } else uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
-                    ?.takeIf(String::isNotBlank)
-                    ?: "The upload result is uncertain. Check your connection before retrying.",
-                true,
-            )
-        } catch (_: IllegalArgumentException) {
-            retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
-        } finally {
-            activeCall.compareAndSet(call, null)
         }
     }
 
@@ -1306,22 +1350,25 @@ class JvmSupportIntake(
         val archiveAgeMillis = (nowEpochMillis - persisted.createdAtEpochMillis).coerceAtLeast(0L)
         val archiveIsRetained = archiveAgeMillis <= SUPPORT_TEMPORARY_MAX_AGE_MILLIS
         val archive = persisted.archiveName?.let { archiveName ->
-            File(temporaryRoot, archiveName).absoluteFile.normalize().also { candidate ->
-                require(candidate.parentFile == temporaryRoot.absoluteFile.normalize())
-                if (archiveIsRetained) {
-                    val archiveAttributes = try {
-                        Files.readAttributes(candidate.toPath(), BasicFileAttributes::class.java)
-                    } catch (failure: NoSuchFileException) {
-                        throw IllegalArgumentException("Pending support archive is missing.", failure)
-                    }
-                    require(archiveAttributes.isRegularFile)
-                    require(archiveAttributes.size() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
+            val candidate = File(temporaryRoot, archiveName).absoluteFile.normalize()
+            require(candidate.parentFile == temporaryRoot.absoluteFile.normalize())
+            if (!archiveIsRetained) {
+                deletePrivateFileOrRetry(candidate)
+                null
+            } else {
+                val archiveAttributes = try {
+                    Files.readAttributes(candidate.toPath(), BasicFileAttributes::class.java)
+                } catch (_: NoSuchFileException) {
+                    null
+                }
+                archiveAttributes?.let { attributes ->
+                    require(attributes.isRegularFile)
+                    require(attributes.size() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
                     restrictOwnerOnlyFile(candidate)
-                } else {
-                    deletePrivateFileOrRetry(candidate)
+                    candidate
                 }
             }
-        }?.takeIf { archiveIsRetained }
+        }
         pendingDescriptorRestorePending.set(false)
         PendingSubmission(
             archive = archive,
@@ -1823,6 +1870,10 @@ private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_00
 private const val SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
 private const val SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS = 60L * 1_000L
+private const val SUPPORT_CANCELLATION_RECONCILE_WINDOW_MILLIS = 10L * 1_000L
+private const val SUPPORT_CANCELLATION_RECONCILE_POLL_MILLIS = 500L
+private const val MAX_CANCELLATION_RECONCILE_WINDOW_MILLIS = 60L * 1_000L
+private const val NANOS_PER_MILLISECOND = 1_000_000L
 private const val SUPPORT_PENDING_RESTORE_MESSAGE =
     "Private support report recovery is temporarily unavailable. The app will retry automatically."
 private const val SUPPORT_COMPLETED_RESTORE_MESSAGE =
