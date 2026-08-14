@@ -60,6 +60,7 @@ class JvmSupportIntake(
     private val supportMutationsAllowed: () -> Boolean = { true },
     private val directorySync: (File) -> Unit = ::syncPosixDirectoryEntry,
     private val descriptorCleanupRetryMillis: Long = SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS,
+    private val beforeCallRegistration: () -> Unit = {},
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -370,9 +371,28 @@ class JvmSupportIntake(
     }
 
     override fun close() {
-        shutdownRequested.set(true)
-        activeCall.getAndSet(null)?.cancel()
+        val call = synchronized(lock) {
+            shutdownRequested.set(true)
+            activeCall.getAndSet(null)
+        }
+        call?.cancel()
         scope.cancel()
+    }
+
+    private fun registerActiveCall(
+        submission: PendingSubmission,
+        call: Call,
+        allowCancellationRequested: Boolean,
+    ): Boolean = synchronized(lock) {
+        if (
+            shutdownRequested.get() ||
+            pending !== submission ||
+            (!allowCancellationRequested && cancellationRequested.get())
+        ) {
+            false
+        } else {
+            activeCall.compareAndSet(null, call)
+        }
     }
 
     private suspend fun packageSubmission(submission: PendingSubmission): Boolean {
@@ -480,10 +500,23 @@ class JvmSupportIntake(
         }
         publishState(SupportDiagnosticsSubmissionState.Uploading(0f))
         val call = client.newCall(request)
-        activeCall.set(call)
+        beforeCallRegistration()
+        if (!registerActiveCall(submission, call, allowCancellationRequested = false)) {
+            call.cancel()
+            when {
+                cancellationRequested.get() -> finishCancelled(submission)
+                synchronized(lock) { pending === submission } -> retainForRetry(
+                    submission,
+                    "The private support submission was interrupted before upload. You can retry it safely.",
+                    ambiguous = false,
+                )
+            }
+            return
+        }
         try {
             call.execute().use { response ->
                 val responseText = response.readBoundedText()
+                activeCall.compareAndSet(call, null)
                 when {
                     response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
                     response.code == 408 -> reconcileAfterAmbiguousResult(
@@ -506,6 +539,7 @@ class JvmSupportIntake(
                 }
             }
         } catch (failure: IOException) {
+            activeCall.compareAndSet(call, null)
             if (shutdownRequested.get()) {
                 retainForRetry(
                     submission,
@@ -533,10 +567,21 @@ class JvmSupportIntake(
             .get()
             .build()
         val call = client.newCall(request)
-        activeCall.set(call)
+        if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
+            call.cancel()
+            if (synchronized(lock) { pending === submission }) {
+                retainForRetry(
+                    submission,
+                    "The upload result still needs to be reconciled. You can retry it safely.",
+                    ambiguous = true,
+                )
+            }
+            return
+        }
         try {
             call.execute().use { response ->
                 val responseText = response.readBoundedText()
+                activeCall.compareAndSet(call, null)
                 when {
                     response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
                     response.code == 404 && cancellationRequested.get() -> finishCancelled(submission)
@@ -614,10 +659,17 @@ class JvmSupportIntake(
             return
         }
         val call = client.newCall(request)
-        activeCall.set(call)
+        if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
+            call.cancel()
+            if (synchronized(lock) { pending === submission }) {
+                retainCancellationForRetry(submission, receipt, "Deletion still needs to be confirmed. Retry safely.")
+            }
+            return
+        }
         try {
             call.execute().use { response ->
                 response.readBoundedText()
+                activeCall.compareAndSet(call, null)
                 when {
                     response.code in TERMINAL_DELETION_STATUS_CODES || response.code == 404 ->
                         finishCancelled(submission)
@@ -655,7 +707,17 @@ class JvmSupportIntake(
             .get()
             .build()
         val call = client.newCall(request)
-        activeCall.set(call)
+        if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
+            call.cancel()
+            if (synchronized(lock) { pending === submission }) {
+                retainCancellationForRetry(
+                    submission,
+                    receipt,
+                    "Deletion verification was interrupted. Retry safely.",
+                )
+            }
+            return
+        }
         try {
             call.execute().use { response ->
                 response.readBoundedText()
@@ -682,6 +744,21 @@ class JvmSupportIntake(
 
     private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
         validateReceipt(receipt)
+        val existingCompletion = synchronized(lock) {
+            completedSubmissions.firstOrNull { completed ->
+                completed.originAccountIdentity == submission.originAccountIdentity &&
+                    completed.receipt.statusUrl == receipt.statusUrl &&
+                    completed.receipt.supportCode == receipt.supportCode
+            }
+        }
+        if (existingCompletion != null) {
+            finishTerminal(submission)
+            publishState(
+                submittedStateFor(submission.originAccountIdentity),
+                submission.originAccountIdentity,
+            )
+            return
+        }
         val completedSubmission = CompletedSubmission(
             recordId = UUID.randomUUID().toString(),
             originAccountIdentity = submission.originAccountIdentity,

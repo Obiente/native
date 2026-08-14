@@ -335,6 +335,32 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun cancellationWinsBeforeTheUploadCallIsRegistered() = runBlocking {
+        val registrationEntered = CountDownLatch(1)
+        val allowRegistration = CountDownLatch(1)
+        testFixture(
+            beforeCallRegistration = {
+                registrationEntered.countDown()
+                check(allowRegistration.await(5, TimeUnit.SECONDS))
+            },
+        ).use { fixture ->
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertTrue(registrationEntered.await(5, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            assertEquals(0, fixture.server.requestCount)
+
+            allowRegistration.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+        }
+    }
+
+    @Test
     fun expiresCompletedReceiptWhileTheProcessRemainsOpen() = runBlocking {
         testFixture().use { fixture ->
             val retentionUntil = Instant.now().plusSeconds(2)
@@ -395,6 +421,39 @@ class JvmSupportIntakeTest {
 
                 assertIs<SupportDiagnosticsSubmissionState.Unsupported>(unavailable.states().value)
                 assertEquals(0, fixture.server.requestCount)
+            }
+        }
+    }
+
+    @Test
+    fun reconciledReceiptDoesNotDuplicateAnExistingCompletionAfterRestart() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(fixture.statusUrl).newBuilder().headersDelay(1, TimeUnit.SECONDS).build(),
+            )
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val persistedPending = File(fixture.temporaryRoot, "pending.json").readText().replace(
+                Regex("\\\"archiveName\\\":\\\"[^\\\"]+\\\""),
+                "\"archiveName\":null",
+            )
+            submission.join()
+            assertEquals(1, fixture.completedDescriptors().size)
+
+            File(fixture.temporaryRoot, "pending.json").writeText(persistedPending)
+            fixture.intake.close()
+            fixture.newIntake().use { restored ->
+                assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+                fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+                restored.retry()
+
+                val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+                assertEquals(listOf("OBI-ABCDE-23456"), submitted.reports.map { it.supportCode })
+                assertEquals(1, fixture.completedDescriptors().size)
+                assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
             }
         }
     }
@@ -968,6 +1027,7 @@ class JvmSupportIntakeTest {
         supportMutationsAllowed: () -> Boolean = { true },
         directorySync: (File) -> Unit = {},
         descriptorCleanupRetryMillis: Long = 60_000L,
+        beforeCallRegistration: () -> Unit = {},
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
@@ -998,6 +1058,7 @@ class JvmSupportIntakeTest {
             supportMutationsAllowed = supportMutationsAllowed,
             directorySync = directorySync,
             descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
+            beforeCallRegistration = beforeCallRegistration,
         )
     }
 
@@ -1034,6 +1095,7 @@ class JvmSupportIntakeTest {
         val supportMutationsAllowed: () -> Boolean,
         val directorySync: (File) -> Unit,
         val descriptorCleanupRetryMillis: Long,
+        val beforeCallRegistration: () -> Unit,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -1050,6 +1112,7 @@ class JvmSupportIntakeTest {
             supportMutationsAllowed = supportMutationsAllowed,
             directorySync = directorySync,
             descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
+            beforeCallRegistration = beforeCallRegistration,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }
