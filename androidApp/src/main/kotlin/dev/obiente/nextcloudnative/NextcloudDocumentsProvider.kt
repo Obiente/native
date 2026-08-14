@@ -18,6 +18,8 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
+import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.io.File
 import java.io.FileOutputStream
@@ -94,6 +96,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
         val session = requireSession()
+        if (AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
+            val handoff = AndroidExternalFileHandoffRegistry.peek(documentId, session)
+                ?: throw FileNotFoundException("This external file handoff has expired.")
+            cursor.addExternalHandoffRow(handoff)
+            return cursor
+        }
         val reference = requireReference(documentId, session)
         if (reference.isRoot) {
             cursor.addDocumentRow(session, null)
@@ -173,6 +181,10 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         signal?.throwIfCanceled()
 
         val session = requireSession()
+        if (AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
+            if (mode != "r") throw SecurityException("External file handoffs are read-only.")
+            return openExternalHandoffDocument(session, documentId, signal)
+        }
         val reference = requireReference(documentId, session)
         if (reference.isRoot) throw FileNotFoundException("Folders cannot be opened as files.")
         if (mode == "r") {
@@ -202,12 +214,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
         }
 
-        return openVirtualFileProxy(session, account, file, signal)
+        return openVirtualFileProxy(session, account.userId, file, signal)
     }
 
     private fun openVirtualFileProxy(
         session: NextcloudSession,
-        account: ResolvedAccount,
+        userId: String,
         file: NextcloudFile,
         signal: CancellationSignal?,
     ): ParcelFileDescriptor {
@@ -231,31 +243,138 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         }
         val rangeSession = services.openFileRangeSession(
             session = session,
-            userId = account.userId,
+            userId = userId,
             path = file.path,
             size = size,
             expectedEtag = etag,
         )
-        val staging = virtualFiles.prepareHydration(session, size)
-        val callback = AndroidVirtualFileProxyCallback(
-            source = rangeSession,
-            staging = staging,
-            publishCompleteHydration = { complete ->
-                runCatching { virtualFiles.publishHydration(session, file, complete) }
-                    .onFailure { failure ->
-                        Log.w(LOG_TAG, "Virtual file cache publish failed", failure)
-                        recordProviderFailure(
-                            operation = "documents.cache-publish",
-                            failure = failure,
-                            accountIdentity = NextcloudDocumentIds.accountKey(session),
-                            remotePath = file.path,
-                        )
-                    }
-                    .getOrDefault(false)
-            },
-            discardIncompleteHydration = virtualFiles::discardHydrationStagingFile,
-        )
+        val staging = try {
+            virtualFiles.prepareHydration(session, size)
+        } catch (failure: Throwable) {
+            rangeSession.close()
+            throw failure
+        }
+        val callback = try {
+            AndroidVirtualFileProxyCallback(
+                source = rangeSession,
+                staging = staging,
+                publishCompleteHydration = { complete ->
+                    runCatching { virtualFiles.publishHydration(session, file, complete) }
+                        .onFailure { failure ->
+                            Log.w(LOG_TAG, "Virtual file cache publish failed", failure)
+                            recordProviderFailure(
+                                operation = "documents.cache-publish",
+                                failure = failure,
+                                accountIdentity = NextcloudDocumentIds.accountKey(session),
+                                remotePath = file.path,
+                            )
+                        }
+                        .getOrDefault(false)
+                },
+                discardIncompleteHydration = virtualFiles::discardHydrationStagingFile,
+            )
+        } catch (failure: Throwable) {
+            rangeSession.close()
+            staging?.let(virtualFiles::discardHydrationStagingFile)
+            throw failure
+        }
         signal?.setOnCancelListener(callback::cancel)
+        return try {
+            requireNotNull(context?.getSystemService(StorageManager::class.java))
+                .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, WRITE_HANDLER)
+        } catch (failure: Throwable) {
+            callback.onRelease()
+            throw failure
+        }
+    }
+
+    private fun openExternalHandoffDocument(
+        session: NextcloudSession,
+        documentId: String,
+        signal: CancellationSignal?,
+    ): ParcelFileDescriptor {
+        val lease = AndroidExternalFileHandoffRegistry.acquire(documentId, session)
+            ?: throw FileNotFoundException("This external file handoff expired or has too many active readers.")
+        val record = lease.record
+        val file = record.file
+        val size = file.size ?: run {
+            lease.release()
+            throw FileNotFoundException("The external file size is unavailable.")
+        }
+        val etag = file.etag?.takeIf(String::isNotBlank) ?: run {
+            lease.release()
+            throw FileNotFoundException("The external file version is unavailable.")
+        }
+        if (signal?.isCanceled == true) {
+            lease.release()
+            throw OperationCanceledException()
+        }
+        if (size == 0L) {
+            val empty = virtualFiles.createHydrationStagingFile()
+            return try {
+                ParcelFileDescriptor.open(empty, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
+                    virtualFiles.discardHydrationStagingFile(empty)
+                    lease.release()
+                }
+            } catch (failure: Throwable) {
+                virtualFiles.discardHydrationStagingFile(empty)
+                lease.release()
+                throw failure
+            }
+        }
+
+        val rangeSession = try {
+            services.openFileRangeSession(
+                session = session,
+                userId = record.userId,
+                path = file.path,
+                size = size,
+                expectedEtag = etag,
+            )
+        } catch (failure: Throwable) {
+            lease.release()
+            throw failure
+        }
+        val staging = try {
+            virtualFiles.prepareHydration(session, size)
+        } catch (failure: Throwable) {
+            rangeSession.close()
+            lease.release()
+            throw failure
+        }
+        val callback = try {
+            AndroidVirtualFileProxyCallback(
+                source = rangeSession,
+                staging = staging,
+                publishCompleteHydration = { complete ->
+                    runCatching { virtualFiles.publishHydration(session, file, complete) }
+                        .onFailure { failure ->
+                            Log.w(LOG_TAG, "External handoff cache publish failed", failure)
+                            recordProviderFailure(
+                                operation = "documents.handoff-cache-publish",
+                                failure = failure,
+                                accountIdentity = record.accountId,
+                                remotePath = file.path,
+                            )
+                        }
+                        .getOrDefault(false)
+                },
+                discardIncompleteHydration = virtualFiles::discardHydrationStagingFile,
+                accessAllowed = lease::isValid,
+                onReleased = lease::release,
+            )
+        } catch (failure: Throwable) {
+            rangeSession.close()
+            staging?.let(virtualFiles::discardHydrationStagingFile)
+            lease.release()
+            throw failure
+        }
+        lease.onRevoked(callback::cancel)
+        signal?.setOnCancelListener(callback::cancel)
+        if (!lease.isValid() || signal?.isCanceled == true) {
+            callback.onRelease()
+            throw OperationCanceledException()
+        }
         return try {
             requireNotNull(context?.getSystemService(StorageManager::class.java))
                 .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, WRITE_HANDLER)
@@ -637,6 +756,20 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 DocumentsContract.Document.COLUMN_FLAGS to documentFlags(file),
                 DocumentsContract.Document.COLUMN_SIZE to file?.size,
                 DocumentsContract.Document.COLUMN_LAST_MODIFIED to file?.lastModified?.toEpochMilliseconds(),
+            ),
+        )
+    }
+
+    private fun MatrixCursor.addExternalHandoffRow(record: AndroidExternalFileHandoffRecord) {
+        val file = record.file
+        addNamedRow(
+            mapOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID to record.documentId,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME to sanitizeExternalFileName(file.name),
+                DocumentsContract.Document.COLUMN_MIME_TYPE to sanitizeExternalMimeType(file.mimeType),
+                DocumentsContract.Document.COLUMN_FLAGS to 0,
+                DocumentsContract.Document.COLUMN_SIZE to file.size,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED to file.lastModified?.toEpochMilliseconds(),
             ),
         )
     }

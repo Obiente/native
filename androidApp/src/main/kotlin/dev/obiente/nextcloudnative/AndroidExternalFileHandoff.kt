@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
@@ -13,6 +14,8 @@ import dev.obiente.nextcloudnative.app.ExternalFileHandoffResult
 import dev.obiente.nextcloudnative.app.MAX_EXTERNAL_FILE_HANDOFF_BYTES
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
 import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
 import dev.obiente.nextcloudnative.app.validateDeckAttachmentHandoff
@@ -22,10 +25,55 @@ import dev.obiente.nextcloudnative.app.verifyDownloadedDeckAttachmentSize
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal class AndroidExternalFileHandoff(private val context: Context) {
+    suspend fun launchRemote(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        action: ExternalFileHandoffAction,
+        capability: ExternalFileHandoffCapability,
+    ): ExternalFileHandoffResult {
+        validateExternalFileHandoff(file, action, capability)?.let { return it }
+        if (!file.canUseSeekableRemoteHandoff(capability)) {
+            return ExternalFileHandoffResult.Unsupported(
+                "This file does not provide the size and version needed for seekable streaming.",
+            )
+        }
+        val record = try {
+            AndroidExternalFileHandoffRegistry.register(session, userId, file)
+        } catch (_: IllegalStateException) {
+            return ExternalFileHandoffResult.Unsupported(
+                "Too many files are currently open in other apps. Close one and try again.",
+            )
+        }
+        val authority = nextcloudDocumentsAuthority(context.packageName)
+        val uri = try {
+            DocumentsContract.buildDocumentUri(authority, record.documentId)
+        } catch (_: IllegalArgumentException) {
+            AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            return ExternalFileHandoffResult.Unsupported(
+                "The scoped external-file provider is unavailable.",
+            )
+        }
+        if (uri.scheme != "content" || uri.authority != authority) {
+            AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            return ExternalFileHandoffResult.Unsupported(
+                "The scoped external-file provider is unavailable.",
+            )
+        }
+        return launchUri(
+            uri = uri,
+            mimeType = sanitizeExternalMimeType(file.mimeType),
+            displayName = sanitizeExternalFileName(file.name),
+            action = action,
+            onFailure = { AndroidExternalFileHandoffRegistry.revoke(record.documentId) },
+        )
+    }
+
     suspend fun launch(
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
@@ -50,6 +98,30 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         }
         if (staged is StagedExternalFile.Rejected) return staged.result
         staged as StagedExternalFile.Ready
+        return launchStaged(staged, action)
+    }
+
+    suspend fun launchLargeStagedRemote(
+        file: NextcloudFile,
+        action: ExternalFileHandoffAction,
+        capability: ExternalFileHandoffCapability,
+        download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
+    ): ExternalFileHandoffResult {
+        validateExternalFileHandoff(file, action, capability)?.let { return it }
+        val expectedBytes = file.size?.takeIf { it > 0L } ?: return ExternalFileHandoffResult.Unsupported(
+            "This file does not provide the size needed for a safe temporary copy.",
+        )
+        val staged = try {
+            withContext(Dispatchers.IO) {
+                stageLargeRemoteCopy(file, expectedBytes, download)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return ExternalFileHandoffResult.Unsupported(
+                "The file could not be cached for another app. Check the connection and available storage, then try again.",
+            )
+        }
         return launchStaged(staged, action)
     }
 
@@ -94,13 +166,34 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "External files must be exposed through the private app provider.",
             )
         }
+        return launchUri(
+            uri = uri,
+            mimeType = staged.mimeType,
+            displayName = staged.file.name,
+            action = action,
+            onFailure = { staged.file.parentFile?.deleteRecursively() },
+        )
+    }
+
+    private suspend fun launchUri(
+        uri: Uri,
+        mimeType: String,
+        displayName: String,
+        action: ExternalFileHandoffAction,
+        onFailure: () -> Unit,
+    ): ExternalFileHandoffResult {
         return withContext(Dispatchers.Main) {
             try {
-                context.startActivity(buildChooser(action, uri, staged.mimeType, staged.file.name))
+                context.startActivity(buildChooser(action, uri, mimeType, displayName))
                 ExternalFileHandoffResult.Launched(action)
             } catch (_: ActivityNotFoundException) {
-                staged.file.parentFile?.deleteRecursively()
+                onFailure()
                 ExternalFileHandoffResult.NoCompatibleApplication(action)
+            } catch (_: SecurityException) {
+                onFailure()
+                ExternalFileHandoffResult.Unsupported(
+                    "Android could not grant read access to the selected application.",
+                )
             }
         }
     }
@@ -146,6 +239,52 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "Could not make the detached attachment read-only."
             }
             val declaredMime = sanitizeExternalMimeType(declaredMimeType)
+            val responseMime = sanitizeExternalMimeType(downloaded.mimeType)
+            val mimeType = declaredMime.takeUnless { it == GENERIC_MIME_TYPE } ?: responseMime
+            return StagedExternalFile.Ready(target, mimeType)
+        } catch (failure: Throwable) {
+            temporary.delete()
+            operationDirectory.deleteRecursively()
+            throw failure
+        }
+    }
+
+    private suspend fun stageLargeRemoteCopy(
+        file: NextcloudFile,
+        expectedBytes: Long,
+        download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
+    ): StagedExternalFile.Ready {
+        val root = File(context.cacheDir, EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY)
+        check(root.isDirectory || root.mkdirs()) { "Could not create the large-file handoff cache." }
+        val canonicalRoot = root.canonicalFile
+        pruneExpiredLargeExternalShareCache(canonicalRoot)
+        check(
+            androidLargeExternalHandoffFitsCapacity(
+                requiredBytes = expectedBytes,
+                availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
+            ),
+        ) { "There is not enough free space for the temporary external-file copy." }
+
+        val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
+        check(operationDirectory.mkdir()) { "Could not create a private large-file handoff directory." }
+        check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-file directory." }
+        val target = File(operationDirectory, sanitizeExternalFileName(file.name))
+        check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) { "Unsafe external-file name." }
+        val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
+        try {
+            val downloaded = FileOutputStream(temporary).use { output ->
+                download(output, expectedBytes).also { output.fd.sync() }
+            }
+            check(downloaded.byteCount == expectedBytes && temporary.length() == expectedBytes) {
+                "The temporary external-file copy is incomplete."
+            }
+            check(!target.exists() && temporary.renameTo(target)) {
+                "Could not publish the temporary external-file copy."
+            }
+            check(target.setWritable(false, true) || !target.canWrite()) {
+                "Could not make the temporary external-file copy read-only."
+            }
+            val declaredMime = sanitizeExternalMimeType(file.mimeType)
             val responseMime = sanitizeExternalMimeType(downloaded.mimeType)
             val mimeType = declaredMime.takeUnless { it == GENERIC_MIME_TYPE } ?: responseMime
             return StagedExternalFile.Ready(target, mimeType)
@@ -263,6 +402,26 @@ internal fun pruneExternalShareCache(root: File, requiredBytes: Long, nowMillis:
     }
 }
 
+internal fun pruneExpiredLargeExternalShareCache(
+    root: File,
+    nowMillis: Long = System.currentTimeMillis(),
+) {
+    require(root.isDirectory) { "The large external-share cache root is not a directory." }
+    root.listFiles().orEmpty()
+        .filter { entry -> nowMillis - entry.lastModified() > EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS }
+        .forEach(File::deleteRecursively)
+}
+
+internal fun androidLargeExternalHandoffFitsCapacity(
+    requiredBytes: Long,
+    availableBytes: Long,
+    reserveBytes: Long = LARGE_EXTERNAL_SHARE_FREE_SPACE_RESERVE_BYTES,
+): Boolean = requiredBytes >= 0L &&
+    availableBytes >= 0L &&
+    reserveBytes >= 0L &&
+    requiredBytes <= availableBytes &&
+    availableBytes - requiredBytes >= reserveBytes
+
 private fun recursiveFileBytes(file: File): Long = when {
     file.isFile -> file.length()
     file.isDirectory -> file.listFiles().orEmpty().sumOf(::recursiveFileBytes)
@@ -271,6 +430,8 @@ private fun recursiveFileBytes(file: File): Long = when {
 
 internal const val EXTERNAL_FILE_PROVIDER_AUTHORITY_SUFFIX = ".sharedfiles"
 private const val EXTERNAL_SHARE_CACHE_DIRECTORY = "external-share"
+private const val EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY = "external-large-share"
 private const val MAX_EXTERNAL_SHARE_CACHE_BYTES = 256L * 1024L * 1024L
+private const val LARGE_EXTERNAL_SHARE_FREE_SPACE_RESERVE_BYTES = 256L * 1024L * 1024L
 private const val EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L
 private const val GENERIC_MIME_TYPE = "application/octet-stream"

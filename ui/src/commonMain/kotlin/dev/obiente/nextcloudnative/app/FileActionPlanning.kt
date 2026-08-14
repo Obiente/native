@@ -35,6 +35,7 @@ data class FileActionSupport(
     val platformViewer: Boolean = false,
     val platformEditor: Boolean = false,
     val maximumExternalFileBytes: Long? = null,
+    val seekableExternalFileStreaming: Boolean = false,
     val documentEditing: NextcloudDocumentEditingCapabilities? = null,
 )
 
@@ -64,6 +65,9 @@ fun planFileActions(
             file.canOpenInMediaViewer() || support.platformViewer
         )
     val hasVersion = !file.etag.isNullOrBlank()
+    val canStreamExternalFile = support.seekableExternalFileStreaming &&
+        file.size?.let { it >= 0L } == true &&
+        hasVersion
     val mutationReason = when {
         !support.webDavMutations -> "This server does not expose safe file changes."
         !hasVersion -> "Refresh the folder before changing this item."
@@ -80,8 +84,9 @@ fun planFileActions(
         !file.originalAccessAllowed -> "This file allows preview only."
         !hasVersion -> "Refresh the folder before sending this file to another app."
         support.maximumExternalFileBytes != null && file.size != null &&
-            file.size > support.maximumExternalFileBytes ->
+            file.size > support.maximumExternalFileBytes && !canStreamExternalFile ->
             "This file is larger than the ${support.maximumExternalFileBytes / (1024 * 1024)} MiB handoff limit."
+        canStreamExternalFile -> null
         else -> boundedDownloadReason
     }
     val offlineReason = when {

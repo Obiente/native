@@ -89,6 +89,7 @@ import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffResult
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
 import dev.obiente.nextcloudnative.app.MAX_EXTERNAL_FILE_HANDOFF_BYTES
+import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.NextcloudFileMutation
 import dev.obiente.nextcloudnative.app.NextcloudFileMutationResult
 import dev.obiente.nextcloudnative.app.NativeMediaCollectionTransportRequest
@@ -224,8 +225,10 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -402,6 +405,29 @@ internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
     check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
 }
 
+private class CoroutineDocumentRequestCancellation(
+    private val job: Job,
+) : DocumentRequestCancellation, AutoCloseable {
+    private val cancelAction = AtomicReference<(() -> Unit)?>(null)
+    private val completion = job.invokeOnCompletion {
+        cancelAction.getAndSet(null)?.invoke()
+    }
+
+    override fun throwIfCancelled() {
+        job.ensureActive()
+    }
+
+    override fun setOnCancelAction(action: (() -> Unit)?) {
+        cancelAction.set(action)
+        if (!job.isActive) cancelAction.getAndSet(null)?.invoke()
+    }
+
+    override fun close() {
+        cancelAction.set(null)
+        completion.dispose()
+    }
+}
+
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
@@ -474,6 +500,7 @@ internal class AndroidNextcloudServices(
         ExternalFileHandoffCapability(
             supportedActions = ExternalFileHandoffAction.entries.toSet(),
             maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            supportsSeekableRemoteStreaming = true,
         ),
     )
 
@@ -959,6 +986,7 @@ internal class AndroidNextcloudServices(
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
+        AndroidExternalFileHandoffRegistry.clear()
         notifyDocumentsRootsChanged()
     }
 
@@ -1001,6 +1029,7 @@ internal class AndroidNextcloudServices(
                 },
             )
             accountId?.let(nativeMediaPreviewCache::clearAccount)
+            AndroidExternalFileHandoffRegistry.clear()
             notifyDocumentsRootsChanged()
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
@@ -1038,8 +1067,101 @@ internal class AndroidNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        val fileSize = file.size
+        if (file.canUseSeekableRemoteHandoff(capability)) {
+            if (probeSeekableExternalHandoff(session, userId, file)) {
+                return externalFileHandoff.launchRemote(
+                    session = session,
+                    userId = userId,
+                    file = file,
+                    action = action,
+                    capability = capability,
+                )
+            }
+            if (fileSize != null && fileSize > capability.maximumFileBytes) {
+                return externalFileHandoff.launchLargeStagedRemote(
+                    file = file,
+                    action = action,
+                    capability = capability,
+                ) { output, expectedBytes ->
+                    downloadExternalHandoffCopy(
+                        session = session,
+                        userId = userId,
+                        file = file,
+                        output = output,
+                        expectedBytes = expectedBytes,
+                    )
+                }
+            }
+        }
         return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
             downloadFile(session, userId, file.path, maximumBytes)
+        }
+    }
+
+    private suspend fun probeSeekableExternalHandoff(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+    ): Boolean {
+        val size = file.size ?: return false
+        if (size == 0L) return true
+        val etag = file.etag?.takeIf(String::isNotBlank) ?: return false
+        val rangeSession = try {
+            openFileRangeSession(
+                session = session,
+                userId = userId,
+                path = file.path,
+                size = size,
+                expectedEtag = etag,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        }
+        return try {
+            rangeSession.read(0L, 1).size == 1
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        } finally {
+            rangeSession.close()
+        }
+    }
+
+    private suspend fun downloadExternalHandoffCopy(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        output: FileOutputStream,
+        expectedBytes: Long,
+    ): AndroidDetachedDownload = withContext(Dispatchers.IO) {
+        require(expectedBytes > 0L)
+        val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+        val cancellation = CoroutineDocumentRequestCancellation(
+            requireNotNull(currentCoroutineContext()[Job]),
+        )
+        try {
+            val result = NextcloudDocumentWebDav(client = noRedirectHttpClient).readFile(
+                session = session,
+                userId = userId,
+                path = file.path,
+                destination = output,
+                maximumBytes = expectedBytes,
+                expectedEtag = expectedEtag,
+                cancellation = cancellation,
+            )
+            check(result.byteCount == expectedBytes) {
+                "The server returned an incomplete external-file copy."
+            }
+            check(result.etag == null || result.etag == expectedEtag) {
+                "The server file changed while it was being prepared for another app."
+            }
+            AndroidDetachedDownload(result.byteCount, result.contentType)
+        } finally {
+            cancellation.close()
         }
     }
 

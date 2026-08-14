@@ -8584,6 +8584,8 @@ internal fun FileActionMenu(
                 offlineStorage = offlineStorageSupported,
                 platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
                 maximumExternalFileBytes = externalHandoffCapability?.maximumFileBytes,
+                seekableExternalFileStreaming =
+                    externalHandoffCapability?.supportsSeekableRemoteStreaming == true,
             ),
             offlineState = offlineAvailability.toFileActionOfflineState(),
         ).actions.forEach { action ->

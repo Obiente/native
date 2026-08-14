@@ -37,6 +37,22 @@ class ExternalFileHandoffTest {
     }
 
     @Test
+    fun `known oversized files remain eligible for seekable remote streaming`() {
+        val streamingCapability = capability.copy(supportsSeekableRemoteStreaming = true)
+        val file = file(name = "video.mov", size = 4L * 1024L * 1024L * 1024L)
+
+        assertNull(
+            validateExternalFileHandoff(
+                file,
+                ExternalFileHandoffAction.OpenWith,
+                streamingCapability,
+            ),
+        )
+        assertTrue(file.canUseSeekableRemoteHandoff(streamingCapability))
+        assertTrue(!file.copy(size = null).canUseSeekableRemoteHandoff(streamingCapability))
+    }
+
+    @Test
     fun `unknown file size remains eligible for bounded download`() {
         assertNull(
             validateExternalFileHandoff(

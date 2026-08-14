@@ -129,6 +129,27 @@ class FileActionPlanningTest {
     }
 
     @Test
+    fun seekableStreamingEnablesLargeOpenAndSendCopyWithoutEnablingBoundedDownload() {
+        val file = file(
+            name = "large-video.mp4",
+            mimeType = "video/mp4",
+            size = 4L * 1024L * 1024L * 1024L,
+            etag = "v4",
+        )
+        val support = FileActionSupport(
+            externalSharing = true,
+            platformViewer = true,
+            maximumExternalFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            seekableExternalFileStreaming = true,
+        )
+
+        val plan = planFilesScreenActions(file, support)
+        assertTrue(plan.action(FileMenuAction.SendCopy).enabled)
+        assertTrue(plan.action(FileMenuAction.OpenWith).enabled)
+        assertFalse(plan.action(FileMenuAction.Download).enabled)
+    }
+
+    @Test
     fun nativeSharingSupportsFoldersAndHonorsExplicitDavSharePermission() {
         val shareableFolder = file(
             name = "Projects",

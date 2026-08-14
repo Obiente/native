@@ -7,6 +7,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
+import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.NextcloudSession
 
 class AndroidExternalFileHandoffTest {
     @Test
@@ -52,6 +54,99 @@ class AndroidExternalFileHandoffTest {
             }
         } finally {
             root.delete()
+        }
+    }
+
+    @Test
+    fun `large staged handoff preserves free space and only prunes expired entries`() {
+        assertTrue(androidLargeExternalHandoffFitsCapacity(40L, 140L, reserveBytes = 100L))
+        assertFalse(androidLargeExternalHandoffFitsCapacity(41L, 140L, reserveBytes = 100L))
+        assertFalse(
+            androidLargeExternalHandoffFitsCapacity(
+                requiredBytes = Long.MAX_VALUE,
+                availableBytes = Long.MAX_VALUE,
+                reserveBytes = 1L,
+            ),
+        )
+
+        val root = Files.createTempDirectory("nextcloud-large-handoff-test-").toFile()
+        try {
+            val expired = root.resolve("expired").apply { mkdir() }
+            val active = root.resolve("active").apply { mkdir() }
+            val now = 2L * 24L * 60L * 60L * 1000L
+            expired.setLastModified(1L)
+            active.setLastModified(now)
+
+            pruneExpiredLargeExternalShareCache(root, nowMillis = now)
+
+            assertFalse(expired.exists())
+            assertTrue(active.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `remote handoff records are account scoped bounded and revocable`() {
+        val session = NextcloudSession(
+            serverUrl = "https://cloud.example.test",
+            loginName = "person",
+            appPassword = "secret",
+        )
+        val otherSession = session.copy(loginName = "other")
+        val file = NextcloudFile(
+            path = "Videos/clip.mp4",
+            name = "clip.mp4",
+            isDirectory = false,
+            mimeType = "video/mp4",
+            size = 4L * 1024L * 1024L * 1024L,
+            lastModified = null,
+            fileId = 7L,
+            hasPreview = true,
+            etag = "\"v1\"",
+        )
+        AndroidExternalFileHandoffRegistry.clear()
+        try {
+            val record = AndroidExternalFileHandoffRegistry.register(session, "person-id", file, nowEpochMillis = 10L)
+            assertTrue(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(record.documentId))
+            assertEquals(record, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, 11L))
+            assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, otherSession, 11L))
+
+            val leases = List(AndroidExternalFileHandoffRegistry.MAX_READERS_PER_RECORD) {
+                requireNotNull(AndroidExternalFileHandoffRegistry.acquire(record.documentId, session, 11L))
+            }
+            assertEquals(null, AndroidExternalFileHandoffRegistry.acquire(record.documentId, session, 11L))
+            var revoked = false
+            leases.first().onRevoked { revoked = true }
+            AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            assertTrue(revoked)
+            assertTrue(leases.none(AndroidExternalFileHandoffLease::isValid))
+            leases.forEach(AndroidExternalFileHandoffLease::release)
+        } finally {
+            AndroidExternalFileHandoffRegistry.clear()
+        }
+    }
+
+    @Test
+    fun `remote handoff records expire without retaining account access`() {
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        val file = NextcloudFile(
+            path = "Videos/clip.mp4",
+            name = "clip.mp4",
+            isDirectory = false,
+            mimeType = "video/mp4",
+            size = 1L,
+            lastModified = null,
+            fileId = null,
+            hasPreview = false,
+            etag = "\"v1\"",
+        )
+        AndroidExternalFileHandoffRegistry.clear()
+        try {
+            val record = AndroidExternalFileHandoffRegistry.register(session, "person-id", file, nowEpochMillis = 10L)
+            assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, Long.MAX_VALUE))
+        } finally {
+            AndroidExternalFileHandoffRegistry.clear()
         }
     }
 }
