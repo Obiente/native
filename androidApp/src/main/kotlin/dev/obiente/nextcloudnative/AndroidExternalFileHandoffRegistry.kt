@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.util.Log
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.util.UUID
@@ -65,6 +66,45 @@ internal object AndroidExternalFileHandoffRegistry {
 
     private val lock = Any()
     private val entries = linkedMapOf<String, Entry>()
+    private var boundStore: AndroidExternalFileHandoffStore? = null
+    private var boundStoreIdentity: String? = null
+
+    fun bind(
+        store: AndroidExternalFileHandoffStore,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ) {
+        require(nowEpochMillis >= 0L)
+        val storeIdentity = store.stateFile.absolutePath
+        val readersToRevoke = mutableListOf<AndroidExternalFileHandoffLease>()
+        synchronized(lock) {
+            if (boundStoreIdentity == storeIdentity) {
+                val expired = pruneExpiredLocked(nowEpochMillis)
+                readersToRevoke += expired
+                if (expired.isNotEmpty()) persistBestEffortLocked()
+                return@synchronized
+            }
+            readersToRevoke += entries.values.flatMap(Entry::readers)
+            entries.clear()
+            boundStore = store
+            boundStoreIdentity = storeIdentity
+            val restored = try {
+                store.load()
+            } catch (failure: AndroidExternalFileHandoffStoreException) {
+                Log.w(LOG_TAG, "Discarding invalid external handoff state", failure)
+                runCatching { store.save(emptyList()) }
+                emptyList()
+            }
+            val retained = restored
+                .asSequence()
+                .filter { record -> record.expiresAtEpochMillis > nowEpochMillis }
+                .distinctBy(AndroidExternalFileHandoffRecord::documentId)
+                .take(MAX_RECORDS)
+                .toList()
+            retained.forEach { record -> entries[record.documentId] = Entry(record) }
+            if (retained.size != restored.size) persistBestEffortLocked()
+        }
+        readersToRevoke.forEach(AndroidExternalFileHandoffLease::revoke)
+    }
 
     fun register(
         session: NextcloudSession,
@@ -101,7 +141,15 @@ internal object AndroidExternalFileHandoffRegistry {
                 expiresAtEpochMillis = (nowEpochMillis + RECORD_LIFETIME_MILLIS)
                     .takeIf { it >= nowEpochMillis }
                     ?: Long.MAX_VALUE,
-            ).also { created -> entries[documentId] = Entry(created) }
+            ).also { created ->
+                entries[documentId] = Entry(created)
+                try {
+                    persistLocked()
+                } catch (failure: Throwable) {
+                    entries.remove(documentId)
+                    throw failure
+                }
+            }
         }
         expiredReaders.forEach(AndroidExternalFileHandoffLease::revoke)
         return record
@@ -118,6 +166,7 @@ internal object AndroidExternalFileHandoffRegistry {
         val expiredReaders = mutableListOf<AndroidExternalFileHandoffLease>()
         val record = synchronized(lock) {
             expiredReaders += pruneExpiredLocked(nowEpochMillis)
+            if (expiredReaders.isNotEmpty()) persistBestEffortLocked()
             entries[documentId]?.record?.takeIf { candidate ->
                 candidate.accountId == NextcloudDocumentIds.accountKey(session)
             }
@@ -135,6 +184,7 @@ internal object AndroidExternalFileHandoffRegistry {
         val expiredReaders = mutableListOf<AndroidExternalFileHandoffLease>()
         val lease = synchronized(lock) {
             expiredReaders += pruneExpiredLocked(nowEpochMillis)
+            if (expiredReaders.isNotEmpty()) persistBestEffortLocked()
             val entry = entries[documentId]?.takeIf { candidate ->
                 candidate.record.accountId == NextcloudDocumentIds.accountKey(session)
             } ?: return@synchronized null
@@ -156,13 +206,32 @@ internal object AndroidExternalFileHandoffRegistry {
     }
 
     fun revoke(documentId: String) {
-        val readers = synchronized(lock) { entries.remove(documentId)?.readers?.toList().orEmpty() }
+        val readers = synchronized(lock) {
+            val removed = entries.remove(documentId) ?: return@synchronized emptyList()
+            persistBestEffortLocked()
+            removed.readers.toList()
+        }
         readers.forEach(AndroidExternalFileHandoffLease::revoke)
     }
 
     fun clear() {
         val readers = synchronized(lock) {
-            entries.values.flatMap { entry -> entry.readers }.also { entries.clear() }
+            entries.values.flatMap { entry -> entry.readers }.also {
+                entries.clear()
+                runCatching(::persistLocked)
+                    .onFailure { failure -> Log.w(LOG_TAG, "Could not clear external handoff state", failure) }
+            }
+        }
+        readers.forEach(AndroidExternalFileHandoffLease::revoke)
+    }
+
+    internal fun resetProcessStateForTests() {
+        val readers = synchronized(lock) {
+            entries.values.flatMap(Entry::readers).also {
+                entries.clear()
+                boundStore = null
+                boundStoreIdentity = null
+            }
         }
         readers.forEach(AndroidExternalFileHandoffLease::revoke)
     }
@@ -177,10 +246,20 @@ internal object AndroidExternalFileHandoffRegistry {
 
     private fun activeReaderCountLocked(): Int = entries.values.sumOf { entry -> entry.readers.size }
 
+    private fun persistLocked() {
+        boundStore?.save(entries.values.map(Entry::record))
+    }
+
+    private fun persistBestEffortLocked() {
+        runCatching(::persistLocked)
+            .onFailure { failure -> Log.w(LOG_TAG, "Could not update external handoff state", failure) }
+    }
+
     internal const val MAX_READERS_PER_RECORD = 4
     private const val MAX_ACTIVE_READERS = 8
     private const val MAX_RECORDS = 32
     private const val RECORD_LIFETIME_MILLIS = 24L * 60L * 60L * 1000L
     private const val HANDOFF_DOCUMENT_ID_PREFIX = "nch1:"
     private val HANDOFF_DOCUMENT_ID_PATTERN = Regex("nch1:[0-9a-f]{32}")
+    private const val LOG_TAG = "ExternalFileHandoff"
 }

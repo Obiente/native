@@ -31,6 +31,7 @@ import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -54,6 +55,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val providerContext = context ?: return false
         cleanupIncompleteAndroidDocumentWritebacks(providerContext)
         services = AndroidNextcloudServices(providerContext)
+        AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(providerContext))
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
         webDav = NextcloudDocumentWebDav(
@@ -281,7 +283,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         signal?.setOnCancelListener(callback::cancel)
         return try {
             requireNotNull(context?.getSystemService(StorageManager::class.java))
-                .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, WRITE_HANDLER)
+                .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, nextProxyHandler())
         } catch (failure: Throwable) {
             callback.onRelease()
             throw failure
@@ -308,6 +310,17 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         if (signal?.isCanceled == true) {
             lease.release()
             throw OperationCanceledException()
+        }
+        offline.availableContent(session, file.path)
+            ?.takeIf { cached -> cached.file.etag == etag && cached.content.length() == size }
+            ?.let { cached ->
+                return openExternalLocalContent(cached.content, lease)
+            }
+        virtualFiles.acquire(session, file.path, expectedRemoteEtag = etag)?.let { cached ->
+            if (cached.content.length() == size) {
+                return openExternalLocalContent(cached.content, lease, cached)
+            }
+            cached.release()
         }
         if (size == 0L) {
             val empty = virtualFiles.createHydrationStagingFile()
@@ -377,11 +390,26 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         }
         return try {
             requireNotNull(context?.getSystemService(StorageManager::class.java))
-                .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, WRITE_HANDLER)
+                .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, nextProxyHandler())
         } catch (failure: Throwable) {
             callback.onRelease()
             throw failure
         }
+    }
+
+    private fun openExternalLocalContent(
+        content: File,
+        handoffLease: AndroidExternalFileHandoffLease,
+        virtualLease: AndroidVirtualFileLease? = null,
+    ): ParcelFileDescriptor = try {
+        ParcelFileDescriptor.open(content, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
+            virtualLease?.release()
+            handoffLease.release()
+        }
+    } catch (failure: Throwable) {
+        virtualLease?.release()
+        handoffLease.release()
+        throw failure
     }
 
     private fun openVirtualFileLease(lease: AndroidVirtualFileLease): ParcelFileDescriptor = try {
@@ -559,7 +587,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
             return try {
                 requireNotNull(context?.getSystemService(StorageManager::class.java))
-                    .openProxyFileDescriptor(descriptorMode(mode), callback, WRITE_HANDLER)
+                    .openProxyFileDescriptor(descriptorMode(mode), callback, nextProxyHandler())
             } catch (failure: Throwable) {
                 callback.abort()
                 throw failure
@@ -920,6 +948,17 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val TRUNCATING_OPEN_MODES = setOf("wt", "rwt")
         val WRITE_THREAD = HandlerThread("nextcloud-document-commit").apply { start() }
         val WRITE_HANDLER = Handler(WRITE_THREAD.looper)
+        val PROXY_THREADS = List(PROXY_CALLBACK_THREAD_COUNT) { index ->
+            HandlerThread("nextcloud-document-proxy-${index + 1}").apply { start() }
+        }
+        val PROXY_HANDLERS = PROXY_THREADS.map { thread -> Handler(thread.looper) }
+        val NEXT_PROXY_HANDLER = AtomicInteger()
+
+        fun nextProxyHandler(): Handler = PROXY_HANDLERS[
+            Math.floorMod(NEXT_PROXY_HANDLER.getAndIncrement(), PROXY_HANDLERS.size)
+        ]
+
+        const val PROXY_CALLBACK_THREAD_COUNT = 4
         val DEFAULT_ROOT_PROJECTION = arrayOf(
             DocumentsContract.Root.COLUMN_ROOT_ID,
             DocumentsContract.Root.COLUMN_DOCUMENT_ID,

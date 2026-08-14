@@ -24,12 +24,17 @@ import dev.obiente.nextcloudnative.app.validateExternalFileHandoff
 import dev.obiente.nextcloudnative.app.verifyDownloadedDeckAttachmentSize
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal class AndroidExternalFileHandoff(private val context: Context) {
+    init {
+        AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(context))
+    }
+
     suspend fun launchRemote(
         session: NextcloudSession,
         userId: String,
@@ -45,6 +50,10 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         }
         val record = try {
             AndroidExternalFileHandoffRegistry.register(session, userId, file)
+        } catch (_: AndroidExternalFileHandoffStoreException) {
+            return ExternalFileHandoffResult.Unsupported(
+                "Android could not persist this temporary file handoff. Check available storage and try again.",
+            )
         } catch (_: IllegalStateException) {
             return ExternalFileHandoffResult.Unsupported(
                 "Too many files are currently open in other apps. Close one and try again.",
@@ -255,19 +264,25 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
     ): StagedExternalFile.Ready {
         val root = File(context.cacheDir, EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY)
-        check(root.isDirectory || root.mkdirs()) { "Could not create the large-file handoff cache." }
-        val canonicalRoot = root.canonicalFile
-        pruneExpiredLargeExternalShareCache(canonicalRoot)
-        check(
-            androidLargeExternalHandoffFitsCapacity(
-                requiredBytes = expectedBytes,
-                availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
-            ),
-        ) { "There is not enough free space for the temporary external-file copy." }
-
-        val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
-        check(operationDirectory.mkdir()) { "Could not create a private large-file handoff directory." }
-        check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-file directory." }
+        val operationDirectory = synchronized(LARGE_EXTERNAL_SHARE_CACHE_LOCK) {
+            check(root.isDirectory || root.mkdirs()) { "Could not create the large-file handoff cache." }
+            val canonicalRoot = root.canonicalFile
+            prepareLargeExternalShareCache(canonicalRoot, expectedBytes)
+            check(
+                androidLargeExternalHandoffFitsCapacity(
+                    requiredBytes = expectedBytes,
+                    availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
+                ),
+            ) { "There is not enough free space for the temporary external-file copy." }
+            File(canonicalRoot, UUID.randomUUID().toString()).also { operation ->
+                check(operation.mkdir()) { "Could not create a private large-file handoff directory." }
+                check(operation.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-file directory." }
+                RandomAccessFile(File(operation, LARGE_EXTERNAL_SHARE_RESERVATION_FILE), "rw").use { reservation ->
+                    reservation.setLength(expectedBytes)
+                    reservation.fd.sync()
+                }
+            }
+        }
         val target = File(operationDirectory, sanitizeExternalFileName(file.name))
         check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) { "Unsafe external-file name." }
         val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
@@ -277,6 +292,9 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             }
             check(downloaded.byteCount == expectedBytes && temporary.length() == expectedBytes) {
                 "The temporary external-file copy is incomplete."
+            }
+            check(File(operationDirectory, LARGE_EXTERNAL_SHARE_RESERVATION_FILE).delete()) {
+                "Could not release the external-file cache reservation."
             }
             check(!target.exists() && temporary.renameTo(target)) {
                 "Could not publish the temporary external-file copy."
@@ -390,26 +408,48 @@ internal fun pruneExternalShareCache(root: File, requiredBytes: Long, nowMillis:
         expired.deleteRecursively()
         entries.remove(expired)
     }
-    var storedBytes = entries.sumOf(::recursiveFileBytes)
+    var storedBytes = entries.fold(0L) { total, entry -> saturatingAdd(total, recursiveFileBytes(entry)) }
     val iterator = entries.iterator()
-    while (storedBytes + requiredBytes > MAX_EXTERNAL_SHARE_CACHE_BYTES && iterator.hasNext()) {
+    while (saturatingAdd(storedBytes, requiredBytes) > MAX_EXTERNAL_SHARE_CACHE_BYTES && iterator.hasNext()) {
         val oldest = iterator.next()
         val bytes = recursiveFileBytes(oldest)
         if (oldest.deleteRecursively()) storedBytes = (storedBytes - bytes).coerceAtLeast(0L)
     }
-    check(storedBytes + requiredBytes <= MAX_EXTERNAL_SHARE_CACHE_BYTES) {
+    check(saturatingAdd(storedBytes, requiredBytes) <= MAX_EXTERNAL_SHARE_CACHE_BYTES) {
         "There is not enough room in the bounded external-share cache."
     }
 }
 
-internal fun pruneExpiredLargeExternalShareCache(
+internal fun prepareLargeExternalShareCache(
     root: File,
+    requiredBytes: Long,
     nowMillis: Long = System.currentTimeMillis(),
+    maximumAggregateBytes: Long = DEFAULT_LARGE_EXTERNAL_SHARE_CACHE_BYTES,
+    minimumRetentionMillis: Long = LARGE_EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS,
 ) {
     require(root.isDirectory) { "The large external-share cache root is not a directory." }
-    root.listFiles().orEmpty()
-        .filter { entry -> nowMillis - entry.lastModified() > EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS }
-        .forEach(File::deleteRecursively)
+    require(requiredBytes >= 0L && maximumAggregateBytes >= 0L && minimumRetentionMillis >= 0L)
+    val budgetBytes = maxOf(requiredBytes, maximumAggregateBytes)
+    val entries = root.listFiles().orEmpty().sortedBy(File::lastModified).toMutableList()
+    entries.filter { entry -> elapsedAtLeast(nowMillis, entry.lastModified(), EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS) }
+        .forEach { expired ->
+            if (expired.deleteRecursively()) entries.remove(expired)
+        }
+    var storedBytes = entries.fold(0L) { total, entry -> saturatingAdd(total, recursiveFileBytes(entry)) }
+    val eligible = entries
+        .filter { entry ->
+            !File(entry, LARGE_EXTERNAL_SHARE_RESERVATION_FILE).exists() &&
+                elapsedAtLeast(nowMillis, entry.lastModified(), minimumRetentionMillis)
+        }
+        .iterator()
+    while (saturatingAdd(storedBytes, requiredBytes) > budgetBytes && eligible.hasNext()) {
+        val oldest = eligible.next()
+        val bytes = recursiveFileBytes(oldest)
+        if (oldest.deleteRecursively()) storedBytes = (storedBytes - bytes).coerceAtLeast(0L)
+    }
+    check(saturatingAdd(storedBytes, requiredBytes) <= budgetBytes) {
+        "There is not enough room in the bounded large-file handoff cache."
+    }
 }
 
 internal fun androidLargeExternalHandoffFitsCapacity(
@@ -424,14 +464,26 @@ internal fun androidLargeExternalHandoffFitsCapacity(
 
 private fun recursiveFileBytes(file: File): Long = when {
     file.isFile -> file.length()
-    file.isDirectory -> file.listFiles().orEmpty().sumOf(::recursiveFileBytes)
+    file.isDirectory -> file.listFiles().orEmpty().fold(0L) { total, child ->
+        saturatingAdd(total, recursiveFileBytes(child))
+    }
     else -> 0L
 }
+
+private fun saturatingAdd(left: Long, right: Long): Long =
+    if (right > Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
+
+private fun elapsedAtLeast(nowMillis: Long, thenMillis: Long, durationMillis: Long): Boolean =
+    nowMillis >= thenMillis && nowMillis - thenMillis >= durationMillis
 
 internal const val EXTERNAL_FILE_PROVIDER_AUTHORITY_SUFFIX = ".sharedfiles"
 private const val EXTERNAL_SHARE_CACHE_DIRECTORY = "external-share"
 private const val EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY = "external-large-share"
+private const val LARGE_EXTERNAL_SHARE_RESERVATION_FILE = ".reservation"
 private const val MAX_EXTERNAL_SHARE_CACHE_BYTES = 256L * 1024L * 1024L
+private const val DEFAULT_LARGE_EXTERNAL_SHARE_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
 private const val LARGE_EXTERNAL_SHARE_FREE_SPACE_RESERVE_BYTES = 256L * 1024L * 1024L
+private const val LARGE_EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 1000L
 private const val EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L
 private const val GENERIC_MIME_TYPE = "application/octet-stream"
+private val LARGE_EXTERNAL_SHARE_CACHE_LOCK = Any()

@@ -58,7 +58,7 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
-    fun `large staged handoff preserves free space and only prunes expired entries`() {
+    fun `large staged handoff preserves free space and bounds aggregate cache entries`() {
         assertTrue(androidLargeExternalHandoffFitsCapacity(40L, 140L, reserveBytes = 100L))
         assertFalse(androidLargeExternalHandoffFitsCapacity(41L, 140L, reserveBytes = 100L))
         assertFalse(
@@ -77,10 +77,39 @@ class AndroidExternalFileHandoffTest {
             expired.setLastModified(1L)
             active.setLastModified(now)
 
-            pruneExpiredLargeExternalShareCache(root, nowMillis = now)
+            prepareLargeExternalShareCache(root, requiredBytes = 0L, nowMillis = now)
 
             assertFalse(expired.exists())
             assertTrue(active.exists())
+
+            active.deleteRecursively()
+            val inProgress = root.resolve("in-progress").apply {
+                mkdir()
+                resolve(".reservation").writeBytes(ByteArray(4))
+                setLastModified(5L)
+            }
+            val oldest = root.resolve("oldest").apply {
+                mkdir()
+                resolve("payload").writeBytes(ByteArray(4))
+                setLastModified(10L)
+            }
+            val newer = root.resolve("newer").apply {
+                mkdir()
+                resolve("payload").writeBytes(ByteArray(4))
+                setLastModified(20L)
+            }
+
+            prepareLargeExternalShareCache(
+                root = root,
+                requiredBytes = 5L,
+                nowMillis = 100L,
+                maximumAggregateBytes = 13L,
+                minimumRetentionMillis = 0L,
+            )
+
+            assertTrue(inProgress.exists())
+            assertFalse(oldest.exists())
+            assertTrue(newer.exists())
         } finally {
             root.deleteRecursively()
         }
@@ -105,7 +134,7 @@ class AndroidExternalFileHandoffTest {
             hasPreview = true,
             etag = "\"v1\"",
         )
-        AndroidExternalFileHandoffRegistry.clear()
+        AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         try {
             val record = AndroidExternalFileHandoffRegistry.register(session, "person-id", file, nowEpochMillis = 10L)
             assertTrue(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(record.documentId))
@@ -123,7 +152,7 @@ class AndroidExternalFileHandoffTest {
             assertTrue(leases.none(AndroidExternalFileHandoffLease::isValid))
             leases.forEach(AndroidExternalFileHandoffLease::release)
         } finally {
-            AndroidExternalFileHandoffRegistry.clear()
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         }
     }
 
@@ -141,12 +170,61 @@ class AndroidExternalFileHandoffTest {
             hasPreview = false,
             etag = "\"v1\"",
         )
-        AndroidExternalFileHandoffRegistry.clear()
+        AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         try {
             val record = AndroidExternalFileHandoffRegistry.register(session, "person-id", file, nowEpochMillis = 10L)
             assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, Long.MAX_VALUE))
         } finally {
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+        }
+    }
+
+    @Test
+    fun `remote handoff records survive process restoration without persisting credentials`() {
+        val root = Files.createTempDirectory("nextcloud-handoff-store-test-").toFile()
+        val store = AndroidExternalFileHandoffStore(root.resolve("records.bin"))
+        val session = NextcloudSession("https://cloud.example.test", "person", "private-app-password")
+        val file = NextcloudFile(
+            path = "Videos/restored.mp4",
+            name = "restored.mp4",
+            isDirectory = false,
+            mimeType = "video/mp4",
+            size = 8L * 1024L * 1024L * 1024L,
+            lastModified = "Fri, 14 Aug 2026 20:00:00 GMT",
+            fileId = 42L,
+            hasPreview = true,
+            etag = "\"restored-v1\"",
+        )
+        AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+        try {
+            AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
+            val registered = AndroidExternalFileHandoffRegistry.register(
+                session,
+                "person-id",
+                file,
+                nowEpochMillis = 10L,
+            )
+            assertTrue(store.stateFile.isFile)
+            assertFalse(store.stateFile.readBytes().decodeToString().contains(session.appPassword))
+
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+            AndroidExternalFileHandoffRegistry.bind(
+                AndroidExternalFileHandoffStore(store.stateFile),
+                nowEpochMillis = 11L,
+            )
+
+            val restored = requireNotNull(
+                AndroidExternalFileHandoffRegistry.peek(registered.documentId, session, nowEpochMillis = 11L),
+            )
+            assertEquals(registered.documentId, restored.documentId)
+            assertEquals(file.path, restored.file.path)
+            assertEquals(file.size, restored.file.size)
+            assertEquals(file.etag, restored.file.etag)
+            assertEquals("person-id", restored.userId)
+        } finally {
             AndroidExternalFileHandoffRegistry.clear()
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+            root.deleteRecursively()
         }
     }
 }
