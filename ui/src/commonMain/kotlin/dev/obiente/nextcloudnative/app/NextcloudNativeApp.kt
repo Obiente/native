@@ -329,6 +329,14 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
     -> false
 }
 
+internal fun Screen.requiresPendingNavigationGuard(groupwareMutationInProgress: Boolean): Boolean =
+    groupwareMutationInProgress ||
+        this is Screen.NoteEditor ||
+        this is Screen.TextEditor ||
+        this is Screen.MediaViewer ||
+        this is Screen.Calendar ||
+        this is Screen.Contacts
+
 internal enum class RootDestinationContent {
     HomeWorkspace,
     FolderSync,
@@ -2167,14 +2175,11 @@ private fun AuthenticatedApp(
         }
     }
 
-    LaunchedEffect(pendingEditorNavigationRequest?.identity, screen) {
+    LaunchedEffect(pendingEditorNavigationRequest?.identity, screen, groupwareMutationInProgress) {
         val request = pendingEditorNavigationRequest ?: return@LaunchedEffect
-        val guarded = screen is Screen.NoteEditor ||
-            screen is Screen.TextEditor ||
-            screen is Screen.MediaViewer ||
-            screen is Screen.Calendar ||
-            screen is Screen.Contacts
-        if (!guarded) applyPendingNavigationRequest(request)
+        if (!screen.requiresPendingNavigationGuard(groupwareMutationInProgress)) {
+            applyPendingNavigationRequest(request)
+        }
     }
 
     LaunchedEffect(linkRequest?.sequence, serverInfo?.userId, discoveryError) {
@@ -2202,13 +2207,7 @@ private fun AuthenticatedApp(
                     releasePendingEditorLinkNavigation(request.sequence)
                 },
             )
-        } else if (
-            screen is Screen.NoteEditor ||
-            screen is Screen.TextEditor ||
-            screen is Screen.MediaViewer ||
-            screen is Screen.Calendar ||
-            screen is Screen.Contacts
-        ) {
+        } else if (screen.requiresPendingNavigationGuard(groupwareMutationInProgress)) {
             linkNavigationJob?.cancel()
             queueEditorNavigationRequest(NextcloudPendingNavigationRequest.IncomingLink(request))
         } else {

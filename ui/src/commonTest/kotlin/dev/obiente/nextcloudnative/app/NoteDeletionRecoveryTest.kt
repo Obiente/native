@@ -7,6 +7,19 @@ import kotlin.test.assertNull
 
 class NoteDeletionRecoveryTest {
     @Test
+    fun `verified deletion releases guards before navigating away`() {
+        val events = mutableListOf<String>()
+
+        completeVerifiedNoteDeletion(
+            onDeletingChanged = { events += "deleting:$it" },
+            onMutationInProgressChanged = { events += "mutation:$it" },
+            onBack = { events += "back" },
+        )
+
+        assertEquals(listOf("deleting:false", "mutation:false", "back"), events)
+    }
+
+    @Test
     fun `note deletion recovery is account scoped and rejects malformed state`() {
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test",

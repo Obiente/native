@@ -875,7 +875,11 @@ internal fun NextcloudNoteEditor(
                 ) {
                     deletionRecoveryState = null
                     sharedNextcloudNotesCache.remove(session, recovery.noteId)
-                    onBack()
+                    completeVerifiedNoteDeletion(
+                        onDeletingChanged = { deleting = it },
+                        onMutationInProgressChanged = onMutationInProgressChanged,
+                        onBack = onBack,
+                    )
                 } else {
                     deleteError = "The verified note-deletion recovery record could not be cleared. Free local storage and retry."
                 }
@@ -1296,7 +1300,11 @@ internal fun NextcloudNoteEditor(
                                     deletionRecoveryState = null
                                     sharedNextcloudNotesCache.remove(session, note.id)
                                     showDeleteConfirmation = false
-                                    onBack()
+                                    completeVerifiedNoteDeletion(
+                                        onDeletingChanged = { deleting = it },
+                                        onMutationInProgressChanged = onMutationInProgressChanged,
+                                        onBack = onBack,
+                                    )
                                 } else {
                                     deleteError = requestFailure
                                         ?: "The deletion has not appeared on the server yet. Retry it before leaving this note."
@@ -1372,6 +1380,16 @@ internal fun NextcloudNoteEditor(
             onDismiss = { showRecoveryOptions = false },
         )
     }
+}
+
+internal fun completeVerifiedNoteDeletion(
+    onDeletingChanged: (Boolean) -> Unit,
+    onMutationInProgressChanged: (Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    onDeletingChanged(false)
+    onMutationInProgressChanged(false)
+    onBack()
 }
 
 @Composable
