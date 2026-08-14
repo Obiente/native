@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -107,6 +108,7 @@ fun NextcloudDesktopShell(
     onOpenApp: (String) -> Unit = {},
     activeAppId: String? = null,
     workspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
+    navigationEnabled: Boolean = true,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -149,6 +151,7 @@ fun NextcloudDesktopShell(
                             key = shortcut,
                             primaryModifierPressed = event.isCtrlPressed || event.isMetaPressed,
                         ) ?: return@onPreviewKeyEvent false
+                        if (!navigationEnabled) return@onPreviewKeyEvent true
                         onSelected(destination)
                         true
                     }
@@ -162,12 +165,14 @@ fun NextcloudDesktopShell(
                         identity = identity,
                         onOpenApp = onOpenApp,
                         activeAppId = activeAppId,
+                        navigationEnabled = navigationEnabled,
                         modifier = Modifier.width(layout.navigationWidthDp.dp).fillMaxHeight(),
                     )
 
                     NextcloudNavigationStyle.CompactRail -> NextcloudDesktopCompactRail(
                         selected = selected,
                         onSelected = onSelected,
+                        navigationEnabled = navigationEnabled,
                         modifier = Modifier.width(layout.navigationWidthDp.dp).fillMaxHeight(),
                     )
 
@@ -194,6 +199,7 @@ private fun NextcloudDesktopSidebar(
     identity: NextcloudDesktopIdentity?,
     onOpenApp: (String) -> Unit,
     activeAppId: String?,
+    navigationEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -250,6 +256,7 @@ private fun NextcloudDesktopSidebar(
                     NextcloudDesktopNavigationRow(
                         item = item,
                         selected = activeAppId == null && selected == item.destination,
+                        enabled = navigationEnabled,
                         onClick = { onSelected(item.destination) },
                     )
                 }
@@ -265,6 +272,7 @@ private fun NextcloudDesktopSidebar(
                         NextcloudDesktopAppShortcutRow(
                             app = app,
                             selected = app.id == activeAppId,
+                            enabled = navigationEnabled,
                             onClick = { onOpenApp(app.id) },
                         )
                     }
@@ -282,6 +290,7 @@ private fun NextcloudDesktopSidebar(
                         NextcloudDesktopAppShortcutRow(
                             app = recent,
                             selected = recent.id == activeAppId,
+                            enabled = navigationEnabled,
                             onClick = { onOpenApp(recent.id) },
                         )
                     }
@@ -289,9 +298,11 @@ private fun NextcloudDesktopSidebar(
 
             identity?.let { account ->
                 if (account.syncSummary != null || account.storageLabel != null) {
-                    NextcloudDesktopCloudStatus(account = account, onOpenSync = {
-                        onSelected(NextcloudDestination.FolderSync)
-                    })
+                    NextcloudDesktopCloudStatus(
+                        account = account,
+                        enabled = navigationEnabled,
+                        onOpenSync = { onSelected(NextcloudDestination.FolderSync) },
+                    )
                 }
                 HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
@@ -300,14 +311,16 @@ private fun NextcloudDesktopSidebar(
                 NextcloudContextMenuArea(
                     items = {
                         listOf(
-                            NextcloudContextMenuItem("Open Settings") {
+                            NextcloudContextMenuItem("Open Settings", enabled = navigationEnabled) {
                                 onSelected(NextcloudDestination.Settings)
                             },
                         )
                     },
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                            .alpha(if (navigationEnabled) 1f else 0.38f)
+                            .padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
@@ -361,19 +374,23 @@ private fun NextcloudDesktopSidebar(
 private fun NextcloudDesktopAppShortcutRow(
     app: NextcloudDesktopSidebarApp,
     selected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(NextcloudRadii.Small)
     NextcloudContextMenuArea(
-        items = { listOf(NextcloudContextMenuItem("Open ${app.label}", onClick = onClick)) },
+        items = {
+            listOf(NextcloudContextMenuItem("Open ${app.label}", enabled = enabled, onClick = onClick))
+        },
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp).clip(shape)
+            modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.38f)
+                .padding(vertical = 1.dp).clip(shape)
                 .background(
                     if (selected) MaterialTheme.colorScheme.primaryContainer
                     else androidx.compose.ui.graphics.Color.Transparent,
                 )
-                .clickable(onClick = onClick)
+                .clickable(enabled = enabled, onClick = onClick)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -412,11 +429,12 @@ private fun NextcloudDesktopAppShortcutRow(
 @Composable
 private fun NextcloudDesktopCloudStatus(
     account: NextcloudDesktopIdentity,
+    enabled: Boolean,
     onOpenSync: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onOpenSync,
+        modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.38f)
+            .clickable(enabled = enabled, onClick = onOpenSync),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(NextcloudRadii.Small),
     ) {
@@ -459,24 +477,26 @@ private fun NextcloudDesktopCloudStatus(
 private fun NextcloudDesktopNavigationRow(
     item: NextcloudNavigationItem,
     selected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(NextcloudRadii.Small)
     NextcloudContextMenuArea(
         items = {
-            listOf(NextcloudContextMenuItem("Open ${item.label}", onClick = onClick))
+            listOf(NextcloudContextMenuItem("Open ${item.label}", enabled = enabled, onClick = onClick))
         },
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .alpha(if (enabled) 1f else 0.38f)
                 .padding(vertical = 2.dp)
                 .clip(shape)
                 .background(
                     if (selected) MaterialTheme.colorScheme.primaryContainer
                     else androidx.compose.ui.graphics.Color.Transparent,
                 )
-                .clickable(onClick = onClick)
+                .clickable(enabled = enabled, onClick = onClick)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -503,6 +523,7 @@ private fun NextcloudDesktopNavigationRow(
 private fun NextcloudDesktopCompactRail(
     selected: NextcloudDestination,
     onSelected: (NextcloudDestination) -> Unit,
+    navigationEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -535,7 +556,7 @@ private fun NextcloudDesktopCompactRail(
                 NextcloudContextMenuArea(
                     items = {
                         listOf(
-                            NextcloudContextMenuItem("Open ${item.label}") {
+                            NextcloudContextMenuItem("Open ${item.label}", enabled = navigationEnabled) {
                                 onSelected(item.destination)
                             },
                         )
@@ -544,12 +565,13 @@ private fun NextcloudDesktopCompactRail(
                     Box(
                         modifier = Modifier
                             .size(48.dp)
+                            .alpha(if (navigationEnabled) 1f else 0.38f)
                             .clip(RoundedCornerShape(NextcloudRadii.Small))
                             .background(
                                 if (isSelected) MaterialTheme.colorScheme.primaryContainer
                                 else androidx.compose.ui.graphics.Color.Transparent,
                             )
-                            .clickable { onSelected(item.destination) },
+                            .clickable(enabled = navigationEnabled) { onSelected(item.destination) },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(

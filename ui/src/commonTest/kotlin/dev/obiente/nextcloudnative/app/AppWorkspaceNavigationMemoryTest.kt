@@ -34,6 +34,23 @@ class AppWorkspaceNavigationMemoryTest {
     }
 
     @Test
+    fun `opening an app root bypasses and replaces its remembered nested route`() {
+        val memory = AppWorkspaceNavigationMemory<String>()
+            .switchTo("notes", "notes:root")
+            .memory
+            .retainCurrent("notes:42")
+
+        val root = memory.switchTo(
+            appId = "notes",
+            initialState = "notes:root",
+            restoreRememberedState = false,
+        )
+
+        assertEquals("notes:root", root.restoredState)
+        assertEquals("notes:root", root.memory.lastStateByApp["notes"])
+    }
+
+    @Test
     fun `remembered workspaces stay bounded by most recent use`() {
         var memory = AppWorkspaceNavigationMemory<String>()
         repeat(4) { index ->

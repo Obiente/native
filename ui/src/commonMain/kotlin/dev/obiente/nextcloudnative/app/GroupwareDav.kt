@@ -236,6 +236,16 @@ enum class GroupwareDavMutation {
     Delete,
 }
 
+/**
+ * A client-error response normally proves that the server refused the mutation. Timeouts and
+ * non-standard client-closed responses remain ambiguous because an intermediary can emit them
+ * after forwarding the request. Redirects and server errors are ambiguous for the same reason.
+ */
+internal fun groupwareMutationResponseProvesRejection(status: Int): Boolean =
+    status in 400..499 && status != 408 && status != 499
+
+internal fun groupwareDeleteResponseProvesAbsence(status: Int): Boolean = status == 404 || status == 410
+
 data class GroupwareDavMutationSpec(
     val kind: GroupwareDavKind,
     val mutation: GroupwareDavMutation,
@@ -301,6 +311,16 @@ fun GroupwareDavMutationSpec.toGroupwareDavRequest(): GroupwareDavRequest {
         headers = headers,
         maximumResponseBytes = DAV_MUTATION_RESPONSE_BYTES,
     )
+}
+
+internal inline fun <T> prepareGroupwareDavMutation(
+    onInvalid: () -> Unit,
+    prepare: () -> T,
+): T? = try {
+    prepare()
+} catch (_: IllegalArgumentException) {
+    onInvalid()
+    null
 }
 
 private fun addressBookQueryBody(maxResults: Int): String = """
@@ -423,7 +443,7 @@ fun parseGroupwareContact(
         CalendarProperty(declaration, line.substring(separator + 1))
     }
     fun property(name: String): CalendarProperty? = properties(name).firstOrNull()
-    val fallbackName = property("N")?.value?.split(';')?.filter(String::isNotBlank)
+    val fallbackName = property("N")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
         ?.joinToString(" ")?.decodeCalendarText()
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
@@ -438,8 +458,13 @@ fun parseGroupwareContact(
         emails = properties("EMAIL").map { it.value.trim() }.filter(String::isNotBlank).distinct(),
         phones = properties("TEL").map { it.value.trim().decodeCalendarText() }
             .filter(String::isNotBlank).distinct(),
-        organization = property("ORG")?.value?.decodeCalendarText()?.trimEnd(';')?.takeIf(String::isNotBlank),
-        address = property("ADR")?.value?.split(';')?.filter(String::isNotBlank)
+        organization = property("ORG")?.value
+            ?.splitUnescapedCalendarComponents(';')
+            ?.dropLastWhile(String::isEmpty)
+            ?.joinToString(";")
+            ?.decodeCalendarText()
+            ?.takeIf(String::isNotBlank),
+        address = property("ADR")?.value?.splitUnescapedCalendarComponents(';')?.filter(String::isNotBlank)
             ?.joinToString(", ")?.decodeCalendarText()?.takeIf(String::isNotBlank),
         birthday = property("BDAY")?.value?.trim()?.takeIf(String::isNotBlank),
         notes = property("NOTE")?.value?.decodeCalendarText()?.takeIf(String::isNotBlank),
@@ -458,6 +483,9 @@ fun createGroupwareContactContent(
 ): String {
     require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The contact id is invalid." }
     require(displayName.isNotBlank()) { "A contact name is required." }
+    require(groupwareContactEmailIsSingleValue(email.orEmpty())) {
+        "The contact email must be a single property value."
+    }
     return buildList {
         add("BEGIN:VCARD")
         add("VERSION:4.0")
@@ -483,6 +511,9 @@ fun updateGroupwareContactContent(
     notes: String?,
 ): String {
     require(displayName.isNotBlank()) { "A contact name is required." }
+    require(groupwareContactEmailIsSingleValue(email.orEmpty())) {
+        "The contact email must be a single property value."
+    }
     val lines = contact.rawVCard.unfoldCalendarLines().toMutableList()
     fun replaceSingle(name: String, replacement: String?, removeAdditional: Boolean = true) {
         val indexes = lines.indices.filter { index ->
@@ -519,6 +550,11 @@ fun updateGroupwareContactContent(
     return lines.joinToString("\r\n", postfix = "\r\n")
 }
 
+internal fun groupwareContactEmailIsSingleValue(email: String): Boolean =
+    email.none { character ->
+        character.isISOControl() || character == '\u2028' || character == '\u2029'
+    }
+
 fun parseGroupwareCalendarEvents(
     calendarHref: String,
     response: NextcloudApiResponse,
@@ -528,7 +564,7 @@ fun parseGroupwareCalendarEvents(
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
             ?: return@flatMap emptyList()
         val calendar = block.xmlText("calendar-data")?.decodeXmlEntities() ?: return@flatMap emptyList()
-        parseGroupwareCalendarEventComponents(
+        parseGroupwareCalendarEventsFromContent(
             calendarHref = calendarHref,
             href = href,
             etag = block.xmlText("getetag")?.decodeXmlEntities()?.trim(),
@@ -543,12 +579,11 @@ fun parseGroupwareCalendarEvent(
     etag: String?,
     content: String,
 ): GroupwareCalendarEvent? {
-    val lines = content.unfoldCalendarLines()
-    val component = lines.calendarEventComponents().firstOrNull() ?: return null
-    return parseGroupwareCalendarEventComponent(calendarHref, href, etag, content, component)
+    val components = parseGroupwareCalendarEventsFromContent(calendarHref, href, etag, content)
+    return components.firstOrNull { event -> event.recurrenceId == null } ?: components.firstOrNull()
 }
 
-private fun parseGroupwareCalendarEventComponents(
+internal fun parseGroupwareCalendarEventsFromContent(
     calendarHref: String,
     href: String,
     etag: String?,
@@ -665,7 +700,7 @@ fun expandGroupwareCalendarEvents(
                 result += master.copy(
                     start = occurrenceStart,
                     end = master.end?.shiftCalendarValue(master.start, occurrenceStart),
-                    recurrenceId = occurrenceStart,
+                    recurrenceId = occurrenceStart.takeIf { it != master.start },
                     isGeneratedOccurrence = occurrenceStart != master.start,
                 )
             }
@@ -929,13 +964,15 @@ fun updateGroupwareCalendarEventContent(
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
-    val eventStart = original.indexOfFirst { it.equals("BEGIN:VEVENT", ignoreCase = true) }
-    val eventEnd = original.indexOfFirst { it.equals("END:VEVENT", ignoreCase = true) }
-    if (eventStart < 0 || eventEnd <= eventStart) {
-        return createGroupwareCalendarEventContent(
-            event.uid, title, start, end, allDay, location, description, recurrenceRule,
-        )
+    val eventRange = original.calendarEventComponentRanges().firstOrNull { range ->
+        val component = original.subList(range.first + 1, range.last)
+        val uid = component.calendarPropertyValue("UID")
+            ?: event.href.substringAfterLast('/').substringBeforeLast('.')
+        uid == event.uid && component.calendarPropertyValue("RECURRENCE-ID") == event.recurrenceId
     }
+    requireNotNull(eventRange) { "The selected calendar event component could not be found." }
+    val eventStart = eventRange.first
+    var eventEnd = eventRange.last
     val replacements = linkedMapOf(
         "DTSTART" to "DTSTART${if (allDay) ";VALUE=DATE" else ""}:$start",
         "DTEND" to end?.let { "DTEND${if (allDay) ";VALUE=DATE" else ""}:$it" },
@@ -950,13 +987,41 @@ fun updateGroupwareCalendarEventContent(
         }
         when {
             index != null && replacement != null -> original[index] = replacement
-            index != null -> original.removeAt(index)
-            replacement != null -> original.add(original.indexOfFirst {
-                it.equals("END:VEVENT", ignoreCase = true)
-            }, replacement)
+            index != null -> {
+                original.removeAt(index)
+                eventEnd -= 1
+            }
+            replacement != null -> {
+                original.add(eventEnd, replacement)
+                eventEnd += 1
+            }
         }
     }
     return original.joinToString("\r\n", postfix = "\r\n")
+}
+
+private fun List<String>.calendarEventComponentRanges(): List<IntRange> {
+    val result = mutableListOf<IntRange>()
+    var start = -1
+    forEachIndexed { index, line ->
+        when {
+            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index
+            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
+                result += start..index
+                start = -1
+            }
+        }
+    }
+    return result
+}
+
+private fun List<String>.calendarPropertyValue(name: String): String? = firstNotNullOfOrNull { line ->
+    val separator = line.indexOf(':')
+    if (separator <= 0 || !line.substring(0, separator).substringBefore(';').equals(name, ignoreCase = true)) {
+        null
+    } else {
+        line.substring(separator + 1).trim().takeIf(String::isNotBlank)
+    }
 }
 
 private fun requireValidCalendarRecurrenceRule(value: String) {
@@ -1050,15 +1115,51 @@ private fun String.unfoldCalendarLines(): List<String> {
     return result
 }
 
-private fun String.escapeCalendarText(): String = replace("\\", "\\\\")
+internal fun String.normalizeGroupwareTextLineEndings(): String =
+    replace("\r\n", "\n").replace('\r', '\n')
+
+private fun String.escapeCalendarText(): String = normalizeGroupwareTextLineEndings()
+    .replace("\\", "\\\\")
     .replace("\n", "\\n")
     .replace(",", "\\,")
     .replace(";", "\\;")
 
-private fun String.decodeCalendarText(): String = replace("\\n", "\n", ignoreCase = true)
-    .replace("\\,", ",")
-    .replace("\\;", ";")
-    .replace("\\\\", "\\")
+private fun String.decodeCalendarText(): String = buildString(length) {
+    var index = 0
+    while (index < this@decodeCalendarText.length) {
+        val character = this@decodeCalendarText[index]
+        if (character != '\\' || index == this@decodeCalendarText.lastIndex) {
+            append(character)
+            index += 1
+            continue
+        }
+        val escaped = this@decodeCalendarText[index + 1]
+        when (escaped) {
+            'n', 'N' -> append('\n')
+            '\\', ',', ';' -> append(escaped)
+            else -> {
+                append('\\')
+                append(escaped)
+            }
+        }
+        index += 2
+    }
+}
+
+private fun String.splitUnescapedCalendarComponents(delimiter: Char): List<String> {
+    val components = mutableListOf<String>()
+    var componentStart = 0
+    var precedingBackslashes = 0
+    forEachIndexed { index, character ->
+        if (character == delimiter && precedingBackslashes % 2 == 0) {
+            components += substring(componentStart, index)
+            componentStart = index + 1
+        }
+        precedingBackslashes = if (character == '\\') precedingBackslashes + 1 else 0
+    }
+    components += substring(componentStart)
+    return components
+}
 
 private fun String.isCalendarDateValue(allDay: Boolean): Boolean =
     if (allDay) length == 8 && all(Char::isDigit)

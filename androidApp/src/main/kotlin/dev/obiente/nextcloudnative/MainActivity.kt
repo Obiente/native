@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -18,12 +19,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import dev.obiente.nextcloudnative.app.NextcloudNativeApp
+import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
 import dev.obiente.nextcloudnative.app.ThemePreference
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private var appUpdateReviewRequest by mutableLongStateOf(0L)
     private var lastAppUpdateReviewEventId: Long? = null
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
+    private var incomingLinkSequence = 0L
+    private val incomingLinkRequests = mutableStateListOf<NextcloudNativeLinkRequest>()
+    private var incomingLinkQueueOverflowEvent by mutableLongStateOf(0L)
+    private var lastIncomingLinkDeliveryId: String? = null
+    private var lastIncomingLinkPayloadIdentity: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,6 +47,25 @@ class MainActivity : ComponentActivity() {
             intentAction = intent?.action,
             intentEventId = intent.appUpdateReviewEventId(),
         ))
+        incomingLinkSequence = savedInstanceState?.getLong(KEY_INCOMING_LINK_SEQUENCE) ?: 0L
+        incomingLinkQueueOverflowEvent = savedInstanceState
+            ?.getLong(KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT)
+            ?: 0L
+        lastIncomingLinkDeliveryId = savedInstanceState?.getString(KEY_INCOMING_LINK_DELIVERY_ID)
+        lastIncomingLinkPayloadIdentity = savedInstanceState
+            ?.getString(KEY_INCOMING_LINK_PAYLOAD_IDENTITY)
+        incomingLinkRequests.addAll(
+            restoreAndroidIncomingLinkQueue(
+                restoredSequence = incomingLinkSequence,
+                sequences = savedInstanceState?.getLongArray(KEY_PENDING_INCOMING_LINK_SEQUENCES),
+                urls = savedInstanceState?.getStringArrayList(KEY_PENDING_INCOMING_LINK_URLS),
+                legacyUrl = savedInstanceState?.getString(KEY_PENDING_INCOMING_LINK),
+            ),
+        )
+        receiveIncomingLinkIntent(
+            intent = intent,
+            restoringLaunchIntent = savedInstanceState != null,
+        )
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         AndroidAppUpdateWork.schedule(
@@ -108,6 +135,16 @@ class MainActivity : ComponentActivity() {
                 services = services,
                 appUpdateReviewRequest = appUpdateReviewRequest,
                 platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
+                linkRequest = incomingLinkRequests.firstOrNull(),
+                onLinkRequestHandled = { sequence ->
+                    if (incomingLinkRequests.firstOrNull()?.sequence == sequence) {
+                        incomingLinkRequests.removeAt(0)
+                    }
+                },
+                linkQueueOverflowEvent = incomingLinkQueueOverflowEvent,
+                onLinkQueueOverflowHandled = { event ->
+                    if (incomingLinkQueueOverflowEvent == event) incomingLinkQueueOverflowEvent = 0L
+                },
             )
         }
     }
@@ -121,12 +158,31 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         receiveNotificationIntent(intent)
+        receiveIncomingLinkIntent(intent, restoringLaunchIntent = false)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putLong(KEY_APP_UPDATE_REVIEW_REQUEST, appUpdateReviewRequest)
         lastAppUpdateReviewEventId?.let { eventId ->
             outState.putLong(KEY_APP_UPDATE_REVIEW_EVENT_ID, eventId)
+        }
+        outState.putLong(KEY_INCOMING_LINK_SEQUENCE, incomingLinkSequence)
+        outState.putLong(KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT, incomingLinkQueueOverflowEvent)
+        if (incomingLinkRequests.isNotEmpty()) {
+            outState.putLongArray(
+                KEY_PENDING_INCOMING_LINK_SEQUENCES,
+                incomingLinkRequests.map(NextcloudNativeLinkRequest::sequence).toLongArray(),
+            )
+            outState.putStringArrayList(
+                KEY_PENDING_INCOMING_LINK_URLS,
+                ArrayList(incomingLinkRequests.map(NextcloudNativeLinkRequest::url)),
+            )
+        }
+        lastIncomingLinkDeliveryId?.let { deliveryId ->
+            outState.putString(KEY_INCOMING_LINK_DELIVERY_ID, deliveryId)
+        }
+        lastIncomingLinkPayloadIdentity?.let { payloadIdentity ->
+            outState.putString(KEY_INCOMING_LINK_PAYLOAD_IDENTITY, payloadIdentity)
         }
         super.onSaveInstanceState(outState)
     }
@@ -140,6 +196,44 @@ class MainActivity : ComponentActivity() {
         ))
     }
 
+    private fun receiveIncomingLinkIntent(
+        intent: Intent?,
+        restoringLaunchIntent: Boolean,
+    ) {
+        val existingDeliveryId = intent.incomingLinkDeliveryId()
+        val payloadIdentity = androidIncomingLinkPayloadIdentity(intent?.action, intent?.dataString)
+        if (!isNewAndroidIncomingLinkDelivery(
+                lastDeliveryId = lastIncomingLinkDeliveryId,
+                currentDeliveryId = existingDeliveryId,
+                lastPayloadIdentity = lastIncomingLinkPayloadIdentity,
+                currentPayloadIdentity = payloadIdentity,
+                restoringLaunchIntent = restoringLaunchIntent,
+            )
+        ) return
+        val state = nextAndroidIncomingLinkState(
+            previousSequence = incomingLinkSequence,
+            action = intent?.action,
+            dataUrl = intent?.dataString,
+        )
+        incomingLinkSequence = state.sequence
+        if (state.request != null) {
+            val deliveryId = existingDeliveryId ?: UUID.randomUUID().toString().also { generated ->
+                intent?.putExtra(EXTRA_INCOMING_LINK_DELIVERY_ID, generated)
+                if (intent === this.intent) setIntent(intent)
+            }
+            lastIncomingLinkDeliveryId = deliveryId
+            lastIncomingLinkPayloadIdentity = payloadIdentity
+            if (canEnqueueAndroidIncomingLink(incomingLinkRequests, state.request)) {
+                incomingLinkRequests.add(state.request)
+            } else {
+                check(incomingLinkQueueOverflowEvent < Long.MAX_VALUE) {
+                    "The incoming link overflow sequence is exhausted."
+                }
+                incomingLinkQueueOverflowEvent += 1L
+            }
+        }
+    }
+
     private fun applyAppUpdateReviewState(state: AppUpdateReviewState) {
         appUpdateReviewRequest = state.requestCount
         lastAppUpdateReviewEventId = state.lastEventId
@@ -148,10 +242,24 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val KEY_APP_UPDATE_REVIEW_REQUEST = "app-update-review-request"
         const val KEY_APP_UPDATE_REVIEW_EVENT_ID = "app-update-review-event-id"
+        const val KEY_INCOMING_LINK_SEQUENCE = "incoming-link-sequence"
+        const val KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT = "incoming-link-queue-overflow-event"
+        const val KEY_PENDING_INCOMING_LINK = "pending-incoming-link"
+        const val KEY_PENDING_INCOMING_LINK_SEQUENCES = "pending-incoming-link-sequences"
+        const val KEY_PENDING_INCOMING_LINK_URLS = "pending-incoming-link-urls"
+        const val KEY_INCOMING_LINK_DELIVERY_ID = "incoming-link-delivery-id"
+        const val KEY_INCOMING_LINK_PAYLOAD_IDENTITY = "incoming-link-payload-identity"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)
     }
 }
+
+private fun Intent?.incomingLinkDeliveryId(): String? =
+    this?.getStringExtra(EXTRA_INCOMING_LINK_DELIVERY_ID)
+        ?.takeIf { value -> runCatching { UUID.fromString(value) }.isSuccess }
+
+private const val EXTRA_INCOMING_LINK_DELIVERY_ID =
+    "dev.obiente.nextcloudnative.extra.INCOMING_LINK_DELIVERY_ID"
 
 internal fun isAppUpdateReviewIntentAction(action: String?): Boolean =
     action == "dev.obiente.nextcloudnative.notification.$ACTION_REVIEW_APP_UPDATE"

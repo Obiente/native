@@ -95,9 +95,9 @@ fun NextcloudMediaViewer(
     onSelect: (NextcloudFile) -> Unit,
     onSourceRemoved: (NextcloudFile) -> Unit,
     onClose: () -> Unit,
-    navigationRequest: NextcloudNativeNavigationRequest? = null,
-    onNavigationConfirmed: (NextcloudNativeNavigationRequest) -> Unit = {},
-    onNavigationCancelled: (NextcloudNativeNavigationRequest) -> Unit = {},
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     sourceMembers: List<NextcloudFile> = media,
     initialZoom: Float = 1f,
     onStateObserved: (MediaViewerStateObservation) -> Unit = {},
@@ -250,7 +250,7 @@ fun NextcloudMediaViewer(
         tagSaving = tagSaving,
         activeActionMutations = activeActionMutations,
     )
-    LaunchedEffect(navigationRequest?.sequence, navigationBlocked) {
+    LaunchedEffect(navigationRequest?.identity, navigationBlocked) {
         navigationRequest?.takeIf { !navigationBlocked }?.let(onNavigationConfirmed)
     }
 

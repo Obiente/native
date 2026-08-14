@@ -11,6 +11,14 @@ enum class ThemePreference {
     Dark,
 }
 
+enum class DurableMutationRecoveryKind(val storageKey: String) {
+    Calendar("calendar-v1"),
+    Contacts("contacts-v1"),
+    NoteDeletion("note-deletion-v1"),
+}
+
+internal const val MAX_DURABLE_MUTATION_RECOVERY_BYTES = 1024 * 1024
+
 enum class PlatformCapability {
     Notifications,
     Camera,
@@ -376,6 +384,11 @@ data class NextcloudNote(
     val isShared: Boolean = false,
 )
 
+sealed interface NextcloudNotePresence {
+    data class Present(val note: NextcloudNote) : NextcloudNotePresence
+    data object Absent : NextcloudNotePresence
+}
+
 sealed interface NextcloudConditionalRead<out T> {
     data class Modified<T>(
         val value: T,
@@ -560,6 +573,29 @@ interface NextcloudPlatformServices {
     fun loadLastOpenedAppId(): String
 
     fun saveLastOpenedAppId(appId: String)
+
+    /**
+     * Loads one account-scoped mutation intent from app-private durable storage.
+     *
+     * Callers persist the intent before contacting the server and clear it only after an
+     * authoritative response or a follow-up read proves the postcondition.
+     */
+    suspend fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = null
+
+    suspend fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = false
+
+    suspend fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
+    ): Boolean = false
 
     /** Loads an account-scoped verified app contract without any cached user records. */
     suspend fun loadCachedDynamicAppDiscovery(
@@ -1390,6 +1426,12 @@ interface NextcloudPlatformServices {
         NextcloudConditionalRead.Modified(listNotes(session), responseEtag = null)
 
     suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote
+
+    /** Returns [Absent] only when an authoritative detail request answers 404 or 410. */
+    suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = NextcloudNotePresence.Present(loadNote(session, noteId))
 
     suspend fun loadNoteConditionally(
         session: NextcloudSession,

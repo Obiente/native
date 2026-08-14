@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -8,6 +11,265 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GroupwareDavTest {
+    @Test
+    fun `only authoritative client errors release mutation recovery`() {
+        assertFalse(groupwareMutationResponseProvesRejection(204))
+        assertTrue(groupwareMutationResponseProvesRejection(409))
+        assertTrue(groupwareMutationResponseProvesRejection(412))
+        assertFalse(groupwareMutationResponseProvesRejection(408))
+        assertFalse(groupwareMutationResponseProvesRejection(499))
+        assertFalse(groupwareMutationResponseProvesRejection(500))
+        assertFalse(groupwareMutationResponseProvesRejection(504))
+        assertTrue(groupwareDeleteResponseProvesAbsence(404))
+        assertTrue(groupwareDeleteResponseProvesAbsence(410))
+        assertFalse(groupwareDeleteResponseProvesAbsence(409))
+    }
+
+    @Test
+    fun `contact navigation detects every editable draft field`() {
+        val initial = ContactDraft(
+            name = "Alex Example",
+            email = "alex@example.test",
+            phone = "+31 6 123",
+            organization = "Example",
+            address = "Main Street 1",
+            notes = "Planning contact",
+        )
+
+        assertFalse(contactDraftIsDirty(initial, initial.copy(), "personal", "personal"))
+        listOf(
+            initial.copy(name = "Alexandra Example"),
+            initial.copy(email = "other@example.test"),
+            initial.copy(phone = "+31 6 456"),
+            initial.copy(organization = "Other"),
+            initial.copy(address = "Side Street 2"),
+            initial.copy(notes = "Updated notes"),
+        ).forEach { changed ->
+            assertTrue(contactDraftIsDirty(initial, changed, "personal", "personal"))
+        }
+        assertTrue(contactDraftIsDirty(initial, initial, "personal", "team"))
+        assertFalse(
+            contactDraftHasDavChanges(
+                initial,
+                initial.copy(
+                    phone = "  ${initial.phone}  ",
+                    notes = "Planning contact\r\n",
+                ),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(
+            contactDraftHasDavChanges(
+                initial,
+                initial.copy(name = "Alexandra Example"),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(contactDraftHasDavChanges(initial, initial, "personal", "team"))
+
+        val href = "/remote.php/dav/addressbooks/users/person/contacts/alex.vcf"
+        val stale = NextcloudApiResponse(
+            status = 200,
+            contentType = "text/vcard",
+            etag = "\"old\"",
+            body = createGroupwareContactContent(
+                uid = "alex",
+                displayName = "Old name",
+                email = "",
+                phone = "",
+                organization = "",
+                address = "",
+                notes = "",
+            ).encodeToByteArray(),
+        )
+        val updated = stale.copy(
+            etag = "\"new\"",
+            body = createGroupwareContactContent(
+                uid = "alex",
+                displayName = initial.name,
+                email = initial.email,
+                phone = initial.phone,
+                organization = initial.organization,
+                address = initial.address,
+                notes = initial.notes,
+            ).encodeToByteArray(),
+        )
+        val missing = updated.copy(status = 404, body = byteArrayOf())
+        val upsert = ContactMutationPostcondition.Upsert(
+            href,
+            "/remote.php/dav/addressbooks/users/person/contacts/",
+            "alex",
+            "\"old\"",
+            initial,
+        )
+        val deletion = ContactMutationPostcondition.Delete(href)
+        assertFalse(upsert.isSatisfiedBy(stale))
+        assertTrue(upsert.isSatisfiedBy(updated))
+        assertTrue(upsert.isSatisfiedBy(updated.copy(etag = "\"old\"")))
+        assertFalse(deletion.isSatisfiedBy(updated))
+        assertTrue(deletion.isSatisfiedBy(missing))
+
+        val session = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "person",
+            appPassword = "secret",
+        )
+        val accountScope = durableMutationAccountScope(session)
+        assertEquals(64, accountScope.length)
+        assertTrue(accountScope.all { it in '0'..'9' || it in 'a'..'f' })
+        assertFalse(accountScope.contains("cloud.example.test"))
+        assertFalse(accountScope.contains("person"))
+        assertFailsWith<IllegalArgumentException> {
+            ContactMutationRecoveryState("https://cloud.example.test|person|person-id", upsert)
+        }
+        val encoded = ContactMutationRecoveryState(accountScope, upsert).encodeForSavedState()
+        assertEquals(upsert, decodeContactMutationRecoveryState(encoded, accountScope))
+        val encodedObject = Json.parseToJsonElement(encoded).jsonObject
+        val legacyPostcondition = JsonObject(
+            encodedObject.getValue("postcondition").jsonObject -
+                setOf("expectedPrimaryEmail", "expectedPrimaryPhone"),
+        )
+        val legacyEncoded = JsonObject(encodedObject + ("postcondition" to legacyPostcondition)).toString()
+        assertEquals(upsert, decodeContactMutationRecoveryState(legacyEncoded, accountScope))
+        assertNull(decodeContactMutationRecoveryState(encoded, "$accountScope-other"))
+        assertNull(decodeContactMutationRecoveryState("not-json", accountScope))
+    }
+
+    @Test
+    fun `contact mutation reconciliation uses the values normalized by the vCard writer`() {
+        val href = "/remote.php/dav/addressbooks/users/person/contacts/alex.vcf"
+        val draft = ContactDraft(
+            name = "Alex Example",
+            email = "  alex@example.test  ",
+            phone = "  +31 6 123  ",
+            organization = "  Example\r\nStudio  ",
+            address = "  Suite A; Building B\rFloor 2  ",
+            notes = "  Planning\r\ncontact\rFollow-up  ",
+        )
+        val response = NextcloudApiResponse(
+            status = 200,
+            contentType = "text/vcard",
+            etag = "\"new\"",
+            body = createGroupwareContactContent(
+                uid = "alex",
+                displayName = draft.name,
+                email = draft.email,
+                phone = draft.phone,
+                organization = draft.organization,
+                address = draft.address,
+                notes = draft.notes,
+            ).encodeToByteArray(),
+        )
+
+        assertTrue(
+            ContactMutationPostcondition.Upsert(
+                href = href,
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                expectedUid = "alex",
+                previousEtag = "\"old\"",
+                draft = draft,
+            ).isSatisfiedBy(response),
+        )
+        assertEquals(
+            "Suite A; Building B\nFloor 2",
+            parseGroupwareContact(
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                href = href,
+                etag = response.etag,
+                content = response.body.decodeToString(),
+            )?.address,
+        )
+        assertEquals(
+            "Planning\ncontact\nFollow-up",
+            parseGroupwareContact(
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                href = href,
+                etag = response.etag,
+                content = response.body.decodeToString(),
+            )?.notes,
+        )
+    }
+
+    @Test
+    fun `contact writer rejects email values that can inject vcard properties`() {
+        assertFalse(groupwareContactEmailIsSingleValue("alex@example.test\nTEL:+31 6 123"))
+        assertFalse(groupwareContactEmailIsSingleValue("alex@example.test\u2028TEL:+31 6 123"))
+        assertTrue(groupwareContactEmailIsSingleValue("alex@example.test"))
+        assertFailsWith<IllegalArgumentException> {
+            createGroupwareContactContent(
+                uid = "alex",
+                displayName = "Alex Example",
+                email = "alex@example.test\r\nTEL:+31 6 123",
+                phone = null,
+                organization = null,
+                address = null,
+                notes = null,
+            )
+        }
+    }
+
+    @Test
+    fun `vcard text decoding consumes escapes once and preserves literal organization semicolons`() {
+        val href = "/remote.php/dav/addressbooks/users/person/contacts/escape.vcf"
+        val notes = "Path C:\\new, archive; ready"
+        val organization = "Example;"
+        val content = createGroupwareContactContent(
+            uid = "escape",
+            displayName = "Escape Example",
+            email = null,
+            phone = null,
+            organization = organization,
+            address = null,
+            notes = notes,
+        )
+
+        val parsed = requireNotNull(
+            parseGroupwareContact(
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                href = href,
+                etag = "\"new\"",
+                content = content,
+            ),
+        )
+
+        assertEquals(notes, parsed.notes)
+        assertEquals(organization, parsed.organization)
+        assertEquals(
+            "Example",
+            parseGroupwareContact(
+                addressBookHref = parsed.addressBookHref,
+                href = href,
+                etag = parsed.etag,
+                content = content.replace("ORG:Example\\;", "ORG:Example;"),
+            )?.organization,
+        )
+        assertTrue(
+            ContactMutationPostcondition.Upsert(
+                href = href,
+                addressBookHref = parsed.addressBookHref,
+                expectedUid = parsed.uid,
+                previousEtag = "\"old\"",
+                draft = ContactDraft(
+                    name = parsed.displayName,
+                    email = "",
+                    phone = "",
+                    organization = organization,
+                    address = "",
+                    notes = notes,
+                ),
+            ).isSatisfiedBy(
+                NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/vcard",
+                    etag = parsed.etag,
+                    body = content.encodeToByteArray(),
+                ),
+            ),
+        )
+    }
+
     @Test
     fun `carddav discovery and contact report become native semantic records`() {
         val discovery = NextcloudApiResponse(
@@ -82,6 +344,8 @@ END:VCARD</card:address-data>
                     N:Example;Alex;;;
                     EMAIL;TYPE=work:old@example.test
                     EMAIL;TYPE=home:private@example.test
+                    TEL;TYPE=work:+31 6 100
+                    TEL;TYPE=home:+31 6 200
                     PHOTO:data:image/png;base64,opaque
                     END:VCARD
                 """.trimIndent(),
@@ -111,6 +375,64 @@ END:VCARD</card:address-data>
             content = updated,
         ).toGroupwareDavRequest()
         assertEquals("\"etag\"", request.headers["If-Match"])
+    }
+
+    @Test
+    fun `contact recovery expects preserved secondary values after clearing the primary fields`() {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/"
+        val href = "${addressBookHref}alex.vcf"
+        val original = requireNotNull(
+            parseGroupwareContact(
+                addressBookHref = addressBookHref,
+                href = href,
+                etag = "\"old\"",
+                content = """
+                    BEGIN:VCARD
+                    VERSION:4.0
+                    UID:alex
+                    FN:Alex Example
+                    N:Example;Alex;;;
+                    EMAIL;TYPE=work:old@example.test
+                    EMAIL;TYPE=home:private@example.test
+                    TEL;TYPE=work:+31 6 100
+                    TEL;TYPE=home:+31 6 200
+                    END:VCARD
+                """.trimIndent(),
+            ),
+        )
+        val draft = ContactDraft(
+            name = original.displayName,
+            email = "",
+            phone = "",
+            organization = "",
+            address = "",
+            notes = "",
+        )
+        val updated = updateGroupwareContactContent(
+            contact = original,
+            displayName = draft.name,
+            email = draft.email,
+            phone = draft.phone,
+            organization = draft.organization,
+            address = draft.address,
+            notes = draft.notes,
+        )
+        val postcondition = requireNotNull(contactUpdatePostcondition(original, draft, updated))
+
+        assertFalse("EMAIL;TYPE=work:old@example.test" in updated)
+        assertTrue("EMAIL;TYPE=home:private@example.test" in updated)
+        assertFalse("TEL;TYPE=work:+31 6 100" in updated)
+        assertTrue("TEL;TYPE=home:+31 6 200" in updated)
+        assertTrue(
+            postcondition.isSatisfiedBy(
+                NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/vcard",
+                    etag = "\"new\"",
+                    body = updated.encodeToByteArray(),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -300,6 +622,56 @@ END:VCALENDAR</c:calendar-data>
     }
 
     @Test
+    fun `calendar serializer selects the recurring master when an override appears first`() {
+        val content = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:event-recurring
+            RECURRENCE-ID:20260810T090000Z
+            DTSTART:20260810T110000Z
+            SUMMARY:Moved occurrence
+            END:VEVENT
+            BEGIN:VEVENT
+            UID:event-recurring
+            DTSTART:20260803T090000Z
+            DTEND:20260803T100000Z
+            SUMMARY:Planning
+            RRULE:FREQ=WEEKLY;COUNT=4
+            END:VEVENT
+            END:VCALENDAR
+        """.trimIndent()
+        val event = requireNotNull(
+            parseGroupwareCalendarEvent(
+                calendarHref = "/remote.php/dav/calendars/person/work/",
+                href = "/remote.php/dav/calendars/person/work/event-recurring.ics",
+                etag = "event-etag",
+                content = content,
+            ),
+        )
+
+        assertNull(event.recurrenceId)
+        val updated = updateGroupwareCalendarEventContent(
+            event = event,
+            title = "Updated series",
+            start = event.start,
+            end = event.end,
+            allDay = event.allDay,
+            location = event.location,
+            description = event.description,
+        )
+        val components = parseGroupwareCalendarEventsFromContent(
+            event.calendarHref,
+            event.href,
+            event.etag,
+            updated,
+        )
+
+        assertEquals("Moved occurrence", components.single { it.recurrenceId != null }.title)
+        assertEquals("Updated series", components.single { it.recurrenceId == null }.title)
+    }
+
+    @Test
     fun `calendar writes reject recurrence rules the local expander cannot reproduce`() {
         listOf(
             "FREQ=YEARLY",
@@ -361,8 +733,30 @@ END:VCALENDAR</c:calendar-data>
         )
         assertEquals("20260707T100000Z", expanded.last().end)
         assertEquals(3, expanded.map(GroupwareCalendarEvent::instanceId).distinct().size)
+        assertNull(expanded.first().recurrenceId)
         assertFalse(expanded.first().isGeneratedOccurrence)
         assertTrue(expanded.last().isGeneratedOccurrence)
+
+        val updatedSeries = updateGroupwareCalendarEventContent(
+            event = expanded.first(),
+            title = "Updated series",
+            start = expanded.first().start,
+            end = expanded.first().end,
+            allDay = expanded.first().allDay,
+            location = expanded.first().location,
+            description = expanded.first().description,
+        )
+        assertEquals(
+            "Updated series",
+            requireNotNull(
+                parseGroupwareCalendarEvent(
+                    calendarHref = expanded.first().calendarHref,
+                    href = expanded.first().href,
+                    etag = expanded.first().etag,
+                    content = updatedSeries,
+                ),
+            ).title,
+        )
     }
 
     @Test
@@ -668,6 +1062,23 @@ END:VCALENDAR</c:calendar-data>
                 content = task.bodyText(),
             ).toGroupwareDavRequest()
         }
+    }
+
+    @Test
+    fun `ui mutation preparation converts request validation into a recoverable result`() {
+        var invalid = false
+        val request = prepareGroupwareDavMutation(onInvalid = { invalid = true }) {
+            GroupwareDavMutationSpec(
+                kind = GroupwareDavKind.Contact,
+                mutation = GroupwareDavMutation.Update,
+                objectHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/contact.vcf",
+                etag = null,
+                content = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Contact\r\nEND:VCARD\r\n",
+            ).toGroupwareDavRequest()
+        }
+
+        assertNull(request)
+        assertTrue(invalid)
     }
 
     private fun GroupwareDavRequest.bodyText(): String = requireNotNull(body).decodeToString()
