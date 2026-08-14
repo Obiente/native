@@ -61,8 +61,9 @@ class JvmSupportIntake(
     private val directorySync: (File) -> Unit = ::syncPosixDirectoryEntry,
     private val descriptorCleanupRetryMillis: Long = SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS,
     private val beforeCallRegistration: () -> Unit = {},
+    private val beforeSubmissionPreparation: () -> Unit = {},
     private val beforeBundlePackaging: () -> Unit = {},
-    private val archiveDelete: (File) -> Boolean = File::delete,
+    private val privateFileDelete: (File) -> Boolean = File::delete,
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -174,7 +175,9 @@ class JvmSupportIntake(
                 return@withContext
             }
             cancellationRequested.set(false)
+            publishState(SupportDiagnosticsSubmissionState.Packaging, originAccountIdentity)
             val context = try {
+                beforeSubmissionPreparation()
                 preparePrivateStorage()
                 diagnostics.prepareSubmissionContextForAccountIdentity(
                     reproductionSteps,
@@ -185,10 +188,18 @@ class JvmSupportIntake(
                 publishState(SupportDiagnosticsSubmissionState.Cancelled)
                 throw cancellation
             } catch (failure: Throwable) {
+                if (cancellationRequested.get()) {
+                    publishState(SupportDiagnosticsSubmissionState.Cancelling, originAccountIdentity)
+                    return@withContext
+                }
                 publishState(SupportDiagnosticsSubmissionState.Rejected(
                     failure.message?.take(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
                         ?: "The private diagnostic report could not be prepared.",
                 ))
+                return@withContext
+            }
+            if (cancellationRequested.get()) {
+                publishState(SupportDiagnosticsSubmissionState.Cancelling, originAccountIdentity)
                 return@withContext
             }
             val submission = PendingSubmission(
@@ -326,17 +337,26 @@ class JvmSupportIntake(
         awaitInitialization()
         // Serialize the terminal receipt decision with publication of the user's intent. If receipt
         // completion wins and clears pending first, cancellation is correctly reported as too late.
-        val accepted = synchronized(lock) {
+        val pendingCancellation: Boolean? = synchronized(lock) {
             val submission = pending
-            if (submission == null || !submission.belongsTo(activeAccountIdentity)) {
-                false
-            } else {
-                cancellationRequested.set(true)
-                true
+            when {
+                submission?.belongsTo(activeAccountIdentity) == true -> {
+                    cancellationRequested.set(true)
+                    true
+                }
+                operationActive.get() && actualState is SupportDiagnosticsSubmissionState.Packaging -> {
+                    cancellationRequested.set(true)
+                    publishStateLocked(SupportDiagnosticsSubmissionState.Cancelling, activeAccountIdentity)
+                    false
+                }
+                else -> null
             }
         }
-        if (!accepted) return false
-        return withContext(Dispatchers.IO) { cancelAfterIntentPublished() }
+        return when (pendingCancellation) {
+            null -> false
+            false -> true
+            true -> withContext(Dispatchers.IO) { cancelAfterIntentPublished() }
+        }
     }
 
     private fun cancelAfterIntentPublished(): Boolean {
@@ -432,7 +452,7 @@ class JvmSupportIntake(
         try {
             restrictOwnerOnlyFile(prepared.archive)
         } catch (_: Throwable) {
-            deleteArchiveOrRetry(prepared.archive)
+            deletePrivateFileOrRetry(prepared.archive)
             retainForRetry(
                 submission,
                 "The private report could not be protected on this device. You can retry safely.",
@@ -441,7 +461,7 @@ class JvmSupportIntake(
             return false
         }
         if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
-            deleteArchiveOrRetry(prepared.archive)
+            deletePrivateFileOrRetry(prepared.archive)
             return false
         }
         submission.archive = prepared.archive
@@ -834,24 +854,24 @@ class JvmSupportIntake(
         synchronized(lock) {
             if (pending === submission) pending = null
         }
-        deleteArchiveOrRetry(submission.archive)
+        deletePrivateFileOrRetry(submission.archive)
         if (!cleanupPendingDescriptorSafely(submission)) {
             scope.launch { retryPendingDescriptorCleanup(submission) }
         }
     }
 
-    private fun deleteArchiveOrRetry(archive: File?) {
-        if (archive == null || deleteArchiveSafely(archive)) return
+    private fun deletePrivateFileOrRetry(file: File?) {
+        if (file == null || deletePrivateFileSafely(file)) return
         scope.launch {
             while (!shutdownRequested.get()) {
                 delay(descriptorCleanupRetryMillis)
-                if (deleteArchiveSafely(archive)) return@launch
+                if (deletePrivateFileSafely(file)) return@launch
             }
         }
     }
 
-    private fun deleteArchiveSafely(archive: File): Boolean =
-        !archive.exists() || runCatching { archiveDelete(archive) }.getOrDefault(false) || !archive.exists()
+    private fun deletePrivateFileSafely(file: File): Boolean =
+        !file.exists() || runCatching { privateFileDelete(file) }.getOrDefault(false) || !file.exists()
 
     private fun cleanupPendingDescriptorSafely(submission: PendingSubmission): Boolean =
         synchronized(persistenceLock) {
@@ -961,10 +981,10 @@ class JvmSupportIntake(
                 file.isFile && file.name.matches(SUPPORT_TEMPORARY_FILE_PATTERN) &&
                     (file != retainedArchive || file.lastModified() < cutoff)
             }
-            .forEach(::deleteArchiveOrRetry)
+            .forEach(::deletePrivateFileOrRetry)
         temporaryRoot.listFiles().orEmpty()
             .filter { file -> file.isFile && file.name.matches(SUPPORT_PENDING_TEMPORARY_FILE_PATTERN) }
-            .forEach(File::delete)
+            .forEach(::deletePrivateFileOrRetry)
     }
 
     private fun preparePrivateStorage() {

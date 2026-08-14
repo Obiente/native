@@ -361,6 +361,33 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun publishesBusyStateAndCancelsBeforeSubmissionPreparationCompletes() = runBlocking {
+        val preparationEntered = CountDownLatch(1)
+        val allowPreparation = CountDownLatch(1)
+        testFixture(
+            beforeSubmissionPreparation = {
+                preparationEntered.countDown()
+                check(allowPreparation.await(5, TimeUnit.SECONDS))
+            },
+        ).use { fixture ->
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertTrue(preparationEntered.await(5, TimeUnit.SECONDS))
+            assertIs<SupportDiagnosticsSubmissionState.Packaging>(fixture.intake.states().value)
+
+            assertTrue(fixture.intake.cancel())
+            assertIs<SupportDiagnosticsSubmissionState.Cancelling>(fixture.intake.states().value)
+            allowPreparation.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
+            assertEquals(0, fixture.server.requestCount)
+        }
+    }
+
+    @Test
     fun cancellationStopsTheActiveCallWhenIntentPersistenceFails() = runBlocking {
         var directorySyncs = 0
         testFixture(
@@ -465,7 +492,7 @@ class JvmSupportIntakeTest {
         val retryEntered = CountDownLatch(1)
         val allowRetry = CountDownLatch(1)
         testFixture(
-            archiveDelete = { archive ->
+            privateFileDelete = { archive ->
                 archiveDeleteAttempts += 1
                 if (archiveDeleteAttempts == 1) {
                     false
@@ -495,21 +522,51 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun reportsUnavailableSubmissionStorageDuringInitialization() = runBlocking {
-        testFixture().use { fixture ->
-            fixture.intake.close()
-            assertTrue(fixture.temporaryRoot.deleteRecursively())
-            fixture.temporaryRoot.writeText("unavailable")
+    fun retriesDeletionOfOrphanedPendingDescriptorTemporaries() = runBlocking {
+        var deleteAttempts = 0
+        val retryEntered = CountDownLatch(1)
+        val allowRetry = CountDownLatch(1)
+        testFixture(
+            privateFileDelete = { file ->
+                deleteAttempts += 1
+                if (deleteAttempts == 1) {
+                    false
+                } else {
+                    retryEntered.countDown()
+                    check(allowRetry.await(5, TimeUnit.SECONDS))
+                    file.delete()
+                }
+            },
+            descriptorCleanupRetryMillis = 10L,
+            pendingTemporaryBeforeInitialization = true,
+        ).use { fixture ->
+            val orphan = requireNotNull(
+                fixture.temporaryRoot.listFiles().orEmpty().singleOrNull {
+                    it.name.startsWith(".pending-") && it.extension == "tmp"
+                },
+            )
+            assertTrue(retryEntered.await(5, TimeUnit.SECONDS))
+            assertTrue(orphan.isFile)
+            allowRetry.countDown()
 
-            fixture.newIntake().use { unavailable ->
-                val state = assertIs<SupportDiagnosticsSubmissionState.Unsupported>(unavailable.states().value)
-                assertTrue(state.reason.contains("storage is unavailable"))
-
-                unavailable.submit("A refresh failed.", "nightly", emptyList())
-
-                assertIs<SupportDiagnosticsSubmissionState.Unsupported>(unavailable.states().value)
-                assertEquals(0, fixture.server.requestCount)
+            withTimeout(5_000) {
+                while (orphan.exists()) delay(10)
             }
+            assertFalse(orphan.exists())
+            assertTrue(deleteAttempts >= 2)
+        }
+    }
+
+    @Test
+    fun reportsUnavailableSubmissionStorageDuringInitialization() = runBlocking {
+        testFixture(submissionStorageBlocked = true).use { fixture ->
+            val state = assertIs<SupportDiagnosticsSubmissionState.Unsupported>(fixture.intake.states().value)
+            assertTrue(state.reason.contains("storage is unavailable"))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Unsupported>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
         }
     }
 
@@ -1116,12 +1173,24 @@ class JvmSupportIntakeTest {
         directorySync: (File) -> Unit = {},
         descriptorCleanupRetryMillis: Long = 60_000L,
         beforeCallRegistration: () -> Unit = {},
+        beforeSubmissionPreparation: () -> Unit = {},
         beforeBundlePackaging: () -> Unit = {},
-        archiveDelete: (File) -> Boolean = File::delete,
+        privateFileDelete: (File) -> Boolean = File::delete,
+        submissionStorageBlocked: Boolean = false,
+        pendingTemporaryBeforeInitialization: Boolean = false,
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
-        val temporaryRoot = File(root, "submissions")
+        val temporaryRoot = if (submissionStorageBlocked) {
+            val blockingParent = File(root, "submission-storage-blocked").apply { writeText("unavailable") }
+            File(blockingParent, "submissions")
+        } else {
+            File(root, "submissions")
+        }
+        if (pendingTemporaryBeforeInitialization) {
+            require(temporaryRoot.mkdirs())
+            File(temporaryRoot, ".pending-orphan.tmp").writeText("private context")
+        }
         val environment = SupportDiagnosticsEnvironment(
             appVersion = "0.1.0-test",
             packageVersion = "1",
@@ -1149,8 +1218,9 @@ class JvmSupportIntakeTest {
             directorySync = directorySync,
             descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
             beforeCallRegistration = beforeCallRegistration,
+            beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
-            archiveDelete = archiveDelete,
+            privateFileDelete = privateFileDelete,
         )
     }
 
@@ -1188,8 +1258,9 @@ class JvmSupportIntakeTest {
         val directorySync: (File) -> Unit,
         val descriptorCleanupRetryMillis: Long,
         val beforeCallRegistration: () -> Unit,
+        val beforeSubmissionPreparation: () -> Unit,
         val beforeBundlePackaging: () -> Unit,
-        val archiveDelete: (File) -> Boolean,
+        val privateFileDelete: (File) -> Boolean,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -1207,8 +1278,9 @@ class JvmSupportIntakeTest {
             directorySync = directorySync,
             descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
             beforeCallRegistration = beforeCallRegistration,
+            beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
-            archiveDelete = archiveDelete,
+            privateFileDelete = privateFileDelete,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }
