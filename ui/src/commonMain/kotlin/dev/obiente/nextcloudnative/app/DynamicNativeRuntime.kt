@@ -92,6 +92,20 @@ enum class DynamicDescriptorAcquisition {
     MetadataFallback,
 }
 
+enum class DynamicDescriptorDiscoveryPhase {
+    CachedWorkspace,
+    ServerApiCatalog,
+    AppApiDefinition,
+    InstalledAppVersion,
+    VerifiedAppPackage,
+    NativeWorkspace,
+}
+
+data class DynamicDescriptorDiscoveryProgress(
+    val phase: DynamicDescriptorDiscoveryPhase,
+    val message: String,
+)
+
 /**
  * Discovers a machine-readable contract shipped by an installed app.
  *
@@ -106,11 +120,13 @@ suspend fun discoverDynamicAppDescriptor(
     serverVersion: String? = null,
     installedAppVersionHint: String? = null,
     serverVersionVerified: Boolean = true,
+    onProgress: (DynamicDescriptorDiscoveryProgress) -> Unit = {},
 ): DynamicDescriptorDiscovery {
     val sameOrigin = discoverDynamicAppDescriptor(
         serverUrl = session.serverUrl,
         app = app,
         execute = { request -> services.executeNextcloudApi(session, request) },
+        onProgress = onProgress,
     )
     if (sameOrigin.acquisition != DynamicDescriptorAcquisition.MetadataFallback) return sameOrigin
     val coreVersion = serverVersion?.coreVersionOrNull()
@@ -119,6 +135,12 @@ suspend fun discoverDynamicAppDescriptor(
                 "The server version is unavailable, so an App Store release could not be selected safely.",
         )
     val contractAppId = app.canonicalAppStoreId()
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.InstalledAppVersion,
+            "Checking the installed app version",
+        ),
+    )
     val observedInstalledVersion = discoverInstalledAppVersion(services, session, contractAppId)
     val installedVersion = observedInstalledVersion ?: installedAppVersionHint?.safeDynamicVersionHint()
     val versionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
@@ -126,6 +148,12 @@ suspend fun discoverDynamicAppDescriptor(
     } else {
         DynamicContractVersionStatus.LastKnownReadOnly
     }
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.VerifiedAppPackage,
+            "Finding a verified app package",
+        ),
+    )
     val acquired = runCatching {
         services.acquireSignedOpenApiContract(contractAppId, coreVersion, installedVersion)
     }.getOrElse { failure ->
@@ -169,6 +197,12 @@ suspend fun discoverDynamicAppDescriptor(
         AcquiredOpenApiContractSourceKind.AppStoreLinkedCompatibleGitHubTag ->
             OpenApiTrust.appStoreLinkedCompatibleGitHubTag
     }
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            "Preparing the native workspace",
+        ),
+    )
     val descriptor = runCatching {
         DynamicAppDescriptorCompiler().compile(
             DynamicDiscoveryInput(
@@ -335,6 +369,7 @@ internal suspend fun discoverDynamicAppDescriptor(
     serverUrl: String,
     app: NextcloudAppEntry,
     execute: suspend (NextcloudApiRequest) -> NextcloudApiResponse,
+    onProgress: (DynamicDescriptorDiscoveryProgress) -> Unit = {},
 ): DynamicDescriptorDiscovery {
     require(app.id.matches(Regex("[A-Za-z0-9_.-]+"))) { "The app ID is invalid." }
     val origin = serverUrl.httpOrigin()
@@ -350,8 +385,20 @@ internal suspend fun discoverDynamicAppDescriptor(
     val compiler = DynamicAppDescriptorCompiler()
     val diagnostics = mutableListOf<String>()
 
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.ServerApiCatalog,
+            "Checking the server API catalog",
+        ),
+    )
     val viewerSpecs = discoverOfficialViewerSpecIds(app.id, execute, diagnostics)
     viewerSpecs.forEach { specId ->
+        onProgress(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+                "Reading the app's API definition",
+            ),
+        )
         val path = "$OCS_API_VIEWER_SPEC_PATH/${specId.encodeUrlComponent()}"
         val response = runCatching { execute(dynamicDiscoveryRequest(path)) }
             .onFailure { failure ->
@@ -367,6 +414,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             diagnostics += "OCS API Viewer returned an invalid OpenAPI JSON body for $specId${response.contentTypeDiagnostic()}."
             return@forEach
         }
+        onProgress(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+                "Preparing the native workspace",
+            ),
+        )
         val descriptor = runCatching {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.onFailure { failure ->
@@ -387,6 +440,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             add("/custom_apps/${app.id}/$file")
         }
     }
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+            "Reading the app's API definition",
+        ),
+    )
     staticCandidates.forEach { path ->
         val response = runCatching {
             execute(dynamicDiscoveryRequest(path))
@@ -395,6 +454,12 @@ internal suspend fun discoverDynamicAppDescriptor(
             return@forEach
         }
         val document = response.parseOpenApiDocument() ?: return@forEach
+        onProgress(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+                "Preparing the native workspace",
+            ),
+        )
         val descriptor = runCatching {
             compileDynamicDescriptor(compiler, identity, policy, serverUrl, path, document)
         }.getOrNull() ?: return@forEach
@@ -408,6 +473,12 @@ internal suspend fun discoverDynamicAppDescriptor(
 
     diagnostics += "No valid static OpenAPI document was found in the app's advertised asset locations."
 
+    onProgress(
+        DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            "Preparing the native workspace",
+        ),
+    )
     return DynamicDescriptorDiscovery(
         descriptor = compiler.compile(
             DynamicDiscoveryInput(

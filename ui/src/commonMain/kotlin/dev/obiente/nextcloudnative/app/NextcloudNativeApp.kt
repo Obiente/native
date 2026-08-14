@@ -2600,6 +2600,14 @@ private fun AppInfoScreen(
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
+    var discoveryProgress by remember(app.id, session) {
+        mutableStateOf(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.CachedWorkspace,
+                "Checking the saved workspace",
+            ),
+        )
+    }
 
     fun retryDiscoveryAndServerInfo() {
         discoveryAttempt += 1
@@ -2614,6 +2622,10 @@ private fun AppInfoScreen(
         serverVersionVerified,
         discoveryAttempt,
     ) {
+        discoveryProgress = DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.CachedWorkspace,
+            "Checking the saved workspace",
+        )
         val persistedDiscovery = if (cachedDiscovery == null) {
             services.loadCachedDynamicAppDiscovery(session, app.id)
         } else {
@@ -2646,6 +2658,7 @@ private fun AppInfoScreen(
                 serverVersion = serverVersion,
                 installedAppVersionHint = installedAppVersionHint,
                 serverVersionVerified = serverVersionVerified,
+                onProgress = { progress -> discoveryProgress = progress },
             )
         }
             .onSuccess { candidate ->
@@ -2699,7 +2712,7 @@ private fun AppInfoScreen(
             if (discoveryError == null) {
                 DynamicAppOpeningState(
                     appName = app.name,
-                    message = "Opening your workspace",
+                    message = discoveryProgress.message,
                     modifier = Modifier.weight(1f),
                 )
             } else {

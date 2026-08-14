@@ -286,6 +286,7 @@ class DynamicNativeRuntimeTest {
     @Test
     fun discoversOpenApiThroughOfficialAuthenticatedViewerPathWithoutTrustingContentType() = runBlocking {
         val requests = mutableListOf<NextcloudApiRequest>()
+        val progress = mutableListOf<DynamicDescriptorDiscoveryPhase>()
         val discovery = discoverDynamicAppDescriptor(
             serverUrl = "https://cloud.example.test",
             app = NextcloudAppEntry("example", "Example", null),
@@ -302,6 +303,7 @@ class DynamicNativeRuntimeTest {
                     else -> response("not found", status = 404, contentType = "text/plain")
                 }
             },
+            onProgress = { update -> progress += update.phase },
         )
 
         assertEquals(DynamicDescriptorAcquisition.OcsApiViewer, discovery.acquisition)
@@ -315,6 +317,14 @@ class DynamicNativeRuntimeTest {
         )
         assertTrue(requests.all { it.method == NextcloudApiMethod.GET })
         assertTrue(discovery.descriptor.actions.isNotEmpty())
+        assertEquals(
+            listOf(
+                DynamicDescriptorDiscoveryPhase.ServerApiCatalog,
+                DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            ),
+            progress,
+        )
         assertTrue(
             discovery.descriptor.actions.flatMap(DynamicAction::provenance)
                 .any { it.kind == ProvenanceKind.advertisedOpenApi && it.source.contains("ocs_api_viewer") },
@@ -324,6 +334,7 @@ class DynamicNativeRuntimeTest {
     @Test
     fun missingViewerFallsBackToStaticAssetWithClearDiagnostic() = runBlocking {
         val requests = mutableListOf<String>()
+        val progress = mutableListOf<DynamicDescriptorDiscoveryPhase>()
         val discovery = discoverDynamicAppDescriptor(
             serverUrl = "https://cloud.example.test",
             app = NextcloudAppEntry("example", "Example", null),
@@ -335,12 +346,21 @@ class DynamicNativeRuntimeTest {
                     else -> response("Not found", 404, "text/html")
                 }
             },
+            onProgress = { update -> progress += update.phase },
         )
 
         assertEquals(DynamicDescriptorAcquisition.StaticAppAsset, discovery.acquisition)
         assertEquals("/apps/example/openapi.json", discovery.sourcePath)
         assertTrue(discovery.diagnostics.any { it.contains("not installed or enabled") })
         assertEquals("/index.php/apps/ocs_api_viewer/apps", requests.first())
+        assertEquals(
+            listOf(
+                DynamicDescriptorDiscoveryPhase.ServerApiCatalog,
+                DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            ),
+            progress,
+        )
     }
 
     @Test
