@@ -313,6 +313,16 @@ fun GroupwareDavMutationSpec.toGroupwareDavRequest(): GroupwareDavRequest {
     )
 }
 
+internal inline fun <T> prepareGroupwareDavMutation(
+    onInvalid: () -> Unit,
+    prepare: () -> T,
+): T? = try {
+    prepare()
+} catch (_: IllegalArgumentException) {
+    onInvalid()
+    null
+}
+
 private fun addressBookQueryBody(maxResults: Int): String = """
     <?xml version="1.0" encoding="UTF-8"?>
     <card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">

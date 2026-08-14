@@ -425,15 +425,21 @@ fun NativeGroupwareContactsScreen(
             onSave = save@{ draft, addressBook ->
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                 val objectHref = "${addressBook.href}$uid.vcf"
-                val request = GroupwareDavMutationSpec(
-                    kind = GroupwareDavKind.Contact,
-                    mutation = GroupwareDavMutation.Create,
-                    objectHref = objectHref,
-                    content = createGroupwareContactContent(
-                        uid, draft.name, draft.email, draft.phone,
-                        draft.organization, draft.address, draft.notes,
-                    ),
-                ).toGroupwareDavRequest()
+                val request = prepareGroupwareDavMutation(
+                    onInvalid = {
+                        mutationError = "The contact is too large or contains invalid data. Review its fields and try again."
+                    },
+                ) {
+                    GroupwareDavMutationSpec(
+                        kind = GroupwareDavKind.Contact,
+                        mutation = GroupwareDavMutation.Create,
+                        objectHref = objectHref,
+                        content = createGroupwareContactContent(
+                            uid, draft.name, draft.email, draft.phone,
+                            draft.organization, draft.address, draft.notes,
+                        ),
+                    ).toGroupwareDavRequest()
+                } ?: return@save
                 scope.launch {
                     if (!retainMutationRecovery(
                             ContactMutationPostcondition.Upsert(
@@ -485,22 +491,29 @@ fun NativeGroupwareContactsScreen(
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationCancelled = onNavigationCancelled,
                 onSave = save@{ draft, _ ->
-                    val updatedContent = updateGroupwareContactContent(
-                        contact, draft.name, draft.email, draft.phone,
-                        draft.organization, draft.address, draft.notes,
-                    )
+                    val prepared = prepareGroupwareDavMutation(
+                        onInvalid = {
+                            mutationError = "The contact is too large or contains invalid data. Review its fields and try again."
+                        },
+                    ) {
+                        val content = updateGroupwareContactContent(
+                            contact, draft.name, draft.email, draft.phone,
+                            draft.organization, draft.address, draft.notes,
+                        )
+                        content to GroupwareDavMutationSpec(
+                            kind = GroupwareDavKind.Contact,
+                            mutation = GroupwareDavMutation.Update,
+                            objectHref = contact.href,
+                            etag = contact.etag,
+                            content = content,
+                        ).toGroupwareDavRequest()
+                    } ?: return@save
+                    val (updatedContent, request) = prepared
                     val postcondition = contactUpdatePostcondition(contact, draft, updatedContent)
                     if (postcondition == null) {
                         mutationError = "The updated contact could not be verified locally. Check its fields and try again."
                         return@save
                     }
-                    val request = GroupwareDavMutationSpec(
-                        kind = GroupwareDavKind.Contact,
-                        mutation = GroupwareDavMutation.Update,
-                        objectHref = contact.href,
-                        etag = contact.etag,
-                        content = updatedContent,
-                    ).toGroupwareDavRequest()
                     scope.launch {
                         if (!retainMutationRecovery(postcondition)) return@launch
                         mutationError = null
@@ -548,12 +561,18 @@ fun NativeGroupwareContactsScreen(
                     TextButton(
                         enabled = !mutationInProgress,
                         onClick = delete@{
-                            val request = GroupwareDavMutationSpec(
-                                kind = GroupwareDavKind.Contact,
-                                mutation = GroupwareDavMutation.Delete,
-                                objectHref = contact.href,
-                                etag = contact.etag,
-                            ).toGroupwareDavRequest()
+                            val request = prepareGroupwareDavMutation(
+                                onInvalid = {
+                                    mutationError = "The contact cannot be changed safely. Refresh it and try again."
+                                },
+                            ) {
+                                GroupwareDavMutationSpec(
+                                    kind = GroupwareDavKind.Contact,
+                                    mutation = GroupwareDavMutation.Delete,
+                                    objectHref = contact.href,
+                                    etag = contact.etag,
+                                ).toGroupwareDavRequest()
+                            } ?: return@delete
                             scope.launch {
                                 if (!retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))) {
                                     return@launch

@@ -567,21 +567,27 @@ fun NativeGroupwareCalendarScreen(
                 mutationError = null
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                 val objectHref = "${calendar.href}$uid.ics"
-                val request = GroupwareDavMutationSpec(
-                    kind = GroupwareDavKind.Event,
-                    mutation = GroupwareDavMutation.Create,
-                    objectHref = objectHref,
-                    content = createGroupwareCalendarEventContent(
-                        uid = uid,
-                        title = draft.title,
-                        start = draft.startValue(),
-                        end = draft.endValue(),
-                        allDay = draft.allDay,
-                        location = draft.location,
-                        description = draft.description,
-                        recurrenceRule = draft.recurrenceRule,
-                    ),
-                ).toGroupwareDavRequest()
+                val request = prepareGroupwareDavMutation(
+                    onInvalid = {
+                        mutationError = "The event is too large or contains invalid data. Review its fields and try again."
+                    },
+                ) {
+                    GroupwareDavMutationSpec(
+                        kind = GroupwareDavKind.Event,
+                        mutation = GroupwareDavMutation.Create,
+                        objectHref = objectHref,
+                        content = createGroupwareCalendarEventContent(
+                            uid = uid,
+                            title = draft.title,
+                            start = draft.startValue(),
+                            end = draft.endValue(),
+                            allDay = draft.allDay,
+                            location = draft.location,
+                            description = draft.description,
+                            recurrenceRule = draft.recurrenceRule,
+                        ),
+                    ).toGroupwareDavRequest()
+                } ?: return@save
                 scope.launch {
                     if (!retainMutationRecovery(
                         CalendarMutationPostcondition.Upsert(
@@ -636,23 +642,29 @@ fun NativeGroupwareCalendarScreen(
                 mutationInProgress = mutationInProgress,
                 onSave = save@{ draft, _ ->
                     mutationError = null
-                    val updated = updateGroupwareCalendarEventContent(
-                        event = event,
-                        title = draft.title,
-                        start = draft.startValue(),
-                        end = draft.endValue(),
-                        allDay = draft.allDay,
-                        location = draft.location,
-                        description = draft.description,
-                        recurrenceRule = draft.recurrenceRule,
-                    )
-                    val request = GroupwareDavMutationSpec(
-                        kind = GroupwareDavKind.Event,
-                        mutation = GroupwareDavMutation.Update,
-                        objectHref = event.href,
-                        etag = event.etag,
-                        content = updated,
-                    ).toGroupwareDavRequest()
+                    val request = prepareGroupwareDavMutation(
+                        onInvalid = {
+                            mutationError = "The event is too large or contains invalid data. Review its fields and try again."
+                        },
+                    ) {
+                        val updated = updateGroupwareCalendarEventContent(
+                            event = event,
+                            title = draft.title,
+                            start = draft.startValue(),
+                            end = draft.endValue(),
+                            allDay = draft.allDay,
+                            location = draft.location,
+                            description = draft.description,
+                            recurrenceRule = draft.recurrenceRule,
+                        )
+                        GroupwareDavMutationSpec(
+                            kind = GroupwareDavKind.Event,
+                            mutation = GroupwareDavMutation.Update,
+                            objectHref = event.href,
+                            etag = event.etag,
+                            content = updated,
+                        ).toGroupwareDavRequest()
+                    } ?: return@save
                     scope.launch {
                         if (!retainMutationRecovery(
                             CalendarMutationPostcondition.Upsert(
@@ -744,12 +756,19 @@ fun NativeGroupwareCalendarScreen(
                     onClick = {
                         deletingInProgress = true
                         mutationError = null
-                        val request = GroupwareDavMutationSpec(
-                            kind = GroupwareDavKind.Event,
-                            mutation = GroupwareDavMutation.Delete,
-                            objectHref = event.href,
-                            etag = event.etag,
-                        ).toGroupwareDavRequest()
+                        val request = prepareGroupwareDavMutation(
+                            onInvalid = {
+                                mutationError = "The event cannot be changed safely. Refresh it and try again."
+                                deletingInProgress = false
+                            },
+                        ) {
+                            GroupwareDavMutationSpec(
+                                kind = GroupwareDavKind.Event,
+                                mutation = GroupwareDavMutation.Delete,
+                                objectHref = event.href,
+                                etag = event.etag,
+                            ).toGroupwareDavRequest()
+                        } ?: return@Button
                         scope.launch {
                             if (!retainMutationRecovery(CalendarMutationPostcondition.Delete(event.href))) {
                                 deletingInProgress = false

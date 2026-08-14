@@ -962,6 +962,23 @@ END:VCALENDAR</c:calendar-data>
         }
     }
 
+    @Test
+    fun `ui mutation preparation converts request validation into a recoverable result`() {
+        var invalid = false
+        val request = prepareGroupwareDavMutation(onInvalid = { invalid = true }) {
+            GroupwareDavMutationSpec(
+                kind = GroupwareDavKind.Contact,
+                mutation = GroupwareDavMutation.Update,
+                objectHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/contact.vcf",
+                etag = null,
+                content = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Contact\r\nEND:VCARD\r\n",
+            ).toGroupwareDavRequest()
+        }
+
+        assertNull(request)
+        assertTrue(invalid)
+    }
+
     private fun GroupwareDavRequest.bodyText(): String = requireNotNull(body).decodeToString()
 
     private fun calendarEvent(
