@@ -190,6 +190,41 @@ class DynamicNavigationParameterInheritanceTest {
 
         assertEquals(body, primaryDynamicContentDestination("messages", listOf(thread, body)))
         assertEquals(null, primaryDynamicContentDestination("accounts", listOf(body)))
+        assertFalse(
+            shouldOpenDynamicContextDestinationMenu(
+                destinations = listOf(thread, body),
+                primaryContentTarget = body,
+                preferredCollectionChild = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `mailbox message collection opens directly while stats remain enrichment`() {
+        val messages = DynamicNavigationDestination(
+            layoutId = "messages.mailbox",
+            label = "Messages",
+            resourceId = "messages",
+            actionId = "route.messages.index",
+            pathParameterValues = mapOf("mailboxId" to "9"),
+        )
+        val stats = DynamicNavigationDestination(
+            layoutId = "mailbox.stats",
+            label = "Mailbox stats",
+            resourceId = "mailboxStats",
+            actionId = "route.mailboxes.stats",
+            pathParameterValues = mapOf("id" to "9"),
+        )
+
+        assertTrue(isDynamicMailboxCollectionSummaryDestination("mailboxes", stats))
+        assertFalse(isDynamicMailboxCollectionSummaryDestination("budgets", stats))
+        assertFalse(
+            shouldOpenDynamicContextDestinationMenu(
+                destinations = listOf(messages, stats),
+                primaryContentTarget = null,
+                preferredCollectionChild = messages,
+            ),
+        )
     }
 
     @Test

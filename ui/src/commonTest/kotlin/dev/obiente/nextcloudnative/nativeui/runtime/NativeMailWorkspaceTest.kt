@@ -53,6 +53,114 @@ class NativeMailWorkspaceTest {
     }
 
     @Test
+    fun `mailbox stats enrich the selected mailbox instead of becoming mail content`() {
+        val mailboxes = ResourceSpec(
+            id = "mailboxes",
+            name = "Mailboxes",
+            confidence = Confidence.verified,
+        )
+        val stats = ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+        )
+        val messages = ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+        )
+        val inbox = NativeRecord(
+            id = "9",
+            values = mapOf("name" to "Inbox", "specialUse" to "inbox"),
+        )
+        val context = NativeDatasetContext(
+            parentResourceId = "mailboxes",
+            parentRecord = inbox,
+            relatedRecords = mapOf(
+                "mailboxes" to listOf(inbox),
+                "mailboxStats" to listOf(
+                    NativeRecord("stats-9", values = mapOf("total" to "84", "unread" to "7")),
+                ),
+            ),
+        )
+        val schema = schema(mailboxes, stats, messages)
+
+        assertEquals(NativeMailCollectionSummary(total = 84, unread = 7), context.nativeMailCollectionSummary(schema))
+        val plan = nativeMailWorkspacePlan(schema, messages, emptyList(), context, null)
+        assertEquals(84, plan.selectedContainer?.presentation?.totalCount)
+        assertEquals(7, plan.selectedContainer?.presentation?.unreadCount)
+        assertEquals(listOf("9"), plan.folders.map { item -> item.record.id })
+        assertTrue(plan.messages.isEmpty())
+    }
+
+    @Test
+    fun `message body keeps its proven mailbox selected and enriched`() {
+        val mailboxes = ResourceSpec(
+            id = "mailboxes",
+            name = "Mailboxes",
+            confidence = Confidence.verified,
+        )
+        val stats = ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+        )
+        val messages = ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+        )
+        val body = ResourceSpec(
+            id = "messageBody",
+            name = "Message body",
+            confidence = Confidence.verified,
+        )
+        val inbox = NativeRecord(
+            id = "9",
+            values = mapOf(
+                "name" to "Inbox",
+                "specialUse" to "inbox",
+                "accountId" to "personal",
+            ),
+        )
+        val message = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Release candidate is ready",
+                "from" to "Ada <ada@example.test>",
+                "accountId" to "personal",
+                "mailboxId" to "9",
+            ),
+        )
+        val schema = schema(mailboxes, stats, messages, body)
+
+        val plan = nativeMailWorkspacePlan(
+            schema = schema,
+            currentResource = body,
+            currentRecords = listOf(NativeRecord("42-body", values = mapOf("body" to "Hello"))),
+            context = NativeDatasetContext(
+                parentResourceId = "messages",
+                parentRecord = message,
+                relatedRecords = mapOf(
+                    "mailboxes" to listOf(inbox),
+                    "messages" to listOf(message),
+                    "mailboxStats" to listOf(
+                        NativeRecord("stats-9", values = mapOf("total" to "84", "unread" to "2")),
+                    ),
+                ),
+            ),
+            selectedRecordId = message.id,
+            selectedRecordResourceId = messages.id,
+        )
+
+        assertEquals("42", plan.selectedMessage?.record?.id)
+        assertEquals("9", plan.selectedContainer?.record?.id)
+        assertEquals(84, plan.selectedContainer?.presentation?.totalCount)
+        assertEquals(2, plan.selectedContainer?.presentation?.unreadCount)
+        assertEquals(listOf("9"), plan.folders.map { item -> item.record.id })
+    }
+
+    @Test
     fun `semantic mail datasets become account mailbox and message panes`() {
         val account = resource("accounts", "Accounts")
         val mailboxes = resource("mailboxes", "Mailboxes")

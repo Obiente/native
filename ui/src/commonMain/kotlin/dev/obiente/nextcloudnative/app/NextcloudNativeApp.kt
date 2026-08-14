@@ -3919,6 +3919,46 @@ private fun DynamicDiscoveredAppScreen(
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
     }
+    val mailCollectionSummaryDestinations = remember(
+        recordContext,
+        navigationPlan.contextualChildDestinations,
+    ) {
+        val context = recordContext ?: return@remember emptyList()
+        navigationPlan.contextualChildDestinations.filter { destination ->
+            isDynamicMailboxCollectionSummaryDestination(context.resourceId, destination)
+        }
+    }
+    LaunchedEffect(
+        descriptor,
+        selectedScreenIdentity,
+        mailCollectionSummaryDestinations,
+        loadAttempt,
+    ) {
+        if (mailCollectionSummaryDestinations.isEmpty()) return@LaunchedEffect
+        val loaded = coroutineScope {
+            mailCollectionSummaryDestinations.map { destination ->
+                async {
+                    destination.resourceId to runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = destination.actionId,
+                            values = destination.pathParameterValues,
+                            runtimeContext = destination.pathParameterValues,
+                            cachePolicy = dynamicReadCachePolicy,
+                        )
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        emptyList()
+                    }
+                }
+            }.awaitAll()
+        }
+        currentCoroutineContext().ensureActive()
+        val summaries = loaded.filter { (_, records) -> records.isNotEmpty() }.toMap()
+        if (summaries.isNotEmpty()) recordsByResourceId = recordsByResourceId + summaries
+    }
     val contextDetailResolution = remember(descriptor, schema, recordContext) {
         val context = recordContext ?: return@remember null
         schema.bestDynamicDetailView(context.resourceId)?.let { view ->
@@ -3997,6 +4037,12 @@ private fun DynamicDiscoveredAppScreen(
                     .filterNot { destination ->
                         selectedRecordResourceId.isDynamicMessageResource() &&
                             destination.resourceId.isMailNavigationAncestor()
+                    }
+                    .filterNot { destination ->
+                        isDynamicMailboxCollectionSummaryDestination(
+                            selectedRecordResourceId.orEmpty(),
+                            destination,
+                        )
                     }
                     .forEach { destination ->
                     schema.views.firstOrNull { it.id == destination.layoutId }?.let { view -> add(destination to view) }
@@ -4343,8 +4389,10 @@ private fun DynamicDiscoveredAppScreen(
             parentResourceId = selectedParentResourceId,
             destinations = nextPlan.contextualChildDestinations,
         )
-        val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
-            nextPlan.contextualChildDestinations,
+        val showDestinationMenu = shouldOpenDynamicContextDestinationMenu(
+            destinations = nextPlan.contextualChildDestinations,
+            primaryContentTarget = primaryContentTarget,
+            preferredCollectionChild = preferredCollectionChild,
         )
         val nextViewId = if (showDestinationMenu) {
             selectedViewId
@@ -5932,6 +5980,32 @@ internal fun primaryDynamicContentDestination(
                 }
             }
         else -> null
+    }
+}
+
+internal fun shouldOpenDynamicContextDestinationMenu(
+    destinations: List<DynamicNavigationDestination>,
+    primaryContentTarget: DynamicNavigationDestination?,
+    preferredCollectionChild: DynamicNavigationDestination?,
+): Boolean = primaryContentTarget == null &&
+    preferredCollectionChild == null &&
+    shouldShowDynamicContextDestinationMenu(destinations)
+
+internal fun isDynamicMailboxCollectionSummaryDestination(
+    parentResourceId: String,
+    destination: DynamicNavigationDestination,
+): Boolean {
+    val parentWords = parentResourceId.dynamicNavigationResourceWords().toSet()
+    if (parentWords.none { word -> word in setOf("folder", "folders", "mailbox", "mailboxes") }) {
+        return false
+    }
+    val destinationWords = sequenceOf(
+        destination.resourceId,
+        destination.label,
+        destination.actionId,
+    ).flatMap { value -> value.dynamicNavigationResourceWords().asSequence() }.toSet()
+    return destinationWords.any { word ->
+        word in setOf("stat", "stats", "statistics", "status", "summary")
     }
 }
 

@@ -21,6 +21,7 @@ class MarketingProductionCaptureTest {
 
         assertEquals("/apps/mail/api/messages", schemaRoutes["route.messages.index"])
         assertEquals("/apps/mail/api/messages/{id}/body", schemaRoutes["route.messages.getbody"])
+        assertEquals("/apps/mail/api/mailboxes/{id}/stats", schemaRoutes["route.mailboxes.stats"])
         assertEquals("/apps/mail/api/drafts", compose.binding.path)
         assertEquals(HttpMethod.POST, compose.binding.method)
         assertEquals("5.10.12", marketingMailSchema.app.version)

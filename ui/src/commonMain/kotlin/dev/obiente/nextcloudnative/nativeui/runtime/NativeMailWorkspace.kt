@@ -55,6 +55,11 @@ internal data class NativeMailWorkspaceItem(
     val hierarchyDepth: Int = 0,
 )
 
+internal data class NativeMailCollectionSummary(
+    val total: Int?,
+    val unread: Int?,
+)
+
 internal data class NativeMailWorkspacePlan(
     val accounts: List<NativeMailWorkspaceItem>,
     val folders: List<NativeMailWorkspaceItem>,
@@ -148,6 +153,7 @@ internal fun nativeMailWorkspacePlan(
     }
     val seen = mutableSetOf<String>()
     val rawItems = datasets.flatMap { (resource, records) ->
+        if (resource.isNativeMailCollectionSummaryResource()) return@flatMap emptyList()
         records.mapNotNull { record ->
             if (currentIsMessageFacet && resource.id == currentResource.id) return@mapNotNull null
             val presentation = nativeMailboxPresentation(resource, record)
@@ -212,7 +218,7 @@ internal fun nativeMailWorkspacePlan(
         recordId = selectedRecordId,
         kind = NativeMailboxItemKind.Message,
     )
-    val selectedContainer = context.parentRecord?.let { parent ->
+    val rawSelectedContainer = context.parentRecord?.let { parent ->
         context.parentResourceId?.let { parentResourceId ->
             items.singleMailWorkspaceSelection(
                 resourceId = parentResourceId,
@@ -224,28 +230,79 @@ internal fun nativeMailWorkspacePlan(
         resourceId = selectedRecordResourceId,
         recordId = selectedRecordId,
         kinds = setOf(NativeMailboxItemKind.Account, NativeMailboxItemKind.Folder),
-    )
+    ) ?: selectedMessage?.let { message ->
+        items.filter { candidate ->
+            candidate.presentation.kind == NativeMailboxItemKind.Folder &&
+                message.belongsToMailbox(candidate)
+        }.singleOrNull()
+    }
+    val collectionSummary = context.nativeMailCollectionSummary(schema)
+    val selectedContainer = rawSelectedContainer?.let { container ->
+        if (container.presentation.kind != NativeMailboxItemKind.Folder || collectionSummary == null) {
+            container
+        } else {
+            container.copy(
+                presentation = container.presentation.copy(
+                    unreadCount = collectionSummary.unread ?: container.presentation.unreadCount,
+                    totalCount = collectionSummary.total ?: container.presentation.totalCount,
+                    unread = (collectionSummary.unread ?: container.presentation.unreadCount ?: 0) > 0,
+                ),
+            )
+        }
+    }
     val cachedMessagesForSelectedMailbox = selectedContainer
         ?.takeIf { container -> container.presentation.kind == NativeMailboxItemKind.Folder }
         ?.let { mailbox -> messages.filter { message -> message.belongsToMailbox(mailbox) } }
         .orEmpty()
+    val folders = items
+        .filter { item -> item.presentation.kind == NativeMailboxItemKind.Folder }
+        .map { item ->
+            selectedContainer?.takeIf { selected ->
+                selected.nativeMailWorkspaceRecordKey() == item.nativeMailWorkspaceRecordKey()
+            } ?: item
+        }
+        .sortedWith(
+            compareByDescending<NativeMailWorkspaceItem> { item -> item.inboxScore() }
+                .thenBy { item -> item.mailboxHierarchySortKey() }
+                .thenBy { item -> item.hierarchyDepth },
+        )
     return NativeMailWorkspacePlan(
         accounts = items
             .filter { item -> item.presentation.kind == NativeMailboxItemKind.Account }
             .sortedBy { item -> item.presentation.title.lowercase() },
-        folders = items
-            .filter { item -> item.presentation.kind == NativeMailboxItemKind.Folder }
-            .sortedWith(
-                compareByDescending<NativeMailWorkspaceItem> { item -> item.inboxScore() }
-                    .thenBy { item -> item.mailboxHierarchySortKey() }
-                    .thenBy { item -> item.hierarchyDepth },
-            ),
+        folders = folders,
         messages = messages,
         currentItems = currentItems,
         selectedContainer = selectedContainer,
         selectedMessage = selectedMessage,
         cachedMessagesForSelectedMailbox = cachedMessagesForSelectedMailbox,
     )
+}
+
+internal fun NativeDatasetContext.nativeMailCollectionSummary(
+    schema: NativeAppSchema,
+): NativeMailCollectionSummary? = relatedRecords.mapNotNull { (resourceId, records) ->
+    val resource = schema.resource(resourceId) ?: return@mapNotNull null
+    if (!resource.isNativeMailCollectionSummaryResource()) return@mapNotNull null
+    records.singleOrNull()?.nativeMailCollectionSummary()
+}.distinct().singleOrNull()
+
+private fun ResourceSpec.isNativeMailCollectionSummaryResource(): Boolean =
+    listOf(id, name).flatMap(String::mailSemanticWords).any { word ->
+        word in setOf("stat", "stats", "status", "summary", "statistics")
+    }
+
+private fun NativeRecord.nativeMailCollectionSummary(): NativeMailCollectionSummary? {
+    val values = (values + displayValues).entries.associate { (key, value) ->
+        key.mailSemanticKey() to value
+    }
+    fun integer(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
+        values[key]?.trim()?.toIntOrNull()?.takeIf { value -> value >= 0 }
+    }
+    val total = integer("total", "totalmessages", "messagecount", "messagescount")
+    val unread = integer("unread", "unseen", "unreadcount", "unseenmessages")
+    return NativeMailCollectionSummary(total = total, unread = unread)
+        .takeIf { summary -> summary.total != null || summary.unread != null }
 }
 
 /**
@@ -833,6 +890,20 @@ private fun NativeMailRailRow(
                 item.presentation.sender?.let { subtitle ->
                     Text(
                         subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (
+                    item.presentation.kind == NativeMailboxItemKind.Folder &&
+                    item.presentation.totalCount != null
+                ) {
+                    val total = item.presentation.totalCount
+                    val unread = item.presentation.unreadCount
+                    Text(
+                        if (unread != null) "$unread unread of $total" else "$total messages",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

@@ -2299,6 +2299,7 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
                     "accounts" to listOf(marketingMailAccount),
                     "mailboxes" to marketingMailboxes,
                     "messages" to marketingMailMessages,
+                    "mailboxStats" to listOf(marketingMailInboxStats),
                 ),
             ),
             modifier = Modifier.weight(1f),
@@ -2532,6 +2533,15 @@ internal val marketingMailSchema = NativeAppSchema(
             ),
         ),
         ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("total", "Messages", FieldKind.integer, required = true, readOnly = true),
+                FieldSpec("unread", "Unread", FieldKind.integer, required = true, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
             id = "messageBody",
             name = "Message body",
             confidence = Confidence.verified,
@@ -2605,6 +2615,22 @@ internal val marketingMailSchema = NativeAppSchema(
             confidence = Confidence.verified,
         ),
         ActionSpec(
+            id = "route.mailboxes.stats",
+            label = "Mailbox stats",
+            resourceId = "mailboxStats",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/mailboxes/{id}/stats",
+                operationId = "route.mailboxes.stats",
+                pathParameterNames = listOf("id"),
+                requiredPathParameterNames = listOf("id"),
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
             id = marketingMailComposeAction.id,
             label = marketingMailComposeAction.label,
             resourceId = marketingMailComposeAction.resourceId,
@@ -2660,6 +2686,10 @@ private val marketingMailInbox = NativeRecord(
         "path" to "Personal/Inbox",
         "accountId" to marketingMailAccount.id,
     ),
+)
+private val marketingMailInboxStats = NativeRecord(
+    id = "inbox-stats",
+    values = mapOf("total" to "84", "unread" to "2"),
 )
 private val marketingMailboxes = listOf(
     marketingMailInbox,
