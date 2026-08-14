@@ -13,6 +13,8 @@ private const val READ_FALLBACK_OPERATION_IDS_EXTENSION =
     "x-nextcloud-native-read-fallback-operation-ids"
 private const val READ_FALLBACK_FOR_OPERATION_EXTENSION =
     "x-nextcloud-native-fallback-for-operation-id"
+private const val RECORD_CURSOR_FIELD_EXTENSION =
+    "x-nextcloud-native-record-cursor-field"
 private const val DESCRIPTION_INFERRED_MULTIPART_EXTENSION =
     "x-nextcloud-native-description-inferred-multipart"
 private const val MAX_MULTIPART_DESCRIPTION_CHARACTERS = 2_048
@@ -920,6 +922,7 @@ private class KotlinCompilerState(
                 ocs = ocsMetadata(path, queryParameters),
             ),
             fallbackOnly = fallbackForOperationId != null,
+            recordCursorFieldId = operation.string(RECORD_CURSOR_FIELD_EXTENSION),
             responseFieldIds = if (method == HttpMethod.GET) {
                 responseFields.map(DynamicField::id)
             } else {

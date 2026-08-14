@@ -235,6 +235,12 @@ internal fun synthesizeReadOnlyRouteContract(
                         ),
                 ),
             )
+        verifiedRecordCursorField(
+            appId = appId,
+            appVersion = appVersion,
+            fullPath = fullPath,
+            operationId = operationId,
+        )?.let { fieldId -> operation.put(RECORD_CURSOR_FIELD_EXTENSION, fieldId) }
         if (operationalRefreshWrite) {
             operation.put(OPERATIONAL_ACTION_EXTENSION, "refresh")
         }
@@ -587,8 +593,21 @@ internal const val VERIFIED_READ_ROUTE_EXTENSION = "x-nextcloud-native-verified-
 internal const val VERIFIED_STATIC_WRITE_EXTENSION = "x-nextcloud-native-verified-static-write"
 internal const val FALLBACK_FOR_OPERATION_EXTENSION = "x-nextcloud-native-fallback-for-operation-id"
 internal const val READ_FALLBACKS_EXTENSION = "x-nextcloud-native-read-fallback-operation-ids"
+internal const val RECORD_CURSOR_FIELD_EXTENSION = "x-nextcloud-native-record-cursor-field"
 internal const val OPERATIONAL_ACTION_EXTENSION = "x-nextcloud-native-operational-action"
 internal const val VERIFIED_CRUD_EXTENSION = "x-nextcloud-native-verified-crud"
+
+private fun verifiedRecordCursorField(
+    appId: String,
+    appVersion: String,
+    fullPath: String,
+    operationId: String,
+): String? = "dateInt".takeIf {
+    appId == "mail" &&
+        appVersion == "5.10.9" &&
+        fullPath == "/apps/mail/api/messages" &&
+        operationId == "route.messages.index"
+}
 
 private val SEMANTIC_PATH_NOISE = setOf(
     "api", "apps", "indexphp", "ocs", "ocsv1php", "ocsv2php", "list", "index", "getall", "findall",

@@ -205,6 +205,8 @@ data class DynamicAction(
     val responseFieldIds: List<String> = emptyList(),
     /** Exact same-route GET action used to reconcile an idempotent replacement result. */
     val resultRecoveryActionId: String? = null,
+    /** Explicit verified binding from an opaque cursor parameter to one response record field. */
+    val recordCursorFieldId: String? = null,
     val capabilityIds: List<String> = emptyList(),
     val permissionIds: List<String> = emptyList(),
     val confidence: Confidence,

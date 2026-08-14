@@ -169,6 +169,18 @@ fun DynamicAppDescriptor.validationErrors(): List<String> = buildList {
         if (action.fallbackOnly && action.binding.method != HttpMethod.GET) {
             add("Hidden fallback action is not read-only: ${action.id}")
         }
+        action.recordCursorFieldId?.let { fieldId ->
+            when {
+                fieldId.isBlank() -> add("Record cursor field is blank: ${action.id}")
+                action.binding.method != HttpMethod.GET || action.intent != ActionIntent.list ->
+                    add("Record cursor binding is not a collection GET: ${action.id}")
+                action.binding.queryParameters.none { parameter ->
+                    !parameter.required && parameter.name.equals("cursor", ignoreCase = true)
+                } -> add("Record cursor binding has no optional cursor query: ${action.id}")
+                action.provenance.none { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage } ->
+                    add("Record cursor binding lacks verified package evidence: ${action.id}")
+            }
+        }
         val placeholders = action.binding.path.pathPlaceholders()
         val parameters = action.binding.pathParameters.mapTo(mutableSetOf(), HttpParameter::name)
         if (placeholders != parameters) add("Path parameters do not match placeholders: ${action.id}")

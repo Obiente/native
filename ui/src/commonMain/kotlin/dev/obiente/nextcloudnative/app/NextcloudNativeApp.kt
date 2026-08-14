@@ -633,9 +633,17 @@ internal data class DynamicFormRelationContinuation(
     val loadedRecordCount: Int,
 )
 
+internal fun shouldOfferInitialDynamicRelationRetry(
+    hasContinuation: Boolean,
+    loading: Boolean,
+    error: String?,
+    discardedRecordCount: Int,
+): Boolean = error != null && !hasContinuation && !loading && discardedRecordCount == 0
+
 private data class DynamicFormRelationLoadResult(
     val records: List<NativeRecord>,
     val pagination: DynamicPaginationSpec?,
+    val partialFailureMessage: String? = null,
 )
 
 internal data class DynamicFormRelationCacheState(
@@ -769,11 +777,12 @@ private fun DynamicPaginationSpec.nextDynamicFormRelationContinuation(
     lastPage: List<NativeRecord>,
     loadedRecordCount: Int,
     novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int = 2,
+    nextPageNumber: Int? = null,
 ): DynamicFormRelationContinuation? {
     if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicFormRelationContinuation(this, nextPageNumber, nextValue, loadedRecordCount)
+    val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
+    val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
+    return DynamicFormRelationContinuation(this, continuationPageNumber, nextValue, loadedRecordCount)
 }
 
 private suspend fun loadInitialDynamicFormRelationRecords(
@@ -787,17 +796,20 @@ private suspend fun loadInitialDynamicFormRelationRecords(
     val action = descriptor.actions.singleOrNull { action -> action.id == request.plan.actionId }
         ?: error("This relation has no declared load action.")
     val boundValues = dynamicFormRelationRuntimeValues(request, values)
+    val outcome = loadDynamicRecordsWithOutcome(
+        services = services,
+        session = session,
+        descriptor = descriptor,
+        actionId = action.id,
+        values = boundValues,
+        runtimeContext = boundValues,
+        cachePolicy = cachePolicy,
+    )
     return DynamicFormRelationLoadResult(
-        records = loadDynamicRecords(
-            services = services,
-            session = session,
-            descriptor = descriptor,
-            actionId = action.id,
-            values = boundValues,
-            runtimeContext = boundValues,
-            cachePolicy = cachePolicy,
-        ),
-        pagination = action.dynamicPaginationSpec(),
+        records = outcome.records,
+        pagination = descriptor.resolvedDynamicPaginationSpec(action.id, boundValues)
+            .takeIf { outcome.partialFailureMessage == null },
+        partialFailureMessage = outcome.partialFailureMessage,
     )
 }
 
@@ -1299,6 +1311,7 @@ fun NextcloudNativeMarketingCapture(
                     -> MarketingCalendarWorkspaceScenario(scenario, assets)
                     MarketingCaptureScenario.MailWorkspaceDesktop,
                     MarketingCaptureScenario.MailWorkspaceMobile,
+                    MarketingCaptureScenario.MailMessageBodyMobile,
                     MarketingCaptureScenario.MailWorkspaceLoadingMobile,
                     MarketingCaptureScenario.MailWorkspaceEmptyMobile,
                     MarketingCaptureScenario.MailWorkspaceErrorDesktop,
@@ -3182,6 +3195,14 @@ private fun AppInfoScreen(
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
+    var discoveryProgress by remember(app.id, session) {
+        mutableStateOf(
+            DynamicDescriptorDiscoveryProgress(
+                DynamicDescriptorDiscoveryPhase.CachedWorkspace,
+                "Checking the saved workspace",
+            ),
+        )
+    }
 
     fun retryDiscoveryAndServerInfo() {
         discoveryAttempt += 1
@@ -3196,6 +3217,10 @@ private fun AppInfoScreen(
         serverVersionVerified,
         discoveryAttempt,
     ) {
+        discoveryProgress = DynamicDescriptorDiscoveryProgress(
+            DynamicDescriptorDiscoveryPhase.CachedWorkspace,
+            "Checking the saved workspace",
+        )
         val persistedDiscovery = if (cachedDiscovery == null) {
             services.loadCachedDynamicAppDiscovery(session, app.id)
         } else {
@@ -3228,6 +3253,7 @@ private fun AppInfoScreen(
                 serverVersion = serverVersion,
                 installedAppVersionHint = installedAppVersionHint,
                 serverVersionVerified = serverVersionVerified,
+                onProgress = { progress -> discoveryProgress = progress },
             )
         }
             .onSuccess { candidate ->
@@ -3281,7 +3307,7 @@ private fun AppInfoScreen(
             if (discoveryError == null) {
                 DynamicAppOpeningState(
                     appName = app.name,
-                    message = "Opening your workspace",
+                    message = discoveryProgress.message,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -3412,6 +3438,14 @@ private fun DynamicDiscoveredAppScreen(
     var renderedScreenCacheKey by remember(descriptor) { mutableStateOf<DynamicScreenCacheKey?>(null) }
     var refreshingDynamicContent by remember(descriptor) { mutableStateOf(false) }
     var dynamicRefreshError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var mailCollectionSummaryError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var trackedMailCollectionSummaryResourceIds by remember(descriptor) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+    var trackedMailCollectionSummaryDestinations by remember(descriptor) {
+        mutableStateOf<List<DynamicNavigationDestination>>(emptyList())
+    }
+    var completedMailCollectionSummaryLoadAttempt by remember(descriptor) { mutableStateOf(-1) }
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
@@ -3696,6 +3730,13 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         val view = selectedView ?: return@LaunchedEffect
+        val retainedMailPagination = retainedMailPaginationSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            paginationViewId = paginationState?.viewId,
+            selectedView = view,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
         if (loadAttempt > 0) {
             // Some app controllers acknowledge a mutation just before the corresponding GET
             // projection becomes visible. Debounce the forced authoritative reload so that an
@@ -3703,7 +3744,7 @@ private fun DynamicDiscoveredAppScreen(
             delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
             currentCoroutineContext().ensureActive()
         }
-        if (!screenCacheAllowed) recordsByResourceId = emptyMap()
+        if (!screenCacheAllowed && retainedMailPagination == null) recordsByResourceId = emptyMap()
         val cacheKey = dynamicScreenCacheKey(
             session = session,
             appId = descriptor.app.id,
@@ -3733,9 +3774,11 @@ private fun DynamicDiscoveredAppScreen(
                 dynamicRefreshError = message
             }
         }
-        paginationState = null
-        loadingMore = false
-        loadMoreError = null
+        if (retainedMailPagination == null) {
+            paginationState = null
+            loadingMore = false
+            loadMoreError = null
+        }
         try {
         if (view.component == NativeComponent.form) {
             val values = formRelationValues
@@ -3773,6 +3816,11 @@ private fun DynamicDiscoveredAppScreen(
                             records = result.records,
                             pagination = result.pagination,
                         )
+                    }
+                    formRelationPageErrors = if (result?.partialFailureMessage == null) {
+                        formRelationPageErrors - request.cacheKey
+                    } else {
+                        formRelationPageErrors.putBounded(request.cacheKey, result.partialFailureMessage)
                     }
                 }
                 formRelationCache = updatedRelationCache
@@ -3835,25 +3883,38 @@ private fun DynamicDiscoveredAppScreen(
             null
         }
         if (freshSnapshot != null) {
-            recordsByResourceId = freshSnapshot.relatedRecords
+            recordsByResourceId = mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = recordsByResourceId,
+                incomingRecords = freshSnapshot.relatedRecords,
+                preservedResourceId = retainedMailPagination?.resourceId,
+            )
             viewState = NativeScreenState.Ready(freshSnapshot.records)
-            paginationState = freshSnapshot.pagination?.let { checkpoint ->
-                descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
-                    ?.dynamicPaginationSpec()
-                    ?.let { spec ->
-                        DynamicPaginationState(
-                            viewId = view.id,
-                            spec = spec,
-                            nextPageNumber = checkpoint.nextPageNumber,
-                            nextRequestValue = checkpoint.nextRequestValue,
-                        )
-                    }
+            if (retainedMailPagination == null) {
+                paginationState = freshSnapshot.pagination?.let { checkpoint ->
+                    descriptor.resolvedDynamicPaginationSpec(
+                        actionId = view.sourceActionId,
+                        boundValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() +
+                            selectedPathParameterValues,
+                    )
+                        ?.let { spec ->
+                            DynamicPaginationState(
+                                viewId = view.id,
+                                spec = spec,
+                                nextPageNumber = checkpoint.nextPageNumber,
+                                nextRequestValue = checkpoint.nextRequestValue,
+                            )
+                        }
+                }
             }
             return@LaunchedEffect
         }
         val staleSnapshot = if (loadAttempt == 0) sharedDynamicNativeMemoryCache.screen(cacheKey) else null
         if (staleSnapshot != null) {
-            recordsByResourceId = staleSnapshot.relatedRecords
+            recordsByResourceId = mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = recordsByResourceId,
+                incomingRecords = staleSnapshot.relatedRecords,
+                preservedResourceId = retainedMailPagination?.resourceId,
+            )
             viewState = NativeScreenState.Ready(staleSnapshot.records)
         }
         val composite = view.compositeDataGrid
@@ -3867,7 +3928,7 @@ private fun DynamicDiscoveredAppScreen(
                         composite.rowResourceId to composite.rowSourceActionId,
                     ).map { (resourceId, actionId) ->
                         async {
-                            resourceId to loadDynamicRecords(
+                            resourceId to loadDynamicRecordsWithOutcome(
                                 services = services,
                                 session = session,
                                 descriptor = descriptor,
@@ -3882,15 +3943,25 @@ private fun DynamicDiscoveredAppScreen(
                 currentCoroutineContext().ensureActive()
                 loaded
             }.onSuccess { loaded ->
-                val updatedRecords = recordsByResourceId + loaded.toMap()
-                val rows = loaded.first { (resourceId, _) -> resourceId == composite.rowResourceId }.second
+                val loadedRecords = preferredDynamicCompositeRefreshRecords(
+                    loaded = loaded,
+                    staleRecordsByResourceId = staleSnapshot?.relatedRecords,
+                )
+                val partialFailure = loaded.firstNotNullOfOrNull { (_, outcome) ->
+                    outcome.partialFailureMessage
+                }
+                val updatedRecords = recordsByResourceId + loadedRecords
+                val rows = loadedRecords.getValue(composite.rowResourceId)
                 recordsByResourceId = updatedRecords
                 viewState = NativeScreenState.Ready(rows)
+                dynamicRefreshError = partialFailure
                 mutationReconciliationGeneration += 1
-                sharedDynamicNativeMemoryCache.storeScreen(
-                    cacheKey,
-                    DynamicScreenSnapshot(rows, updatedRecords),
-                )
+                if (partialFailure == null) {
+                    sharedDynamicNativeMemoryCache.storeScreen(
+                        cacheKey,
+                        DynamicScreenSnapshot(rows, updatedRecords),
+                    )
+                }
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
                 if (staleSnapshot != null) {
@@ -3918,7 +3989,7 @@ private fun DynamicDiscoveredAppScreen(
         if (staleSnapshot == null) showLoading()
         val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
         runCatching {
-            val records = loadDynamicRecords(
+            val outcome = loadDynamicRecordsWithOutcome(
                 services = services,
                 session = session,
                 descriptor = descriptor,
@@ -3928,35 +3999,57 @@ private fun DynamicDiscoveredAppScreen(
                 cachePolicy = dynamicReadCachePolicy,
             )
             currentCoroutineContext().ensureActive()
-            records
-        }.onSuccess { records ->
-            val updatedRecords = recordsByResourceId + (view.resourceId to records)
-            val nextPagination = descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
-                ?.dynamicPaginationSpec()
-                ?.toDynamicPaginationState(view.id, records)
-            recordsByResourceId = updatedRecords
-            viewState = NativeScreenState.Ready(records)
-            mutationReconciliationGeneration += 1
-            records.firstOrNull()?.let { authoritative ->
-                if (
-                    view.component == NativeComponent.detail &&
-                    selectedRecord?.id == authoritative.id
-                ) {
-                    // Promote the freshly loaded server record over the sparse list stub. This
-                    // gives contextual actions a declared identity and prefills edit forms with
-                    // the complete current recipe.
-                    selectedRecord = authoritative
-                }
+            outcome
+        }.onSuccess { outcome ->
+            val records = outcome.records
+            val paginationSpec = if (outcome.partialFailureMessage == null) {
+                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId, values)
+            } else {
+                null
             }
-            paginationState = nextPagination
-            sharedDynamicNativeMemoryCache.storeScreen(
-                cacheKey,
-                DynamicScreenSnapshot(
-                    records = records,
-                    relatedRecords = updatedRecords,
-                    pagination = nextPagination?.toCheckpoint(),
-                ),
+            val paginationFailure = paginationSpec?.continuationFailureMessage(records)
+            val displayFailure = outcome.partialFailureMessage ?: paginationFailure
+            val presentedRecords = preferredDynamicPartialRefreshRecords(
+                freshRecords = records,
+                staleRecords = staleSnapshot?.records,
+                partialFailureMessage = displayFailure,
             )
+            val updatedRecords = recordsByResourceId + (view.resourceId to presentedRecords)
+            val nextPagination = if (displayFailure == null) {
+                paginationSpec?.toDynamicPaginationState(view.id, presentedRecords)
+            } else {
+                null
+            }
+            recordsByResourceId = updatedRecords
+            viewState = NativeScreenState.Ready(presentedRecords)
+            dynamicRefreshError = displayFailure
+            mutationReconciliationGeneration += 1
+            records.firstOrNull()
+                ?.takeIf { displayFailure == null }
+                ?.let { authoritative ->
+                    if (
+                        view.component == NativeComponent.detail &&
+                        selectedRecord?.id == authoritative.id
+                    ) {
+                        // Promote the freshly loaded server record over the sparse list stub. This
+                        // gives contextual actions a declared identity and prefills edit forms with
+                        // the complete current recipe.
+                        selectedRecord = authoritative
+                    }
+                }
+            if (retainedMailPagination == null) {
+                paginationState = nextPagination
+            }
+            if (displayFailure == null) {
+                sharedDynamicNativeMemoryCache.storeScreen(
+                    cacheKey,
+                    DynamicScreenSnapshot(
+                        records = records,
+                        relatedRecords = updatedRecords,
+                        pagination = nextPagination?.toCheckpoint(),
+                    ),
+                )
+            }
         }.onFailure { failure ->
             if (failure is CancellationException) throw failure
             if (staleSnapshot != null) {
@@ -4087,6 +4180,45 @@ private fun DynamicDiscoveredAppScreen(
             val loading = request.cacheKey in loadingFormRelationPageKeys
             val discardedRecordCount = formRelationCache.discardedRecordCount(request)
             val error = formRelationPageErrors[request.cacheKey]
+            val reloadInitialPage = {
+                if (request.cacheKey !in loadingFormRelationPageKeys) {
+                    loadingFormRelationPageKeys += request.cacheKey
+                    formRelationPageErrors -= request.cacheKey
+                    formRelationPageScope.launch {
+                        runCatching {
+                            loadInitialDynamicFormRelationRecords(
+                                services = services,
+                                session = session,
+                                descriptor = descriptor,
+                                request = request,
+                                values = formRelationValues,
+                                cachePolicy = dynamicReadCachePolicy,
+                            )
+                        }.onSuccess { result ->
+                            formRelationCache = formRelationCache.loadSucceeded(
+                                request = request,
+                                records = result.records,
+                                pagination = result.pagination,
+                            )
+                            formRelationPageErrors = if (result.partialFailureMessage == null) {
+                                formRelationPageErrors - request.cacheKey
+                            } else {
+                                formRelationPageErrors.putBounded(
+                                    request.cacheKey,
+                                    result.partialFailureMessage,
+                                )
+                            }
+                        }.onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            formRelationPageErrors = formRelationPageErrors.putBounded(
+                                request.cacheKey,
+                                failure.message ?: "Could not reload choices.",
+                            )
+                        }
+                        loadingFormRelationPageKeys -= request.cacheKey
+                    }
+                }
+            }
             if (
                 continuation == null &&
                 error == null &&
@@ -4142,40 +4274,15 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     }
                 },
-                returnToFirstPage = discardedRecordCount.takeIf { count -> count > 0 && !loading }?.let {
-                    {
-                        if (request.cacheKey !in loadingFormRelationPageKeys) {
-                            loadingFormRelationPageKeys += request.cacheKey
-                            formRelationPageErrors -= request.cacheKey
-                            formRelationPageScope.launch {
-                                runCatching {
-                                    loadInitialDynamicFormRelationRecords(
-                                        services = services,
-                                        session = session,
-                                        descriptor = descriptor,
-                                        request = request,
-                                        values = formRelationValues,
-                                        cachePolicy = dynamicReadCachePolicy,
-                                    )
-                                }.onSuccess { result ->
-                                    formRelationCache = formRelationCache.loadSucceeded(
-                                        request = request,
-                                        records = result.records,
-                                        pagination = result.pagination,
-                                    )
-                                    formRelationPageErrors -= request.cacheKey
-                                }.onFailure { failure ->
-                                    if (failure is CancellationException) throw failure
-                                    formRelationPageErrors = formRelationPageErrors.putBounded(
-                                        request.cacheKey,
-                                        failure.message ?: "Could not return to the first choices.",
-                                    )
-                                }
-                                loadingFormRelationPageKeys -= request.cacheKey
-                            }
-                        }
-                    }
+                retry = reloadInitialPage.takeIf {
+                    shouldOfferInitialDynamicRelationRetry(
+                        hasContinuation = continuation != null,
+                        loading = loading,
+                        error = error,
+                        discardedRecordCount = discardedRecordCount,
+                    )
                 },
+                returnToFirstPage = reloadInitialPage.takeIf { discardedRecordCount > 0 && !loading },
             )
         }.toMap()
     }
@@ -4403,7 +4510,13 @@ private fun DynamicDiscoveredAppScreen(
                                         )
                                         .relatedRecords(listOf(relationRequest))[relatedResourceId]
                                         .orEmpty()
-                                    Triple(relatedResourceId, boundedRecords, null)
+                                    Triple(
+                                        relatedResourceId,
+                                        boundedRecords,
+                                        result.partialFailureMessage?.take(
+                                            MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH,
+                                        ),
+                                    )
                                 },
                                 onFailure = { failure ->
                                     if (failure is CancellationException) throw failure
@@ -4501,6 +4614,94 @@ private fun DynamicDiscoveredAppScreen(
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
     }
+    val mailCollectionSummaryDestinations = remember(
+        recordContext,
+        navigationPlan.contextualChildDestinations,
+    ) {
+        val context = recordContext ?: return@remember emptyList()
+        navigationPlan.contextualChildDestinations.filter { destination ->
+            isDynamicMailboxCollectionSummaryDestination(schema, context.resourceId, destination)
+        }
+    }
+    LaunchedEffect(
+        descriptor,
+        selectedScreenIdentity,
+        mailCollectionSummaryDestinations,
+        loadAttempt,
+    ) {
+        val retainedMailboxCollection = retainedMailCollectionSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            selectedView = selectedView,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
+        val retainingAdjacentMailbox = mailCollectionSummaryDestinations.isEmpty() &&
+            retainedMailboxCollection != null
+        if (
+            shouldRetainDynamicMailboxSummaryState(
+                retainingAdjacentMailbox = retainingAdjacentMailbox,
+                loadAttempt = loadAttempt,
+                completedLoadAttempt = completedMailCollectionSummaryLoadAttempt,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        val activeSummaryDestinations = if (retainingAdjacentMailbox) {
+            trackedMailCollectionSummaryDestinations
+        } else {
+            mailCollectionSummaryDestinations.also { destinations ->
+                trackedMailCollectionSummaryDestinations = destinations
+            }
+        }
+        mailCollectionSummaryError = null
+        val summaryResourceIds = activeSummaryDestinations
+            .mapTo(linkedSetOf(), DynamicNavigationDestination::resourceId)
+        val preparation = prepareDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            previouslyTrackedResourceIds = trackedMailCollectionSummaryResourceIds,
+            currentResourceIds = summaryResourceIds,
+        )
+        recordsByResourceId = preparation.recordsByResourceId
+        trackedMailCollectionSummaryResourceIds = preparation.trackedResourceIds
+        if (activeSummaryDestinations.isEmpty()) {
+            completedMailCollectionSummaryLoadAttempt = loadAttempt
+            return@LaunchedEffect
+        }
+        val loaded = coroutineScope {
+            activeSummaryDestinations.map { destination ->
+                async {
+                    runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = destination.actionId,
+                            values = destination.pathParameterValues,
+                            runtimeContext = destination.pathParameterValues,
+                            cachePolicy = dynamicReadCachePolicy,
+                        )
+                    }.fold(
+                        onSuccess = { records ->
+                            DynamicMailboxCollectionSummaryResult(destination.resourceId, records)
+                        },
+                        onFailure = { failure ->
+                            if (failure is CancellationException) throw failure
+                            DynamicMailboxCollectionSummaryResult(destination.resourceId, failed = true)
+                        },
+                    )
+                }
+            }.awaitAll()
+        }
+        currentCoroutineContext().ensureActive()
+        val outcome = reconcileDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            results = loaded,
+        )
+        recordsByResourceId = outcome.recordsByResourceId
+        mailCollectionSummaryError = outcome.errorMessage
+        completedMailCollectionSummaryLoadAttempt = loadAttempt
+    }
     val contextDetailResolution = remember(descriptor, schema, recordContext) {
         val context = recordContext ?: return@remember null
         schema.bestDynamicDetailView(context.resourceId)?.let { view ->
@@ -4579,6 +4780,13 @@ private fun DynamicDiscoveredAppScreen(
                     .filterNot { destination ->
                         selectedRecordResourceId.isDynamicMessageResource() &&
                             destination.resourceId.isMailNavigationAncestor()
+                    }
+                    .filterNot { destination ->
+                        isDynamicMailboxCollectionSummaryDestination(
+                            schema,
+                            selectedRecordResourceId.orEmpty(),
+                            destination,
+                        )
                     }
                     .forEach { destination ->
                     schema.views.firstOrNull { it.id == destination.layoutId }?.let { view -> add(destination to view) }
@@ -4760,17 +4968,41 @@ private fun DynamicDiscoveredAppScreen(
     }
     val dynamicActionScope = rememberCoroutineScope()
 
-    val activePagination = paginationState?.takeIf { pagination -> pagination.viewId == selectedView.id }
+    val adjacentMailPaginationSnapshot = paginationState?.let { pagination ->
+        retainedMailPaginationSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            paginationViewId = pagination.viewId,
+            selectedView = selectedView,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
+    }
+    val activePagination = paginationState?.takeIf { pagination ->
+        pagination.viewId == selectedView.id || adjacentMailPaginationSnapshot != null
+    }
     val onLoadMore = activePagination?.let { pagination ->
         {
             if (!loadingMore) {
                 loadingMore = true
                 loadMoreError = null
-                val pagingView = selectedView
-                val existingRecords = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
-                val pagingSelection = selectedScreenIdentity
-                val pagingPathParameters = selectedPathParameterValues.toMap()
-                val pagingCacheable = screenCacheAllowed
+                val pagingView = schema.views.single { view -> view.id == pagination.viewId }
+                val pagingRecord = adjacentMailPaginationSnapshot?.record ?: selectedRecord
+                val pagingRecordResourceId = adjacentMailPaginationSnapshot?.recordResourceId
+                    ?: selectedRecordResourceId
+                val pagingSelection = dynamicScreenSelectionIdentity(
+                    resourceId = pagingRecordResourceId,
+                    recordId = pagingRecord?.id,
+                    recordScope = pagingRecord?.dynamicScreenCacheScope().orEmpty(),
+                )
+                val pagingPathParameters = adjacentMailPaginationSnapshot?.pathParameterValues
+                    ?: selectedPathParameterValues.toMap()
+                val pagingCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
+                    nativeMailScreenCacheScopeIsSafe(schema, pagingRecordResourceId, pagingRecord)
+                val existingRecords = recordsByResourceId[pagingView.resourceId].orEmpty().ifEmpty {
+                    (viewState as? NativeScreenState.Ready)?.records.orEmpty()
+                        .takeIf { pagingView.id == selectedView.id }
+                        .orEmpty()
+                }
                 val pagingRequestIdentity = dynamicPaginationRequestIdentity(
                     session = session,
                     appId = descriptor.app.id,
@@ -4780,23 +5012,35 @@ private fun DynamicDiscoveredAppScreen(
                     pathParameters = pagingPathParameters,
                     cacheable = pagingCacheable,
                 )
-                val pagingRuntimeValues = selectedRecord?.toDynamicRuntimeValues().orEmpty().toMap()
+                val pagingRuntimeValues = pagingRecord?.toDynamicRuntimeValues().orEmpty().toMap()
                 val values = pagingRuntimeValues +
                     pagingPathParameters +
                     (pagination.spec.parameterName to pagination.nextRequestValue)
                 fun isPagingRequestCurrent(): Boolean {
-                    val activeView = schema.views.firstOrNull { view -> view.id == selectedViewId }
+                    val currentView = schema.views.firstOrNull { view -> view.id == selectedViewId }
                         ?: return false
-                    val activeRecord = selectedRecord
+                    val retainedSnapshot = retainedMailPaginationSnapshot(
+                        hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+                        paginationViewId = pagination.viewId,
+                        selectedView = currentView,
+                        selectedRecordResourceId = selectedRecordResourceId,
+                        navigationHistory = navigationHistory,
+                    )
+                    val activeView = if (retainedSnapshot == null) currentView else pagingView
+                    val activeRecord = retainedSnapshot?.record ?: selectedRecord
+                    val activeRecordResourceId = retainedSnapshot?.recordResourceId
+                        ?: selectedRecordResourceId
+                    val activePathParameters = retainedSnapshot?.pathParameterValues
+                        ?: selectedPathParameterValues
                     val activeSelection = dynamicScreenSelectionIdentity(
-                        resourceId = selectedRecordResourceId,
+                        resourceId = activeRecordResourceId,
                         recordId = activeRecord?.id,
                         recordScope = activeRecord?.dynamicScreenCacheScope().orEmpty(),
                     )
                     val activeCacheable = !descriptor.hasNativeMailWorkspaceSemantics() ||
                         nativeMailScreenCacheScopeIsSafe(
                             schema,
-                            selectedRecordResourceId,
+                            activeRecordResourceId,
                             activeRecord,
                         )
                     val activeIdentity = dynamicPaginationRequestIdentity(
@@ -4805,7 +5049,7 @@ private fun DynamicDiscoveredAppScreen(
                         viewId = activeView.id,
                         resourceId = activeView.resourceId,
                         selection = activeSelection,
-                        pathParameters = selectedPathParameterValues,
+                        pathParameters = activePathParameters,
                         cacheable = activeCacheable,
                     )
                     return pagingRequestIdentity.isCurrentDynamicPaginationRequest(activeIdentity)
@@ -4831,9 +5075,22 @@ private fun DynamicDiscoveredAppScreen(
                             .filterNot { record ->
                                 record.dynamicPaginationRecordIdentity(pagingView.resourceId) in existingIdentities
                             }
+                        val continuationFailure = pagination.spec.continuationFailureMessage(
+                            lastPage = pageRecords,
+                            loadedRecordCount = existingRecords.size + novelRecords.size,
+                            novelRecordCount = novelRecords.size,
+                            nextPageNumber = pagination.nextPageNumber + 1,
+                        )
+                        if (continuationFailure != null) {
+                            loadMoreError = continuationFailure
+                            loadingMore = false
+                            return@onSuccess
+                        }
                         val mergedRecords = existingRecords + novelRecords
                         val updatedRecords = recordsByResourceId + (pagingView.resourceId to mergedRecords)
-                        viewState = NativeScreenState.Ready(mergedRecords)
+                        if (selectedViewId == pagingView.id) {
+                            viewState = NativeScreenState.Ready(mergedRecords)
+                        }
                         val nextPagination = pagination.spec.toDynamicPaginationState(
                             viewId = pagingView.id,
                             lastPage = pageRecords,
@@ -4925,8 +5182,10 @@ private fun DynamicDiscoveredAppScreen(
             parentResourceId = selectedParentResourceId,
             destinations = nextPlan.contextualChildDestinations,
         )
-        val showDestinationMenu = shouldShowDynamicContextDestinationMenu(
-            nextPlan.contextualChildDestinations,
+        val showDestinationMenu = shouldOpenDynamicContextDestinationMenu(
+            destinations = nextPlan.contextualChildDestinations,
+            primaryContentTarget = primaryContentTarget,
+            preferredCollectionChild = preferredCollectionChild,
         )
         val nextViewId = if (showDestinationMenu) {
             selectedViewId
@@ -5532,6 +5791,15 @@ private fun DynamicDiscoveredAppScreen(
                 bindingValues = datasetBindingValues + retainedChoresTeamActionValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
+                mailCollectionSummaryResourceIds = trackedMailCollectionSummaryResourceIds,
+                collectionSearchScopeKey = nativeMailCollectionScopeKey(
+                    hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+                    selectedView = selectedView,
+                    selectedRecordResourceId = selectedRecordResourceId,
+                    selectedRecord = selectedRecord,
+                    selectedPathParameterValues = selectedPathParameterValues,
+                    navigationHistory = navigationHistory,
+                ),
                 fieldChoices = nativeChoresMemberFieldChoices(schema, retainedChoresTeamRecord),
             )
             val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->
@@ -5617,7 +5885,9 @@ private fun DynamicDiscoveredAppScreen(
                         }
                     },
                     mediaArtworkResolver = mediaArtworkResolver,
-                    onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
+                    onLoadMore = onLoadMore.takeUnless {
+                        showFallbackRecordDetail && adjacentMailPaginationSnapshot == null
+                    },
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
                     workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
@@ -5657,7 +5927,7 @@ private fun DynamicDiscoveredAppScreen(
                         modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
                     )
                 }
-                dynamicRefreshError?.let { message ->
+                (dynamicRefreshError ?: mailCollectionSummaryError)?.let { message ->
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -6438,6 +6708,118 @@ private data class DynamicPaginationState(
     val nextRequestValue: String,
 )
 
+internal fun retainedMailPaginationSnapshot(
+    hasMailWorkspaceSemantics: Boolean,
+    paginationViewId: String?,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): DynamicNavigationSnapshot? {
+    if (paginationViewId == null) return null
+    return retainedMailCollectionSnapshot(
+        hasMailWorkspaceSemantics = hasMailWorkspaceSemantics,
+        selectedView = selectedView,
+        selectedRecordResourceId = selectedRecordResourceId,
+        navigationHistory = navigationHistory,
+    )?.takeIf { snapshot -> snapshot.viewId == paginationViewId }
+}
+
+internal fun retainedMailCollectionSnapshot(
+    hasMailWorkspaceSemantics: Boolean,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): DynamicNavigationSnapshot? {
+    if (
+        !hasMailWorkspaceSemantics ||
+        selectedView.component != NativeComponent.detail ||
+        !selectedRecordResourceId.isDynamicMessageResource()
+    ) {
+        return null
+    }
+    return navigationHistory.findLast(DynamicNavigationSnapshot::isNativeMailboxCollectionSnapshot)
+}
+
+internal fun nativeMailCollectionScopeKey(
+    hasMailWorkspaceSemantics: Boolean,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    selectedRecord: NativeRecord?,
+    selectedPathParameterValues: Map<String, String>,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): String? {
+    if (!hasMailWorkspaceSemantics) return null
+    val retained = retainedMailCollectionSnapshot(
+        hasMailWorkspaceSemantics = true,
+        selectedView = selectedView,
+        selectedRecordResourceId = selectedRecordResourceId,
+        navigationHistory = navigationHistory,
+    )
+    val scope = retained ?: DynamicNavigationSnapshot(
+        viewId = selectedView.id,
+        resourceId = selectedView.resourceId,
+        record = selectedRecord,
+        recordResourceId = selectedRecordResourceId,
+        pathParameterValues = selectedPathParameterValues,
+    ).takeIf(DynamicNavigationSnapshot::isNativeMailboxCollectionSnapshot)
+        ?: return null
+    return buildString {
+        append(scope.viewId)
+        append('\u0000')
+        append(scope.recordResourceId)
+        append('\u0000')
+        append(scope.record?.id)
+        scope.record?.dynamicScreenCacheScope().orEmpty().toSortedMap().forEach { (name, value) ->
+            append('\u0000')
+            append(name)
+            append('=')
+            append(value)
+        }
+        scope.pathParameterValues.toSortedMap().forEach { (name, value) ->
+            append('\u0000')
+            append(name)
+            append('=')
+            append(value)
+        }
+    }
+}
+
+private fun DynamicNavigationSnapshot.isNativeMailboxCollectionSnapshot(): Boolean =
+    resourceId.isDynamicMessageResource() &&
+        record != null &&
+        recordResourceId != null &&
+        !recordResourceId.isDynamicMessageResource()
+
+internal fun preferredDynamicPartialRefreshRecords(
+    freshRecords: List<NativeRecord>,
+    staleRecords: List<NativeRecord>?,
+    partialFailureMessage: String?,
+): List<NativeRecord> = staleRecords
+    ?.takeIf { records -> partialFailureMessage != null && records.isNotEmpty() }
+    ?: freshRecords
+
+internal fun preferredDynamicCompositeRefreshRecords(
+    loaded: List<Pair<String, DynamicRecordLoadOutcome>>,
+    staleRecordsByResourceId: Map<String, List<NativeRecord>>?,
+): Map<String, List<NativeRecord>> = loaded.associate { (resourceId, outcome) ->
+    resourceId to preferredDynamicPartialRefreshRecords(
+        freshRecords = outcome.records,
+        staleRecords = staleRecordsByResourceId?.get(resourceId),
+        partialFailureMessage = outcome.partialFailureMessage,
+    )
+}
+
+internal fun mergeDynamicRelatedRecordsPreservingResource(
+    currentRecords: Map<String, List<NativeRecord>>,
+    incomingRecords: Map<String, List<NativeRecord>>,
+    preservedResourceId: String?,
+): Map<String, List<NativeRecord>> {
+    if (preservedResourceId == null) return incomingRecords
+    val preservedRecords = currentRecords[preservedResourceId]
+        ?: return currentRecords + incomingRecords
+    return currentRecords + incomingRecords + (preservedResourceId to preservedRecords)
+}
+
 private fun DynamicPaginationState.toCheckpoint(): DynamicPaginationCheckpoint = DynamicPaginationCheckpoint(
     nextPageNumber = nextPageNumber,
     nextRequestValue = nextRequestValue,
@@ -6448,11 +6830,12 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
     lastPage: List<NativeRecord>,
     loadedRecordCount: Int = lastPage.size,
     novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int = 2,
+    nextPageNumber: Int? = null,
 ): DynamicPaginationState? {
     if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicPaginationState(viewId, this, nextPageNumber, nextValue)
+    val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
+    val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
+    return DynamicPaginationState(viewId, this, continuationPageNumber, nextValue)
 }
 
 private fun String.dynamicUiLabel(appName: String): String {
@@ -6516,6 +6899,116 @@ internal fun primaryDynamicContentDestination(
         else -> null
     }
 }
+
+internal fun shouldOpenDynamicContextDestinationMenu(
+    destinations: List<DynamicNavigationDestination>,
+    primaryContentTarget: DynamicNavigationDestination?,
+    preferredCollectionChild: DynamicNavigationDestination?,
+): Boolean = primaryContentTarget == null &&
+    preferredCollectionChild == null &&
+    shouldShowDynamicContextDestinationMenu(destinations)
+
+internal fun isDynamicMailboxCollectionSummaryDestination(
+    schema: NativeAppSchema,
+    parentResourceId: String,
+    destination: DynamicNavigationDestination,
+): Boolean {
+    val parentWords = parentResourceId.dynamicNavigationResourceWords().toSet()
+    if (parentWords.none { word -> word in setOf("folder", "folders", "mailbox", "mailboxes") }) {
+        return false
+    }
+    val destinationWords = sequenceOf(
+        destination.resourceId,
+        destination.label,
+        destination.actionId,
+    ).flatMap { value -> value.dynamicNavigationResourceWords().asSequence() }.toSet()
+    val summaryNamed = destinationWords.any { word ->
+        word in setOf("stat", "stats", "statistics", "status", "summary")
+    }
+    if (!summaryNamed) return false
+    val summaryResource = schema.resource(destination.resourceId) ?: return false
+    return summaryResource.fields.any { field ->
+        sequenceOf(field.id, field.label)
+            .map(String::normalizedMailboxSummaryFieldName)
+            .any { fieldName -> fieldName in DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES }
+    }
+}
+
+internal fun replaceDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    summaryResourceIds: Set<String>,
+    loadedSummaries: Map<String, List<NativeRecord>>,
+): Map<String, List<NativeRecord>> =
+    (recordsByResourceId - summaryResourceIds) + loadedSummaries.filterKeys(summaryResourceIds::contains)
+
+internal data class DynamicMailboxCollectionSummaryPreparation(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val trackedResourceIds: Set<String>,
+)
+
+internal fun shouldRetainDynamicMailboxSummaryState(
+    retainingAdjacentMailbox: Boolean,
+    loadAttempt: Int,
+    completedLoadAttempt: Int,
+): Boolean = retainingAdjacentMailbox && loadAttempt == completedLoadAttempt
+
+internal fun prepareDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    previouslyTrackedResourceIds: Set<String>,
+    currentResourceIds: Set<String>,
+): DynamicMailboxCollectionSummaryPreparation = DynamicMailboxCollectionSummaryPreparation(
+    recordsByResourceId = recordsByResourceId - (previouslyTrackedResourceIds + currentResourceIds),
+    trackedResourceIds = currentResourceIds.toSet(),
+)
+
+internal data class DynamicMailboxCollectionSummaryResult(
+    val resourceId: String,
+    val records: List<NativeRecord> = emptyList(),
+    val failed: Boolean = false,
+)
+
+internal data class DynamicMailboxCollectionSummaryOutcome(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val errorMessage: String?,
+)
+
+internal fun reconcileDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    summaryResourceIds: Set<String>,
+    results: List<DynamicMailboxCollectionSummaryResult>,
+): DynamicMailboxCollectionSummaryOutcome {
+    val loadedSummaries = results
+        .filterNot(DynamicMailboxCollectionSummaryResult::failed)
+        .filter { result -> result.records.isNotEmpty() }
+        .associate { result -> result.resourceId to result.records }
+    return DynamicMailboxCollectionSummaryOutcome(
+        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            loadedSummaries = loadedSummaries,
+        ),
+        errorMessage = DYNAMIC_MAILBOX_SUMMARY_LOAD_ERROR.takeIf {
+            results.any(DynamicMailboxCollectionSummaryResult::failed)
+        },
+    )
+}
+
+private fun String.normalizedMailboxSummaryFieldName(): String =
+    lowercase().filter(Char::isLetterOrDigit)
+
+private val DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES = setOf(
+    "total",
+    "totalmessages",
+    "messagecount",
+    "messagescount",
+    "unread",
+    "unseen",
+    "unreadcount",
+    "unseenmessages",
+)
+
+private const val DYNAMIC_MAILBOX_SUMMARY_LOAD_ERROR =
+    "Could not load mailbox counts. The mailbox is still available."
 
 private fun String.isMailNavigationAncestor(): Boolean = dynamicResourceWords().any { word ->
     word in setOf(

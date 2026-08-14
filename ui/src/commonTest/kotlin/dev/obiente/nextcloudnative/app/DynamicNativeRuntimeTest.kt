@@ -286,6 +286,7 @@ class DynamicNativeRuntimeTest {
     @Test
     fun discoversOpenApiThroughOfficialAuthenticatedViewerPathWithoutTrustingContentType() = runBlocking {
         val requests = mutableListOf<NextcloudApiRequest>()
+        val progress = mutableListOf<DynamicDescriptorDiscoveryPhase>()
         val discovery = discoverDynamicAppDescriptor(
             serverUrl = "https://cloud.example.test",
             app = NextcloudAppEntry("example", "Example", null),
@@ -302,6 +303,7 @@ class DynamicNativeRuntimeTest {
                     else -> response("not found", status = 404, contentType = "text/plain")
                 }
             },
+            onProgress = { update -> progress += update.phase },
         )
 
         assertEquals(DynamicDescriptorAcquisition.OcsApiViewer, discovery.acquisition)
@@ -315,6 +317,14 @@ class DynamicNativeRuntimeTest {
         )
         assertTrue(requests.all { it.method == NextcloudApiMethod.GET })
         assertTrue(discovery.descriptor.actions.isNotEmpty())
+        assertEquals(
+            listOf(
+                DynamicDescriptorDiscoveryPhase.ServerApiCatalog,
+                DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            ),
+            progress,
+        )
         assertTrue(
             discovery.descriptor.actions.flatMap(DynamicAction::provenance)
                 .any { it.kind == ProvenanceKind.advertisedOpenApi && it.source.contains("ocs_api_viewer") },
@@ -324,6 +334,7 @@ class DynamicNativeRuntimeTest {
     @Test
     fun missingViewerFallsBackToStaticAssetWithClearDiagnostic() = runBlocking {
         val requests = mutableListOf<String>()
+        val progress = mutableListOf<DynamicDescriptorDiscoveryPhase>()
         val discovery = discoverDynamicAppDescriptor(
             serverUrl = "https://cloud.example.test",
             app = NextcloudAppEntry("example", "Example", null),
@@ -335,12 +346,21 @@ class DynamicNativeRuntimeTest {
                     else -> response("Not found", 404, "text/html")
                 }
             },
+            onProgress = { update -> progress += update.phase },
         )
 
         assertEquals(DynamicDescriptorAcquisition.StaticAppAsset, discovery.acquisition)
         assertEquals("/apps/example/openapi.json", discovery.sourcePath)
         assertTrue(discovery.diagnostics.any { it.contains("not installed or enabled") })
         assertEquals("/index.php/apps/ocs_api_viewer/apps", requests.first())
+        assertEquals(
+            listOf(
+                DynamicDescriptorDiscoveryPhase.ServerApiCatalog,
+                DynamicDescriptorDiscoveryPhase.AppApiDefinition,
+                DynamicDescriptorDiscoveryPhase.NativeWorkspace,
+            ),
+            progress,
+        )
     }
 
     @Test
@@ -618,9 +638,24 @@ class DynamicNativeRuntimeTest {
                 expected = "12",
             ),
             Case(
+                name = "limit",
+                schema = """{"type":"integer","format":"int64","nullable":true,"default":null}""",
+                expected = "50",
+            ),
+            Case(
                 name = "pageSize",
                 schema = """{"type":"integer","maximum":20}""",
                 expected = "20",
+            ),
+            Case(
+                name = "limit",
+                schema = """{"type":"integer","minimum":null}""",
+                expected = null,
+            ),
+            Case(
+                name = "limit",
+                schema = """{"type":"integer","maximum":null}""",
+                expected = null,
             ),
             Case(
                 name = "perPage",
@@ -731,7 +766,55 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
-    fun `offset pagination uses loaded count and cursor needs a declared record value`() {
+    fun `page number pagination honors a zero based contract default`() {
+        val action = readAction().copy(
+            binding = readAction().binding.copy(
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "page",
+                        required = false,
+                        schema = json.parseToJsonElement(
+                            """{"type":"integer","default":0,"minimum":0}""",
+                        ),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+        )
+
+        val pagination = requireNotNull(action.dynamicPaginationSpec())
+
+        assertEquals(0, pagination.initialPageNumber)
+        assertEquals("1", pagination.nextValue(pagination.initialPageNumber + 1, loadedRecordCount = 50))
+        assertEquals(
+            1,
+            requireNotNull(
+                action.copy(
+                    binding = action.binding.copy(
+                        queryParameters = listOf(
+                            action.binding.queryParameters.single().copy(
+                                schema = json.parseToJsonElement("""{"type":"integer","minimum":0}"""),
+                            ),
+                        ),
+                    ),
+                ).dynamicPaginationSpec(),
+            ).initialPageNumber,
+        )
+        assertNull(
+            action.copy(
+                binding = action.binding.copy(
+                    queryParameters = listOf(
+                        action.binding.queryParameters.single().copy(
+                            schema = json.parseToJsonElement("""{"type":"integer","minimum":null}"""),
+                        ),
+                    ),
+                ),
+            ).dynamicPaginationSpec(),
+        )
+    }
+
+    @Test
+    fun `offset pagination uses loaded count and generic cursor contracts stay unpaged`() {
         fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
             name = name,
             required = required,
@@ -746,20 +829,38 @@ class DynamicNativeRuntimeTest {
         assertEquals(DynamicPaginationMode.Offset, offset.mode)
         assertEquals("75", offset.nextValue(nextPageNumber = 3, loadedRecordCount = 75))
         assertTrue(offset.canContinue(lastPageSize = 20))
-        val cursor = requireNotNull(
+        val nonzeroOffset = requireNotNull(
+            offsetAction.copy(
+                binding = offsetAction.binding.copy(
+                    queryParameters = listOf(
+                        integerParameter("offset").copy(
+                            schema = json.parseToJsonElement(
+                                """{"type":"integer","default":100,"minimum":0}""",
+                            ),
+                        ),
+                    ),
+                ),
+            ).dynamicPaginationSpec(),
+        )
+        assertEquals(100, nonzeroOffset.initialOffset)
+        assertEquals("150", nonzeroOffset.nextValue(nextPageNumber = 2, loadedRecordCount = 50))
+        assertNull(
+            offsetAction.copy(
+                binding = offsetAction.binding.copy(
+                    queryParameters = listOf(
+                        integerParameter("offset").copy(
+                            schema = json.parseToJsonElement(
+                                """{"type":"integer","minimum":50}""",
+                            ),
+                        ),
+                    ),
+                ),
+            ).dynamicPaginationSpec(),
+        )
+        assertNull(
             readAction().copy(
                 binding = readAction().binding.copy(queryParameters = listOf(integerParameter("cursor"))),
             ).dynamicPaginationSpec(),
-        )
-        assertEquals(DynamicPaginationMode.RecordCursor, cursor.mode)
-        assertNull(cursor.nextValue(2, 50, listOf(NativeRecord("1", mapOf("id" to "1")))))
-        assertEquals(
-            "1721734567",
-            cursor.nextValue(
-                2,
-                50,
-                listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
-            ),
         )
         assertNull(
             readAction().copy(
@@ -770,6 +871,52 @@ class DynamicNativeRuntimeTest {
             readAction().copy(intent = ActionIntent.update).copy(
                 binding = readAction().binding.copy(queryParameters = listOf(integerParameter("page"))),
             ).dynamicPaginationSpec(),
+        )
+    }
+
+    @Test
+    fun `verified cursor pagination requires an explicit response field binding`() {
+        fun cursorAction(cursorFieldId: String?) = readAction().copy(
+            recordCursorFieldId = cursorFieldId,
+            binding = readAction().binding.copy(
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "cursor",
+                        required = false,
+                        schema = json.parseToJsonElement("""{"type":"integer"}"""),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "mail package", "Signed Mail contract"),
+            ),
+        )
+        assertNull(descriptor(cursorAction(null)).resolvedDynamicPaginationSpec("items.list"))
+        val pagination = requireNotNull(
+            descriptor(cursorAction("dateInt")).resolvedDynamicPaginationSpec("items.list"),
+        )
+        assertEquals(DynamicPaginationMode.RecordCursor, pagination.mode)
+        assertEquals(
+            "1721734567",
+            pagination.nextValue(
+                2,
+                50,
+                listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
+            ),
+        )
+        assertNull(
+            pagination.continuationFailureMessage(
+                listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
+            ),
+        )
+        assertEquals(
+            DYNAMIC_CURSOR_CONTINUATION_FAILURE,
+            pagination.continuationFailureMessage(listOf(NativeRecord("1", emptyMap()))),
+        )
+        assertNull(
+            pagination.copy(expectedPageSize = 2)
+                .continuationFailureMessage(listOf(NativeRecord("1", emptyMap()))),
         )
     }
 
@@ -2361,6 +2508,255 @@ class DynamicNativeRuntimeTest {
         )
         assertEquals(listOf(preferred.id), populated.first)
         assertEquals("primary-1", populated.second.single().id)
+    }
+
+    @Test
+    fun `verified paged fallback prevents a sparse primary route from loading one row`() = runBlocking {
+        fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
+            name = name,
+            required = required,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "messages.list.verified",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/messages",
+                queryParameters = listOf(
+                    integerParameter("mailboxId", required = true),
+                    integerParameter("cursor"),
+                    integerParameter("limit"),
+                ),
+            ),
+            fallbackOnly = true,
+            recordCursorFieldId = "dateInt",
+            responseFieldIds = listOf("databaseId", "dateInt", "subject"),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "mail package", "Signed Mail contract"),
+            ),
+        )
+        val preferred = readAction().copy(
+            id = "messages.list",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/mailboxes/{id}/messages",
+                pathParameters = listOf(integerParameter("id", required = true)),
+            ),
+            fallbackActionIds = listOf(fallback.id),
+        )
+        val descriptor = descriptor(preferred).copy(
+            app = AppIdentity("mail", "Mail", "5.10.9"),
+            actions = listOf(preferred, fallback),
+            resources = descriptor(preferred).resources.map { resource ->
+                resource.copy(
+                    fields = fallback.responseFieldIds.map { fieldId ->
+                        DynamicField(
+                            id = fieldId,
+                            label = fieldId,
+                            kind = FieldKind.string,
+                            required = false,
+                            readOnly = true,
+                            nullable = true,
+                            multiple = false,
+                            confidence = Confidence.high,
+                        )
+                    },
+                )
+            },
+        )
+        val attempts = mutableListOf<String>()
+
+        val records = executeDynamicReadWithFallback(descriptor, preferred.id) { candidate ->
+            attempts += candidate.id
+            val values = remapReadFallbackValues(
+                preferred = preferred,
+                candidate = candidate,
+                values = mapOf("id" to "9"),
+            )
+            val request = buildDynamicApiRequest(descriptor, candidate, values)
+            assertEquals("50", request.queryParameters["limit"])
+            assertEquals("9", request.queryParameters["mailboxId"])
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"databaseId":"42","subject":"First"},{"databaseId":"41","subject":"Second"}]}}""",
+            )
+        }
+
+        assertEquals(listOf(fallback.id), attempts)
+        assertEquals(listOf("42", "41"), records.map(NativeRecord::id))
+        val pagination = requireNotNull(descriptor.resolvedDynamicPaginationSpec(preferred.id))
+        assertEquals(DynamicPaginationMode.RecordCursor, pagination.mode)
+        assertEquals(50, pagination.expectedPageSize)
+    }
+
+    @Test
+    fun `paged fallback failure marks a successful sparse preferred read as partial`() = runBlocking {
+        fun integerParameter(name: String) = HttpParameter(
+            name = name,
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(integerParameter("page"))),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+
+        val outcome = executeDynamicReadWithFallbackOutcome(descriptor, preferred.id) { candidate ->
+            if (candidate.id == fallback.id) {
+                response("unavailable", status = 503, contentType = "text/plain")
+            } else {
+                response(
+                    """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"id":"sparse"}]}}""",
+                )
+            }
+        }
+
+        assertEquals(listOf("sparse"), outcome.records.map(NativeRecord::id))
+        assertEquals(DYNAMIC_PAGED_READ_PARTIAL_FAILURE, outcome.partialFailureMessage)
+    }
+
+    @Test
+    fun `paged fallback failure marks an empty sparse preferred read as partial`() = runBlocking {
+        val page = HttpParameter(
+            name = "page",
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(page)),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+
+        val outcome = executeDynamicReadWithFallbackOutcome(descriptor, preferred.id) { candidate ->
+            if (candidate.id == fallback.id) {
+                response("unavailable", status = 503, contentType = "text/plain")
+            } else {
+                response("""{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}}""")
+            }
+        }
+
+        assertTrue(outcome.records.isEmpty())
+        assertEquals(DYNAMIC_PAGED_READ_PARTIAL_FAILURE, outcome.partialFailureMessage)
+    }
+
+    @Test
+    fun `matching empty paged and preferred first pages are authoritative`() = runBlocking {
+        val page = HttpParameter(
+            name = "page",
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(page)),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val attempts = mutableListOf<String>()
+
+        val outcome = executeDynamicReadWithFallbackOutcome(descriptor, preferred.id) { candidate ->
+            attempts += candidate.id
+            response("""{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}}""")
+        }
+
+        assertEquals(listOf(fallback.id, preferred.id), attempts)
+        assertTrue(outcome.records.isEmpty())
+        assertNull(outcome.partialFailureMessage)
+    }
+
+    @Test
+    fun `empty continuation page ends pagination without retrying the sparse route`() = runBlocking {
+        val page = HttpParameter(
+            name = "page",
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(page)),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val attempts = mutableListOf<String>()
+
+        val outcome = executeDynamicReadWithFallbackOutcome(
+            descriptor = descriptor,
+            actionId = preferred.id,
+            boundValues = mapOf("page" to "2"),
+        ) { candidate ->
+            attempts += candidate.id
+            response("""{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}}""")
+        }
+
+        assertEquals(listOf(fallback.id), attempts)
+        assertTrue(outcome.records.isEmpty())
+        assertNull(outcome.partialFailureMessage)
+    }
+
+    @Test
+    fun `bound optional filter keeps the preferred read ahead of a paged fallback`() = runBlocking {
+        fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
+            name = name,
+            required = required,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "messages.list.paged",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/messages",
+                queryParameters = listOf(integerParameter("mailboxId", required = true), integerParameter("page")),
+            ),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(
+            id = "messages.list",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/mailboxes/{id}/messages",
+                pathParameters = listOf(integerParameter("id", required = true)),
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "filter",
+                        required = false,
+                        schema = json.parseToJsonElement("""{"type":"string"}"""),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+            fallbackActionIds = listOf(fallback.id),
+        )
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val attempts = mutableListOf<String>()
+
+        val records = executeDynamicReadWithFallback(
+            descriptor = descriptor,
+            actionId = preferred.id,
+            boundValues = mapOf("id" to "9", "filter" to "unread"),
+        ) { candidate ->
+            attempts += candidate.id
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"id":"filtered"}]}}""",
+            )
+        }
+
+        assertEquals(listOf(preferred.id), attempts)
+        assertEquals("filtered", records.single().id)
+        assertNull(
+            descriptor.resolvedDynamicPaginationSpec(
+                actionId = preferred.id,
+                boundValues = mapOf("id" to "9", "filter" to "unread"),
+            ),
+        )
     }
 
     @Test

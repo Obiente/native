@@ -6,6 +6,8 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -16,6 +18,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DynamicNavigationParameterInheritanceTest {
@@ -190,6 +194,330 @@ class DynamicNavigationParameterInheritanceTest {
 
         assertEquals(body, primaryDynamicContentDestination("messages", listOf(thread, body)))
         assertEquals(null, primaryDynamicContentDestination("accounts", listOf(body)))
+        assertFalse(
+            shouldOpenDynamicContextDestinationMenu(
+                destinations = listOf(thread, body),
+                primaryContentTarget = body,
+                preferredCollectionChild = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `mailbox message collection opens directly while stats remain enrichment`() {
+        val messages = DynamicNavigationDestination(
+            layoutId = "messages.mailbox",
+            label = "Messages",
+            resourceId = "messages",
+            actionId = "route.messages.index",
+            pathParameterValues = mapOf("mailboxId" to "9"),
+        )
+        val stats = DynamicNavigationDestination(
+            layoutId = "mailbox.stats",
+            label = "Mailbox stats",
+            resourceId = "mailboxStats",
+            actionId = "route.mailboxes.stats",
+            pathParameterValues = mapOf("id" to "9"),
+        )
+        val deliveryStatus = DynamicNavigationDestination(
+            layoutId = "mailbox.delivery-status",
+            label = "Delivery status",
+            resourceId = "deliveryStatus",
+            actionId = "route.mailboxes.delivery-status",
+            pathParameterValues = mapOf("id" to "9"),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("mail", "Mail", "1"),
+            confidence = Confidence.verified,
+            resources = listOf(
+                ResourceSpec("mailboxes", "Mailboxes", Confidence.verified),
+                ResourceSpec(
+                    "mailboxStats",
+                    "Mailbox stats",
+                    Confidence.verified,
+                    fields = listOf(
+                        FieldSpec("total", "Total", FieldKind.integer, false, true),
+                        FieldSpec("unread", "Unread", FieldKind.integer, false, true),
+                    ),
+                ),
+                ResourceSpec(
+                    "deliveryStatus",
+                    "Delivery status",
+                    Confidence.verified,
+                    fields = listOf(
+                        FieldSpec("state", "State", FieldKind.string, false, true),
+                        FieldSpec("detail", "Detail", FieldKind.string, false, true),
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue(isDynamicMailboxCollectionSummaryDestination(schema, "mailboxes", stats))
+        assertFalse(isDynamicMailboxCollectionSummaryDestination(schema, "budgets", stats))
+        assertFalse(isDynamicMailboxCollectionSummaryDestination(schema, "mailboxes", deliveryStatus))
+        assertFalse(
+            shouldOpenDynamicContextDestinationMenu(
+                destinations = listOf(messages, stats),
+                primaryContentTarget = null,
+                preferredCollectionChild = messages,
+            ),
+        )
+    }
+
+    @Test
+    fun `mail detail retains the adjacent mailbox pagination scope`() {
+        val mailboxSnapshot = DynamicNavigationSnapshot(
+            viewId = "messages.collection",
+            resourceId = "messages",
+            record = NativeRecord("inbox", mapOf("id" to "9", "accountId" to "account-a")),
+            recordResourceId = "mailboxes",
+            pathParameterValues = mapOf("mailboxId" to "9"),
+        )
+        val detail = ViewSpec(
+            id = "message.detail",
+            title = "Message",
+            resourceId = "messageBody",
+            component = NativeComponent.detail,
+            sourceActionId = "message.read",
+            confidence = Confidence.verified,
+        )
+        val newerDetailSnapshot = DynamicNavigationSnapshot(
+            viewId = detail.id,
+            resourceId = detail.resourceId,
+            record = NativeRecord("message-1", mapOf("mailboxId" to "9")),
+            recordResourceId = "messages",
+            pathParameterValues = mapOf("id" to "message-1"),
+        )
+
+        assertEquals(
+            mailboxSnapshot,
+            retainedMailPaginationSnapshot(
+                hasMailWorkspaceSemantics = true,
+                paginationViewId = "messages.collection",
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
+            ),
+        )
+        assertNull(
+            retainedMailPaginationSnapshot(
+                hasMailWorkspaceSemantics = false,
+                paginationViewId = "messages.collection",
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
+            ),
+        )
+        assertNull(
+            retainedMailPaginationSnapshot(
+                hasMailWorkspaceSemantics = true,
+                paginationViewId = "other.collection",
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
+            ),
+        )
+        val collection = ViewSpec(
+            id = mailboxSnapshot.viewId,
+            title = "Messages",
+            resourceId = mailboxSnapshot.resourceId,
+            component = NativeComponent.collectionList,
+            sourceActionId = "messages.list",
+            confidence = Confidence.verified,
+        )
+        assertEquals(
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = collection,
+                selectedRecordResourceId = mailboxSnapshot.recordResourceId,
+                selectedRecord = mailboxSnapshot.record,
+                selectedPathParameterValues = mailboxSnapshot.pathParameterValues,
+                navigationHistory = emptyList(),
+            ),
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                selectedRecord = newerDetailSnapshot.record,
+                selectedPathParameterValues = newerDetailSnapshot.pathParameterValues,
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
+            ),
+        )
+        assertNotEquals(
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = collection,
+                selectedRecordResourceId = mailboxSnapshot.recordResourceId,
+                selectedRecord = mailboxSnapshot.record,
+                selectedPathParameterValues = mailboxSnapshot.pathParameterValues,
+                navigationHistory = emptyList(),
+            ),
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = collection,
+                selectedRecordResourceId = mailboxSnapshot.recordResourceId,
+                selectedRecord = NativeRecord(
+                    "inbox",
+                    mapOf("id" to "9", "accountId" to "account-b"),
+                ),
+                selectedPathParameterValues = mailboxSnapshot.pathParameterValues,
+                navigationHistory = emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun `partial refresh keeps a complete stale collection`() {
+        val cached = listOf(
+            NativeRecord("message-3", emptyMap()),
+            NativeRecord("message-2", emptyMap()),
+            NativeRecord("message-1", emptyMap()),
+        )
+        val sparse = listOf(NativeRecord("message-3", emptyMap()))
+
+        assertEquals(
+            cached,
+            preferredDynamicPartialRefreshRecords(sparse, cached, "Could not load every message."),
+        )
+        assertEquals(
+            sparse,
+            preferredDynamicPartialRefreshRecords(sparse, cached, partialFailureMessage = null),
+        )
+        assertEquals(
+            sparse,
+            preferredDynamicPartialRefreshRecords(
+                freshRecords = sparse,
+                staleRecords = null,
+                partialFailureMessage = "Partial",
+            ),
+        )
+    }
+
+    @Test
+    fun `detail cache merge keeps the live paginated mailbox collection`() {
+        val liveMessages = listOf(
+            NativeRecord("message-3", emptyMap()),
+            NativeRecord("message-2", emptyMap()),
+            NativeRecord("message-1", emptyMap()),
+        )
+        val cachedMessages = listOf(NativeRecord("message-1", emptyMap()))
+        val cachedBody = listOf(NativeRecord("body-1", emptyMap()))
+
+        val merged = mergeDynamicRelatedRecordsPreservingResource(
+            currentRecords = mapOf("messages" to liveMessages),
+            incomingRecords = mapOf("messages" to cachedMessages, "messageBody" to cachedBody),
+            preservedResourceId = "messages",
+        )
+
+        assertEquals(liveMessages, merged["messages"])
+        assertEquals(cachedBody, merged["messageBody"])
+        assertEquals(
+            mapOf("messages" to cachedMessages, "messageBody" to cachedBody),
+            mergeDynamicRelatedRecordsPreservingResource(
+                currentRecords = mapOf("messages" to liveMessages),
+                incomingRecords = mapOf("messages" to cachedMessages, "messageBody" to cachedBody),
+                preservedResourceId = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `partial composite refresh keeps only affected complete datasets`() {
+        val cachedRows = listOf(
+            NativeRecord("row-2", emptyMap()),
+            NativeRecord("row-1", emptyMap()),
+        )
+        val sparseRows = listOf(NativeRecord("row-2", emptyMap()))
+        val freshColumns = listOf(NativeRecord("column-1", emptyMap()))
+
+        val preferred = preferredDynamicCompositeRefreshRecords(
+            loaded = listOf(
+                "rows" to DynamicRecordLoadOutcome(sparseRows, "Could not load every row."),
+                "columns" to DynamicRecordLoadOutcome(freshColumns),
+            ),
+            staleRecordsByResourceId = mapOf(
+                "rows" to cachedRows,
+                "columns" to listOf(NativeRecord("old-column", emptyMap())),
+            ),
+        )
+
+        assertEquals(cachedRows, preferred["rows"])
+        assertEquals(freshColumns, preferred["columns"])
+    }
+
+    @Test
+    fun `mailbox summary state is cleared before a different mailbox summary loads`() {
+        assertTrue(
+            shouldRetainDynamicMailboxSummaryState(
+                retainingAdjacentMailbox = true,
+                loadAttempt = 2,
+                completedLoadAttempt = 2,
+            ),
+        )
+        assertFalse(
+            shouldRetainDynamicMailboxSummaryState(
+                retainingAdjacentMailbox = true,
+                loadAttempt = 3,
+                completedLoadAttempt = 2,
+            ),
+        )
+        val previousSummary = NativeRecord("inbox-summary", mapOf("total" to "120", "unread" to "8"))
+        val nextSummary = NativeRecord("sent-summary", mapOf("total" to "42", "unread" to "0"))
+        val message = NativeRecord("message-1", mapOf("subject" to "Synthetic message"))
+
+        val cleared = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = mapOf(
+                "mailboxStats" to listOf(previousSummary),
+                "messages" to listOf(message),
+            ),
+            summaryResourceIds = setOf("mailboxStats"),
+            loadedSummaries = emptyMap(),
+        )
+        val reloaded = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = cleared,
+            summaryResourceIds = setOf("mailboxStats"),
+            loadedSummaries = mapOf(
+                "mailboxStats" to listOf(nextSummary),
+                "unrelated" to listOf(previousSummary),
+            ),
+        )
+
+        assertFalse("mailboxStats" in cleared)
+        assertEquals(listOf(message), cleared["messages"])
+        assertEquals(listOf(nextSummary), reloaded["mailboxStats"])
+        assertFalse("unrelated" in reloaded)
+
+        val failed = reconcileDynamicMailboxCollectionSummaries(
+            recordsByResourceId = mapOf("mailboxStats" to listOf(previousSummary)),
+            summaryResourceIds = setOf("mailboxStats"),
+            results = listOf(
+                DynamicMailboxCollectionSummaryResult("mailboxStats", failed = true),
+            ),
+        )
+        assertFalse("mailboxStats" in failed.recordsByResourceId)
+        assertEquals(
+            "Could not load mailbox counts. The mailbox is still available.",
+            failed.errorMessage,
+        )
+    }
+
+    @Test
+    fun `mailbox summary state clears when the next mailbox has no resolved summary route`() {
+        val previousSummary = NativeRecord("inbox-summary", mapOf("total" to "120", "unread" to "8"))
+        val records = mapOf(
+            "messages" to listOf(NativeRecord("message-1", mapOf("subject" to "Hello"))),
+            "mailboxStats" to listOf(previousSummary),
+        )
+
+        val preparation = prepareDynamicMailboxCollectionSummaries(
+            recordsByResourceId = records,
+            previouslyTrackedResourceIds = setOf("mailboxStats"),
+            currentResourceIds = emptySet(),
+        )
+
+        assertEquals(setOf("messages"), preparation.recordsByResourceId.keys)
+        assertTrue(preparation.trackedResourceIds.isEmpty())
     }
 
     @Test
