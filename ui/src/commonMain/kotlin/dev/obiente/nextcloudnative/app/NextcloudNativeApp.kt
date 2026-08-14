@@ -3936,7 +3936,7 @@ private fun DynamicDiscoveredAppScreen(
         if (staleSnapshot == null) showLoading()
         val values = selectedRecord?.toDynamicRuntimeValues().orEmpty() + selectedPathParameterValues
         runCatching {
-            val records = loadDynamicRecords(
+            val outcome = loadDynamicRecordsWithOutcome(
                 services = services,
                 session = session,
                 descriptor = descriptor,
@@ -3946,13 +3946,19 @@ private fun DynamicDiscoveredAppScreen(
                 cachePolicy = dynamicReadCachePolicy,
             )
             currentCoroutineContext().ensureActive()
-            records
-        }.onSuccess { records ->
+            outcome
+        }.onSuccess { outcome ->
+            val records = outcome.records
             val updatedRecords = recordsByResourceId + (view.resourceId to records)
-            val nextPagination = descriptor.resolvedDynamicPaginationSpec(view.sourceActionId)
-                ?.toDynamicPaginationState(view.id, records)
+            val nextPagination = if (outcome.partialFailureMessage == null) {
+                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId)
+                    ?.toDynamicPaginationState(view.id, records)
+            } else {
+                null
+            }
             recordsByResourceId = updatedRecords
             viewState = NativeScreenState.Ready(records)
+            dynamicRefreshError = outcome.partialFailureMessage
             mutationReconciliationGeneration += 1
             records.firstOrNull()?.let { authoritative ->
                 if (
@@ -3966,14 +3972,16 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
             paginationState = nextPagination
-            sharedDynamicNativeMemoryCache.storeScreen(
-                cacheKey,
-                DynamicScreenSnapshot(
-                    records = records,
-                    relatedRecords = updatedRecords,
-                    pagination = nextPagination?.toCheckpoint(),
-                ),
-            )
+            if (outcome.partialFailureMessage == null) {
+                sharedDynamicNativeMemoryCache.storeScreen(
+                    cacheKey,
+                    DynamicScreenSnapshot(
+                        records = records,
+                        relatedRecords = updatedRecords,
+                        pagination = nextPagination?.toCheckpoint(),
+                    ),
+                )
+            }
         }.onFailure { failure ->
             if (failure is CancellationException) throw failure
             if (staleSnapshot != null) {

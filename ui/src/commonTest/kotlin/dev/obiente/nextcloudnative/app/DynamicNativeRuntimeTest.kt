@@ -2537,6 +2537,36 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun `paged fallback failure marks a successful sparse preferred read as partial`() = runBlocking {
+        fun integerParameter(name: String) = HttpParameter(
+            name = name,
+            required = false,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "items.list.paged",
+            binding = readAction().binding.copy(queryParameters = listOf(integerParameter("page"))),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(fallbackActionIds = listOf(fallback.id))
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+
+        val outcome = executeDynamicReadWithFallbackOutcome(descriptor, preferred.id) { candidate ->
+            if (candidate.id == fallback.id) {
+                response("unavailable", status = 503, contentType = "text/plain")
+            } else {
+                response(
+                    """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"id":"sparse"}]}}""",
+                )
+            }
+        }
+
+        assertEquals(listOf("sparse"), outcome.records.map(NativeRecord::id))
+        assertEquals(DYNAMIC_PAGED_READ_PARTIAL_FAILURE, outcome.partialFailureMessage)
+    }
+
+    @Test
     fun `bound optional filter keeps the preferred read ahead of a paged fallback`() = runBlocking {
         fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
             name = name,

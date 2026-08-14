@@ -696,10 +696,37 @@ suspend fun loadDynamicRecords(
     runtimeContext: Map<String, String> = emptyMap(),
     cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
 ): List<NativeRecord> {
+    val outcome = loadDynamicRecordsWithOutcome(
+        services = services,
+        session = session,
+        descriptor = descriptor,
+        actionId = actionId,
+        values = values,
+        runtimeContext = runtimeContext,
+        cachePolicy = cachePolicy,
+    )
+    check(outcome.partialFailureMessage == null) { outcome.partialFailureMessage.orEmpty() }
+    return outcome.records
+}
+
+internal data class DynamicRecordLoadOutcome(
+    val records: List<NativeRecord>,
+    val partialFailureMessage: String? = null,
+)
+
+internal suspend fun loadDynamicRecordsWithOutcome(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    descriptor: DynamicAppDescriptor,
+    actionId: String,
+    values: Map<String, String> = emptyMap(),
+    runtimeContext: Map<String, String> = emptyMap(),
+    cachePolicy: NextcloudApiCachePolicy = NextcloudApiCachePolicy.PreferCache,
+): DynamicRecordLoadOutcome {
     val action = descriptor.actions.firstOrNull { it.id == actionId }
         ?: error("This view has no declared load action.")
     val bindingContext = dynamicReadBindingContext(action, values, runtimeContext)
-    return executeDynamicReadWithFallback(
+    val outcome = executeDynamicReadWithFallbackOutcome(
         descriptor = descriptor,
         actionId = actionId,
         boundValues = runtimeContext + values,
@@ -717,7 +744,8 @@ suspend fun loadDynamicRecords(
                 }
             }
         },
-    ).map { record ->
+    )
+    return outcome.copy(records = outcome.records.map { record ->
         if (bindingContext.isEmpty()) {
             record
         } else {
@@ -728,7 +756,7 @@ suspend fun loadDynamicRecords(
                     record.actionBindingProvenanceValid && mergedBindingContext != null,
             )
         }
-    }
+    })
 }
 
 /**
@@ -832,7 +860,19 @@ internal suspend fun executeDynamicReadWithFallback(
     actionId: String,
     boundValues: Map<String, String> = emptyMap(),
     execute: suspend (DynamicAction) -> NextcloudApiResponse,
-): List<NativeRecord> {
+): List<NativeRecord> = executeDynamicReadWithFallbackOutcome(
+    descriptor = descriptor,
+    actionId = actionId,
+    boundValues = boundValues,
+    execute = execute,
+).records
+
+internal suspend fun executeDynamicReadWithFallbackOutcome(
+    descriptor: DynamicAppDescriptor,
+    actionId: String,
+    boundValues: Map<String, String> = emptyMap(),
+    execute: suspend (DynamicAction) -> NextcloudApiResponse,
+): DynamicRecordLoadOutcome {
     val actionsById = descriptor.actions.associateBy(DynamicAction::id)
     val preferred = actionsById[actionId] ?: error("This view has no declared load action.")
     require(preferred.binding.method == HttpMethod.GET && !preferred.fallbackOnly) {
@@ -859,9 +899,10 @@ internal suspend fun executeDynamicReadWithFallback(
     var bestFailure: Throwable? = null
     var bestFailureSpecificity = -1
     var successfulEmptyResult: List<NativeRecord>? = null
+    var pagedFallbackUnavailable = false
     candidates.forEach { candidate ->
         if (candidate.binding.method != HttpMethod.GET) return@forEach
-        val records = runCatching {
+        val attempt = runCatching {
             val parsingAction = if (candidate.id == preferred.id) {
                 candidate
             } else {
@@ -878,16 +919,26 @@ internal suspend fun executeDynamicReadWithFallback(
                 preferredIdentityFieldId = descriptor.verifiedRecordIdentityFieldId(candidate),
             )
         }.onFailure { failure ->
+            if (candidate in pagedFallbacks) pagedFallbackUnavailable = true
             val specificity = (failure as? DynamicReadLoadException)?.specificity ?: 0
             if (bestFailure == null || specificity > bestFailureSpecificity) {
                 bestFailure = failure
                 bestFailureSpecificity = specificity
             }
-        }.getOrNull() ?: return@forEach
-        if (records.isNotEmpty()) return records
+        }
+        val records = attempt.getOrNull() ?: return@forEach
+        if (candidate in pagedFallbacks && records.isEmpty()) pagedFallbackUnavailable = true
+        if (records.isNotEmpty()) {
+            return DynamicRecordLoadOutcome(
+                records = records,
+                partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
+                    candidate.id == preferred.id && pagedFallbackUnavailable
+                },
+            )
+        }
         successfulEmptyResult = records
     }
-    successfulEmptyResult?.let { return it }
+    successfulEmptyResult?.let { return DynamicRecordLoadOutcome(it) }
     throw bestFailure ?: error("No usable declared read action was available.")
 }
 
@@ -1635,6 +1686,8 @@ private fun String.sameRuntimeResource(other: String): Boolean = runtimeResource
 
 internal const val INITIAL_COLLECTION_PAGE_SIZE = 50
 private const val MAX_AUTOMATIC_COLLECTION_PAGE_SIZE = 500
+internal const val DYNAMIC_PAGED_READ_PARTIAL_FAILURE =
+    "Could not load the complete collection. A partial result is shown; retry to load all items."
 private val INITIAL_PAGE_SIZE_PARAMETER_NAMES = setOf("limit", "pagesize", "perpage", "maxresults")
 private val PAGE_NUMBER_PARAMETER_NAMES = setOf("page", "pagenumber", "pageno")
 private val OFFSET_PARAMETER_NAMES = setOf("offset")
