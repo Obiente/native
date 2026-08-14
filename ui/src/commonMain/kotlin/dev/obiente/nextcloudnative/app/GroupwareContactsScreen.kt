@@ -973,7 +973,15 @@ private fun ContactEditorDialog(
         title = { Text(if (contact == null) "New contact" else "Edit contact") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                item { OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    OutlinedTextField(
+                        name,
+                        { name = it },
+                        label = { Text("Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
+                    )
+                }
                 item {
                     OutlinedTextField(
                         email,
@@ -986,20 +994,38 @@ private fun ContactEditorDialog(
                         } else {
                             null
                         },
+                        enabled = !mutationInProgress,
                     )
                 }
-                item { OutlinedTextField(phone, { phone = it }, label = { Text("Phone") }, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    OutlinedTextField(
+                        phone,
+                        { phone = it },
+                        label = { Text("Phone") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
+                    )
+                }
                 item {
                     OutlinedTextField(
                         organization, { organization = it },
                         label = { Text("Organization") }, modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
                     )
                 }
-                item { OutlinedTextField(address, { address = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    OutlinedTextField(
+                        address,
+                        { address = it },
+                        label = { Text("Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
+                    )
+                }
                 item {
                     OutlinedTextField(
                         notes, { notes = it }, label = { Text("Notes") },
-                        modifier = Modifier.fillMaxWidth(), minLines = 2,
+                        modifier = Modifier.fillMaxWidth(), minLines = 2, enabled = !mutationInProgress,
                     )
                 }
                 if (addressBooks.size > 1) item {
@@ -1010,6 +1036,7 @@ private fun ContactEditorDialog(
                                 selected = candidate == addressBook,
                                 onClick = { selectedAddressBookHref = candidate.href },
                                 label = { Text(candidate.displayName) },
+                                enabled = !mutationInProgress,
                             )
                         }
                     }

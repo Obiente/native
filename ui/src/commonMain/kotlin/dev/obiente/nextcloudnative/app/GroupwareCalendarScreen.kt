@@ -1666,6 +1666,7 @@ private fun EventEditorDialog(
                         onValueChange = { title = it },
                         label = { Text("Title") },
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
                     )
                 }
                 item {
@@ -1681,6 +1682,7 @@ private fun EventEditorDialog(
                                     }
                                 },
                                 label = { Text(preset.label) },
+                                enabled = !mutationInProgress,
                             )
                         }
                     }
@@ -1696,6 +1698,7 @@ private fun EventEditorDialog(
                             },
                             isError = !recurrenceValid,
                             modifier = Modifier.fillMaxWidth(),
+                            enabled = !mutationInProgress,
                         )
                     }
                 }
@@ -1706,12 +1709,17 @@ private fun EventEditorDialog(
                         label = { Text("Date") },
                         supportingText = { Text("YYYY-MM-DD") },
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
                     )
                 }
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("All day", modifier = Modifier.weight(1f))
-                        Switch(checked = allDay, onCheckedChange = { allDay = it })
+                        Switch(
+                            checked = allDay,
+                            onCheckedChange = { allDay = it },
+                            enabled = !mutationInProgress,
+                        )
                     }
                 }
                 if (!allDay) {
@@ -1722,12 +1730,14 @@ private fun EventEditorDialog(
                                 onValueChange = { startTime = it },
                                 label = { Text("Starts") },
                                 modifier = Modifier.weight(1f),
+                                enabled = !mutationInProgress,
                             )
                             OutlinedTextField(
                                 value = endTime,
                                 onValueChange = { endTime = it },
                                 label = { Text("Ends") },
                                 modifier = Modifier.weight(1f),
+                                enabled = !mutationInProgress,
                             )
                         }
                     }
@@ -1738,6 +1748,7 @@ private fun EventEditorDialog(
                         onValueChange = { location = it },
                         label = { Text("Location") },
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = !mutationInProgress,
                     )
                 }
                 item {
@@ -1747,6 +1758,7 @@ private fun EventEditorDialog(
                         label = { Text("Description") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
+                        enabled = !mutationInProgress,
                     )
                 }
                 if (calendars.size > 1) {
@@ -1758,6 +1770,7 @@ private fun EventEditorDialog(
                                     selected = calendar == candidate,
                                     onClick = { selectedCalendarHref = candidate.href },
                                     label = { Text(candidate.displayName) },
+                                    enabled = !mutationInProgress,
                                 )
                             }
                         }
