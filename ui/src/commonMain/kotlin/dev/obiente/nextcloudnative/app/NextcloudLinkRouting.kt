@@ -63,7 +63,13 @@ internal fun nextcloudLinkDestination(
     val segments = parsed.pathSegments.let { values ->
         if (values.firstOrNull() == "index.php") values.drop(1) else values
     }
-    if (segments.isEmpty()) return NextcloudLinkDestination.Home(resolved.browserUrl)
+    if (segments.isEmpty()) {
+        return if (parsed.queryParameters.isEmpty() && !parsed.hasFragment) {
+            NextcloudLinkDestination.Home(resolved.browserUrl)
+        } else {
+            NextcloudLinkDestination.Browser(resolved.browserUrl, sameAccount = true)
+        }
+    }
 
     if (segments.size == 2 && segments[0] == "f") {
         val fileId = segments[1].toPositiveFileId()

@@ -197,6 +197,59 @@ class CalendarWorkspacePresentationTest {
         assertTrue(calendarEventDraftIsDirty(initial, initial, "personal", "team"))
     }
 
+    @Test
+    fun `calendar mutation postconditions reject stale reads`() {
+        val draft = EventDraft(
+            title = "Planning",
+            date = "2026-08-14",
+            startTime = "09:00",
+            endTime = "10:00",
+            allDay = false,
+            location = "Team room",
+            description = "Weekly planning",
+            recurrenceRule = null,
+        )
+        val href = "/remote.php/dav/calendars/synthetic/team/planning.ics"
+        val stale = NextcloudApiResponse(
+            status = 200,
+            contentType = "text/calendar",
+            etag = "\"old\"",
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = "Old planning",
+                start = draft.startValue(),
+                end = draft.endValue(),
+                allDay = draft.allDay,
+            ).encodeToByteArray(),
+        )
+        val updated = stale.copy(
+            etag = "\"new\"",
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = draft.title,
+                start = draft.startValue(),
+                end = draft.endValue(),
+                allDay = draft.allDay,
+                location = draft.location,
+                description = draft.description,
+            ).encodeToByteArray(),
+        )
+        val missing = updated.copy(status = 404, body = byteArrayOf())
+        val upsert = CalendarMutationPostcondition.Upsert(
+            href,
+            "/remote.php/dav/calendars/synthetic/team/",
+            "planning",
+            "\"old\"",
+            draft,
+        )
+        val deletion = CalendarMutationPostcondition.Delete(href)
+
+        assertFalse(upsert.isSatisfiedBy(stale))
+        assertTrue(upsert.isSatisfiedBy(updated))
+        assertFalse(deletion.isSatisfiedBy(updated))
+        assertTrue(deletion.isSatisfiedBy(missing))
+    }
+
     private fun calendar(id: String, name: String) = GroupwareCalendar(
         href = "/remote.php/dav/calendars/synthetic/$id/",
         displayName = name,

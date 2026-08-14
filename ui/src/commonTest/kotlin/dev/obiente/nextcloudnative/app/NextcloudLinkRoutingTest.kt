@@ -94,6 +94,23 @@ class NextcloudLinkRoutingTest {
     }
 
     @Test
+    fun frontControllerQueryAndFragmentRoutesRetainBrowserFallbacks() {
+        listOf(
+            "/index.php?redirect_url=%2Findex.php%2Fapps%2Ffiles%2F",
+            "/index.php#server-defined-route",
+        ).forEach { link ->
+            val destination = assertIs<NextcloudLinkDestination.Browser>(
+                nextcloudLinkDestination(session, link),
+                link,
+            )
+            assertEquals(true, destination.sameAccount, link)
+        }
+        assertIs<NextcloudLinkDestination.Home>(
+            nextcloudLinkDestination(session, "/index.php"),
+        )
+    }
+
+    @Test
     fun unknownFilesRoutesKeepTheirBrowserFallback() {
         listOf(
             "/index.php/apps/files/search-result",

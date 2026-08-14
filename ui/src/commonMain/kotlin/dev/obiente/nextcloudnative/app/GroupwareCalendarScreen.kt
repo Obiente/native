@@ -155,6 +155,7 @@ fun NativeGroupwareCalendarScreen(
     var deletingInProgress by remember { mutableStateOf(false) }
     var mutationInProgress by remember { mutableStateOf(false) }
     var mutationReconciliationAttempt by remember { mutableStateOf<Int?>(null) }
+    var mutationPostcondition by remember { mutableStateOf<CalendarMutationPostcondition?>(null) }
     var creating by rememberSaveable { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -187,6 +188,21 @@ fun NativeGroupwareCalendarScreen(
     }
 
     suspend fun reload(attempt: Int) {
+        val reconciliationConfirmed = if (
+            mutationReconciliationAttempt?.let { attempt >= it } == true
+        ) {
+            mutationPostcondition?.let { postcondition ->
+                runCatching {
+                    val response = services.executeGroupwareDav(
+                        session,
+                        groupwareDavDetailRequest(postcondition.href),
+                    )
+                    postcondition.isSatisfiedBy(response)
+                }.getOrDefault(false)
+            } == true
+        } else {
+            false
+        }
         val cached = CalendarWorkspaceMemoryCache.get(session, userId, month, queryWindow)
         if (cached != null) state = cached
         val retained = cached ?: (state as? CalendarLoadState.Ready)?.takeIf { ready ->
@@ -224,8 +240,13 @@ fun NativeGroupwareCalendarScreen(
             state = loaded
             CalendarWorkspaceMemoryCache.store(session, userId, loaded)
             if (mutationReconciliationAttempt?.let { attempt >= it } == true) {
-                mutationReconciliationAttempt = null
-                mutationInProgress = false
+                if (reconciliationConfirmed) {
+                    mutationReconciliationAttempt = null
+                    mutationPostcondition = null
+                    mutationInProgress = false
+                } else {
+                    refreshError = "The calendar change has not appeared on the server yet. Refresh to verify it before leaving."
+                }
             }
         }.onFailure { failure ->
             val message = failure.message ?: "Could not load calendars."
@@ -402,13 +423,14 @@ fun NativeGroupwareCalendarScreen(
             onSave = { draft, calendar ->
                 mutationError = null
                 mutationInProgress = true
+                val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
+                val objectHref = "${calendar.href}$uid.ics"
                 scope.launch {
                     runCatching {
-                        val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                         val request = GroupwareDavMutationSpec(
                             kind = GroupwareDavKind.Event,
                             mutation = GroupwareDavMutation.Create,
-                            objectHref = "${calendar.href}$uid.ics",
+                            objectHref = objectHref,
                             content = createGroupwareCalendarEventContent(
                                 uid = uid,
                                 title = draft.title,
@@ -424,11 +446,19 @@ fun NativeGroupwareCalendarScreen(
                         check(response.status in 200..299) { "Creating the event failed (HTTP ${response.status})." }
                     }.onSuccess {
                         creating = false
+                        mutationPostcondition = CalendarMutationPostcondition.Upsert(
+                            href = objectHref,
+                            calendarHref = calendar.href,
+                            expectedUid = uid,
+                            previousEtag = null,
+                            draft = draft,
+                        )
                         val reconciliationAttempt = loadAttempt + 1
                         mutationReconciliationAttempt = reconciliationAttempt
                         loadAttempt = reconciliationAttempt
                     }.onFailure {
                         mutationInProgress = false
+                        mutationPostcondition = null
                         mutationError = it.message ?: "Could not create the event."
                     }
                 }
@@ -477,11 +507,19 @@ fun NativeGroupwareCalendarScreen(
                             }
                         }.onSuccess {
                             editing = null
+                            mutationPostcondition = CalendarMutationPostcondition.Upsert(
+                                href = event.href,
+                                calendarHref = event.calendarHref,
+                                expectedUid = event.uid,
+                                previousEtag = event.etag,
+                                draft = draft,
+                            )
                             val reconciliationAttempt = loadAttempt + 1
                             mutationReconciliationAttempt = reconciliationAttempt
                             loadAttempt = reconciliationAttempt
                         }.onFailure {
                             mutationInProgress = false
+                            mutationPostcondition = null
                             mutationError = it.message ?: "Could not save the event."
                         }
                     }
@@ -547,11 +585,13 @@ fun NativeGroupwareCalendarScreen(
                             }.onSuccess {
                                 deleting = null
                                 selectedEventId = null
+                                mutationPostcondition = CalendarMutationPostcondition.Delete(event.href)
                                 val reconciliationAttempt = loadAttempt + 1
                                 mutationReconciliationAttempt = reconciliationAttempt
                                 loadAttempt = reconciliationAttempt
                             }.onFailure { failure ->
                                 mutationInProgress = false
+                                mutationPostcondition = null
                                 mutationError = failure.message ?: "Could not delete the event."
                             }
                             deletingInProgress = false
@@ -1053,6 +1093,43 @@ internal data class EventDraft(
     fun startValue(): String = date.isoDateToCompact() + if (allDay) "" else "T${startTime.timeToCompact()}00Z"
     fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact()
     else date.isoDateToCompact() + "T${endTime.timeToCompact()}00Z"
+}
+
+internal sealed interface CalendarMutationPostcondition {
+    val href: String
+    fun isSatisfiedBy(response: NextcloudApiResponse): Boolean
+
+    data class Upsert(
+        override val href: String,
+        val calendarHref: String,
+        val expectedUid: String,
+        val previousEtag: String?,
+        val draft: EventDraft,
+    ) : CalendarMutationPostcondition {
+        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
+            if (response.status !in 200..299) return false
+            val event = parseGroupwareCalendarEvent(
+                calendarHref = calendarHref,
+                href = href,
+                etag = response.etag,
+                content = response.body.decodeToString(),
+            ) ?: return false
+            return event.href == href &&
+                event.uid == expectedUid &&
+                (previousEtag == null || event.etag != null && event.etag != previousEtag) &&
+                event.title == draft.title &&
+                event.allDay == draft.allDay &&
+                event.location.orEmpty() == draft.location &&
+                event.description.orEmpty() == draft.description &&
+                event.recurrenceRule == draft.recurrenceRule &&
+                event.start == draft.startValue()
+        }
+    }
+
+    data class Delete(override val href: String) : CalendarMutationPostcondition {
+        override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean =
+            response.status == 404 || response.status == 410
+    }
 }
 
 internal fun calendarEventDraftIsDirty(

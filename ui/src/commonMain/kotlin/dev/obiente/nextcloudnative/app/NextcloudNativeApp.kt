@@ -2209,15 +2209,22 @@ private fun AuthenticatedApp(
                     TextButton(
                         onClick = {
                             linkNavigationFailure = null
-                            launchNextcloudLinkNavigation(
-                                retryLink,
-                                NextcloudLinkSource.OperatingSystem,
-                                incomingRequestSequence = failure.incomingRequestSequence,
-                                onFinished = {
-                                    failure.incomingRequestSequence?.let(onLinkRequestHandled)
-                                    pendingEditorLinkNavigationInProgress = false
-                                },
-                            )
+                            val needsAccountDiscovery = serverInfo == null &&
+                                failure.incomingRequestSequence != null &&
+                                nextcloudLinkDestination(session, retryLink) is NextcloudLinkDestination.FileId
+                            if (needsAccountDiscovery) {
+                                discoveryAttempt += 1
+                            } else {
+                                launchNextcloudLinkNavigation(
+                                    retryLink,
+                                    NextcloudLinkSource.OperatingSystem,
+                                    incomingRequestSequence = failure.incomingRequestSequence,
+                                    onFinished = {
+                                        failure.incomingRequestSequence?.let(onLinkRequestHandled)
+                                        pendingEditorLinkNavigationInProgress = false
+                                    },
+                                )
+                            }
                         },
                     ) {
                         Text("Try again")

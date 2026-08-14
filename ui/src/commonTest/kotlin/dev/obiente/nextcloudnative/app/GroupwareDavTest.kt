@@ -31,6 +31,47 @@ class GroupwareDavTest {
             assertTrue(contactDraftIsDirty(initial, changed, "personal", "personal"))
         }
         assertTrue(contactDraftIsDirty(initial, initial, "personal", "team"))
+
+        val href = "/remote.php/dav/addressbooks/users/person/contacts/alex.vcf"
+        val stale = NextcloudApiResponse(
+            status = 200,
+            contentType = "text/vcard",
+            etag = "\"old\"",
+            body = createGroupwareContactContent(
+                uid = "alex",
+                displayName = "Old name",
+                email = "",
+                phone = "",
+                organization = "",
+                address = "",
+                notes = "",
+            ).encodeToByteArray(),
+        )
+        val updated = stale.copy(
+            etag = "\"new\"",
+            body = createGroupwareContactContent(
+                uid = "alex",
+                displayName = initial.name,
+                email = initial.email,
+                phone = initial.phone,
+                organization = initial.organization,
+                address = initial.address,
+                notes = initial.notes,
+            ).encodeToByteArray(),
+        )
+        val missing = updated.copy(status = 404, body = byteArrayOf())
+        val upsert = ContactMutationPostcondition.Upsert(
+            href,
+            "/remote.php/dav/addressbooks/users/person/contacts/",
+            "alex",
+            "\"old\"",
+            initial,
+        )
+        val deletion = ContactMutationPostcondition.Delete(href)
+        assertFalse(upsert.isSatisfiedBy(stale))
+        assertTrue(upsert.isSatisfiedBy(updated))
+        assertFalse(deletion.isSatisfiedBy(updated))
+        assertTrue(deletion.isSatisfiedBy(missing))
     }
 
     @Test
