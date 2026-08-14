@@ -125,40 +125,65 @@ internal object AndroidExternalFileHandoffRegistry {
         }
         require(nowEpochMillis >= 0L)
         val expiredReaders = mutableListOf<AndroidExternalFileHandoffLease>()
-        val record = synchronized(lock) {
-            expiredReaders += pruneExpiredLocked(nowEpochMillis)
-            if (entries.size >= MAX_RECORDS) {
-                val disposable = entries.values.firstOrNull { entry -> entry.readers.isEmpty() }
-                    ?: error("Too many external file handoffs are active.")
-                entries.remove(disposable.record.documentId)
-            }
-            val documentId = generateSequence {
-                HANDOFF_DOCUMENT_ID_PREFIX + UUID.randomUUID().toString().replace("-", "")
-            }.first { candidate -> candidate !in entries }
-            AndroidExternalFileHandoffRecord(
-                documentId = documentId,
-                accountId = NextcloudDocumentIds.accountKey(session),
-                userId = userId,
-                file = file,
-                createdAtEpochMillis = nowEpochMillis,
-                expiresAtEpochMillis = (nowEpochMillis + RECORD_LIFETIME_MILLIS)
-                    .takeIf { it >= nowEpochMillis }
-                    ?: Long.MAX_VALUE,
-            ).also { created ->
-                entries[documentId] = Entry(created)
-                try {
-                    persistLocked()
-                } catch (failure: Throwable) {
-                    entries.remove(documentId)
-                    throw failure
+        var displacedRecord: AndroidExternalFileHandoffRecord? = null
+        val record = try {
+            synchronized(lock) {
+                expiredReaders += pruneExpiredLocked(nowEpochMillis)
+                val previousEntries = entries.toMap()
+                val displaced = if (entries.size >= MAX_RECORDS) {
+                    val disposable = entries.values.firstOrNull { entry -> entry.readers.isEmpty() }
+                        ?: error("Too many external file handoffs are active.")
+                    entries.remove(disposable.record.documentId)
+                    disposable
+                } else {
+                    null
+                }
+                val documentId = generateSequence {
+                    HANDOFF_DOCUMENT_ID_PREFIX + UUID.randomUUID().toString().replace("-", "")
+                }.first { candidate -> candidate !in entries }
+                AndroidExternalFileHandoffRecord(
+                    documentId = documentId,
+                    accountId = NextcloudDocumentIds.accountKey(session),
+                    userId = userId,
+                    file = file,
+                    createdAtEpochMillis = nowEpochMillis,
+                    expiresAtEpochMillis = (nowEpochMillis + RECORD_LIFETIME_MILLIS)
+                        .takeIf { it >= nowEpochMillis }
+                        ?: Long.MAX_VALUE,
+                ).also { created ->
+                    entries[documentId] = Entry(created)
+                    try {
+                        persistLocked()
+                        displacedRecord = displaced?.record
+                    } catch (failure: Throwable) {
+                        entries.clear()
+                        entries.putAll(previousEntries)
+                        throw failure
+                    }
                 }
             }
+        } finally {
+            expiredReaders.forEach(AndroidExternalFileHandoffLease::revoke)
         }
-        expiredReaders.forEach(AndroidExternalFileHandoffLease::revoke)
+        displacedRecord?.let(::deleteManagedContentBestEffort)
         return record
     }
 
     fun isHandoffDocumentId(documentId: String): Boolean = HANDOFF_DOCUMENT_ID_PATTERN.matches(documentId)
+
+    internal fun activeManagedContentDirectoryNames(
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): Set<String> {
+        require(nowEpochMillis >= 0L)
+        val expiredReaders = mutableListOf<AndroidExternalFileHandoffLease>()
+        val names = synchronized(lock) {
+            expiredReaders += pruneExpiredLocked(nowEpochMillis)
+            if (expiredReaders.isNotEmpty()) persistBestEffortLocked()
+            entries.keys.mapTo(linkedSetOf(), ::androidExternalHandoffContentDirectoryName)
+        }
+        expiredReaders.forEach(AndroidExternalFileHandoffLease::revoke)
+        return names
+    }
 
     fun peek(
         documentId: String,
@@ -276,7 +301,7 @@ internal object AndroidExternalFileHandoffRegistry {
 
     internal const val MAX_READERS_PER_RECORD = 4
     private const val MAX_ACTIVE_READERS = 8
-    private const val MAX_RECORDS = 32
+    internal const val MAX_RECORDS = 32
     private const val RECORD_LIFETIME_MILLIS = 24L * 60L * 60L * 1000L
     private const val HANDOFF_DOCUMENT_ID_PREFIX = "nch1:"
     private val HANDOFF_DOCUMENT_ID_PATTERN = Regex("nch1:[0-9a-f]{32}")

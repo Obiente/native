@@ -82,17 +82,26 @@ class AndroidExternalFileHandoffTest {
         val root = Files.createTempDirectory("nextcloud-large-handoff-test-").toFile()
         try {
             val expired = root.resolve("expired").apply { mkdir() }
+            val protected = root.resolve("protected").apply { mkdir() }
             val active = root.resolve("active").apply { mkdir() }
             val now = 2L * 24L * 60L * 60L * 1000L
             expired.setLastModified(1L)
+            protected.setLastModified(1L)
             active.setLastModified(now)
 
-            prepareLargeExternalShareCache(root, requiredBytes = 0L, nowMillis = now)
+            prepareLargeExternalShareCache(
+                root,
+                requiredBytes = 0L,
+                nowMillis = now,
+                protectedDirectoryNames = setOf(protected.name),
+            )
 
             assertFalse(expired.exists())
+            assertTrue(protected.exists())
             assertTrue(active.exists())
 
             active.deleteRecursively()
+            protected.deleteRecursively()
             val inProgress = root.resolve("in-progress").apply {
                 mkdir()
                 resolve(".reservation").writeBytes(ByteArray(4))
@@ -115,11 +124,12 @@ class AndroidExternalFileHandoffTest {
                 nowMillis = 100L,
                 maximumAggregateBytes = 13L,
                 minimumRetentionMillis = 0L,
+                protectedDirectoryNames = setOf(oldest.name),
             )
 
             assertTrue(inProgress.exists())
-            assertFalse(oldest.exists())
-            assertTrue(newer.exists())
+            assertTrue(oldest.exists())
+            assertFalse(newer.exists())
         } finally {
             root.deleteRecursively()
         }
@@ -159,11 +169,15 @@ class AndroidExternalFileHandoffTest {
                 nowEpochMillis = 10L,
             )
             val operation = root.resolve("operation").apply { mkdir() }
+            operation.resolve(LARGE_EXTERNAL_SHARE_RESERVATION_FILE).writeBytes(ByteArray(0))
             val staged = operation.resolve(file.name).apply { writeText("cached bytes") }
             val published = publishLargeExternalHandoffContent(staged, record.documentId)
 
             assertEquals(published, resolveLargeExternalHandoffContent(cacheDirectory, record))
             assertEquals("cached bytes", published.readText())
+            assertFalse(
+                requireNotNull(published.parentFile).resolve(LARGE_EXTERNAL_SHARE_RESERVATION_FILE).exists(),
+            )
 
             AndroidExternalFileHandoffRegistry.clear()
             assertFalse(published.exists())
@@ -263,6 +277,49 @@ class AndroidExternalFileHandoffTest {
             assertEquals(
                 record,
                 AndroidExternalFileHandoffRegistry.peek(record.documentId, session, nowEpochMillis = 11L),
+            )
+        } finally {
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `failed full registry insertion restores displaced durable handoff`() {
+        val root = Files.createTempDirectory("nextcloud-handoff-register-test-").toFile()
+        val store = AndroidExternalFileHandoffStore(root.resolve("records.bin"))
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+        try {
+            AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
+            val existing = List(AndroidExternalFileHandoffRegistry.MAX_RECORDS) { index ->
+                AndroidExternalFileHandoffRegistry.register(
+                    session,
+                    "person-id",
+                    handoffFile(size = 4L),
+                    nowEpochMillis = 10L + index,
+                )
+            }
+            val displaced = existing.first()
+            assertTrue(store.stateFile.delete())
+            assertTrue(store.stateFile.mkdir())
+            store.stateFile.resolve("blocker").writeText("keep directory non-empty")
+
+            assertFailsWith<AndroidExternalFileHandoffStoreException> {
+                AndroidExternalFileHandoffRegistry.register(
+                    session,
+                    "person-id",
+                    handoffFile(size = 4L),
+                    nowEpochMillis = 100L,
+                )
+            }
+            assertEquals(
+                displaced,
+                AndroidExternalFileHandoffRegistry.peek(
+                    displaced.documentId,
+                    session,
+                    nowEpochMillis = 101L,
+                ),
             )
         } finally {
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()

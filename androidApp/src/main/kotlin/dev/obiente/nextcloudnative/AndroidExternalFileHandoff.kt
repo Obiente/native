@@ -313,7 +313,11 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         val operationDirectory = synchronized(LARGE_EXTERNAL_SHARE_CACHE_LOCK) {
             check(root.isDirectory || root.mkdirs()) { "Could not create the large-file handoff cache." }
             val canonicalRoot = root.canonicalFile
-            prepareLargeExternalShareCache(canonicalRoot, expectedBytes)
+            prepareLargeExternalShareCache(
+                root = canonicalRoot,
+                requiredBytes = expectedBytes,
+                protectedDirectoryNames = AndroidExternalFileHandoffRegistry.activeManagedContentDirectoryNames(),
+            )
             check(
                 androidLargeExternalHandoffFitsCapacity(
                     requiredBytes = expectedBytes,
@@ -332,8 +336,9 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             check(downloaded.byteCount == expectedBytes && temporary.length() == expectedBytes) {
                 "The temporary external-file copy is incomplete."
             }
-            check(File(operationDirectory, LARGE_EXTERNAL_SHARE_RESERVATION_FILE).delete()) {
-                "Could not release the external-file cache reservation."
+            RandomAccessFile(File(operationDirectory, LARGE_EXTERNAL_SHARE_RESERVATION_FILE), "rw").use { marker ->
+                marker.setLength(0L)
+                marker.fd.sync()
             }
             check(!target.exists() && temporary.renameTo(target)) {
                 "Could not publish the temporary external-file copy."
@@ -466,11 +471,18 @@ internal fun androidExternalHandoffContentDirectory(root: File, documentId: Stri
     require(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
         "The external handoff document ID is invalid."
     }
-    val directoryName = documentId.substringAfter(':')
+    val directoryName = androidExternalHandoffContentDirectoryName(documentId)
     val canonicalRoot = root.canonicalFile
     return File(canonicalRoot, directoryName).canonicalFile.also { directory ->
         require(directory.parentFile == canonicalRoot) { "Unsafe external handoff content directory." }
     }
+}
+
+internal fun androidExternalHandoffContentDirectoryName(documentId: String): String {
+    require(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
+        "The external handoff document ID is invalid."
+    }
+    return documentId.substringAfter(':')
 }
 
 internal fun publishLargeExternalHandoffContent(source: File, documentId: String): File {
@@ -482,6 +494,9 @@ internal fun publishLargeExternalHandoffContent(source: File, documentId: String
     check(!destinationDirectory.exists()) { "The external handoff content already exists." }
     check(operationDirectory.renameTo(destinationDirectory)) {
         "Could not publish the managed external handoff content."
+    }
+    check(File(destinationDirectory, LARGE_EXTERNAL_SHARE_RESERVATION_FILE).delete()) {
+        "Could not release the managed external handoff cache marker."
     }
     return File(destinationDirectory, source.name).also { published ->
         check(published.isFile && published.canonicalFile.parentFile == destinationDirectory) {
@@ -511,12 +526,16 @@ internal fun prepareLargeExternalShareCache(
     nowMillis: Long = System.currentTimeMillis(),
     maximumAggregateBytes: Long = DEFAULT_LARGE_EXTERNAL_SHARE_CACHE_BYTES,
     minimumRetentionMillis: Long = LARGE_EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS,
+    protectedDirectoryNames: Set<String> = emptySet(),
 ) {
     require(root.isDirectory) { "The large external-share cache root is not a directory." }
     require(requiredBytes >= 0L && maximumAggregateBytes >= 0L && minimumRetentionMillis >= 0L)
     val budgetBytes = maxOf(requiredBytes, maximumAggregateBytes)
     val entries = root.listFiles().orEmpty().sortedBy(File::lastModified).toMutableList()
-    entries.filter { entry -> elapsedAtLeast(nowMillis, entry.lastModified(), EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS) }
+    entries.filter { entry ->
+        entry.name !in protectedDirectoryNames &&
+            elapsedAtLeast(nowMillis, entry.lastModified(), EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS)
+    }
         .forEach { expired ->
             if (expired.deleteRecursively()) entries.remove(expired)
         }
@@ -524,6 +543,7 @@ internal fun prepareLargeExternalShareCache(
     val eligible = entries
         .filter { entry ->
             !File(entry, LARGE_EXTERNAL_SHARE_RESERVATION_FILE).exists() &&
+                entry.name !in protectedDirectoryNames &&
                 elapsedAtLeast(nowMillis, entry.lastModified(), minimumRetentionMillis)
         }
         .iterator()
@@ -590,7 +610,7 @@ private fun elapsedAtLeast(nowMillis: Long, thenMillis: Long, durationMillis: Lo
 internal const val EXTERNAL_FILE_PROVIDER_AUTHORITY_SUFFIX = ".sharedfiles"
 private const val EXTERNAL_SHARE_CACHE_DIRECTORY = "external-share"
 private const val EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY = "external-large-share"
-private const val LARGE_EXTERNAL_SHARE_RESERVATION_FILE = ".reservation"
+internal const val LARGE_EXTERNAL_SHARE_RESERVATION_FILE = ".reservation"
 private const val MAX_EXTERNAL_SHARE_CACHE_BYTES = 256L * 1024L * 1024L
 private const val DEFAULT_LARGE_EXTERNAL_SHARE_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
 private const val LARGE_EXTERNAL_SHARE_FREE_SPACE_RESERVE_BYTES = 256L * 1024L * 1024L
