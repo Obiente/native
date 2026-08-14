@@ -13,6 +13,7 @@ import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
@@ -20,8 +21,12 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -832,6 +837,27 @@ private fun desktopContractCacheDirectory(name: String): File {
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
 
+internal fun desktopPendingDynamicMutationDirectory(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    environment: Map<String, String> = System.getenv(),
+    userHome: File = File(System.getProperty("user.home")),
+): File = when {
+    osName.startsWith("Windows", ignoreCase = true) -> {
+        val localAppData = environment["LOCALAPPDATA"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, "AppData/Local")
+        File(localAppData, "Nextcloud Native/State/Pending Mutations")
+    }
+    osName.startsWith("Mac", ignoreCase = true) ->
+        File(userHome, "Library/Application Support/Nextcloud Native/Pending Mutations")
+    else -> {
+        val stateRoot = environment["XDG_STATE_HOME"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, ".local/state")
+        File(stateRoot, "nextcloud-native/pending-mutations-v1")
+    }
+}.absoluteFile
+
 internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
 internal const val DESKTOP_PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
@@ -863,6 +889,80 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
             destination.toPath(),
             StandardCopyOption.REPLACE_EXISTING,
         )
+    }
+}
+
+private val PENDING_MUTATION_DIRECTORY_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+    PosixFilePermission.OWNER_EXECUTE,
+)
+private val PENDING_MUTATION_FILE_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+)
+
+internal fun ensurePrivatePendingMutationDirectory(directory: File) {
+    Files.createDirectories(directory.toPath())
+    setPendingMutationPosixPermissions(directory.toPath(), PENDING_MUTATION_DIRECTORY_PERMISSIONS)
+}
+
+internal fun setPrivatePendingMutationFilePermissions(file: File) {
+    setPendingMutationPosixPermissions(file.toPath(), PENDING_MUTATION_FILE_PERMISSIONS)
+}
+
+private fun setPendingMutationPosixPermissions(path: Path, permissions: Set<PosixFilePermission>) {
+    if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
+        Files.setPosixFilePermissions(path, permissions)
+    }
+}
+
+private fun createPrivatePendingMutationTemporary(directory: File, targetName: String): Path {
+    val directoryPath = directory.toPath()
+    return if (Files.getFileStore(directoryPath).supportsFileAttributeView("posix")) {
+        Files.createTempFile(
+            directoryPath,
+            "$targetName-",
+            ".part",
+            PosixFilePermissions.asFileAttribute(PENDING_MUTATION_FILE_PERMISSIONS),
+        )
+    } else {
+        Files.createTempFile(directoryPath, "$targetName-", ".part")
+    }
+}
+
+internal fun writePrivatePendingMutationFile(
+    directory: File,
+    target: File,
+    bytes: ByteArray,
+) {
+    require(target.parentFile?.absoluteFile == directory.absoluteFile) {
+        "The pending mutation target must be inside its private directory."
+    }
+    ensurePrivatePendingMutationDirectory(directory)
+    val temporary = createPrivatePendingMutationTemporary(directory, target.name)
+    try {
+        FileOutputStream(temporary.toFile()).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+        try {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        setPrivatePendingMutationFilePermissions(target)
+    } finally {
+        Files.deleteIfExists(temporary)
     }
 }
 
@@ -980,6 +1080,7 @@ class DesktopNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
     private val dynamicDiscoveryCacheDirectory = desktopContractCacheDirectory("discoveries-v1")
+    private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()
@@ -3467,11 +3568,89 @@ class DesktopNextcloudServices(
                 StandardCopyOption.REPLACE_EXISTING,
             )
         }
+        Unit
     }
 
     private fun dynamicDiscoveryCacheFile(session: NextcloudSession, appId: String): File? {
         if (!appId.isSafeDynamicDiscoveryCacheAppId()) return null
         return File(dynamicDiscoveryCacheDirectory, "${desktopFileCacheAccountId(session)}-$appId.json")
+    }
+
+    override suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = withContext(Dispatchers.IO) {
+        val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
+            ?: return@withContext null
+        if (!target.exists()) return@withContext null
+        if (pendingDynamicMutationDirectory.isDirectory) {
+            ensurePrivatePendingMutationDirectory(pendingDynamicMutationDirectory)
+        }
+        check(
+            Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong(),
+        ) {
+            "The pending mutation marker is unreadable."
+        }
+        setPrivatePendingMutationFilePermissions(target)
+        val encoded = runCatching { target.readText() }.getOrElse { failure ->
+            throw IllegalStateException("The pending mutation marker could not be read.", failure)
+        }
+        requireNotNull(decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)) {
+            "The pending mutation marker is invalid."
+        }
+    }
+
+    override suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = requireNotNull(
+            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+        ) { "The pending dynamic mutation is invalid." }
+        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+            "The pending dynamic mutation identity is invalid."
+        }
+        writePrivatePendingMutationFile(
+            directory = pendingDynamicMutationDirectory,
+            target = target,
+            bytes = encoded.encodeToByteArray(),
+        )
+        Unit
+    }
+
+    override suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = withContext(Dispatchers.IO) {
+        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        }
+        Unit
+    }
+
+    private fun pendingDynamicMutationFile(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): File? {
+        if (!appId.isSafePendingMutationId() || !actionId.isSafePendingMutationId()) return null
+        if (!targetRecordId.isSafePendingMutationId()) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$actionId\n$targetRecordId".encodeToByteArray())
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return File(
+            pendingDynamicMutationDirectory,
+            "${desktopFileCacheAccountId(session)}-$appId-$digest.json",
+        )
     }
 
     override fun loadSession(): NextcloudSession? {

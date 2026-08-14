@@ -143,8 +143,12 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
+import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.planDynamicNavigation
 import dev.obiente.nextcloudnative.nativeui.model.preferredSemanticContextualChild
@@ -158,9 +162,21 @@ import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
+import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationKey
+import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationStore
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCreateMutationMatchKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresCompletionPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeCreateMutationPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.executeNativeChoresInvitationAccept
+import dev.obiente.nextcloudnative.nativeui.runtime.isNativeChoresInvitationAcceptAction
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInvitationAcceptPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInvitationAcceptRecoveryPlan
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeWorkspaceNavigationItem
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRelatedRecordPaging
 import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailWorkspaceContext
 import dev.obiente.nextcloudnative.nativeui.runtime.isNativeMailContainerRecord
@@ -168,6 +184,8 @@ import dev.obiente.nextcloudnative.nativeui.runtime.hasNativeMailWorkspaceSemant
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresMemberFieldChoices
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecordImageLoader
@@ -2151,6 +2169,7 @@ private fun AuthenticatedApp(
             AppInfoScreen(
                 services = services,
                 session = session,
+                currentUserId = serverInfo?.userId ?: session.loginName,
                 app = current.app,
                 serverVersion = resumePlan.serverVersion,
                 installedAppVersionHint = resumePlan.installedAppVersionHint,
@@ -2566,6 +2585,7 @@ private fun AdminAppsScreen(
 private fun AppInfoScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    currentUserId: String,
     app: NextcloudAppEntry,
     serverVersion: String?,
     installedAppVersionHint: String?,
@@ -2696,6 +2716,7 @@ private fun AppInfoScreen(
             DynamicDiscoveredAppScreen(
                 services = services,
                 session = session,
+                currentUserId = currentUserId,
                 discovery = resolved,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
@@ -2735,6 +2756,7 @@ private fun DynamicAppOpeningState(
 private fun DynamicDiscoveredAppScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    currentUserId: String,
     discovery: DynamicDescriptorDiscovery,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
@@ -2751,6 +2773,9 @@ private fun DynamicDiscoveredAppScreen(
     val initialViewId = remember(descriptor, schema) {
         val rootDestinations = descriptor.planDynamicNavigation().rootDestinations
         schema.views.firstOrNull { it.id == NATIVE_BUDGET_DASHBOARD_VIEW_ID }?.id
+            ?: schema.views.firstOrNull { view ->
+                nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team
+            }?.id
             ?: preferredNativeMusicLandingViewId(rootDestinations, schema)
             ?: rootDestinations.firstOrNull()?.layoutId
             ?: schema.views.firstOrNull { it.component != NativeComponent.form }?.id
@@ -2852,6 +2877,14 @@ private fun DynamicDiscoveredAppScreen(
     var paginationState by remember(descriptor) { mutableStateOf<DynamicPaginationState?>(null) }
     var loadingMore by remember(descriptor) { mutableStateOf(false) }
     var loadMoreError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var retainedChoresTeamRecord by remember(descriptor) { mutableStateOf<NativeRecord?>(null) }
+    var openedDefaultChores by rememberSaveable(
+        session.serverUrl,
+        session.loginName,
+        descriptor.app.id,
+    ) {
+        mutableStateOf(restoredNavigation.hasPersistedDynamicLocation())
+    }
     val hasRestoredMailLocation = restoredNavigation.selectedViewId != null ||
         restoredNavigation.selectedRecord != null ||
         restoredNavigation.history.isNotEmpty()
@@ -3575,6 +3608,162 @@ private fun DynamicDiscoveredAppScreen(
             onMultipartUploadSucceeded = ::releaseSelectedDynamicUploadFile,
         )
     }
+    val pendingMutationStore = remember(services, session, descriptor, schema) {
+        object : NativePendingMutationStore {
+            override suspend fun load(key: NativePendingMutationKey): Map<String, String>? =
+                services.loadPendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                )
+
+            override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
+                services.savePendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                    values = values,
+                )
+            }
+
+            override suspend fun postconditionSatisfied(
+                key: NativePendingMutationKey,
+                values: Map<String, String>,
+            ): Boolean {
+                val invitationAccept = nativeChoresInvitationAcceptPostcondition(key, values)
+                if (invitationAccept != null) {
+                    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                    if (schema.action(invitationAccept.actionId)?.takeIf { action ->
+                        isNativeChoresInvitationAcceptAction(schema, action)
+                    } == null) return false
+                    val read = schema.action(invitationAccept.readActionId)?.takeIf { action ->
+                        action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.binding.method == HttpMethod.GET &&
+                            action.binding.path == "/apps/chores/api/v1.0/account/invites" &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                    return runCatching {
+                        invitationAccept.satisfiedBy(
+                            loadDynamicRecords(
+                                services = services,
+                                session = session,
+                                descriptor = descriptor,
+                                actionId = read.id,
+                                values = emptyMap(),
+                                runtimeContext = emptyMap(),
+                                cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                            ),
+                        )
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        false
+                    }
+                }
+                val createPostcondition = nativeCreateMutationPostcondition(key, values)
+                if (createPostcondition != null) {
+                    val create = schema.action(createPostcondition.actionId)?.takeIf { action ->
+                        action.intent == ActionIntent.create &&
+                            action.binding.method == HttpMethod.POST &&
+                            action.resourceId == createPostcondition.resourceId &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    val read = schema.action(createPostcondition.readActionId)?.takeIf { action ->
+                            action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.binding.method == HttpMethod.GET &&
+                            action.resourceId == createPostcondition.resourceId &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    val validRoutePair = when (createPostcondition.matchKind) {
+                        NativeCreateMutationMatchKind.NewRecord ->
+                            read.binding.path.substringBefore('?').trimEnd('/') ==
+                                create.binding.path.substringBefore('?').trimEnd('/')
+                        NativeCreateMutationMatchKind.NestedRecord ->
+                            schema.app.id == "chores" && schema.app.version == "0.1.0" &&
+                                create.binding.path ==
+                                "/apps/chores/api/v1.0/team/{teamId}/invites" &&
+                                create.binding.bodyFieldNames == listOf("userId") &&
+                                read.binding.path == "/apps/chores/api/v1.0/team" &&
+                                createPostcondition.nestedCollectionFieldId == "invites" &&
+                                createPostcondition.parentRecordId ==
+                                createPostcondition.bindingValues["teamId"]
+                    }
+                    if (!validRoutePair) return false
+                    delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                    return runCatching {
+                        loadDynamicRecords(
+                            services = services,
+                            session = session,
+                            descriptor = descriptor,
+                            actionId = read.id,
+                            values = createPostcondition.bindingValues,
+                            runtimeContext = createPostcondition.bindingValues,
+                            cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                        ).any(createPostcondition::matches)
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        false
+                    }
+                }
+                if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                val postcondition = nativeChoresCompletionPostcondition(key, values) ?: return false
+                val commandActionId = key.actionId.removePrefix(
+                    "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:",
+                )
+                val command = schema.action(commandActionId)?.takeIf { action ->
+                    action.binding.method == HttpMethod.POST &&
+                        action.binding.path.substringBefore('?').trimEnd('/') ==
+                        "/apps/chores/api/v1.0/team/{teamId}/work" &&
+                        action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+                } ?: return false
+                if (key.actionId != "$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:${command.id}") return false
+                val history = descriptor.actions.singleOrNull { action ->
+                    action.binding.method == HttpMethod.GET &&
+                        action.binding.path.substringBefore('?').trimEnd('/') ==
+                        "/apps/chores/api/v1.0/team/{teamId}/work" &&
+                        "id" in action.responseFieldIds &&
+                        action.provenance.any { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
+                } ?: return false
+                delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                return runCatching {
+                    loadDynamicRecords(
+                        services = services,
+                        session = session,
+                        descriptor = descriptor,
+                        actionId = history.id,
+                        values = mapOf("teamId" to postcondition.teamId),
+                        runtimeContext = mapOf("teamId" to postcondition.teamId),
+                        cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                    ).any { record ->
+                        record.actionSafeIdentity && record.values["id"] == postcondition.completionId
+                    }
+                }.getOrElse { failure ->
+                    if (failure is CancellationException) throw failure
+                    false
+                }
+            }
+
+            override suspend fun clear(key: NativePendingMutationKey) {
+                services.clearPendingDynamicMutation(
+                    session = session,
+                    appId = descriptor.app.id,
+                    actionId = key.actionId,
+                    targetRecordId = key.targetRecordId,
+                )
+            }
+        }
+    }
     val collectionBatchRelationLoader = remember(services, session, descriptor, schema) {
         NativeCollectionBatchRelationLoader { request ->
             val action = schema.action(request.actionId)
@@ -3689,6 +3878,44 @@ private fun DynamicDiscoveredAppScreen(
             visitedStates = visitedStates,
         )
     }
+    val retainedChoresTeamContext = remember(schema, retainedChoresTeamRecord) {
+        val teamRecord = retainedChoresTeamRecord ?: return@remember null
+        val teamView = schema.views.singleOrNull { view ->
+            nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team
+        } ?: return@remember null
+        DynamicResourceRecordContext(
+            resourceId = teamView.resourceId,
+            recordId = teamRecord.id,
+            fieldValues = teamRecord.values,
+            actionSafeIdentity = teamRecord.actionSafeIdentity,
+            actionBindingProvenanceValid = teamRecord.actionBindingProvenanceValid,
+            currentLayoutId = teamView.id,
+        )
+    }
+    val retainedChoresTeamActionValues = remember(
+        descriptor,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        if (
+            retainedChoresTeamContext == null ||
+            nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team
+        ) {
+            emptyMap()
+        } else {
+            descriptor.planDynamicNavigation(retainedChoresTeamContext)
+                .contextualFormActions
+                .flatMap { action -> action.pathParameterValues.entries }
+                .groupBy(Map.Entry<String, String>::key)
+                .mapNotNull { (name, entries) ->
+                    entries.map(Map.Entry<String, String>::value)
+                        .distinct()
+                        .singleOrNull()
+                        ?.let { value -> name to value }
+                }
+                .toMap()
+        }
+    }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
     }
@@ -3777,6 +4004,68 @@ private fun DynamicDiscoveredAppScreen(
             }
         }
     }
+    val choresNavigationDestinations = remember(
+        descriptor,
+        schema,
+        recordContext,
+        retainedChoresTeamContext,
+        selectedView.id,
+        selectedPathParameterValues,
+    ) {
+        if (schema.app.id != "chores") {
+            emptyList()
+        } else {
+            val unvisitedPlan = descriptor.planDynamicNavigation(
+                retainedChoresNavigationContext(
+                    retainedTeamContext = retainedChoresTeamContext,
+                    currentRecordContext = recordContext,
+                )?.copy(visitedStates = emptySet()),
+            )
+            val order = listOf(
+                NativeChoresWorkspaceKind.Chores,
+                NativeChoresWorkspaceKind.History,
+                NativeChoresWorkspaceKind.Team,
+                NativeChoresWorkspaceKind.Invitations,
+            )
+            order.mapNotNull { kind ->
+                val view = schema.views.firstOrNull { candidate ->
+                    nativeChoresWorkspaceKind(schema, candidate) == kind
+                } ?: return@mapNotNull null
+                val planned = (
+                    unvisitedPlan.rootDestinations + unvisitedPlan.contextualChildDestinations
+                    ).firstOrNull { destination -> destination.layoutId == view.id }
+                if (
+                    kind in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History) &&
+                    planned == null && view.id != selectedView.id
+                ) {
+                    return@mapNotNull null
+                }
+                (planned ?: DynamicNavigationDestination(
+                    layoutId = view.id,
+                    label = view.title,
+                    resourceId = view.resourceId,
+                    actionId = view.sourceActionId,
+                    pathParameterValues = selectedPathParameterValues,
+                )) to view
+            }
+        }
+    }
+    val choresNavigationItems = remember(choresNavigationDestinations, selectedView.id) {
+        choresNavigationDestinations.map { (_, view) ->
+            val kind = requireNotNull(nativeChoresWorkspaceKind(schema, view))
+            NativeWorkspaceNavigationItem(
+                id = view.id,
+                label = when (kind) {
+                    NativeChoresWorkspaceKind.Chores -> "All chores"
+                    NativeChoresWorkspaceKind.History -> "History"
+                    NativeChoresWorkspaceKind.Team -> "Team"
+                    NativeChoresWorkspaceKind.Invitations -> "Invitations"
+                },
+                selected = view.id == selectedView.id,
+            )
+        }
+    }
+    val choresWorkspaceActive = nativeChoresWorkspaceKind(schema, selectedView) != null
     // Every verified read destination belongs in the adaptive, scrollable navigator. Keeping
     // technical or trash collections in the small header popup makes them unreachable on compact
     // screens once the menu exceeds the viewport. Semantic ranking still controls the preferred
@@ -4101,6 +4390,59 @@ private fun DynamicDiscoveredAppScreen(
     LaunchedEffect(
         descriptor,
         selectedView.id,
+        loadAttempt,
+    ) {
+        val kind = nativeChoresWorkspaceKind(schema, selectedView)
+        if (
+            kind !in setOf(
+                NativeChoresWorkspaceKind.Team,
+                NativeChoresWorkspaceKind.Chores,
+                NativeChoresWorkspaceKind.History,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        // Cached Team content remains useful to paint, but it never authorizes a write. Clear the
+        // retained authority on Team and child entry until this exact force-network read succeeds.
+        retainedChoresTeamRecord = null
+        val teamView = schema.views.singleOrNull { candidate ->
+            nativeChoresWorkspaceKind(schema, candidate) == NativeChoresWorkspaceKind.Team &&
+                candidate.sourceActionId.isNotBlank()
+        } ?: return@LaunchedEffect
+        runCatching {
+            loadDynamicRecords(
+                services = services,
+                session = session,
+                descriptor = descriptor,
+                actionId = teamView.sourceActionId,
+                values = emptyMap(),
+                runtimeContext = emptyMap(),
+                cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+            )
+        }.onSuccess { records ->
+            currentCoroutineContext().ensureActive()
+            val team = records.singleOrNull()?.takeIf { record ->
+                record.actionSafeIdentity && record.actionBindingProvenanceValid
+            }
+            retainedChoresTeamRecord = team
+            recordsByResourceId = recordsByResourceId + (teamView.resourceId to records)
+            if (
+                kind == NativeChoresWorkspaceKind.Team &&
+                records.size == 1 &&
+                selectedRecord == null &&
+                !openedDefaultChores
+            ) {
+                openedDefaultChores = true
+                selectDynamicRecord(records.single())
+            }
+        }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
+        }
+    }
+
+    LaunchedEffect(
+        descriptor,
+        selectedView.id,
         viewState,
         automaticMailLandingStage,
     ) {
@@ -4208,10 +4550,30 @@ private fun DynamicDiscoveredAppScreen(
             }?.value ?: selectedRecord?.id ?: schema.resource(actionSpec.resourceId)?.name ?: "item"
             directActionError = null
             directActionFailureState = null
+            val invitationRecoveryRequired = isNativeChoresInvitationAcceptAction(schema, actionSpec)
+            val invitationRecoveryPlan = if (invitationRecoveryRequired) {
+                val activeRead = schema.action(selectedView.sourceActionId)
+                val record = selectedRecord
+                if (activeRead != null && record != null) {
+                    nativeChoresInvitationAcceptRecoveryPlan(
+                        schema = schema,
+                        activeReadAction = activeRead,
+                        action = actionSpec,
+                        record = record,
+                        values = action.pathParameterValues,
+                    )
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
             pendingDirectAction = PendingDynamicDirectAction(
                 action = actionSpec,
                 values = action.pathParameterValues,
                 targetLabel = label,
+                invitationAcceptRecoveryPlan = invitationRecoveryPlan,
+                durableRecoveryRequired = invitationRecoveryRequired,
             )
             return
         }
@@ -4240,6 +4602,24 @@ private fun DynamicDiscoveredAppScreen(
         }
         selectedPathParameterValues = selection.pathParameterValues
         selectedViewId = view.id
+    }
+
+    fun selectChoresDestination(viewId: String) {
+        val (destination, view) = choresNavigationDestinations
+            .firstOrNull { (_, candidate) -> candidate.id == viewId }
+            ?: return
+        actionMenuExpanded = false
+        contextualMenuOpen = false
+        if (nativeChoresWorkspaceKind(schema, view) == NativeChoresWorkspaceKind.Team) {
+            selectedRecord = null
+            selectedRecordResourceId = null
+            navigationHistory = emptyList()
+        }
+        selectedPathParameterValues = destination.pathParameterValues
+        selectedViewId = view.id
+        paginationState = null
+        loadingMore = false
+        loadMoreError = null
     }
 
     val hasCollectionHierarchyBack = navigationHistory.isNotEmpty() || selectedRecord != null
@@ -4370,11 +4750,14 @@ private fun DynamicDiscoveredAppScreen(
                     selectedRecordResourceId != selectedView.resourceId
             }
         val activeContentTitle = when {
+            choresWorkspaceActive -> descriptor.app.name
             showContextDestinationMenu -> selectedRecord?.dynamicContextLabel().orEmpty()
             nestedObjectTitle != null -> nestedObjectTitle
             else -> activeSectionLabel
         }.ifBlank { descriptor.app.name }
-        val activeContentSubtitle = if (showContextDestinationMenu) {
+        val activeContentSubtitle = if (choresWorkspaceActive) {
+            null
+        } else if (showContextDestinationMenu) {
             "Choose a section"
         } else if (nestedObjectTitle != null) {
             activeSectionLabel.takeUnless { label ->
@@ -4391,7 +4774,7 @@ private fun DynamicDiscoveredAppScreen(
 
         NextcloudCollectionWorkspaceScaffold(
             model = collectionNavigationModel,
-            mode = if (musicWorkspaceIntent == null) {
+            mode = if (musicWorkspaceIntent == null && !choresWorkspaceActive) {
                 collectionNavigationMode
             } else {
                 NextcloudCollectionNavigationMode.Hidden
@@ -4560,11 +4943,14 @@ private fun DynamicDiscoveredAppScreen(
                 }
             }
             val rendererDatasetContext = NativeDatasetContext(
-                parentResourceId = selectedRecordResourceId,
-                parentRecord = selectedRecord,
-                bindingValues = datasetBindingValues,
+                parentResourceId = selectedRecordResourceId
+                    ?: retainedChoresTeamContext?.resourceId,
+                parentRecord = selectedRecord ?: retainedChoresTeamRecord,
+                currentUserId = currentUserId,
+                bindingValues = datasetBindingValues + retainedChoresTeamActionValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
+                fieldChoices = nativeChoresMemberFieldChoices(schema, retainedChoresTeamRecord),
             )
             val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->
                 val records = (viewState as? NativeScreenState.Ready)?.records.orEmpty()
@@ -4610,6 +4996,7 @@ private fun DynamicDiscoveredAppScreen(
                     showSelectedRecordDetail = showFallbackRecordDetail,
                     datasetContext = rendererDatasetContext,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
+                    pendingMutationStore = pendingMutationStore,
                     collectionBatchRelationLoader = collectionBatchRelationLoader,
                     filePicker = dynamicFilePicker,
                     recordImageLoader = recordImageLoader,
@@ -4651,6 +5038,12 @@ private fun DynamicDiscoveredAppScreen(
                     onLoadMore = onLoadMore.takeUnless { showFallbackRecordDetail },
                     loadingMore = loadingMore,
                     loadMoreError = loadMoreError,
+                    workspaceNavigationItems = choresNavigationItems.takeIf { choresWorkspaceActive }.orEmpty(),
+                    onWorkspaceNavigate = if (choresWorkspaceActive && choresNavigationItems.size > 1) {
+                        ::selectChoresDestination
+                    } else {
+                        null
+                    },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -4750,6 +5143,8 @@ private fun DynamicDiscoveredAppScreen(
     }
     pendingDirectAction?.let { pending ->
         val outcomeUnknown = directActionFailureState?.requiresReconciliation == true
+        val durableRecoveryUnavailable = pending.durableRecoveryRequired &&
+            pending.invitationAcceptRecoveryPlan == null
         AlertDialog(
             onDismissRequest = {
                 if (!directActionRunning) {
@@ -4762,6 +5157,8 @@ private fun DynamicDiscoveredAppScreen(
                 Text(
                     if (outcomeUnknown) {
                         "${dynamicHeaderActionLabel(pending.action, pending.action.label)} result unknown"
+                    } else if (durableRecoveryUnavailable) {
+                        "Refresh invitations"
                     } else {
                         dynamicDirectActionTitle(pending.action, pending.targetLabel)
                     },
@@ -4773,6 +5170,11 @@ private fun DynamicDiscoveredAppScreen(
                         Text(
                             "The server may already have completed this action. The view is being refreshed " +
                                 "to reconcile the result. Review the refreshed state before trying again.",
+                        )
+                    } else if (durableRecoveryUnavailable) {
+                        Text(
+                            "Refresh invitations before accepting this item. Its verified identity " +
+                                "is not available for crash-safe recovery yet.",
                         )
                     } else {
                         Text(dynamicDirectActionDescription(pending.action))
@@ -4799,7 +5201,7 @@ private fun DynamicDiscoveredAppScreen(
                 }
             },
             confirmButton = {
-                if (directActionFailureState?.retryAllowed != false) {
+                if (directActionFailureState?.retryAllowed != false && !durableRecoveryUnavailable) {
                     Button(
                         enabled = !directActionRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -4808,15 +5210,20 @@ private fun DynamicDiscoveredAppScreen(
                             directActionError = null
                             directActionFailureState = null
                             dynamicActionScope.launch {
-                                when (
-                                    val result = executor.execute(
-                                        NativeActionRequest.Submit(
-                                            action = pending.action,
-                                            values = pending.values,
-                                            confirmed = true,
-                                        ),
+                                val request = NativeActionRequest.Submit(
+                                    action = pending.action,
+                                    values = pending.values,
+                                    confirmed = true,
+                                )
+                                val executionResult = pending.invitationAcceptRecoveryPlan?.let { plan ->
+                                    executeNativeChoresInvitationAccept(
+                                        plan = plan,
+                                        request = request,
+                                        actionExecutor = executor,
+                                        pendingMutationStore = pendingMutationStore,
                                     )
-                                ) {
+                                } ?: executor.execute(request)
+                                when (val result = executionResult) {
                                     is NativeActionExecutionResult.Success -> {
                                         pendingDirectAction = null
                                         reconcileSuccessfulMutation(
@@ -5293,6 +5700,14 @@ internal data class DynamicAppNavigationState(
     val history: List<SavedDynamicNavigationSnapshot> = emptyList(),
 )
 
+internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
+    selectedViewId != null || selectedRecord != null || history.isNotEmpty()
+
+internal fun retainedChoresNavigationContext(
+    retainedTeamContext: DynamicResourceRecordContext?,
+    currentRecordContext: DynamicResourceRecordContext?,
+): DynamicResourceRecordContext? = retainedTeamContext ?: currentRecordContext
+
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
     val savedRecordId = selectedRecord?.id?.takeIf { value ->
@@ -5508,6 +5923,12 @@ internal fun primaryDynamicContentDestination(
                         "entry",
                         "entries",
                     )
+                }
+            }
+        parentWords.any { it in setOf("team", "teams", "household", "households") } ->
+            destinations.firstOrNull { destination ->
+                destination.resourceId.dynamicResourceWords().any { word ->
+                    word in setOf("assignment", "assignments", "chore", "chores", "duty", "duties")
                 }
             }
         else -> null

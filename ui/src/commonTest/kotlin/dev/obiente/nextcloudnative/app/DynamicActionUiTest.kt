@@ -177,6 +177,72 @@ class DynamicActionUiTest {
     }
 
     @Test
+    fun `verified execute with a fully bound body targets its selected collection record`() {
+        val accept = action(
+            "accept-invitation",
+            ActionIntent.execute,
+            ActionRisk.mutating,
+            HttpMethod.POST,
+        ).copy(
+            resourceId = "invitations",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/account/invitations/accept",
+                operationId = "accept-invitation",
+                bodyFieldNames = listOf("teamId"),
+                requiredBodyFieldNames = listOf("teamId"),
+                bodyContentType = "application/json",
+            ),
+        )
+        val form = view(
+            id = "accept-invitation.form",
+            resourceId = "invitations",
+            component = NativeComponent.form,
+            sourceActionId = accept.id,
+        ).copy(confidence = Confidence.verified)
+        val active = view(
+            id = "invitations.list",
+            resourceId = "invitations",
+            component = NativeComponent.collectionList,
+            sourceActionId = "list-invitations",
+        )
+        val read = action(
+            "list-invitations",
+            ActionIntent.list,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(resourceId = "invitations", confidence = Confidence.verified)
+
+        assertTrue(
+            dynamicContextualFormTargetsActiveSurface(
+                action = accept,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = mapOf("teamId" to "42"),
+                selectedRecordResourceId = "invitations",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+        assertFalse(
+            dynamicContextualFormTargetsActiveSurface(
+                action = accept,
+                formView = form,
+                activeView = active,
+                activeReadAction = read,
+                plannedBindingValues = emptyMap(),
+                selectedRecordResourceId = "invitations",
+                selectedCollectionState = null,
+                hasEditableFileField = false,
+                uniqueTargetResource = true,
+            ),
+        )
+    }
+
+    @Test
     fun `context bound singleton update requires its unique active verified detail read`() {
         val update = action(
             "update-preferences",

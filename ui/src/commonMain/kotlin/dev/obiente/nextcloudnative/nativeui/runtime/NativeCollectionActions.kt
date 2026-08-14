@@ -73,6 +73,22 @@ internal data class NativeCollectionReorderActionPlan(
     private val availableRecordIds: Set<String>,
     private val bindingValues: Map<String, String>,
 ) {
+    internal fun pendingMutationScope(resourceId: String): String = buildString {
+        append(resourceId.length)
+        append(':')
+        append(resourceId)
+        bindingValues.toSortedMap().forEach { (name, value) ->
+            append('|')
+            append(name.length)
+            append(':')
+            append(name)
+            append('=')
+            append(value.length)
+            append(':')
+            append(value)
+        }
+    }
+
     /**
      * Builds the default request a generic reorder UI should use.
      *
@@ -658,9 +674,11 @@ private fun ApiBinding.isDirectChildRouteOf(
     resource: ResourceSpec,
     context: Map<String, String>,
 ): Boolean {
-    if (hasSelfResourcePathIdentity(resource)) return false
     val readSegments = readBinding.resolvedNativeCollectionPathSegments(context) ?: return false
     val actionSegments = resolvedNativeCollectionPathSegments(context) ?: return false
+    // A generic `{id}` is ambiguous in isolation, but is proven to be the collection parent's
+    // identity when both exact routes resolve to the same collection and the command appends one
+    // literal segment. A record-scoped route still has an extra identity segment and fails below.
     return actionSegments.size == readSegments.size + 1 &&
         actionSegments.dropLast(1) == readSegments &&
         path.trimEnd('/').substringAfterLast('/').let { segment ->

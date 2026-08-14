@@ -9,6 +9,8 @@ import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT
+import dev.obiente.nextcloudnative.nativeui.model.Evidence
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
@@ -23,6 +25,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -31,6 +34,42 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NativeRecordActionsTest {
+    @Test
+    fun `context-bound child create wins over an unscoped root create`() {
+        val team = resource(
+            fields = listOf(
+                field("name", "Team name", FieldKind.string),
+                field("userId", "Member", FieldKind.userReference),
+            ),
+        )
+        val createTeam = action(
+            id = "create-team",
+            intent = ActionIntent.create,
+            method = HttpMethod.POST,
+            bodyNames = listOf("name"),
+            requiredBodyNames = listOf("name"),
+        )
+        val inviteMember = action(
+            id = "invite-member",
+            intent = ActionIntent.create,
+            method = HttpMethod.POST,
+            pathNames = listOf("teamId"),
+            bodyNames = listOf("userId"),
+            requiredBodyNames = listOf("userId"),
+        )
+        val schema = schema(team, listOf(createTeam, inviteMember))
+
+        assertEquals(createTeam.id, nativeRecordActions(schema, team).create?.action?.id)
+        assertEquals(
+            inviteMember.id,
+            nativeRecordActions(
+                schema,
+                team,
+                navigationContext = mapOf("teamId" to "team-12"),
+            ).create?.action?.id,
+        )
+    }
+
     @Test
     fun `structural record actions bind exact parent and item identities`() {
         val resource = resource(
@@ -2094,6 +2133,469 @@ class NativeRecordActionsTest {
             plan.request(confirmed = false)
         }
         assertTrue(plan.request(confirmed = true).confirmed)
+    }
+
+    @Test
+    fun `verified Chores owner can remove a known non-owner team member`() {
+        val team = resource(
+            id = "team",
+            fields = listOf(
+                field("owner", "Owner", FieldKind.userReference, readOnly = true),
+                field("members", "Members", FieldKind.objectValue, readOnly = true),
+            ),
+        )
+        val removeMember = ActionSpec(
+            id = "route-api-removemember",
+            label = "Remove member",
+            resourceId = team.id,
+            binding = ApiBinding(
+                method = HttpMethod.DELETE,
+                path = "/apps/chores/api/v1.0/team/{teamId}/members/{userIdToRemove}",
+                operationId = "route-api-removemember",
+                pathParameterNames = listOf("teamId", "userIdToRemove"),
+                requiredPathParameterNames = listOf("teamId", "userIdToRemove"),
+            ),
+            intent = ActionIntent.delete,
+            risk = ActionRisk.destructive,
+            requiresConfirmation = true,
+            confidence = Confidence.verified,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores 0.1.0 package")),
+        )
+        val nativeSchema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(team),
+            actions = listOf(removeMember),
+        )
+        fun member(userId: String, displayName: String) = NativeStructuredValue.ObjectValue(
+            entries = listOf(
+                NativeStructuredEntry(
+                    "member",
+                    "Member",
+                    NativeStructuredValue.Scalar(userId, NativeStructuredScalarKind.string),
+                ),
+                NativeStructuredEntry(
+                    "displayName",
+                    "Display name",
+                    NativeStructuredValue.Scalar(displayName, NativeStructuredScalarKind.string),
+                ),
+            ),
+        )
+        val teamRecord = NativeRecord(
+            id = "4",
+            values = mapOf("id" to "4", "owner" to "alex"),
+            structuredValues = mapOf(
+                "members" to NativeStructuredValue.ListValue(
+                    listOf(member("alex", "Alex"), member("sam", "Sam")),
+                ),
+            ),
+        )
+        val roster = requireNotNull(nativeRosterPresentation(teamRecord))
+        val authority = requireNotNull(
+            NativeDatasetContext(
+                parentResourceId = team.id,
+                parentRecord = teamRecord,
+                currentUserId = "alex",
+            ).nativeRecordAuthorityContext(nativeSchema),
+        )
+        val sam = roster.people.single { person -> person.userId == "sam" }
+        val plan = requireNotNull(
+            nativeChoresRosterMemberRemovalPlan(nativeSchema, teamRecord, sam, authority),
+        )
+
+        assertEquals(
+            mapOf("teamId" to "4", "userIdToRemove" to "sam"),
+            plan.request(confirmed = true).values,
+        )
+        assertFailsWith<IllegalArgumentException> { plan.request(confirmed = false) }
+        assertNull(
+            nativeChoresRosterMemberRemovalPlan(
+                nativeSchema,
+                teamRecord,
+                roster.people.single { person -> person.userId == "alex" },
+                authority,
+            ),
+        )
+        assertNull(
+            nativeChoresRosterMemberRemovalPlan(
+                nativeSchema,
+                teamRecord,
+                sam,
+                authority.copy(actorUserId = "sam", auditedActionIds = emptySet()),
+            ),
+        )
+    }
+
+    @Test
+    fun `verified Chores team member can edit a chore from the exact pinned contract`() {
+        val team = resource(
+            id = "team",
+            fields = listOf(field("members", "Members", FieldKind.objectValue, readOnly = true)),
+        )
+        val chores = resource(
+            id = "chores",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("name", "Name", FieldKind.string),
+                field("points", "Points", FieldKind.integer),
+            ),
+        )
+        val edit = ActionSpec(
+            id = "route-api-patchchore",
+            label = "Edit chore",
+            resourceId = chores.id,
+            binding = ApiBinding(
+                method = HttpMethod.PATCH,
+                path = "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}",
+                operationId = "route-api-patchchore",
+                pathParameterNames = listOf("teamId", "choreId"),
+                requiredPathParameterNames = listOf("teamId", "choreId"),
+                bodyFieldNames = listOf("name", "points"),
+                requiredBodyFieldNames = listOf("name"),
+                bodyContentType = "application/json",
+            ),
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            effect = ActionEffect.update,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores 0.1.0 package")),
+        )
+        val nativeSchema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(chores, team),
+            actions = listOf(edit),
+        )
+        fun teamRecord(memberUserId: String) = NativeRecord(
+            id = "4",
+            values = mapOf("id" to "4"),
+            structuredValues = mapOf(
+                "members" to NativeStructuredValue.ListValue(
+                    listOf(
+                        NativeStructuredValue.ObjectValue(
+                            listOf(
+                                NativeStructuredEntry(
+                                    "member",
+                                    "Member",
+                                    NativeStructuredValue.Scalar(
+                                        memberUserId,
+                                        NativeStructuredScalarKind.string,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        fun authority(schema: NativeAppSchema, memberUserId: String) = NativeDatasetContext(
+            parentResourceId = team.id,
+            parentRecord = teamRecord(memberUserId),
+            currentUserId = "alex",
+        ).nativeRecordAuthorityContext(schema)
+        val chore = NativeRecord(
+            id = "23",
+            values = mapOf("id" to "23", "name" to "Kitchen", "points" to "3"),
+        )
+
+        val plan = requireNotNull(
+            nativeRecordActions(
+                schema = nativeSchema,
+                resource = chores,
+                record = chore,
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority(nativeSchema, "alex"),
+            ).edit,
+        )
+        assertEquals(
+            mapOf("teamId" to "4", "choreId" to "23", "name" to "Bathroom", "points" to "5"),
+            plan.request(mapOf("name" to "Bathroom", "points" to "5")).values,
+        )
+
+        assertNull(
+            nativeRecordActions(
+                schema = nativeSchema,
+                resource = chores,
+                record = chore,
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority(nativeSchema, "sam"),
+            ).edit,
+        )
+        val unpinnedSchema = nativeSchema.copy(app = nativeSchema.app.copy(version = "0.1.1"))
+        assertNull(
+            nativeRecordActions(
+                schema = unpinnedSchema,
+                resource = chores,
+                record = chore,
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority(unpinnedSchema, "alex"),
+            ).edit,
+        )
+    }
+
+    @Test
+    fun `verified Chores completion derives protocol fields and requires confirmation`() = runBlocking {
+        val workSpec = RepeatableObjectInputSpec(
+            minimumItems = 1,
+            maximumItems = 1,
+            fields = listOf(
+                RepeatableObjectInputFieldSpec(
+                    "id",
+                    "Completion id",
+                    RepeatableObjectInputScalarKind.String,
+                    required = true,
+                    format = "uuid",
+                ),
+                RepeatableObjectInputFieldSpec(
+                    "work_time",
+                    "Completed at",
+                    RepeatableObjectInputScalarKind.String,
+                    required = true,
+                    format = "date-time",
+                ),
+                RepeatableObjectInputFieldSpec(
+                    "chore_id",
+                    "Chore",
+                    RepeatableObjectInputScalarKind.Integer,
+                    required = true,
+                ),
+                RepeatableObjectInputFieldSpec(
+                    "member",
+                    "Member",
+                    RepeatableObjectInputScalarKind.String,
+                    required = true,
+                ),
+            ),
+        )
+        val workSchema = Json.parseToJsonElement(
+            """{"type":"array","format":"$DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT","minItems":1,"maxItems":1,"items":{"type":"object","additionalProperties":false,"required":["id","work_time","chore_id","member"],"properties":{"id":{"type":"string","format":"uuid","title":"Completion id"},"work_time":{"type":"string","format":"date-time","title":"Completed at"},"chore_id":{"type":"integer","title":"Chore"},"member":{"type":"string","title":"Member"}}}}""",
+        )
+        val bodySchema = JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("object"),
+                "properties" to JsonObject(mapOf("work" to workSchema)),
+                "required" to JsonArray(listOf(JsonPrimitive("work"))),
+            ),
+        )
+        val chores = resource(
+            id = "chores",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("name", "Name", FieldKind.string, readOnly = true),
+                field("work", "Work", FieldKind.objectValue, repeatableObjectInput = workSpec),
+            ),
+        )
+        val team = resource(
+            id = "team",
+            fields = listOf(field("members", "Members", FieldKind.objectValue, readOnly = true)),
+        )
+        val completion = ActionSpec(
+            id = "route-api-submitwork",
+            label = "Mark as done",
+            resourceId = chores.id,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/apps/chores/api/v1.0/team/{teamId}/work",
+                operationId = "route-api-submitwork",
+                pathParameterNames = listOf("teamId"),
+                requiredPathParameterNames = listOf("teamId"),
+                bodyFieldNames = listOf("work"),
+                requiredBodyFieldNames = listOf("work"),
+                bodyContentType = "application/json",
+                bodySchema = bodySchema,
+            ),
+            intent = ActionIntent.execute,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            effect = ActionEffect.unspecified,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores 0.1.0 package")),
+        )
+        val nativeSchema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(chores, team),
+            actions = listOf(completion),
+        )
+        val member = NativeStructuredValue.ObjectValue(
+            listOf(
+                NativeStructuredEntry(
+                    "member",
+                    "Member",
+                    NativeStructuredValue.Scalar("alex", NativeStructuredScalarKind.string),
+                ),
+            ),
+        )
+        val authority = NativeDatasetContext(
+            parentResourceId = team.id,
+            parentRecord = NativeRecord(
+                id = "4",
+                values = mapOf("id" to "4"),
+                structuredValues = mapOf("members" to NativeStructuredValue.ListValue(listOf(member))),
+            ),
+            currentUserId = "alex",
+        ).nativeRecordAuthorityContext(nativeSchema)
+        val plan = nativeRecordActions(
+            schema = nativeSchema,
+            resource = chores,
+            record = NativeRecord("23", mapOf("id" to "23", "name" to "Kitchen")),
+            navigationContext = mapOf("teamId" to "4"),
+            authorityContext = authority,
+            completionValueSource = NativeRecordCompletionValueSource(
+                memberUserId = "alex",
+                completionId = { "123e4567-e89b-42d3-a456-426614174000" },
+                completedAt = { "2026-08-13T10:15:30Z" },
+            ),
+        ).commands.single()
+
+        assertTrue(plan.requiresConfirmation)
+        assertFailsWith<IllegalArgumentException> { plan.request() }
+        val firstRequest = plan.request(confirmed = true)
+        assertEquals(
+            mapOf(
+                "teamId" to "4",
+                "work" to "[{\"id\":\"123e4567-e89b-42d3-a456-426614174000\",\"work_time\":\"2026-08-13T10:15:30Z\",\"chore_id\":23,\"member\":\"alex\"}]",
+            ),
+            firstRequest.values,
+        )
+        assertEquals(
+            NativePendingMutationKey(
+                actionId = "chores-completion-v1:${completion.id}",
+                targetRecordId = "23",
+            ),
+            plan.pendingMutationKey("23"),
+        )
+        assertEquals(
+            NativeChoresCompletionPostcondition(
+                teamId = "4",
+                completionId = "123e4567-e89b-42d3-a456-426614174000",
+            ),
+            nativeChoresCompletionPostcondition(
+                requireNotNull(plan.pendingMutationKey("23")),
+                firstRequest.values,
+            ),
+        )
+        assertNull(
+            nativeChoresCompletionPostcondition(
+                requireNotNull(plan.pendingMutationKey("different-chore")),
+                firstRequest.values,
+            ),
+        )
+        assertEquals(
+            firstRequest.values,
+            plan.request(confirmed = true, persistedValues = firstRequest.values).values,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            plan.request(
+                confirmed = true,
+                persistedValues = firstRequest.values + ("teamId" to "different-team"),
+            )
+        }
+        val persistenceEvents = mutableListOf<String>()
+        var stagedValues: Map<String, String>? = null
+        var postconditionVerified = false
+        val pendingStore = object : NativePendingMutationStore {
+            override suspend fun load(key: NativePendingMutationKey): Map<String, String>? {
+                persistenceEvents += "load"
+                return stagedValues
+            }
+
+            override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
+                persistenceEvents += "save"
+                stagedValues = values
+            }
+
+            override suspend fun postconditionSatisfied(
+                key: NativePendingMutationKey,
+                values: Map<String, String>,
+            ): Boolean {
+                persistenceEvents += "reconcile"
+                assertEquals(stagedValues, values)
+                return postconditionVerified
+            }
+
+            override suspend fun clear(key: NativePendingMutationKey) {
+                persistenceEvents += "clear"
+                stagedValues = null
+            }
+        }
+        val unknown = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor { request ->
+                persistenceEvents += "execute"
+                assertEquals(stagedValues, (request as NativeActionRequest.Submit).values)
+                NativeActionExecutionResult.Failure("Connection lost", NativeActionFailureOutcome.Unknown)
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertTrue(unknown is NativeActionExecutionResult.Failure)
+        assertEquals(listOf("load", "save", "execute"), persistenceEvents)
+        val retainedValues = requireNotNull(stagedValues)
+
+        persistenceEvents.clear()
+        val awaitingReconciliation = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor {
+                persistenceEvents += "execute"
+                error("A staged unknown mutation must not be submitted again.")
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertEquals(
+            NativeActionFailureOutcome.Unknown,
+            (awaitingReconciliation as NativeActionExecutionResult.Failure).outcome,
+        )
+        assertEquals(listOf("load", "reconcile"), persistenceEvents)
+        assertEquals(retainedValues, stagedValues)
+
+        persistenceEvents.clear()
+        postconditionVerified = true
+        val reconciled = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor {
+                persistenceEvents += "execute"
+                error("A reconciled mutation must not be submitted again.")
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertTrue(reconciled is NativeActionExecutionResult.Success)
+        assertEquals(listOf("load", "reconcile", "clear"), persistenceEvents)
+        assertNull(stagedValues)
+
+        persistenceEvents.clear()
+        val verifiedSuccess = executeNativeRecordCommand(
+            plan = plan,
+            targetRecordId = "23",
+            confirmed = true,
+            actionExecutor = NativeActionExecutor { request ->
+                persistenceEvents += "execute"
+                assertEquals(stagedValues, (request as NativeActionRequest.Submit).values)
+                NativeActionExecutionResult.Success()
+            },
+            pendingMutationStore = pendingStore,
+        )
+        assertTrue(verifiedSuccess is NativeActionExecutionResult.Success)
+        assertEquals(listOf("load", "save", "execute", "reconcile", "clear"), persistenceEvents)
+        assertNull(stagedValues)
+        assertTrue(
+            nativeRecordActions(
+                schema = nativeSchema.copy(app = nativeSchema.app.copy(version = "0.1.1")),
+                resource = chores,
+                record = NativeRecord("23", mapOf("id" to "23")),
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority,
+            ).commands.isEmpty(),
+        )
     }
 
     @Test

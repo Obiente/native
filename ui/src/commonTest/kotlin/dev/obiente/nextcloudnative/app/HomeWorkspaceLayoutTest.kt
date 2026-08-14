@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -36,6 +38,40 @@ class HomeWorkspaceLayoutTest {
 
         assertEquals(recent, movedToEnd.sections.last())
         assertEquals(recent, movedToStart.sections.first())
+    }
+
+    @Test
+    fun `grid drag targets the card under both pointer axes`() {
+        val original = defaultHomeWorkspaceLayout(scope(HomeFormFactor.Desktop))
+        val sourceId = original.visibleSections.first().id
+        val leftTarget = original.visibleSections[1].id
+        val rightTarget = original.visibleSections[2].id
+        val bounds = mapOf(
+            sourceId to Rect(0f, 0f, 100f, 100f),
+            leftTarget to Rect(0f, 120f, 100f, 220f),
+            rightTarget to Rect(120f, 120f, 220f, 220f),
+        )
+
+        val moved = homeWorkspaceLayoutAtDragPosition(
+            layout = original,
+            sourceId = sourceId,
+            position = Offset(170f, 170f),
+            sectionBounds = bounds,
+        )
+
+        assertEquals(
+            original.sections.indexOfFirst { section -> section.id == rightTarget },
+            moved.sections.indexOfFirst { section -> section.id == sourceId },
+        )
+        assertSame(
+            original,
+            homeWorkspaceLayoutAtDragPosition(
+                layout = original,
+                sourceId = sourceId,
+                position = Offset(110f, 170f),
+                sectionBounds = bounds,
+            ),
+        )
     }
 
     @Test

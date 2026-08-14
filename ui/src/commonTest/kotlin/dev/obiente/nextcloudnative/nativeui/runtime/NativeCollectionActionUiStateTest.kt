@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
@@ -116,6 +118,150 @@ class NativeCollectionActionUiStateTest {
                 recordId = "missing",
                 targetIndex = 1,
             ),
+        )
+    }
+
+    @Test
+    fun `pending reorder recovery accepts only a complete permutation`() {
+        val authoritative = listOf("first", "second", "third")
+
+        assertEquals(
+            listOf("third", "first", "second"),
+            validPendingNativeCollectionOrder(
+                authoritativeRecordIds = authoritative,
+                pendingRecordIds = listOf("third", "first", "second"),
+            ),
+        )
+        assertEquals(
+            null,
+            validPendingNativeCollectionOrder(
+                authoritativeRecordIds = authoritative,
+                pendingRecordIds = listOf("third", "first"),
+            ),
+        )
+        assertEquals(
+            null,
+            validPendingNativeCollectionOrder(
+                authoritativeRecordIds = authoritative,
+                pendingRecordIds = listOf("third", "third", "first"),
+            ),
+        )
+    }
+
+    @Test
+    fun `pending reorder recovery round trips durable identity and phase`() {
+        val encoded = requireNotNull(
+            encodeNativePendingCollectionReorder(
+                orderedRecordIds = listOf("third", "first", "second"),
+                recoveryRequested = true,
+            ),
+        )
+
+        assertEquals(
+            NativePendingCollectionReorder(
+                orderedRecordIds = listOf("third", "first", "second"),
+                recoveryRequested = true,
+            ),
+            decodeNativePendingCollectionReorder(encoded),
+        )
+        assertEquals(
+            null,
+            decodeNativePendingCollectionReorder(encoded + ("unexpected" to "value")),
+        )
+        assertEquals(
+            null,
+            decodeNativePendingCollectionReorder(encoded + ("orderedRecordIds" to "[\"first\",\"first\"]")),
+        )
+    }
+
+    @Test
+    fun `live drag crosses only the adjacent row midpoint`() {
+        val bounds = mapOf(
+            "first" to Rect(0f, 0f, 100f, 100f),
+            "second" to Rect(0f, 100f, 100f, 200f),
+            "third" to Rect(0f, 200f, 100f, 300f),
+        )
+
+        assertEquals(
+            listOf("first", "second", "third"),
+            moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                orderedRecordIds = listOf("first", "second", "third"),
+                recordId = "first",
+                pointerY = 140f,
+                movementY = 20f,
+                rowBounds = bounds,
+            ),
+        )
+        assertEquals(
+            listOf("second", "first", "third"),
+            moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                orderedRecordIds = listOf("first", "second", "third"),
+                recordId = "first",
+                pointerY = 280f,
+                movementY = 20f,
+                rowBounds = bounds,
+            ),
+        )
+    }
+
+    @Test
+    fun `drop target ignores retained bounds for off-screen rows`() {
+        val overlappingBounds = mapOf(
+            "offscreen" to Rect(0f, 100f, 100f, 200f),
+            "visible" to Rect(0f, 100f, 100f, 200f),
+        )
+
+        assertEquals(
+            "visible",
+            nativeVisibleReorderTargetId(
+                orderedRecordIds = listOf("offscreen", "visible"),
+                rowBounds = overlappingBounds,
+                pointerPosition = Offset(50f, 150f),
+                visibleItemKeys = setOf("visible"),
+            ),
+        )
+    }
+
+    @Test
+    fun `reorderable flat categories preserve authoritative draft order`() {
+        val rows = listOf(
+            categoryRow("3", "Zulu"),
+            categoryRow("1", "Alpha"),
+            categoryRow("2", "Middle"),
+        )
+
+        assertEquals(
+            listOf("3", "1", "2"),
+            nativeCategoryRowsForDisplay(
+                rows = rows,
+                expandedIds = emptySet(),
+                preserveAuthoritativeOrder = true,
+            ).map { row -> row.record.id },
+        )
+        assertEquals(
+            listOf("1", "2", "3"),
+            nativeCategoryRowsForDisplay(
+                rows = rows,
+                expandedIds = emptySet(),
+                preserveAuthoritativeOrder = false,
+            ).map { row -> row.record.id },
+        )
+    }
+
+    @Test
+    fun `category hierarchy remains projected when order preservation is requested`() {
+        val rows = listOf(
+            categoryRow("child", "Child", parentId = "parent"),
+            categoryRow("parent", "Parent"),
+        )
+
+        assertEquals(
+            listOf("parent", "child"),
+            nativeCategoryRowsForDisplay(
+                rows = rows,
+                expandedIds = setOf("parent"),
+                preserveAuthoritativeOrder = true,
+            ).map { row -> row.record.id },
         )
     }
 
@@ -331,4 +477,22 @@ class NativeCollectionActionUiStateTest {
             ),
         )
     }
+
+    private fun categoryRow(
+        id: String,
+        name: String,
+        parentId: String? = null,
+    ): Pair<NativeRecord, NativeCategoryPresentation> = NativeRecord(
+        id = id,
+        values = mapOf("id" to id, "name" to name),
+    ) to NativeCategoryPresentation(
+        name = name,
+        kind = NativeCategoryKind.Other,
+        parentId = parentId,
+        transactionCount = null,
+        shared = false,
+        writable = true,
+        sharedBy = null,
+        mutedFromReports = false,
+    )
 }

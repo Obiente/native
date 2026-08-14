@@ -33,6 +33,55 @@ import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
     @Test
+    fun dedicatedCollectionUsesTheSameFilteredRecordsAsItsSearchBar() {
+        val first = NativeRecord(id = "1", values = mapOf("name" to "Kitchen"))
+        val second = NativeRecord(id = "2", values = mapOf("name" to "Garden"))
+
+        val filtered = assertIs<NativeScreenState.Ready>(
+            nativeDedicatedCollectionState(
+                state = NativeScreenState.Ready(listOf(first, second)),
+                presentedRecords = listOf(first, second),
+                visiblePresentedRecords = listOf(second),
+                searchableCollection = true,
+            ),
+        )
+        val unfiltered = assertIs<NativeScreenState.Ready>(
+            nativeDedicatedCollectionState(
+                state = NativeScreenState.Ready(listOf(first, second)),
+                presentedRecords = listOf(first, second),
+                visiblePresentedRecords = listOf(second),
+                searchableCollection = false,
+            ),
+        )
+
+        assertEquals(listOf(second), filtered.records)
+        assertEquals(listOf(first, second), unfiltered.records)
+    }
+
+    @Test
+    fun enumSearchMatchesTheLabelsShownToUsers() {
+        val field = FieldSpec(
+            id = "repeat",
+            label = "Repeat",
+            kind = FieldKind.enumeration,
+            required = true,
+            readOnly = false,
+            enumValues = listOf("d:1", "w:1", "m:1"),
+            enumLabels = mapOf(
+                "d:1" to "Every day",
+                "w:1" to "Every week",
+                "m:1" to "Every month",
+            ),
+        )
+
+        assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "week"))
+        assertEquals(listOf("d:1", "w:1", "m:1"), nativeEnumOptionsMatchingQuery(field, "every"))
+        assertEquals(listOf("w:1"), nativeEnumOptionsMatchingQuery(field, "w:1"))
+        assertEquals("Every week", nativeEnumOptionLabel(field, "w:1"))
+        assertEquals("Custom Value", nativeEnumOptionLabel(field, "custom-value"))
+    }
+
+    @Test
     fun collectionSearchMatchesMeaningfulRecordContentAndIgnoresTechnicalFields() {
         val resource = ResourceSpec(
             id = "entries",
@@ -1071,6 +1120,66 @@ class GenericNativeRendererStateTest {
                 NativeRelationOption("collection-9", "Later", "Collections"),
             ),
             options,
+        )
+    }
+
+    @Test
+    fun contextualTypedChoicesRenderHiddenUserIdsWithoutADeclaredTopLevelResource() {
+        val chores = ResourceSpec(
+            id = "chores",
+            name = "Chores",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec(
+                    id = "assignee",
+                    label = "Assignee",
+                    kind = FieldKind.userReference,
+                    required = false,
+                    readOnly = false,
+                ),
+            ),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "test",
+            app = AppIdentity("synthetic", "Synthetic", "test"),
+            confidence = Confidence.verified,
+            resources = listOf(chores),
+        )
+        val context = NativeDatasetContext(
+            fieldChoices = mapOf(
+                "assignee" to listOf(
+                    NativeFieldChoice("sam", "Sam", "Team member"),
+                    NativeFieldChoice("alex", "Alex", "Team member"),
+                ),
+            ),
+        )
+
+        assertTrue(nativeRelationFieldRequiresChoice(chores.fields.single(), chores, schema, context))
+        assertTrue(nativeRelationChoicesLoaded(chores.fields.single(), chores, schema, context))
+        assertTrue(nativeRelationChoiceSourceHasRecords(chores.fields.single(), chores, schema, context))
+        assertNull(nativeRelationChoiceUnavailableReason(chores.fields.single(), chores, schema, context))
+        assertEquals(
+            listOf(
+                NativeRelationOption("alex", "Alex", "Team member"),
+                NativeRelationOption("sam", "Sam", "Team member"),
+            ),
+            nativeRelationOptions(chores.fields.single(), chores, schema, context),
+        )
+        assertEquals(
+            NativeRelationChoiceUnavailableReason.duplicateValue,
+            nativeRelationChoiceUnavailableReason(
+                chores.fields.single(),
+                chores,
+                schema,
+                context.copy(
+                    fieldChoices = mapOf(
+                        "assignee" to listOf(
+                            NativeFieldChoice("alex", "Alex"),
+                            NativeFieldChoice("alex", "Alex duplicate"),
+                        ),
+                    ),
+                ),
+            ),
         )
     }
 

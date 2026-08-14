@@ -101,6 +101,7 @@ import com.mohamedrejeb.richeditor.annotation.ExperimentalRichTextApi
 import com.mohamedrejeb.richeditor.ui.material3.RichText
 import dev.obiente.nextcloudnative.app.design.BoardDragVerticalScrollTarget
 import dev.obiente.nextcloudnative.app.design.NextcloudBoardDragAutoScroll
+import dev.obiente.nextcloudnative.app.design.NextcloudVerticalDragAutoScroll
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
@@ -148,6 +149,12 @@ internal val LocalNativeFinanceCurrency = compositionLocalOf<String?> { null }
 fun interface NativeImageLoader {
     suspend fun load(relativePath: String): ImageBitmap?
 }
+
+data class NativeWorkspaceNavigationItem(
+    val id: String,
+    val label: String,
+    val selected: Boolean,
+)
 
 data class NativeRecordImagePreview(
     val image: ImageBitmap,
@@ -206,6 +213,7 @@ internal fun NativeDatasetContext.withCollectionBatchRelationRecords(
     // parent or an earlier form and therefore must never satisfy this dialog accidentally.
     relatedRecords = recordsByResourceId,
     relatedRecordPaging = emptyMap(),
+    fieldChoices = emptyMap(),
 )
 
 /**
@@ -240,8 +248,16 @@ fun GenericNativeAppScreen(
     audioPlayer: NativeAudioRecordPlayer? = null,
     mediaArtworkResolver: NativeMediaArtworkResolver? = null,
     mutationReconciliationGeneration: Int = 0,
+    pendingMutationStore: NativePendingMutationStore? = null,
     collectionBatchRelationLoader: NativeCollectionBatchRelationLoader? = null,
+    workspaceNavigationItems: List<NativeWorkspaceNavigationItem> = emptyList(),
+    onWorkspaceNavigate: ((String) -> Unit)? = null,
 ) {
+    var pendingCollectionReorderActionId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCollectionReorderResourceId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCollectionReorderScopeId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCollectionReorderIds by rememberSaveable(schema.app.id) { mutableStateOf<List<String>?>(null) }
+    var pendingCollectionReorderRecoveryRequested by rememberSaveable(schema.app.id) { mutableStateOf(false) }
     val resource = schema.resource(view.resourceId)
     val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
         NativeBoardMoveReconciliation()
@@ -312,6 +328,27 @@ fun GenericNativeAppScreen(
             }
         }
     }
+    val dedicatedPresentedState = nativeDedicatedCollectionState(
+        state = state,
+        presentedRecords = presentedRecords,
+        visiblePresentedRecords = visiblePresentedRecords,
+        searchableCollection = searchableCollection,
+    )
+    val choresWorkspace = presentedResource
+        ?.takeUnless {
+            searchableCollection && collectionQuery.isNotBlank() && visiblePresentedRecords.isEmpty()
+        }
+        ?.let { resourceSpec ->
+            nativeChoresPresentation(schema, view, resourceSpec, dedicatedPresentedState)
+        }
+    val rosterPresentation = choresWorkspace
+        ?.takeIf { presentation -> presentation.kind == NativeChoresWorkspaceKind.Team }
+        ?.let {
+            (dedicatedPresentedState as? NativeScreenState.Ready)
+                ?.records
+                ?.singleOrNull()
+                ?.let(::nativeRosterPresentation)
+        }
     LaunchedEffect(
         collectionQuery,
         visiblePresentedRecords.size,
@@ -412,6 +449,7 @@ fun GenericNativeAppScreen(
         if (plan.requiresConfirmation) {
             pendingRecordCommandAction = PendingNativeRecordCommandAction(
                 plan = plan,
+                targetRecordId = record.id,
                 itemLabel = itemLabel,
             )
             return@command
@@ -428,6 +466,7 @@ fun GenericNativeAppScreen(
                         }
                         pendingRecordCommandAction = PendingNativeRecordCommandAction(
                             plan = plan,
+                            targetRecordId = record.id,
                             itemLabel = itemLabel,
                             initialError = result.message,
                             initialFailureOutcome = result.outcome,
@@ -439,7 +478,7 @@ fun GenericNativeAppScreen(
             }
         }
     }
-    val collectionCreatePlan = presentedResource
+    val collectionCreateCandidate = presentedResource
         ?.takeIf { showCollectionCreateAction }
         ?.let { resource ->
         nativeRecordActions(
@@ -447,6 +486,31 @@ fun GenericNativeAppScreen(
             resource = resource,
             navigationContext = datasetContext.bindingValues,
         ).create
+    }
+    val collectionCreateRecoveryPlan = collectionCreateCandidate?.let { createPlan ->
+        val activeReadAction = schema.action(view.sourceActionId) ?: return@let null
+        nativeCreateMutationRecoveryPlan(
+            schema = schema,
+            activeReadAction = activeReadAction,
+            resource = presentedResource,
+            createPlan = createPlan,
+            records = presentedRecords,
+            navigationContext = datasetContext.bindingValues,
+            collectionComplete = onLoadMore == null,
+        ) ?: nativeChoresInviteMutationRecoveryPlan(
+            schema = schema,
+            activeReadAction = activeReadAction,
+            resource = presentedResource,
+            createPlan = createPlan,
+            records = presentedRecords,
+            navigationContext = datasetContext.bindingValues,
+            collectionComplete = onLoadMore == null,
+        )
+    }
+    // Non-idempotent creates remain unavailable until the active collection supplies the exact
+    // complete baseline and request shape needed for durable postcondition reconciliation.
+    val collectionCreatePlan = collectionCreateCandidate?.takeIf {
+        collectionCreateRecoveryPlan != null
     }
     val openCollectionCreate: (() -> Unit)? = collectionCreatePlan?.let { plan ->
         val actionResource = presentedResource
@@ -468,6 +532,7 @@ fun GenericNativeAppScreen(
         datasetContext.bindingValues,
         datasetContext.parentResourceId,
         datasetContext.parentRecord,
+        datasetContext.currentUserId,
         onLoadMore,
         presentedSurface,
         nestedBoard,
@@ -565,6 +630,13 @@ fun GenericNativeAppScreen(
                 intent = plan.action.intent,
                 recordId = record?.id,
             ) ?: return@pending null
+            val createMutationRecoveryPlan = if (plan.kind == NativeRecordFormActionKind.Create) {
+                collectionCreateRecoveryPlan?.takeIf { recoveryPlan ->
+                    recoveryPlan.action.id == plan.action.id
+                } ?: return@pending null
+            } else {
+                null
+            }
             PendingNativeRecordFormAction(
                 plan = plan,
                 itemLabel = record
@@ -574,6 +646,7 @@ fun GenericNativeAppScreen(
                 datasetContext = datasetContext,
                 restoreKey = pendingRecordFormActionToken.orEmpty(),
                 mutationRecoveryOwner = mutationRecoveryOwner,
+                createMutationRecoveryPlan = createMutationRecoveryPlan,
             )
         }
     val pendingRecordCommandFormAction = pendingRecordCommandFormActionToken
@@ -728,6 +801,57 @@ fun GenericNativeAppScreen(
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when {
             presentedResource == null -> GenericRendererError("This view references an unknown resource.")
+            choresWorkspace != null && !showSelectedRecordDetail -> NativeChoresWorkspaceSurface(
+                presentation = choresWorkspace,
+                onSelectRecord = onSelectRecord,
+                recordActions = { record ->
+                    nativeRecordCardActions(
+                        capabilities = nativeRecordActions(
+                            schema = schema,
+                            resource = presentedResource,
+                            record = record,
+                            navigationContext = datasetContext.bindingValues,
+                            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+                        ),
+                        record = record,
+                        onEditRecord = openRecordEdit,
+                        onDeleteRecord = openRecordDelete,
+                        onCommandRecord = executeRecordCommand,
+                        onCommandFormRecord = openRecordCommandForm,
+                    )
+                },
+                navigationItems = workspaceNavigationItems,
+                onNavigate = onWorkspaceNavigate,
+                createLabel = collectionCreatePlan?.action?.label,
+                onCreate = openCollectionCreate,
+                roster = rosterPresentation,
+                rosterMemberActions = { person ->
+                    val teamRecord = datasetContext.parentRecord
+                    val plan = teamRecord?.let { record ->
+                        nativeChoresRosterMemberRemovalPlan(
+                            schema = schema,
+                            teamRecord = record,
+                            person = person,
+                            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+                        )
+                    }
+                    listOfNotNull(
+                        plan?.let { removal ->
+                            NextcloudCardAction(
+                                label = "Remove member",
+                                semanticId = removal.action.id,
+                                destructive = true,
+                                onClick = {
+                                    pendingRecordDeleteAction = PendingNativeRecordDeleteAction(
+                                        plan = removal,
+                                        itemLabel = person.displayName,
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            )
             mailWorkspacePlan != null && state is NativeScreenState.Loading ->
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
@@ -837,6 +961,41 @@ fun GenericNativeAppScreen(
                     reorder = collectionActionCapabilities.reorder.takeIf {
                         collectionQuery.isBlank()
                     },
+                    pendingCollectionReorderOrder = collectionActionCapabilities.reorder
+                        ?.takeIf { plan ->
+                            val key = nativePendingCollectionReorderKey(plan, presentedResource.id)
+                            pendingCollectionReorderActionId == plan.action.id &&
+                                pendingCollectionReorderResourceId == presentedResource.id &&
+                                pendingCollectionReorderScopeId == key.targetRecordId
+                        }
+                        ?.let { pendingCollectionReorderIds },
+                    pendingCollectionReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+                    onPendingCollectionReorderChanged = { plan, orderedRecordIds, recoveryRequested ->
+                        val scopeId = nativePendingCollectionReorderKey(
+                            plan,
+                            presentedResource.id,
+                        ).targetRecordId
+                        if (orderedRecordIds == null) {
+                            if (
+                                pendingCollectionReorderActionId == plan.action.id &&
+                                pendingCollectionReorderResourceId == presentedResource.id &&
+                                pendingCollectionReorderScopeId == scopeId
+                            ) {
+                                pendingCollectionReorderActionId = null
+                                pendingCollectionReorderResourceId = null
+                                pendingCollectionReorderScopeId = null
+                                pendingCollectionReorderIds = null
+                                pendingCollectionReorderRecoveryRequested = false
+                            }
+                        } else {
+                            pendingCollectionReorderActionId = plan.action.id
+                            pendingCollectionReorderResourceId = presentedResource.id
+                            pendingCollectionReorderScopeId = scopeId
+                            pendingCollectionReorderIds = orderedRecordIds.toCollection(ArrayList())
+                            pendingCollectionReorderRecoveryRequested = recoveryRequested
+                        }
+                    },
+                    pendingMutationStore = pendingMutationStore,
                     authoritativeRecordsKey = NativeAuthoritativeRecordsKey(presentedRecords),
                     onLoadMore = onLoadMore,
                     loadingMore = loadingMore,
@@ -917,6 +1076,7 @@ fun GenericNativeAppScreen(
             schema = schema,
             actionExecutor = actionExecutor,
             filePicker = filePicker,
+            pendingMutationStore = pendingMutationStore,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
                 activeMutationOwners += owner
@@ -945,6 +1105,7 @@ fun GenericNativeAppScreen(
             schema = schema,
             actionExecutor = actionExecutor,
             filePicker = filePicker,
+            pendingMutationStore = pendingMutationStore,
             mutationRecovery = formMutationRecovery,
             onMutationStarted = { owner ->
                 activeMutationOwners += owner
@@ -985,6 +1146,7 @@ fun GenericNativeAppScreen(
         GenericRecordCommandActionDialog(
             pending = pending,
             actionExecutor = actionExecutor,
+            pendingMutationStore = pendingMutationStore,
             onDismiss = { pendingRecordCommandAction = null },
             onActionSucceeded = { action ->
                 pendingRecordCommandAction = null
@@ -1877,6 +2039,7 @@ private data class PendingNativeRecordFormAction(
     override val datasetContext: NativeDatasetContext,
     override val restoreKey: String,
     override val mutationRecoveryOwner: NativeFormMutationRecoveryOwner,
+    val createMutationRecoveryPlan: NativeCreateMutationRecoveryPlan?,
 ) : PendingNativeRecordActionForm {
     override val action: ActionSpec
         get() = plan.action
@@ -2051,6 +2214,7 @@ private data class PendingNativeRecordDeleteAction(
 
 private data class PendingNativeRecordCommandAction(
     val plan: NativeRecordCommandActionPlan,
+    val targetRecordId: String,
     val itemLabel: String,
     val initialError: String? = null,
     val initialFailureOutcome: NativeActionFailureOutcome? = null,
@@ -2062,6 +2226,7 @@ private fun GenericRecordActionFormDialog(
     schema: NativeAppSchema,
     actionExecutor: NativeActionExecutor,
     filePicker: NativeFileFieldPicker?,
+    pendingMutationStore: NativePendingMutationStore?,
     mutationRecovery: NativeFormMutationRecoveryState?,
     onMutationStarted: (NativeFormMutationRecoveryOwner) -> Unit,
     onMutationFinished: (NativeFormMutationRecoveryOwner, NativeActionExecutionResult) -> Unit,
@@ -2071,11 +2236,13 @@ private fun GenericRecordActionFormDialog(
     val scalarFields = remember(pending.fields) {
         pending.fields.filter { field -> field.repeatableObjectInput == null }
     }
-    val displayFields = remember(pending.fields, pending.resource, schema) {
+    val displayFields = remember(pending.fields, pending.resource, pending.datasetContext, schema) {
         nativeFormDisplayFields(
             fields = pending.fields,
             relationFieldIds = pending.fields
-                .filter { field -> nativeRelationFieldRequiresChoice(field, pending.resource, schema) }
+                .filter { field ->
+                    nativeRelationFieldRequiresChoice(field, pending.resource, schema, pending.datasetContext)
+                }
                 .mapTo(linkedSetOf(), FieldSpec::id),
         )
     }
@@ -2125,6 +2292,14 @@ private fun GenericRecordActionFormDialog(
     var submitting by remember(pending) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val operation = pending.operationLabel
+    val formTitle = if (
+        pending is PendingNativeRecordFormAction &&
+        pending.plan.kind == NativeRecordFormActionKind.Create
+    ) {
+        pending.action.label
+    } else {
+        "$operation ${pending.itemLabel}"
+    }
 
     fun submit(confirmed: Boolean) {
         val request = runCatching {
@@ -2141,7 +2316,26 @@ private fun GenericRecordActionFormDialog(
         error = null
         onMutationStarted(pending.mutationRecoveryOwner)
         scope.launch {
-            val result = actionExecutor.execute(request)
+            val createRecoveryPlan = (pending as? PendingNativeRecordFormAction)
+                ?.createMutationRecoveryPlan
+            val result = if (createRecoveryPlan != null) {
+                val store = pendingMutationStore
+                if (store == null) {
+                    NativeActionExecutionResult.Failure(
+                        "Crash-safe create staging is unavailable on this platform.",
+                        NativeActionFailureOutcome.Rejected,
+                    )
+                } else {
+                    executeNativeCreateMutation(
+                        plan = createRecoveryPlan,
+                        request = request,
+                        actionExecutor = actionExecutor,
+                        pendingMutationStore = store,
+                    )
+                }
+            } else {
+                actionExecutor.execute(request)
+            }
             onMutationFinished(pending.mutationRecoveryOwner, result)
             when (result) {
                 is NativeActionExecutionResult.Success -> onActionSucceeded(pending.action)
@@ -2167,7 +2361,7 @@ private fun GenericRecordActionFormDialog(
                 } else if (awaitingConfirmation) {
                     "Confirm ${operation.lowercase()}"
                 } else {
-                    "$operation ${pending.itemLabel}"
+                    formTitle
                 },
             )
         },
@@ -2215,7 +2409,14 @@ private fun GenericRecordActionFormDialog(
                                 schema = schema,
                                 context = pending.datasetContext,
                             )
-                            if (nativeRelationFieldRequiresChoice(field, pending.resource, schema)) {
+                            if (
+                                nativeRelationFieldRequiresChoice(
+                                    field,
+                                    pending.resource,
+                                    schema,
+                                    pending.datasetContext,
+                                )
+                            ) {
                                 GenericRelationshipField(
                                     field = field,
                                     value = values[field.id].orEmpty(),
@@ -2450,11 +2651,16 @@ private fun GenericRecordDeleteActionDialog(
 private fun GenericRecordCommandActionDialog(
     pending: PendingNativeRecordCommandAction,
     actionExecutor: NativeActionExecutor,
+    pendingMutationStore: NativePendingMutationStore?,
     onDismiss: () -> Unit,
     onActionSucceeded: (ActionSpec) -> Unit,
     onOutcomeUnknown: (ActionSpec) -> Unit,
 ) {
-    val ui = nativeRecordCommandUi(pending.plan.effect, pending.itemLabel)
+    val ui = nativeRecordCommandUi(
+        effect = pending.plan.effect,
+        itemLabel = pending.itemLabel,
+        actionLabel = pending.plan.action.label,
+    )
     var error by remember(pending) { mutableStateOf(pending.initialError) }
     var failureOutcome by remember(pending) { mutableStateOf(pending.initialFailureOutcome) }
     var executing by remember(pending) { mutableStateOf(false) }
@@ -2511,11 +2717,20 @@ private fun GenericRecordCommandActionDialog(
                         error = null
                         failureOutcome = null
                         scope.launch {
-                            when (
-                                val result = actionExecutor.execute(
-                                    pending.plan.request(confirmed = pending.plan.requiresConfirmation),
+                            val result = runCatching {
+                                executeNativeRecordCommand(
+                                    plan = pending.plan,
+                                    targetRecordId = pending.targetRecordId,
+                                    confirmed = pending.plan.requiresConfirmation,
+                                    actionExecutor = actionExecutor,
+                                    pendingMutationStore = pendingMutationStore,
                                 )
-                            ) {
+                            }.getOrElse { failure ->
+                                error = failure.message ?: "The action could not be staged safely."
+                                executing = false
+                                return@launch
+                            }
+                            when (result) {
                                 is NativeActionExecutionResult.Success -> {
                                     onActionSucceeded(pending.plan.action)
                                 }
@@ -3166,57 +3381,68 @@ private fun GenericRecordList(
     reorder: NativeCollectionReorderActionPlan? = null,
     actionExecutor: NativeActionExecutor? = null,
     onActionSucceeded: ((ActionSpec) -> Unit)? = null,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey = NativeAuthoritativeRecordsKey(records),
+    pendingReorderOrder: List<String>? = null,
+    pendingReorderRecoveryRequested: Boolean = false,
+    onPendingReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit =
+        { _, _, _ -> },
+    pendingMutationStore: NativePendingMutationStore? = null,
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
     loadMoreError: String? = null,
 ) {
     val authoritativeOrder = remember(records) { records.map(NativeRecord::id) }
-    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
-        mutableStateOf(authoritativeOrder)
-    }
+    val activeReorder = reorder.takeIf { actionExecutor != null && pendingMutationStore != null }
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
+    var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
-    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
-    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
-    val scope = rememberCoroutineScope()
+    var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
     val listState = rememberLazyListState()
     val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
-    val displayedRecords = remember(recordsById, orderedRecordIds, reorder) {
-        if (reorder == null) records else orderedRecordIds.mapNotNull(recordsById::get)
+    val reorderState = rememberNativeDurableCollectionReorderState(
+        plan = activeReorder,
+        resourceId = resource.id,
+        authoritativeOrder = authoritativeOrder,
+        authoritativeRecordsKey = authoritativeRecordsKey,
+        draggingRecordId = draggingRecordId,
+        pendingOrder = pendingReorderOrder,
+        pendingRecoveryRequested = pendingReorderRecoveryRequested,
+        actionExecutor = actionExecutor ?: NativeActionExecutor {
+            NativeActionExecutionResult.Failure(
+                "Order changes are unavailable.",
+                NativeActionFailureOutcome.Rejected,
+            )
+        },
+        pendingMutationStore = pendingMutationStore,
+        onPendingChanged = onPendingReorderChanged,
+        onActionSucceeded = onActionSucceeded,
+    )
+    val displayedRecords = remember(recordsById, reorderState.orderedRecordIds, activeReorder) {
+        if (activeReorder == null) records else reorderState.orderedRecordIds.mapNotNull(recordsById::get)
     }
-    val submitReorder: () -> Unit = submit@{
-        val plan = reorder ?: return@submit
-        val executor = actionExecutor ?: return@submit
-        val submittedOrder = orderedRecordIds
-        if (submittedOrder == authoritativeOrder) return@submit
-        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
-            reorderError = failure.message ?: "The new order could not be submitted."
-            orderedRecordIds = authoritativeOrder
-            return@submit
-        }
-        reorderExecuting = true
-        reorderError = null
-        scope.launch {
-            when (val result = executor.execute(request)) {
-                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
-                is NativeActionExecutionResult.Failure -> {
-                    reorderError = result.message
-                    orderedRecordIds = authoritativeOrder
-                    if (result.outcome.requiresMutationReconciliation()) {
-                        onActionSucceeded?.invoke(plan.action)
-                    }
-                }
-            }
-            reorderExecuting = false
-        }
-    }
-    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
-        if (draggingRecordId == null && !reorderExecuting) {
-            orderedRecordIds = authoritativeOrder
-            reorderError = null
+    fun moveDraggedRecord(position: Offset) {
+        val recordId = draggingRecordId ?: return
+        val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { item -> item.key as? String }
+            .toSet()
+        val targetId = nativeVisibleReorderTargetId(
+            orderedRecordIds = reorderState.orderedRecordIds,
+            rowBounds = rowBounds,
+            pointerPosition = position,
+            visibleItemKeys = visibleItemKeys,
+        )
+        val targetIndex = targetId?.let(reorderState.orderedRecordIds::indexOf) ?: -1
+        if (targetIndex >= 0 && targetId != recordId) {
+            reorderState.updateOrder(
+                moveNativeCollectionRecordToIndex(
+                    orderedRecordIds = reorderState.orderedRecordIds,
+                    recordId = recordId,
+                    targetIndex = targetIndex,
+                ),
+            )
         }
     }
     NativeCollectionAutoPager(
@@ -3226,8 +3452,17 @@ private fun GenericRecordList(
         loadingMore = loadingMore,
         loadMoreError = loadMoreError,
     )
+    NextcloudVerticalDragAutoScroll(
+        activeDragKey = draggingRecordId,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        viewport = listBounds,
+        scrollState = listState,
+    )
     LazyColumn(
-        modifier = modifier,
+        modifier = modifier.onGloballyPositioned { coordinates ->
+            listBounds = coordinates.boundsInWindow()
+        },
         state = listState,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
@@ -3240,13 +3475,14 @@ private fun GenericRecordList(
             else NextcloudSpacing.Small,
         ),
     ) {
-        reorderError?.let { message ->
+        reorderState.error?.let { message ->
             item(key = "collection-reorder-error") {
-                Text(
-                    message,
+                NativeCollectionReorderRecoveryMessage(
+                    message = message,
+                    recoveryAvailable = reorderState.recoveryAvailable,
+                    retryRecovery = reorderState.retryRecovery,
+                    discardRecovery = reorderState.discardRecovery,
                     modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
@@ -3265,45 +3501,46 @@ private fun GenericRecordList(
                         rowBounds[record.id] = coordinates.boundsInWindow()
                     }
                     .graphicsLayer { alpha = if (dragging) 0.56f else 1f },
-                leadingContent = reorder?.takeUnless { reorderExecuting }?.let {
+                leadingContent = activeReorder?.takeUnless { reorderState.executing }?.let {
                     {
                         NextcloudBoardDragHandle(
                             itemLabel = nativeRecordPresentation(resource, record).title,
                             dragActive = dragging,
                             onDragStart = { position ->
                                 draggingRecordId = record.id
+                                dragOrigin = position
                                 dragPosition = position
-                                reorderError = null
                             },
                             onDrag = { delta ->
                                 val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                 dragPosition = position
-                                val targetId = orderedRecordIds.firstOrNull { id ->
-                                    rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
-                                }
-                                val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
-                                if (targetIndex >= 0 && targetId != draggingRecordId) {
-                                    orderedRecordIds = moveNativeCollectionRecordToIndex(
-                                        orderedRecordIds = orderedRecordIds,
+                                reorderState.updateOrder(
+                                    moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                        orderedRecordIds = reorderState.orderedRecordIds,
                                         recordId = record.id,
-                                        targetIndex = targetIndex,
-                                    )
-                                }
+                                        pointerY = position.y,
+                                        movementY = delta.y,
+                                        rowBounds = rowBounds,
+                                    ),
+                                )
                             },
                             onDragEnd = {
+                                dragPosition?.let(::moveDraggedRecord)
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
-                                submitReorder()
+                                reorderState.submit(reorderState.orderedRecordIds)
                             },
                             onDragCancel = {
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
-                                orderedRecordIds = authoritativeOrder
+                                reorderState.updateOrder(authoritativeOrder)
                             },
                         )
                     }
                 },
-                busy = reorderExecuting,
+                busy = reorderState.executing,
             )
         }
         NativeCollectionPagingFooter(
@@ -3511,6 +3748,10 @@ private fun GenericRecordCollection(
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
     reorder: NativeCollectionReorderActionPlan?,
+    pendingCollectionReorderOrder: List<String>?,
+    pendingCollectionReorderRecoveryRequested: Boolean,
+    onPendingCollectionReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingMutationStore: NativePendingMutationStore?,
     authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
@@ -3542,6 +3783,10 @@ private fun GenericRecordCollection(
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
             reorder = reorder,
+            pendingReorderOrder = pendingCollectionReorderOrder,
+            pendingReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+            onPendingReorderChanged = onPendingCollectionReorderChanged,
+            pendingMutationStore = pendingMutationStore,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -3563,13 +3808,21 @@ private fun GenericRecordCollection(
             schema = schema,
             resource = resource,
             rows = categories,
+            authoritativeRecordsKey = authoritativeRecordsKey,
             navigationContext = datasetContext.bindingValues,
             authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+            actionExecutor = actionExecutor,
+            onActionSucceeded = onInlineActionSucceeded,
             onSelectRecord = onSelectRecord,
             onEditRecord = onEditRecord,
             onDeleteRecord = onDeleteRecord,
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
+            reorder = reorder,
+            pendingReorderOrder = pendingCollectionReorderOrder,
+            pendingReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+            onPendingReorderChanged = onPendingCollectionReorderChanged,
+            pendingMutationStore = pendingMutationStore,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -3651,6 +3904,11 @@ private fun GenericRecordCollection(
                 reorder = reorder,
                 actionExecutor = actionExecutor,
                 onActionSucceeded = onInlineActionSucceeded,
+                authoritativeRecordsKey = authoritativeRecordsKey,
+                pendingReorderOrder = pendingCollectionReorderOrder,
+                pendingReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+                onPendingReorderChanged = onPendingCollectionReorderChanged,
+                pendingMutationStore = pendingMutationStore,
                 onLoadMore = onLoadMore,
                 loadingMore = loadingMore,
                 loadMoreError = loadMoreError,
@@ -3837,7 +4095,7 @@ private enum class NativeCategoryFilter(val label: String) {
     Income("Income"),
 }
 
-private data class NativeCategoryRow(
+internal data class NativeCategoryRow(
     val record: NativeRecord,
     val presentation: NativeCategoryPresentation,
     val depth: Int,
@@ -3869,33 +4127,339 @@ private fun flattenNativeCategoryRows(
     return output
 }
 
+/**
+ * Keeps a verified flat collection in its authoritative order while a reorder draft is active.
+ *
+ * Category hierarchy presentation normally sorts siblings by name. Applying that projection to a
+ * reorderable flat collection hides every drag-state update by immediately sorting the rows back
+ * into their previous visual positions. Hierarchical collections remain projected and sorted;
+ * their partial tree traversal is not eligible for the complete-order mutation in the first place.
+ */
+internal fun nativeCategoryRowsForDisplay(
+    rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    expandedIds: Set<String>,
+    preserveAuthoritativeOrder: Boolean,
+): List<NativeCategoryRow> {
+    val knownIds = rows.mapTo(hashSetOf()) { (record, _) -> record.id }
+    val hasHierarchy = rows.any { (_, category) -> category.parentId in knownIds }
+    return if (preserveAuthoritativeOrder && !hasHierarchy) {
+        rows.map { (record, category) ->
+            NativeCategoryRow(record, category, depth = 0, hasChildren = false)
+        }
+    } else {
+        flattenNativeCategoryRows(rows, expandedIds)
+    }
+}
+
 @Composable
 private fun GenericCategoryCollection(
     schema: NativeAppSchema,
     resource: ResourceSpec,
     rows: List<Pair<NativeRecord, NativeCategoryPresentation>>,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     navigationContext: Map<String, String>,
     authorityContext: NativeRecordAuthorityContext?,
+    actionExecutor: NativeActionExecutor,
+    onActionSucceeded: ((ActionSpec) -> Unit)?,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     onEditRecord: (NativeRecord, NativeRecordFormActionPlan) -> Unit,
     onDeleteRecord: (NativeRecord, NativeRecordDeleteActionPlan) -> Unit,
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
+    reorder: NativeCollectionReorderActionPlan?,
+    pendingReorderOrder: List<String>?,
+    pendingReorderRecoveryRequested: Boolean,
+    onPendingReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingMutationStore: NativePendingMutationStore?,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
 ) {
+    val scope = rememberCoroutineScope()
     var filter by rememberSaveable(resource.id) { mutableStateOf(NativeCategoryFilter.All) }
     val parentIds = remember(rows) {
         val knownIds = rows.map { (record, _) -> record.id }.toSet()
         rows.mapNotNull { (_, category) -> category.parentId?.takeIf(knownIds::contains) }.toSet()
     }
+    // A collection reorder payload must describe the complete authoritative order. Filtered and
+    // hierarchical category projections are intentionally excluded because their visible order is
+    // only a subset or a tree traversal, not the server's declared flat collection order.
+    val activeReorder = reorder.takeIf {
+        parentIds.isEmpty() && filter == NativeCategoryFilter.All && pendingMutationStore != null
+    }
+    val authoritativeOrder = remember(authoritativeRecordsKey) { rows.map { (record, _) -> record.id } }
+    val rowsById = remember(rows) { rows.associateBy { (record, _) -> record.id } }
+    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf(authoritativeOrder)
+    }
+    var draggingRecordId by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf<String?>(null)
+    }
+    var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
+    var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
+    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
+    var reorderRecoveryAvailable by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var reorderRequestInFlight by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var durableRestoreChecked by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf(activeReorder == null)
+    }
+    val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
+    var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
+    val listState = rememberLazyListState()
+    val displayedRows = remember(rows, rowsById, orderedRecordIds, activeReorder) {
+        if (activeReorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
+    }
+    LaunchedEffect(activeReorder?.action?.id, resource.id, pendingMutationStore) {
+        val plan = activeReorder
+        val store = pendingMutationStore
+        if (plan == null || store == null) {
+            durableRestoreChecked = true
+            return@LaunchedEffect
+        }
+        durableRestoreChecked = false
+        reorderExecuting = true
+        val pending = runCatching {
+            store.load(nativePendingCollectionReorderKey(plan, resource.id))
+        }.getOrElse { failure ->
+            reorderError = failure.message ?: "The saved order recovery marker could not be read."
+            reorderRecoveryAvailable = true
+            durableRestoreChecked = true
+            return@LaunchedEffect
+        }
+        if (pending == null) {
+            onPendingReorderChanged(plan, null, false)
+            reorderExecuting = false
+            reorderRecoveryAvailable = false
+        } else {
+            val restored = decodeNativePendingCollectionReorder(pending)
+            if (restored == null) {
+                reorderError = "The saved order recovery marker is invalid."
+                reorderRecoveryAvailable = true
+            } else {
+                onPendingReorderChanged(
+                    plan,
+                    restored.orderedRecordIds,
+                    restored.recoveryRequested,
+                )
+            }
+        }
+        durableRestoreChecked = true
+    }
+    fun submitReorder(submittedOrder: List<String> = orderedRecordIds) {
+        val plan = activeReorder ?: return
+        val store = pendingMutationStore ?: return
+        if (submittedOrder == authoritativeOrder) return
+        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
+            reorderError = failure.message ?: "The new order could not be submitted."
+            orderedRecordIds = authoritativeOrder
+            return
+        }
+        val stagedValues = encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = false)
+        if (stagedValues == null) {
+            reorderError = "The new order is too large to stage safely."
+            orderedRecordIds = authoritativeOrder
+            return
+        }
+        val pendingKey = nativePendingCollectionReorderKey(plan, resource.id)
+        onPendingReorderChanged(plan, submittedOrder, false)
+        reorderRequestInFlight = true
+        reorderExecuting = true
+        reorderError = null
+        reorderRecoveryAvailable = false
+        scope.launch {
+            runCatching { store.save(pendingKey, stagedValues) }.onFailure { failure ->
+                reorderError = failure.message ?: "The new order could not be staged safely."
+                onPendingReorderChanged(plan, null, false)
+                orderedRecordIds = authoritativeOrder
+                reorderExecuting = false
+                reorderRequestInFlight = false
+                return@launch
+            }
+            when (val result = actionExecutor.execute(request)) {
+                is NativeActionExecutionResult.Success -> {
+                    encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
+                        ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                    onPendingReorderChanged(plan, submittedOrder, true)
+                    onActionSucceeded?.invoke(plan.action)
+                }
+                is NativeActionExecutionResult.Failure -> {
+                    reorderError = result.message
+                    if (result.outcome.requiresMutationReconciliation()) {
+                        encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
+                            ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                        onPendingReorderChanged(plan, submittedOrder, true)
+                        onActionSucceeded?.invoke(plan.action)
+                    } else {
+                        runCatching { store.clear(pendingKey) }
+                        onPendingReorderChanged(plan, null, false)
+                        orderedRecordIds = authoritativeOrder
+                        reorderExecuting = false
+                        reorderRecoveryAvailable = false
+                    }
+                }
+            }
+            reorderRequestInFlight = false
+        }
+    }
+    fun moveRecordBy(recordId: String, offset: Int) {
+        val currentIndex = orderedRecordIds.indexOf(recordId)
+        if (currentIndex < 0) return
+        val targetIndex = (currentIndex + offset).coerceIn(0, orderedRecordIds.lastIndex)
+        if (targetIndex == currentIndex) return
+        val nextOrder = moveNativeCollectionRecordToIndex(
+            orderedRecordIds = orderedRecordIds,
+            recordId = recordId,
+            targetIndex = targetIndex,
+        )
+        orderedRecordIds = nextOrder
+        submitReorder(nextOrder)
+    }
+    LaunchedEffect(
+        authoritativeRecordsKey,
+        authoritativeOrder,
+        reorder?.action?.id,
+        pendingReorderOrder,
+        pendingReorderRecoveryRequested,
+        reorderRequestInFlight,
+        durableRestoreChecked,
+    ) {
+        if (!durableRestoreChecked) return@LaunchedEffect
+        val pendingOrder = pendingReorderOrder
+        val validPendingOrder = validPendingNativeCollectionOrder(authoritativeOrder, pendingOrder)
+        if (pendingOrder != null && validPendingOrder == null) {
+            activeReorder?.let { plan ->
+                pendingMutationStore?.let { store ->
+                    runCatching { store.clear(nativePendingCollectionReorderKey(plan, resource.id)) }
+                        .onFailure { failure ->
+                            reorderError = failure.message ?: "The obsolete order marker could not be cleared."
+                            reorderExecuting = true
+                            return@LaunchedEffect
+                        }
+                }
+                onPendingReorderChanged(plan, null, false)
+            }
+            orderedRecordIds = authoritativeOrder
+            reorderExecuting = false
+            reorderError = "The saved order no longer matches the authoritative collection."
+            reorderRecoveryAvailable = false
+        } else if (validPendingOrder != null && authoritativeOrder == validPendingOrder) {
+            orderedRecordIds = authoritativeOrder
+            activeReorder?.let { plan ->
+                pendingMutationStore?.let { store ->
+                    runCatching { store.clear(nativePendingCollectionReorderKey(plan, resource.id)) }
+                        .onFailure { failure ->
+                            reorderError = failure.message ?: "The confirmed order marker could not be cleared."
+                            reorderExecuting = true
+                            return@LaunchedEffect
+                        }
+                }
+                onPendingReorderChanged(plan, null, false)
+            }
+            reorderExecuting = false
+            reorderError = null
+            reorderRecoveryAvailable = false
+        } else if (
+            validPendingOrder != null && !reorderRequestInFlight && !pendingReorderRecoveryRequested
+        ) {
+            orderedRecordIds = validPendingOrder
+            reorderExecuting = true
+            reorderRecoveryAvailable = false
+            activeReorder?.let { plan ->
+                val pendingKey = nativePendingCollectionReorderKey(plan, resource.id)
+                val values = encodeNativePendingCollectionReorder(
+                    validPendingOrder,
+                    recoveryRequested = true,
+                )
+                if (values == null) {
+                    reorderError = "The saved order could not be prepared for recovery."
+                    reorderRecoveryAvailable = pendingMutationStore != null
+                    return@LaunchedEffect
+                }
+                val store = pendingMutationStore
+                if (store == null) {
+                    onPendingReorderChanged(plan, null, false)
+                    orderedRecordIds = authoritativeOrder
+                    reorderExecuting = false
+                    reorderError = "Order recovery is unavailable; the authoritative server order is shown."
+                    reorderRecoveryAvailable = false
+                    return@LaunchedEffect
+                }
+                runCatching { store.save(pendingKey, values) }.onFailure { failure ->
+                    reorderError = failure.message ?: "The order recovery marker could not be updated."
+                    reorderRecoveryAvailable = true
+                    return@LaunchedEffect
+                }
+                onPendingReorderChanged(plan, validPendingOrder, true)
+                onActionSucceeded?.invoke(plan.action)
+            }
+        } else if (
+            validPendingOrder != null && pendingReorderRecoveryRequested && !reorderRequestInFlight
+        ) {
+            orderedRecordIds = validPendingOrder
+            reorderExecuting = true
+            reorderError = "The submitted order is awaiting authoritative server confirmation."
+            reorderRecoveryAvailable = true
+        } else if (draggingRecordId == null && !reorderExecuting) {
+            orderedRecordIds = authoritativeOrder
+            reorderError = null
+            reorderRecoveryAvailable = false
+        }
+    }
+    fun retryPendingReorderRecovery() {
+        val plan = activeReorder ?: return
+        val callback = onActionSucceeded ?: return
+        reorderRecoveryAvailable = false
+        reorderExecuting = true
+        reorderError = "Checking the authoritative server order again."
+        callback(plan.action)
+    }
+    fun discardPendingReorderRecovery() {
+        val plan = activeReorder ?: return
+        val store = pendingMutationStore ?: return
+        reorderRecoveryAvailable = false
+        reorderExecuting = true
+        scope.launch {
+            runCatching {
+                store.clear(nativePendingCollectionReorderKey(plan, resource.id))
+            }.onSuccess {
+                onPendingReorderChanged(plan, null, false)
+                orderedRecordIds = authoritativeOrder
+                reorderExecuting = false
+                reorderError = null
+            }.onFailure { failure ->
+                reorderExecuting = true
+                reorderRecoveryAvailable = true
+                reorderError = failure.message ?: "The saved order recovery marker could not be cleared."
+            }
+        }
+    }
+    fun moveDraggedRecord(position: Offset) {
+        val recordId = draggingRecordId ?: return
+        val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { item -> item.key as? String }
+            .toSet()
+        val targetId = nativeVisibleReorderTargetId(
+            orderedRecordIds = orderedRecordIds,
+            rowBounds = rowBounds,
+            pointerPosition = position,
+            visibleItemKeys = visibleItemKeys,
+        )
+        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+        if (targetIndex >= 0 && targetId != recordId) {
+            orderedRecordIds = moveNativeCollectionRecordToIndex(
+                orderedRecordIds = orderedRecordIds,
+                recordId = recordId,
+                targetIndex = targetIndex,
+            )
+        }
+    }
     var expandedIds by rememberSaveable(resource.id) { mutableStateOf(parentIds.toList()) }
     LaunchedEffect(parentIds) {
         expandedIds = expandedIds.filter(parentIds::contains)
     }
-    val filteredRows = remember(rows, filter) {
-        rows.filter { (_, category) ->
+    val filteredRows = remember(displayedRows, filter) {
+        displayedRows.filter { (_, category) ->
             when (filter) {
                 NativeCategoryFilter.All -> true
                 NativeCategoryFilter.Expenses -> category.kind == NativeCategoryKind.Expense
@@ -3903,18 +4467,28 @@ private fun GenericCategoryCollection(
             }
         }
     }
-    val visibleRows = remember(filteredRows, expandedIds) {
-        flattenNativeCategoryRows(filteredRows, expandedIds.toSet())
+    val visibleRows = remember(filteredRows, expandedIds, activeReorder) {
+        nativeCategoryRowsForDisplay(
+            rows = filteredRows,
+            expandedIds = expandedIds.toSet(),
+            preserveAuthoritativeOrder = activeReorder != null,
+        )
     }
     val expenseCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Expense }
     val incomeCount = rows.count { (_, category) -> category.kind == NativeCategoryKind.Income }
-    val listState = rememberLazyListState()
     NativeCollectionAutoPager(
         listState,
         visibleRows.size,
         onLoadMore.takeIf { filter == NativeCategoryFilter.All },
         loadingMore,
         loadMoreError,
+    )
+    NextcloudVerticalDragAutoScroll(
+        activeDragKey = draggingRecordId,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        viewport = listBounds,
+        scrollState = listState,
     )
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -3959,7 +4533,9 @@ private fun GenericCategoryCollection(
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).onGloballyPositioned { coordinates ->
+                listBounds = coordinates.boundsInWindow()
+            },
             contentPadding = PaddingValues(
                 start = NextcloudSpacing.Large,
                 top = NextcloudSpacing.Medium,
@@ -3968,6 +4544,33 @@ private fun GenericCategoryCollection(
             ),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
+            reorderError?.let { message ->
+                item(key = "category-reorder-error") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                    ) {
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (reorderRecoveryAvailable) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                TextButton(
+                                    onClick = ::retryPendingReorderRecovery,
+                                    enabled = onActionSucceeded != null,
+                                ) {
+                                    Text("Check again")
+                                }
+                                TextButton(onClick = ::discardPendingReorderRecovery) {
+                                    Text("Use server order")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             items(visibleRows, key = { row -> row.record.id }) { row ->
                 val recordPresentation = nativeRecordPresentation(resource, row.record)
                 val iconKey = recordPresentation.iconKey
@@ -3982,6 +4585,7 @@ private fun GenericCategoryCollection(
                         authorityContext = authorityContext,
                     )
                 }
+                val reorderIndex = orderedRecordIds.indexOf(row.record.id)
                 val secondaryActions = nativeRecordCardActions(
                     capabilities = actions,
                     record = row.record,
@@ -3989,10 +4593,34 @@ private fun GenericCategoryCollection(
                     onDeleteRecord = onDeleteRecord,
                     onCommandRecord = onCommandRecord,
                     onCommandFormRecord = onCommandFormRecord,
-                )
+                ) + if (activeReorder != null && !reorderExecuting && reorderIndex >= 0) {
+                    listOf(
+                        NextcloudCardAction(
+                            label = "Move earlier",
+                            semanticId = "${activeReorder.action.id}.move-earlier",
+                            enabled = reorderIndex > 0,
+                            onClick = { moveRecordBy(row.record.id, -1) },
+                        ),
+                        NextcloudCardAction(
+                            label = "Move later",
+                            semanticId = "${activeReorder.action.id}.move-later",
+                            enabled = reorderIndex < orderedRecordIds.lastIndex,
+                            onClick = { moveRecordBy(row.record.id, 1) },
+                        ),
+                    )
+                } else {
+                    emptyList()
+                }
                 var actionsExpanded by rememberSaveable(row.record.id) { mutableStateOf(false) }
+                val dragging = draggingRecordId == row.record.id
                 Card(
-                    modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            rowBounds[row.record.id] = coordinates.boundsInWindow()
+                        }
+                        .graphicsLayer { alpha = if (dragging) 0.56f else 1f }
+                        .nextcloudCardInteractions(
                         onOpen = onSelectRecord?.let { callback -> { callback(row.record) } },
                         onShowActions = if (secondaryActions.isNotEmpty()) {
                             { actionsExpanded = true }
@@ -4011,7 +4639,42 @@ private fun GenericCategoryCollection(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (row.depth > 0) Box(Modifier.width((row.depth * 18).dp))
-                        if (row.hasChildren) {
+                        if (activeReorder != null && !reorderExecuting) {
+                            NextcloudBoardDragHandle(
+                                itemLabel = row.presentation.name,
+                                dragActive = dragging,
+                                onDragStart = { position ->
+                                    draggingRecordId = row.record.id
+                                    dragOrigin = position
+                                    dragPosition = position
+                                    reorderError = null
+                                },
+                                onDrag = { delta ->
+                                    val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
+                                    dragPosition = position
+                                    orderedRecordIds = moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                        orderedRecordIds = orderedRecordIds,
+                                        recordId = row.record.id,
+                                        pointerY = position.y,
+                                        movementY = delta.y,
+                                        rowBounds = rowBounds,
+                                    )
+                                },
+                                onDragEnd = {
+                                    dragPosition?.let(::moveDraggedRecord)
+                                    draggingRecordId = null
+                                    dragOrigin = null
+                                    dragPosition = null
+                                    submitReorder()
+                                },
+                                onDragCancel = {
+                                    draggingRecordId = null
+                                    dragOrigin = null
+                                    dragPosition = null
+                                    orderedRecordIds = authoritativeOrder
+                                },
+                            )
+                        } else if (row.hasChildren) {
                             Box(
                                 modifier = Modifier.size(40.dp).clickable {
                                     expandedIds = if (row.record.id in expandedIds) {
@@ -4104,6 +4767,32 @@ private fun GenericCategoryCollection(
                 }
             }
             NativeCollectionPagingFooter(loadingMore, loadMoreError, onLoadMore)
+        }
+    }
+}
+
+@Composable
+private fun NativeCollectionReorderRecoveryMessage(
+    message: String,
+    recoveryAvailable: Boolean,
+    retryRecovery: () -> Unit,
+    discardRecovery: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+    ) {
+        Text(
+            message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (recoveryAvailable) {
+            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                TextButton(onClick = retryRecovery) { Text("Check again") }
+                TextButton(onClick = discardRecovery) { Text("Use server order") }
+            }
         }
     }
 }
@@ -4906,6 +5595,10 @@ private fun GenericTaskCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     reorder: NativeCollectionReorderActionPlan?,
+    pendingReorderOrder: List<String>?,
+    pendingReorderRecoveryRequested: Boolean,
+    onPendingReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingMutationStore: NativePendingMutationStore?,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
@@ -4915,43 +5608,29 @@ private fun GenericTaskCollection(
     val listState = rememberLazyListState()
     val authoritativeOrder = remember(rows) { rows.map { (record, _) -> record.id } }
     val rowsById = remember(rows) { rows.associateBy { (record, _) -> record.id } }
-    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
-        mutableStateOf(authoritativeOrder)
-    }
+    val activeReorder = reorder.takeIf { pendingMutationStore != null }
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
+    var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
-    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
-    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
-    val displayedRows = remember(rowsById, orderedRecordIds, reorder) {
-        if (reorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
-    }
-    val submitReorder: () -> Unit = submit@{
-        val plan = reorder ?: return@submit
-        val submittedOrder = orderedRecordIds
-        if (submittedOrder == authoritativeOrder) return@submit
-        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
-            reorderError = failure.message ?: "The new order could not be submitted."
-            orderedRecordIds = authoritativeOrder
-            return@submit
-        }
-        reorderExecuting = true
-        reorderError = null
-        scope.launch {
-            when (val result = actionExecutor.execute(request)) {
-                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
-                is NativeActionExecutionResult.Failure -> {
-                    reorderError = result.message
-                    orderedRecordIds = authoritativeOrder
-                    if (result.outcome.requiresMutationReconciliation()) {
-                        onActionSucceeded?.invoke(plan.action)
-                    }
-                }
-            }
-            reorderExecuting = false
-        }
+    var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
+    val reorderState = rememberNativeDurableCollectionReorderState(
+        plan = activeReorder,
+        resourceId = resource.id,
+        authoritativeOrder = authoritativeOrder,
+        authoritativeRecordsKey = authoritativeRecordsKey,
+        draggingRecordId = draggingRecordId,
+        pendingOrder = pendingReorderOrder,
+        pendingRecoveryRequested = pendingReorderRecoveryRequested,
+        actionExecutor = actionExecutor,
+        pendingMutationStore = pendingMutationStore,
+        onPendingChanged = onPendingReorderChanged,
+        onActionSucceeded = onActionSucceeded,
+    )
+    val displayedRows = remember(rowsById, reorderState.orderedRecordIds, activeReorder) {
+        if (activeReorder == null) rows else reorderState.orderedRecordIds.mapNotNull(rowsById::get)
     }
     val currentAuthoritativeRecordsKey by rememberUpdatedState(authoritativeRecordsKey)
     val completionOverrides = remember(schema, resource.id) {
@@ -4968,10 +5647,26 @@ private fun GenericTaskCollection(
             .reconcileNativeCompletionFailures(authoritativeRecordsKey)
             .forEach(completionErrors::remove)
     }
-    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
-        if (draggingRecordId == null && !reorderExecuting) {
-            orderedRecordIds = authoritativeOrder
-            reorderError = null
+    fun moveDraggedRecord(position: Offset) {
+        val recordId = draggingRecordId ?: return
+        val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { item -> item.key as? String }
+            .toSet()
+        val targetId = nativeVisibleReorderTargetId(
+            orderedRecordIds = reorderState.orderedRecordIds,
+            rowBounds = rowBounds,
+            pointerPosition = position,
+            visibleItemKeys = visibleItemKeys,
+        )
+        val targetIndex = targetId?.let(reorderState.orderedRecordIds::indexOf) ?: -1
+        if (targetIndex >= 0 && targetId != recordId) {
+            reorderState.updateOrder(
+                moveNativeCollectionRecordToIndex(
+                    orderedRecordIds = reorderState.orderedRecordIds,
+                    recordId = recordId,
+                    targetIndex = targetIndex,
+                ),
+            )
         }
     }
     NativeCollectionAutoPager(
@@ -4981,8 +5676,17 @@ private fun GenericTaskCollection(
         loadingMore = loadingMore,
         loadMoreError = loadMoreError,
     )
+    NextcloudVerticalDragAutoScroll(
+        activeDragKey = draggingRecordId,
+        position = dragPosition,
+        dragOrigin = dragOrigin,
+        viewport = listBounds,
+        scrollState = listState,
+    )
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+            listBounds = coordinates.boundsInWindow()
+        },
         state = listState,
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Large,
@@ -4992,13 +5696,14 @@ private fun GenericTaskCollection(
         ),
         verticalArrangement = Arrangement.spacedBy(if (dense) 1.dp else NextcloudSpacing.Small),
     ) {
-        reorderError?.let { message ->
+        reorderState.error?.let { message ->
             item(key = "task-reorder-error") {
-                Text(
-                    message,
+                NativeCollectionReorderRecoveryMessage(
+                    message = message,
+                    recoveryAvailable = reorderState.recoveryAvailable,
+                    retryRecovery = reorderState.retryRecovery,
+                    discardRecovery = reorderState.discardRecovery,
                     modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
@@ -5067,39 +5772,40 @@ private fun GenericTaskCollection(
                     ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    reorder?.takeUnless { reorderExecuting }?.let {
+                    activeReorder?.takeUnless { reorderState.executing }?.let {
                         NextcloudBoardDragHandle(
                             itemLabel = task.title,
                             dragActive = dragging,
                             onDragStart = { position ->
                                 draggingRecordId = record.id
+                                dragOrigin = position
                                 dragPosition = position
-                                reorderError = null
                             },
                             onDrag = { delta ->
                                 val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                 dragPosition = position
-                                val targetId = orderedRecordIds.firstOrNull { id ->
-                                    rowBounds[id]?.let { bounds -> position.y in bounds.top..bounds.bottom } == true
-                                }
-                                val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
-                                if (targetIndex >= 0 && targetId != draggingRecordId) {
-                                    orderedRecordIds = moveNativeCollectionRecordToIndex(
-                                        orderedRecordIds = orderedRecordIds,
+                                reorderState.updateOrder(
+                                    moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                        orderedRecordIds = reorderState.orderedRecordIds,
                                         recordId = record.id,
-                                        targetIndex = targetIndex,
-                                    )
-                                }
+                                        pointerY = position.y,
+                                        movementY = delta.y,
+                                        rowBounds = rowBounds,
+                                    ),
+                                )
                             },
                             onDragEnd = {
+                                dragPosition?.let(::moveDraggedRecord)
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
-                                submitReorder()
+                                reorderState.submit(reorderState.orderedRecordIds)
                             },
                             onDragCancel = {
                                 draggingRecordId = null
+                                dragOrigin = null
                                 dragPosition = null
-                                orderedRecordIds = authoritativeOrder
+                                reorderState.updateOrder(authoritativeOrder)
                             },
                         )
                     }
@@ -5216,7 +5922,7 @@ private fun GenericTaskCollection(
                             )
                         }
                     }
-                    if (reorderExecuting) {
+                    if (reorderState.executing) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     }
                     if (secondaryActions.isNotEmpty()) {
@@ -5263,7 +5969,7 @@ internal fun nativeRecordCardActions(
         )
     }
     capabilities.commands.forEach { plan ->
-        val ui = nativeRecordCommandUi(plan.effect, record.id)
+        val ui = nativeRecordCommandUi(plan.effect, record.id, plan.action.label)
         add(
             NextcloudCardAction(
                 label = ui.label,
@@ -5317,6 +6023,7 @@ internal fun NativeActionFailureOutcome.allowsGenericDeleteRetry(): Boolean =
 internal fun nativeRecordCommandUi(
     effect: ActionEffect,
     itemLabel: String,
+    actionLabel: String? = null,
 ): NativeRecordCommandUi = when (effect) {
     ActionEffect.archive -> NativeRecordCommandUi(label = "Archive", destructive = false)
     ActionEffect.unarchive -> NativeRecordCommandUi(label = "Unarchive", destructive = false)
@@ -5339,6 +6046,12 @@ internal fun nativeRecordCommandUi(
         destructive = true,
         confirmationTitle = "Leave $itemLabel?",
         confirmationMessage = "You may lose access to this item after leaving.",
+    )
+    ActionEffect.execute -> NativeRecordCommandUi(
+        label = actionLabel?.takeIf(String::isNotBlank) ?: "Run",
+        destructive = false,
+        confirmationTitle = "${actionLabel?.takeIf(String::isNotBlank) ?: "Run action"}: $itemLabel?",
+        confirmationMessage = "This records the action on the server.",
     )
     else -> error("Unsupported record command effect: $effect")
 }
@@ -8601,7 +9314,9 @@ private fun GenericNativeForm(
             nativeFormDisplayFields(
                 fields = editableFields,
                 relationFieldIds = editableFields
-                    .filter { field -> nativeRelationFieldRequiresChoice(field, formResource, schema) }
+                    .filter { field ->
+                        nativeRelationFieldRequiresChoice(field, formResource, schema, datasetContext)
+                    }
                     .mapTo(linkedSetOf(), FieldSpec::id),
             )
         }
@@ -8691,7 +9406,7 @@ private fun GenericNativeForm(
                         fields.forEach { field ->
                             val relationOptions =
                                 nativeRelationOptions(field, formResource, schema, datasetContext)
-                            if (nativeRelationFieldRequiresChoice(field, formResource, schema)) {
+                            if (nativeRelationFieldRequiresChoice(field, formResource, schema, datasetContext)) {
                                 GenericRelationshipField(
                                     field = field,
                                     value = draft.values[field.id].orEmpty(),
@@ -9912,6 +10627,64 @@ private fun GenericRepeatableObjectField(
     enabled: Boolean,
     onRowsChange: (List<RepeatableObjectInputRow>) -> Unit,
 ) {
+    if (spec.minimumItems == 1 && spec.maximumItems == 1 && rows.size == 1) {
+        val row = rows.single()
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            spec.fields.forEach { itemField ->
+                val explicitNull = itemField.id in row.nullFieldIds
+                GenericFormField(
+                    field = itemField.toNativeRepeatableObjectFieldSpec(),
+                    value = row.values[itemField.id].orEmpty(),
+                    error = null,
+                    enabled = enabled && !explicitNull,
+                    filePicker = null,
+                    automationFieldId = nativeRepeatableObjectAutomationFieldId(
+                        fieldId = field.id,
+                        rowIndex = 0,
+                        itemFieldId = itemField.id,
+                    ),
+                    onValueChange = { value ->
+                        onRowsChange(
+                            updateNativeRepeatableObjectValue(
+                                rows = rows,
+                                rowIndex = 0,
+                                field = itemField,
+                                value = value,
+                            ),
+                        )
+                    },
+                )
+                if (itemField.nullable) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().semantics {
+                            contentDescription = "Send ${itemField.label} as null"
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = explicitNull,
+                            enabled = enabled,
+                            onCheckedChange = { checked ->
+                                onRowsChange(
+                                    updateNativeRepeatableObjectNull(
+                                        rows = rows,
+                                        rowIndex = 0,
+                                        field = itemField,
+                                        explicitNull = checked,
+                                    ),
+                                )
+                            },
+                        )
+                        Text("Send ${itemField.label} as null", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+        return
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -10074,6 +10847,7 @@ internal fun RepeatableObjectInputFieldSpec.toNativeRepeatableObjectFieldSpec():
         readOnly = false,
         format = format,
         enumValues = enumValues,
+        enumLabels = enumLabels,
     )
 
 @Composable
@@ -10343,16 +11117,8 @@ private fun GenericEnumField(
     var expanded by remember { mutableStateOf(false) }
     var query by rememberSaveable(field.id) { mutableStateOf("") }
     val options = field.enumValues.orEmpty()
-    val visibleOptions = remember(options, query) {
-        val normalizedQuery = query.trim().lowercase()
-        if (normalizedQuery.isBlank()) {
-            options
-        } else {
-            options.filter { option ->
-                normalizedQuery in option.lowercase() ||
-                    normalizedQuery in option.dynamicSettingLabel().lowercase()
-            }
-        }
+    val visibleOptions = remember(field.enumLabels, options, query) {
+        nativeEnumOptionsMatchingQuery(field, query)
     }
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
         Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
@@ -10384,7 +11150,9 @@ private fun GenericEnumField(
                     )
                 }
                 Text(
-                    value.takeIf(String::isNotBlank)?.dynamicSettingLabel() ?: "Choose an option",
+                    value.takeIf(String::isNotBlank)?.let { selected ->
+                        nativeEnumOptionLabel(field, selected)
+                    } ?: "Choose an option",
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Start,
                     maxLines = 1,
@@ -10421,12 +11189,13 @@ private fun GenericEnumField(
                     )
                 }
                 visibleOptions.forEach { option ->
+                    val optionLabel = nativeEnumOptionLabel(field, option)
                     val optionIcon = option.takeIf { field.isNativeVisualIconField() }
                         ?.let(NextcloudIcons::semanticOrFallback)
                     val optionColor = option.nativeFormColorOrNull(field)
                     DropdownMenuItem(
                         modifier = Modifier.semantics {
-                            contentDescription = "Choose $automationFieldId option $option"
+                            contentDescription = "Choose $automationFieldId option $optionLabel"
                         },
                         leadingIcon = if (optionIcon != null || optionColor != null) {
                             {
@@ -10438,7 +11207,7 @@ private fun GenericEnumField(
                         } else {
                             null
                         },
-                        text = { Text(option.dynamicSettingLabel()) },
+                        text = { Text(optionLabel) },
                         onClick = {
                             expanded = false
                             query = ""
@@ -10456,6 +11225,32 @@ private fun GenericEnumField(
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+internal fun nativeDedicatedCollectionState(
+    state: NativeScreenState,
+    presentedRecords: List<NativeRecord>,
+    visiblePresentedRecords: List<NativeRecord>,
+    searchableCollection: Boolean,
+): NativeScreenState = when (state) {
+    is NativeScreenState.Ready -> NativeScreenState.Ready(
+        if (searchableCollection) visiblePresentedRecords else presentedRecords,
+    )
+    else -> state
+}
+
+internal fun nativeEnumOptionLabel(field: FieldSpec, option: String): String =
+    field.enumLabels?.get(option) ?: option.dynamicSettingLabel()
+
+internal fun nativeEnumOptionsMatchingQuery(field: FieldSpec, query: String): List<String> {
+    val options = field.enumValues.orEmpty()
+    val normalizedQuery = query.trim().lowercase()
+    if (normalizedQuery.isBlank()) return options
+    return options.filter { option ->
+        normalizedQuery in option.lowercase() ||
+            normalizedQuery in option.dynamicSettingLabel().lowercase() ||
+            normalizedQuery in field.enumLabels?.get(option).orEmpty().lowercase()
     }
 }
 

@@ -7,6 +7,8 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.Evidence
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
@@ -351,6 +353,23 @@ class NativeCollectionActionsTest {
         )
         assertEquals("id", plan.identityFieldId)
         assertEquals("sortOrder", plan.orderFieldId)
+        val siblingPlan = assertNotNull(
+            nativeCollectionActions(
+                schema(resource, read, reorder),
+                read,
+                resource,
+                records.map { record ->
+                    record.copy(bindingContext = mapOf("groupId" to "8"))
+                },
+                mapOf("groupId" to "8"),
+                collectionComplete = true,
+            ).reorder,
+        )
+        assertTrue(plan.pendingMutationScope(resource.id) != siblingPlan.pendingMutationScope(resource.id))
+        assertTrue(
+            nativePendingCollectionReorderKey(plan, resource.id).targetRecordId !=
+                nativePendingCollectionReorderKey(siblingPlan, resource.id).targetRecordId,
+        )
 
         val request = plan.request(
             listOf(
@@ -1009,6 +1028,99 @@ class NativeCollectionActionsTest {
         assertNull(editDenied.reorder)
         assertNull(editDenied.batches.singleOrNull { plan -> plan.action.id == batch.id })
         assertNotNull(editDenied.batches.singleOrNull { plan -> plan.action.id == destructiveBatch.id })
+    }
+
+    @Test
+    fun `generic parent owner role does not grant reorder while exact Pantry adapter remains available`() {
+        val resource = ResourceSpec(
+            id = "categories",
+            name = "Categories",
+            confidence = Confidence.verified,
+        )
+        val parent = ResourceSpec(
+            id = "houses",
+            name = "Houses",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("role", "Role", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("isAdmin", "Is admin", FieldKind.boolean, required = false, readOnly = true),
+                FieldSpec("permissions", "Permissions", FieldKind.objectValue, required = false, readOnly = true),
+            ),
+        )
+        val read = readAction(
+            resource.id,
+            "/ocs/v2.php/apps/pantry/api/houses/{houseId}/categories",
+            listOf("houseId"),
+        )
+        val reorder = action(
+            id = "reorder-categories",
+            resourceId = resource.id,
+            method = HttpMethod.POST,
+            path = "/ocs/v2.php/apps/pantry/api/houses/{houseId}/categories/reorder",
+            pathFields = listOf("houseId"),
+            bodyFields = listOf("items"),
+            bodySchema = reorderBody("items", "id", "sortOrder"),
+            intent = ActionIntent.execute,
+            effect = ActionEffect.reorder,
+            risk = ActionRisk.mutating,
+        )
+        val nativeSchema = schema(resource, read, reorder).copy(resources = listOf(resource, parent))
+        val records = listOf("11", "12").map { id ->
+            NativeRecord(id, mapOf("id" to id), bindingContext = mapOf("houseId" to "7"))
+        }
+
+        fun plan(values: Map<String, String?>, displayValues: Map<String, String> = emptyMap()) =
+            nativeCollectionActions(
+                schema = nativeSchema,
+                activeReadAction = read,
+                resource = resource,
+                records = records,
+                navigationContext = mapOf("houseId" to "7"),
+                collectionComplete = true,
+                authorityContext = NativeRecordAuthorityContext(
+                    parentResource = parent,
+                    parentRecord = NativeRecord("7", values, displayValues = displayValues),
+                ),
+            ).reorder
+
+        assertNull(plan(mapOf("role" to "owner")))
+        assertNull(plan(mapOf("role" to "member")))
+        assertNull(plan(emptyMap(), displayValues = mapOf("role" to "owner")))
+
+        val pantryReorder = reorder.copy(
+            id = "category-reorder",
+            binding = reorder.binding.copy(operationId = "category-reorder"),
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Pantry 0.23.0 package")),
+        )
+        val pantrySchema = nativeSchema.copy(
+            app = AppIdentity("pantry", "Pantry", "0.23.0"),
+            actions = listOf(read, pantryReorder),
+        )
+        val pantryParent = NativeRecord("7", mapOf("role" to "owner"))
+        val pantryAuthority = NativeDatasetContext(
+            parentResourceId = parent.id,
+            parentRecord = pantryParent,
+        ).nativeRecordAuthorityContext(pantrySchema)
+        assertNotNull(
+            nativeCollectionActions(
+                schema = pantrySchema,
+                activeReadAction = read,
+                resource = resource,
+                records = records,
+                navigationContext = mapOf("houseId" to "7"),
+                collectionComplete = true,
+                authorityContext = pantryAuthority,
+            ).reorder,
+        )
+
+        assertNull(
+            NativeDatasetContext(
+                parentResourceId = parent.id,
+                parentRecord = pantryParent,
+            ).nativeRecordAuthorityContext(
+                pantrySchema.copy(app = pantrySchema.app.copy(version = "0.23.1")),
+            )?.auditedActionIds?.singleOrNull(),
+        )
     }
 
     private fun schema(

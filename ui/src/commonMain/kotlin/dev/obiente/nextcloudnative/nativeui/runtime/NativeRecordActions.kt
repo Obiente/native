@@ -10,11 +10,13 @@ import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_LIST_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DynamicIntegerArrayParseResult
+import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputRow
+import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKind
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.isExactDynamicIntegerArraySchema
 import dev.obiente.nextcloudnative.nativeui.model.parseDynamicIntegerArrayInput
@@ -30,6 +32,8 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlin.random.Random
+import kotlin.time.Clock
 
 internal data class NativeRecordActionCapabilities(
     val create: NativeRecordFormActionPlan?,
@@ -43,6 +47,8 @@ internal data class NativeRecordActionCapabilities(
 internal data class NativeRecordAuthorityContext(
     val parentResource: ResourceSpec,
     val parentRecord: NativeRecord,
+    val actorUserId: String? = null,
+    val auditedActionIds: Set<String> = emptySet(),
 )
 
 internal fun NativeDatasetContext.nativeRecordAuthorityContext(
@@ -54,7 +60,16 @@ internal fun NativeDatasetContext.nativeRecordAuthorityContext(
         ?: return null
     val resource = schema.resources.singleOrNull { candidate -> candidate.id == resourceId }
         ?: return null
-    return NativeRecordAuthorityContext(resource, record)
+    return NativeRecordAuthorityContext(
+        parentResource = resource,
+        parentRecord = record,
+        actorUserId = currentUserId,
+        auditedActionIds = schema.auditedParentAuthorityActionIds(
+            parentResource = resource,
+            parentRecord = record,
+            actorUserId = currentUserId,
+        ),
+    )
 }
 
 internal enum class NativeRecordFormActionKind {
@@ -112,6 +127,9 @@ internal data class NativeRecordFormActionPlan(
         ),
         confirmed = confirmed,
     )
+
+    internal fun bindsAny(contextualSources: Map<String, String>): Boolean =
+        bindingValues.any { (name, value) -> contextualSources[name] == value }
 }
 
 internal data class NativeRecordDeleteActionPlan(
@@ -132,21 +150,137 @@ internal data class NativeRecordCommandActionPlan(
     val action: ActionSpec,
     val effect: ActionEffect,
     private val bindingValues: Map<String, String>,
+    private val derivedValues: (() -> Map<String, String>)? = null,
+    private val forceConfirmation: Boolean = false,
+    private val durableMutationNamespace: String? = null,
 ) {
     val requiresConfirmation: Boolean
-        get() = action.requiresConfirmation
+        get() = action.requiresConfirmation || forceConfirmation
 
-    fun request(confirmed: Boolean = false): NativeActionRequest.Submit {
+    fun pendingMutationKey(targetRecordId: String): NativePendingMutationKey? =
+        durableMutationNamespace?.let { namespace ->
+            NativePendingMutationKey(
+                actionId = "$namespace:${action.id}",
+                targetRecordId = targetRecordId,
+            )
+        }
+
+    fun request(
+        confirmed: Boolean = false,
+        persistedValues: Map<String, String>? = null,
+    ): NativeActionRequest.Submit {
         require(!requiresConfirmation || confirmed) {
             "This action requires explicit confirmation."
         }
         return NativeActionRequest.Submit(
             action = action,
-            values = bindingValues,
+            values = persistedValues?.let { staged ->
+                requireNotNull(safeActionBindingValues(bindingValues, staged)) {
+                    "The staged action values are invalid or conflict with the active record."
+                }
+            } ?: derivedValues
+                    ?.invoke()
+                    ?.let { generated ->
+                        requireNotNull(safeActionBindingValues(bindingValues, generated)) {
+                            "The action generated invalid or conflicting values."
+                        }
+                    }
+                    ?: bindingValues,
             confirmed = confirmed,
         )
     }
 }
+
+internal suspend fun executeNativeRecordCommand(
+    plan: NativeRecordCommandActionPlan,
+    targetRecordId: String,
+    confirmed: Boolean,
+    actionExecutor: NativeActionExecutor,
+    pendingMutationStore: NativePendingMutationStore?,
+): NativeActionExecutionResult {
+    val pendingKey = plan.pendingMutationKey(targetRecordId)
+    val durableStore = pendingKey?.let {
+        requireNotNull(pendingMutationStore) {
+            "Crash-safe staging is unavailable for this action."
+        }
+    }
+    val stagedValues = pendingKey?.let { key ->
+        durableStore?.load(key)
+    }
+    if (pendingKey != null && stagedValues != null) {
+        if (runCatching { durableStore?.postconditionSatisfied(pendingKey, stagedValues) == true }.getOrDefault(false)) {
+            runCatching { durableStore?.clear(pendingKey) }
+            return NativeActionExecutionResult.Success("The earlier action is confirmed by the server.")
+        }
+        return NativeActionExecutionResult.Failure(
+            message = "The earlier action is still awaiting authoritative server confirmation.",
+            outcome = NativeActionFailureOutcome.Unknown,
+        )
+    }
+    val request = plan.request(confirmed = confirmed, persistedValues = stagedValues)
+    if (pendingKey != null && stagedValues == null) {
+        durableStore?.save(pendingKey, request.values)
+    }
+    val result = actionExecutor.execute(request)
+    if (pendingKey == null) return result
+    if ((result as? NativeActionExecutionResult.Failure)?.outcome == NativeActionFailureOutcome.Rejected) {
+        runCatching { durableStore?.clear(pendingKey) }
+        return result
+    }
+    if (result is NativeActionExecutionResult.Success) {
+        val reconciled = runCatching {
+            durableStore?.postconditionSatisfied(pendingKey, request.values) == true
+        }.getOrDefault(false)
+        if (reconciled) {
+            runCatching { durableStore?.clear(pendingKey) }
+            return result
+        }
+        return NativeActionExecutionResult.Failure(
+            message = "The server accepted the action, but refreshed data does not confirm it yet.",
+            outcome = NativeActionFailureOutcome.Unknown,
+        )
+    }
+    return result
+}
+
+internal const val NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE = "chores-completion-v1"
+
+internal data class NativeChoresCompletionPostcondition(
+    val teamId: String,
+    val completionId: String,
+)
+
+internal fun nativeChoresCompletionPostcondition(
+    key: NativePendingMutationKey,
+    values: Map<String, String>,
+): NativeChoresCompletionPostcondition? {
+    if (!key.actionId.startsWith("$NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE:")) return null
+    val teamId = values["teamId"]?.trim()?.takeIf(String::isSafeRecordBodyValue) ?: return null
+    val work = values["work"]?.let { encoded ->
+        runCatching { Json.parseToJsonElement(encoded) as? JsonArray }.getOrNull()
+    }?.singleOrNull() as? JsonObject ?: return null
+    val completionId = (work["id"] as? JsonPrimitive)?.contentOrNull
+        ?.trim()
+        ?.takeIf(String::isNativeUuidValue)
+        ?: return null
+    val choreId = (work["chore_id"] as? JsonPrimitive)?.contentOrNull?.trim()
+        ?.takeIf { value -> value == key.targetRecordId }
+        ?: return null
+    if (choreId.toLongOrNull()?.let { value -> value >= 0L } != true) return null
+    return NativeChoresCompletionPostcondition(teamId, completionId)
+}
+
+private fun String.isNativeUuidValue(): Boolean {
+    val segments = split('-')
+    return segments.map(String::length) == listOf(8, 4, 4, 4, 12) &&
+        segments.all { segment -> segment.all { character -> character.isDigit() || character.lowercaseChar() in 'a'..'f' } }
+}
+
+internal data class NativeRecordCompletionValueSource(
+    val memberUserId: String?,
+    val completionId: () -> String = ::randomNativeUuidV4,
+    val completedAt: () -> String = { Clock.System.now().toString() },
+)
 
 internal data class NativeRecordCommandFormActionPlan(
     val action: ActionSpec,
@@ -255,6 +389,9 @@ internal fun nativeRecordActions(
     record: NativeRecord? = null,
     navigationContext: Map<String, String> = emptyMap(),
     authorityContext: NativeRecordAuthorityContext? = null,
+    completionValueSource: NativeRecordCompletionValueSource = NativeRecordCompletionValueSource(
+        memberUserId = authorityContext?.actorUserId,
+    ),
 ): NativeRecordActionCapabilities {
     val authoritativeResource = schema.resources
         .filter { candidate -> candidate.id == resource.id }
@@ -313,7 +450,7 @@ internal fun nativeRecordActions(
         allowReadOnly = permittedRecordActions.any { action -> action.effect == ActionEffect.toggle },
     )
 
-    val create = resourceActions.mapNotNull { action ->
+    val createCandidates = resourceActions.mapNotNull { action ->
         action.recordFormPlan(
             kind = NativeRecordFormActionKind.Create,
             resource = authoritativeResource,
@@ -323,7 +460,8 @@ internal fun nativeRecordActions(
             relationshipFieldIds = verifiedRelationshipFieldIds,
             completionFieldId = completionSemantics?.field?.id,
         )
-    }.singleOrNull()
+    }
+    val create = nativePreferredCreatePlan(createCandidates, contextualSources)
 
     val edit = if (record?.actionSafeIdentity == true && !record.hasNativeDeletedState()) {
         permittedRecordActions.mapNotNull { action ->
@@ -366,7 +504,7 @@ internal fun nativeRecordActions(
         null
     }
     val commands = if (record?.actionSafeIdentity == true) {
-        permittedRecordActions
+        val ordinaryCommands = permittedRecordActions
             .mapNotNull { action ->
                 action.recordCommandPlan(
                     resource = authoritativeResource,
@@ -377,6 +515,16 @@ internal fun nativeRecordActions(
             .groupBy(NativeRecordCommandActionPlan::effect)
             .mapNotNull { (_, candidates) -> candidates.singleOrNull() }
             .sortedBy { plan -> RECORD_COMMAND_EFFECT_ORDER.indexOf(plan.effect) }
+        val choresCompletion = permittedRecordActions.mapNotNull { action ->
+            action.verifiedChoresCompletionCommandPlan(
+                schema = schema,
+                resource = authoritativeResource,
+                record = record,
+                sources = recordSources,
+                valueSource = completionValueSource,
+            )
+        }.singleOrNull()
+        ordinaryCommands + listOfNotNull(choresCompletion)
     } else {
         emptyList()
     }
@@ -407,6 +555,52 @@ internal fun nativeRecordActions(
         completion = completion,
         commands = commands,
         commandForms = commandForms,
+    )
+}
+
+/** Prefers one fully bound child create over an unscoped root create in an active context. */
+internal fun nativePreferredCreatePlan(
+    candidates: List<NativeRecordFormActionPlan>,
+    contextualSources: Map<String, String>,
+): NativeRecordFormActionPlan? {
+    if (candidates.size <= 1) return candidates.singleOrNull()
+    val contextBound = candidates.filter { plan ->
+        plan.bindsAny(contextualSources)
+    }
+    return contextBound.singleOrNull()
+}
+
+internal fun nativeChoresRosterMemberRemovalPlan(
+    schema: NativeAppSchema,
+    teamRecord: NativeRecord,
+    person: NativeRosterPerson,
+    authorityContext: NativeRecordAuthorityContext?,
+): NativeRecordDeleteActionPlan? {
+    if (
+        schema.app.id != "chores" || schema.app.version != "0.1.0" ||
+        !teamRecord.actionSafeIdentity || !teamRecord.actionBindingProvenanceValid ||
+        person.owner || !person.userId.isSafeRecordPathValue()
+    ) {
+        return null
+    }
+    val authority = authorityContext?.takeIf { context ->
+        context.parentRecord.id == teamRecord.id &&
+            context.parentResource.id.sameDynamicResourceAs("team")
+    } ?: return null
+    val action = schema.actions.singleOrNull { candidate ->
+        candidate.id in authority.auditedActionIds &&
+            candidate.resourceId.sameDynamicResourceAs(authority.parentResource.id) &&
+            candidate.binding.method == HttpMethod.DELETE &&
+            candidate.binding.path.substringBefore('?').trimEnd('/') == CHORES_MEMBER_REMOVAL_PATH &&
+            candidate.binding.pathParameterNames.toSet() == setOf("teamId", "userIdToRemove") &&
+            candidate.intent == ActionIntent.delete &&
+            candidate.risk == ActionRisk.destructive &&
+            candidate.requiresConfirmation &&
+            candidate.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+    } ?: return null
+    return NativeRecordDeleteActionPlan(
+        action = action,
+        bindingValues = mapOf("teamId" to teamRecord.id, "userIdToRemove" to person.userId),
     )
 }
 
@@ -627,6 +821,97 @@ private fun ActionSpec.recordCommandPlan(
         action = this,
         effect = effect,
         bindingValues = resolved,
+    )
+}
+
+/**
+ * Builds the Chores 0.1.0 completion request exactly like its audited web client: the selected
+ * record supplies chore_id, the signed-in account supplies member, and protocol metadata is
+ * generated only when the user confirms. None of those values are editable form fields.
+ */
+private fun ActionSpec.verifiedChoresCompletionCommandPlan(
+    schema: NativeAppSchema,
+    resource: ResourceSpec,
+    record: NativeRecord,
+    sources: Map<String, String>,
+    valueSource: NativeRecordCompletionValueSource,
+): NativeRecordCommandActionPlan? {
+    if (
+        schema.app.id != "chores" || schema.app.version != "0.1.0" ||
+        resource.id.sameDynamicResourceAs("chores").not() ||
+        binding.method != HttpMethod.POST ||
+        binding.path.substringBefore('?').trimEnd('/') != CHORES_COMPLETION_PATH ||
+        binding.pathParameterNames != listOf("teamId") ||
+        binding.requiredPathParameterNames != listOf("teamId") ||
+        binding.queryParameterNames.isNotEmpty() ||
+        binding.requiredQueryParameterNames.isNotEmpty() ||
+        binding.bodyFieldNames != listOf("work") ||
+        binding.requiredBodyFieldNames != listOf("work") ||
+        binding.bodyContentType?.substringBefore(';')?.trim()?.lowercase() != "application/json" ||
+        binding.allowsObservedBodyFields ||
+        intent != ActionIntent.execute || risk != ActionRisk.mutating ||
+        evidence.none { entry -> entry.source == EvidenceSource.verifiedAppPackage }
+    ) {
+        return null
+    }
+    val memberUserId = valueSource.memberUserId
+        ?.trim()
+        ?.takeIf(String::isSafeRecordBodyValue)
+        ?: return null
+    val choreId = record.id.trim().takeIf { value ->
+        value.toLongOrNull()?.let { parsed -> parsed >= 0L } == true && value.isSafeRecordBodyValue()
+    } ?: return null
+    val workField = resource.fields.singleOrNull { field ->
+        field.id == "work" && field.kind == FieldKind.objectValue && !field.readOnly
+    } ?: return null
+    val workSpec = workField.repeatableObjectInput ?: return null
+    if (workSpec != binding.bodyFieldSchema("work").repeatableObjectInputSpec()) return null
+    if (workSpec.minimumItems != 1 || workSpec.maximumItems != 1) return null
+    val workFields = workSpec.fields.associateBy { field -> field.id }
+    if (workFields.keys != CHORES_COMPLETION_FIELD_IDS || workFields.values.any { field -> !field.required }) {
+        return null
+    }
+    if (
+        workFields.getValue("id").kind != RepeatableObjectInputScalarKind.String ||
+        workFields.getValue("id").format != "uuid" ||
+        workFields.getValue("work_time").kind != RepeatableObjectInputScalarKind.String ||
+        workFields.getValue("work_time").format != "date-time" ||
+        workFields.getValue("chore_id").kind != RepeatableObjectInputScalarKind.Integer ||
+        workFields.getValue("member").kind != RepeatableObjectInputScalarKind.String
+    ) {
+        return null
+    }
+    val resolved = binding.resolveRecordActionBindings(
+        resource = resource,
+        record = record,
+        sources = sources,
+        userInputNames = setOf("work"),
+    ) ?: return null
+    if (resolved.keys != setOf("teamId")) return null
+    return NativeRecordCommandActionPlan(
+        action = this,
+        effect = ActionEffect.execute,
+        bindingValues = resolved,
+        forceConfirmation = true,
+        durableMutationNamespace = NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE,
+        derivedValues = {
+            val completionId = valueSource.completionId().trim()
+            val completedAt = valueSource.completedAt().trim()
+            mapOf(
+                "work" to workSpec.encode(
+                    listOf(
+                        RepeatableObjectInputRow(
+                            values = mapOf(
+                                "id" to completionId,
+                                "work_time" to completedAt,
+                                "chore_id" to choreId,
+                                "member" to memberUserId,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        },
     )
 }
 
@@ -1492,6 +1777,7 @@ private fun NativeRecordAuthorityContext.authorityEvidence(
     resource: ResourceSpec,
 ): NativeAuthorityEvidence {
     if (!parentRecord.actionBindingProvenanceValid) return NativeAuthorityEvidence.Denied
+    if (action.id in auditedActionIds) return NativeAuthorityEvidence.Allowed
     val adminFields = parentResource.fields.filter { field ->
         field.id.recordSemanticId() == "isadmin" && field.kind == FieldKind.boolean
     }
@@ -1535,6 +1821,84 @@ private fun NativeRecordAuthorityContext.authorityEvidence(
         null -> NativeAuthorityEvidence.Denied
     }
 }
+
+/**
+ * Exact, versioned adapters may promote presentation-only parent data into narrowly scoped write
+ * authority. Generic role labels never grant mutations: every returned action is pinned to the
+ * audited app version, route, operation, and signed-package evidence.
+ */
+private fun NativeAppSchema.auditedParentAuthorityActionIds(
+    parentResource: ResourceSpec,
+    parentRecord: NativeRecord,
+    actorUserId: String?,
+): Set<String> = when {
+    app.id == "pantry" && app.version == "0.23.0" &&
+        parentResource.id.sameDynamicResourceAs("houses") &&
+        parentResource.fields.singleOrNull { field ->
+            field.id.recordSemanticId() in setOf("role", "membershiprole", "accessrole") &&
+                field.kind in setOf(FieldKind.string, FieldKind.enumeration)
+        }?.let { field -> parentRecord.values[field.id]?.trim()?.lowercase() } == "owner" ->
+        actions.filter { action ->
+            PANTRY_0_23_0_OWNER_REORDER_PATHS[action.id] ==
+                action.binding.path.substringBefore('?').trimEnd('/') &&
+                action.binding.operationId == action.id &&
+                action.binding.method == HttpMethod.POST &&
+                action.effect == ActionEffect.reorder &&
+                action.intent == ActionIntent.execute &&
+                action.risk == ActionRisk.mutating &&
+                action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+        }.mapTo(linkedSetOf(), ActionSpec::id)
+
+    app.id == "chores" && app.version == "0.1.0" &&
+        parentResource.id.sameDynamicResourceAs("team") && actorUserId != null -> buildSet {
+        val roster = nativeRosterPresentation(parentRecord)
+        if (parentRecord.hasChoresTeamMember(actorUserId)) {
+            actions.filter { action ->
+                val path = action.binding.path.substringBefore('?').trimEnd('/')
+                val completion = action.binding.method == HttpMethod.POST &&
+                    path == CHORES_COMPLETION_PATH && action.intent == ActionIntent.execute
+                val edit = action.binding.method == HttpMethod.PATCH &&
+                    path == CHORES_EDIT_PATH && action.intent == ActionIntent.update &&
+                    action.effect == ActionEffect.update
+                (completion || edit) && action.risk == ActionRisk.mutating &&
+                    action.evidence.any { evidence ->
+                        evidence.source == EvidenceSource.verifiedAppPackage
+                    }
+            }.mapTo(this, ActionSpec::id)
+        }
+        if (roster?.ownerUserId == actorUserId && roster.omittedPeople == 0) {
+            actions.filter { action ->
+                action.binding.method == HttpMethod.DELETE &&
+                    action.binding.path.substringBefore('?').trimEnd('/') == CHORES_MEMBER_REMOVAL_PATH &&
+                    action.intent == ActionIntent.delete &&
+                    action.risk == ActionRisk.destructive && action.requiresConfirmation &&
+                    action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+            }.mapTo(this, ActionSpec::id)
+        }
+    }
+
+    else -> emptySet()
+}
+
+private fun NativeRecord.hasChoresTeamMember(actorUserId: String): Boolean {
+    val memberFields = structuredValues.filterKeys { fieldId ->
+        fieldId.recordSemanticId() in setOf("members", "people", "participants")
+    }
+    if (memberFields.size != 1) return false
+    val members = memberFields.values.single() as? NativeStructuredValue.ListValue ?: return false
+    if (members.omittedItems > 0) return false
+    return members.items.any { item ->
+        val member = item as? NativeStructuredValue.ObjectValue ?: return@any false
+        val identities = member.entries.filter { entry ->
+            entry.key.recordSemanticId() in setOf("member", "memberuserid", "userid", "uid", "user")
+        }
+        identities.size == 1 &&
+            (identities.single().value as? NativeStructuredValue.Scalar)?.value == actorUserId
+    }
+}
+
+private const val CHORES_MEMBER_REMOVAL_PATH =
+    "/apps/chores/api/v1.0/team/{teamId}/members/{userIdToRemove}"
 
 private fun ActionSpec.authorityCapabilityIds(resource: ResourceSpec): Set<String> {
     val verbs = when {
@@ -1601,6 +1965,26 @@ private fun String.nativeCapabilityBooleanOrNull(): Boolean? = when (trim().lowe
     "true", "1", "yes" -> true
     "false", "0", "no" -> false
     else -> null
+}
+
+private fun randomNativeUuidV4(): String {
+    val bytes = Random.nextBytes(16)
+    bytes[6] = ((bytes[6].toInt() and 0x0f) or 0x40).toByte()
+    bytes[8] = ((bytes[8].toInt() and 0x3f) or 0x80).toByte()
+    val hexadecimal = bytes.joinToString(separator = "") { byte ->
+        (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+    }
+    return buildString(36) {
+        append(hexadecimal, 0, 8)
+        append('-')
+        append(hexadecimal, 8, 12)
+        append('-')
+        append(hexadecimal, 12, 16)
+        append('-')
+        append(hexadecimal, 16, 20)
+        append('-')
+        append(hexadecimal, 20, 32)
+    }
 }
 
 private fun emptyNativeRecordActionCapabilities() = NativeRecordActionCapabilities(
@@ -1751,6 +2135,15 @@ private val RECORD_INCOMPLETE_VALUES = setOf(
     "pending",
     "todo",
 )
+private val PANTRY_0_23_0_OWNER_REORDER_PATHS = mapOf(
+    "category-reorder" to "/ocs/v2.php/apps/pantry/api/houses/{houseId}/categories/reorder",
+    "checklist-reorder-lists" to "/ocs/v2.php/apps/pantry/api/houses/{houseId}/lists/reorder",
+    "checklist-reorder-items" to
+        "/ocs/v2.php/apps/pantry/api/houses/{houseId}/lists/{listId}/items/reorder",
+)
+private val CHORES_COMPLETION_FIELD_IDS = setOf("id", "work_time", "chore_id", "member")
+private const val CHORES_COMPLETION_PATH = "/apps/chores/api/v1.0/team/{teamId}/work"
+private const val CHORES_EDIT_PATH = "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}"
 private const val MAX_RECORD_IDENTITY_VALUE_LENGTH = 256
 private const val MAX_RECORD_QUERY_VALUE_LENGTH = 2_048
 private const val MAX_RECORD_BODY_VALUE_LENGTH = 65_536
