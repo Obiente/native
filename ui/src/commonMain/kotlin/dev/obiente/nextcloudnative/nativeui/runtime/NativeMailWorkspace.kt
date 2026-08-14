@@ -649,19 +649,40 @@ internal fun NativeMailWorkspace(
                     plan.folders.isNotEmpty() -> plan.folders
                     else -> plan.accounts
                 }
-                NativeMailMessageList(
-                    items = compactItems,
-                    selectedMessage = plan.selectedMessage,
-                    onSelectRecord = onSelectRecord,
-                    contentState = contentState,
-                    onLoadMore = onLoadMore,
-                    loadingMore = loadingMore,
-                    loadMoreError = loadMoreError,
-                )
+                if (nativeMailCompactSearchAvailable(compactItems, onSearchQueryChanged != null)) {
+                    NativeMailSearchableMessageList(
+                        items = compactItems,
+                        selectedMessage = plan.selectedMessage,
+                        onSelectRecord = onSelectRecord,
+                        contentState = contentState,
+                        onLoadMore = onLoadMore,
+                        loadingMore = loadingMore,
+                        loadMoreError = loadMoreError,
+                        searchQuery = searchQuery,
+                        onSearchQueryChanged = onSearchQueryChanged,
+                    )
+                } else {
+                    NativeMailMessageList(
+                        items = compactItems,
+                        selectedMessage = plan.selectedMessage,
+                        onSelectRecord = onSelectRecord,
+                        contentState = contentState,
+                        onLoadMore = onLoadMore,
+                        loadingMore = loadingMore,
+                        loadMoreError = loadMoreError,
+                    )
+                }
             }
         }
     }
 }
+
+internal fun nativeMailCompactSearchAvailable(
+    items: List<NativeMailWorkspaceItem>,
+    searchHandlerAvailable: Boolean,
+): Boolean = searchHandlerAvailable &&
+    items.isNotEmpty() &&
+    items.all { item -> item.presentation.kind == NativeMailboxItemKind.Message }
 
 internal fun nativeMailVisibleMessages(
     items: List<NativeMailWorkspaceItem>,

@@ -3937,7 +3937,7 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         val context = recordContext ?: return@remember emptyList()
         navigationPlan.contextualChildDestinations.filter { destination ->
-            isDynamicMailboxCollectionSummaryDestination(context.resourceId, destination)
+            isDynamicMailboxCollectionSummaryDestination(schema, context.resourceId, destination)
         }
     }
     LaunchedEffect(
@@ -3947,6 +3947,13 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         if (mailCollectionSummaryDestinations.isEmpty()) return@LaunchedEffect
+        val summaryResourceIds = mailCollectionSummaryDestinations
+            .mapTo(linkedSetOf(), DynamicNavigationDestination::resourceId)
+        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            loadedSummaries = emptyMap(),
+        )
         val loaded = coroutineScope {
             mailCollectionSummaryDestinations.map { destination ->
                 async {
@@ -3969,7 +3976,11 @@ private fun DynamicDiscoveredAppScreen(
         }
         currentCoroutineContext().ensureActive()
         val summaries = loaded.filter { (_, records) -> records.isNotEmpty() }.toMap()
-        if (summaries.isNotEmpty()) recordsByResourceId = recordsByResourceId + summaries
+        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            loadedSummaries = summaries,
+        )
     }
     val contextDetailResolution = remember(descriptor, schema, recordContext) {
         val context = recordContext ?: return@remember null
@@ -4052,6 +4063,7 @@ private fun DynamicDiscoveredAppScreen(
                     }
                     .filterNot { destination ->
                         isDynamicMailboxCollectionSummaryDestination(
+                            schema,
                             selectedRecordResourceId.orEmpty(),
                             destination,
                         )
@@ -6004,6 +6016,7 @@ internal fun shouldOpenDynamicContextDestinationMenu(
     shouldShowDynamicContextDestinationMenu(destinations)
 
 internal fun isDynamicMailboxCollectionSummaryDestination(
+    schema: NativeAppSchema,
     parentResourceId: String,
     destination: DynamicNavigationDestination,
 ): Boolean {
@@ -6016,10 +6029,38 @@ internal fun isDynamicMailboxCollectionSummaryDestination(
         destination.label,
         destination.actionId,
     ).flatMap { value -> value.dynamicNavigationResourceWords().asSequence() }.toSet()
-    return destinationWords.any { word ->
+    val summaryNamed = destinationWords.any { word ->
         word in setOf("stat", "stats", "statistics", "status", "summary")
     }
+    if (!summaryNamed) return false
+    val summaryResource = schema.resource(destination.resourceId) ?: return false
+    return summaryResource.fields.any { field ->
+        sequenceOf(field.id, field.label)
+            .map(String::normalizedMailboxSummaryFieldName)
+            .any { fieldName -> fieldName in DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES }
+    }
 }
+
+internal fun replaceDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    summaryResourceIds: Set<String>,
+    loadedSummaries: Map<String, List<NativeRecord>>,
+): Map<String, List<NativeRecord>> =
+    (recordsByResourceId - summaryResourceIds) + loadedSummaries.filterKeys(summaryResourceIds::contains)
+
+private fun String.normalizedMailboxSummaryFieldName(): String =
+    lowercase().filter(Char::isLetterOrDigit)
+
+private val DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES = setOf(
+    "total",
+    "totalmessages",
+    "messagecount",
+    "messagescount",
+    "unread",
+    "unseen",
+    "unreadcount",
+    "unseenmessages",
+)
 
 private fun String.isMailNavigationAncestor(): Boolean = dynamicResourceWords().any { word ->
     word in setOf(

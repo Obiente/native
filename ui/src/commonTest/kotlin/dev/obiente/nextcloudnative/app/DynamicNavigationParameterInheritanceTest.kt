@@ -6,6 +6,8 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.ApiBinding
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.Confidence
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -215,9 +217,43 @@ class DynamicNavigationParameterInheritanceTest {
             actionId = "route.mailboxes.stats",
             pathParameterValues = mapOf("id" to "9"),
         )
+        val deliveryStatus = DynamicNavigationDestination(
+            layoutId = "mailbox.delivery-status",
+            label = "Delivery status",
+            resourceId = "deliveryStatus",
+            actionId = "route.mailboxes.delivery-status",
+            pathParameterValues = mapOf("id" to "9"),
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("mail", "Mail", "1"),
+            confidence = Confidence.verified,
+            resources = listOf(
+                ResourceSpec("mailboxes", "Mailboxes", Confidence.verified),
+                ResourceSpec(
+                    "mailboxStats",
+                    "Mailbox stats",
+                    Confidence.verified,
+                    fields = listOf(
+                        FieldSpec("total", "Total", FieldKind.integer, false, true),
+                        FieldSpec("unread", "Unread", FieldKind.integer, false, true),
+                    ),
+                ),
+                ResourceSpec(
+                    "deliveryStatus",
+                    "Delivery status",
+                    Confidence.verified,
+                    fields = listOf(
+                        FieldSpec("state", "State", FieldKind.string, false, true),
+                        FieldSpec("detail", "Detail", FieldKind.string, false, true),
+                    ),
+                ),
+            ),
+        )
 
-        assertTrue(isDynamicMailboxCollectionSummaryDestination("mailboxes", stats))
-        assertFalse(isDynamicMailboxCollectionSummaryDestination("budgets", stats))
+        assertTrue(isDynamicMailboxCollectionSummaryDestination(schema, "mailboxes", stats))
+        assertFalse(isDynamicMailboxCollectionSummaryDestination(schema, "budgets", stats))
+        assertFalse(isDynamicMailboxCollectionSummaryDestination(schema, "mailboxes", deliveryStatus))
         assertFalse(
             shouldOpenDynamicContextDestinationMenu(
                 destinations = listOf(messages, stats),
@@ -225,6 +261,35 @@ class DynamicNavigationParameterInheritanceTest {
                 preferredCollectionChild = messages,
             ),
         )
+    }
+
+    @Test
+    fun `mailbox summary state is cleared before a different mailbox summary loads`() {
+        val previousSummary = NativeRecord("inbox-summary", mapOf("total" to "120", "unread" to "8"))
+        val nextSummary = NativeRecord("sent-summary", mapOf("total" to "42", "unread" to "0"))
+        val message = NativeRecord("message-1", mapOf("subject" to "Synthetic message"))
+
+        val cleared = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = mapOf(
+                "mailboxStats" to listOf(previousSummary),
+                "messages" to listOf(message),
+            ),
+            summaryResourceIds = setOf("mailboxStats"),
+            loadedSummaries = emptyMap(),
+        )
+        val reloaded = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = cleared,
+            summaryResourceIds = setOf("mailboxStats"),
+            loadedSummaries = mapOf(
+                "mailboxStats" to listOf(nextSummary),
+                "unrelated" to listOf(previousSummary),
+            ),
+        )
+
+        assertFalse("mailboxStats" in cleared)
+        assertEquals(listOf(message), cleared["messages"])
+        assertEquals(listOf(nextSummary), reloaded["mailboxStats"])
+        assertFalse("unrelated" in reloaded)
     }
 
     @Test

@@ -53,6 +53,26 @@ class NativeMailWorkspaceTest {
     }
 
     @Test
+    fun `compact mail owns search only for message collections`() {
+        val messages = listOf(
+            mailItem(id = "release", sender = "Ada", subject = "Release candidate is ready"),
+            mailItem(id = "review", sender = "Mira", subject = "Design review notes"),
+        )
+        val folderResource = resource("mailboxes", "Mailboxes")
+        val folderRecord = NativeRecord("inbox", values = mapOf("name" to "Inbox"))
+        val folder = NativeMailWorkspaceItem(
+            resource = folderResource,
+            record = folderRecord,
+            presentation = nativeMailboxPresentation(folderResource, folderRecord),
+        )
+
+        assertTrue(nativeMailCompactSearchAvailable(messages, searchHandlerAvailable = true))
+        assertFalse(nativeMailCompactSearchAvailable(messages, searchHandlerAvailable = false))
+        assertFalse(nativeMailCompactSearchAvailable(listOf(folder), searchHandlerAvailable = true))
+        assertFalse(nativeMailCompactSearchAvailable(emptyList(), searchHandlerAvailable = true))
+    }
+
+    @Test
     fun `mailbox stats enrich the selected mailbox instead of becoming mail content`() {
         val mailboxes = ResourceSpec(
             id = "mailboxes",

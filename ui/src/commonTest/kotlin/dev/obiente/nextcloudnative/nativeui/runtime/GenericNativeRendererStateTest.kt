@@ -33,6 +33,33 @@ import kotlin.test.assertTrue
 
 class GenericNativeRendererStateTest {
     @Test
+    fun nativeMailKeepsSearchInsideItsWorkspace() {
+        val ready = NativeScreenState.Ready(
+            listOf(
+                NativeRecord(id = "1", values = emptyMap()),
+                NativeRecord(id = "2", values = emptyMap()),
+            ),
+        )
+
+        assertTrue(
+            genericCollectionSearchAvailable(
+                state = ready,
+                recordCount = 2,
+                surface = GenericNativeSurface.Mailbox,
+                nativeMailWorkspaceEligible = false,
+            ),
+        )
+        assertFalse(
+            genericCollectionSearchAvailable(
+                state = ready,
+                recordCount = 2,
+                surface = GenericNativeSurface.Mailbox,
+                nativeMailWorkspaceEligible = true,
+            ),
+        )
+    }
+
+    @Test
     fun dedicatedCollectionUsesTheSameFilteredRecordsAsItsSearchBar() {
         val first = NativeRecord(id = "1", values = mapOf("name" to "Kitchen"))
         val second = NativeRecord(id = "2", values = mapOf("name" to "Garden"))
