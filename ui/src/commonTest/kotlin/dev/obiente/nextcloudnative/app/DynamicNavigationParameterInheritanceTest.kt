@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -269,7 +270,7 @@ class DynamicNavigationParameterInheritanceTest {
         val mailboxSnapshot = DynamicNavigationSnapshot(
             viewId = "messages.collection",
             resourceId = "messages",
-            record = NativeRecord("inbox", mapOf("id" to "9")),
+            record = NativeRecord("inbox", mapOf("id" to "9", "accountId" to "account-a")),
             recordResourceId = "mailboxes",
             pathParameterValues = mapOf("mailboxId" to "9"),
         )
@@ -343,6 +344,27 @@ class DynamicNavigationParameterInheritanceTest {
                 navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
             ),
         )
+        assertNotEquals(
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = collection,
+                selectedRecordResourceId = mailboxSnapshot.recordResourceId,
+                selectedRecord = mailboxSnapshot.record,
+                selectedPathParameterValues = mailboxSnapshot.pathParameterValues,
+                navigationHistory = emptyList(),
+            ),
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = collection,
+                selectedRecordResourceId = mailboxSnapshot.recordResourceId,
+                selectedRecord = NativeRecord(
+                    "inbox",
+                    mapOf("id" to "9", "accountId" to "account-b"),
+                ),
+                selectedPathParameterValues = mailboxSnapshot.pathParameterValues,
+                navigationHistory = emptyList(),
+            ),
+        )
     }
 
     @Test
@@ -374,6 +396,20 @@ class DynamicNavigationParameterInheritanceTest {
 
     @Test
     fun `mailbox summary state is cleared before a different mailbox summary loads`() {
+        assertTrue(
+            shouldRetainDynamicMailboxSummaryState(
+                retainingAdjacentMailbox = true,
+                loadAttempt = 2,
+                completedLoadAttempt = 2,
+            ),
+        )
+        assertFalse(
+            shouldRetainDynamicMailboxSummaryState(
+                retainingAdjacentMailbox = true,
+                loadAttempt = 3,
+                completedLoadAttempt = 2,
+            ),
+        )
         val previousSummary = NativeRecord("inbox-summary", mapOf("total" to "120", "unread" to "8"))
         val nextSummary = NativeRecord("sent-summary", mapOf("total" to "42", "unread" to "0"))
         val message = NativeRecord("message-1", mapOf("subject" to "Synthetic message"))

@@ -786,6 +786,20 @@ class DynamicNativeRuntimeTest {
 
         assertEquals(0, pagination.initialPageNumber)
         assertEquals("1", pagination.nextValue(pagination.initialPageNumber + 1, loadedRecordCount = 50))
+        assertEquals(
+            1,
+            requireNotNull(
+                action.copy(
+                    binding = action.binding.copy(
+                        queryParameters = listOf(
+                            action.binding.queryParameters.single().copy(
+                                schema = json.parseToJsonElement("""{"type":"integer","minimum":0}"""),
+                            ),
+                        ),
+                    ),
+                ).dynamicPaginationSpec(),
+            ).initialPageNumber,
+        )
         assertNull(
             action.copy(
                 binding = action.binding.copy(
@@ -862,6 +876,19 @@ class DynamicNativeRuntimeTest {
                 50,
                 listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
             ),
+        )
+        assertNull(
+            pagination.continuationFailureMessage(
+                listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
+            ),
+        )
+        assertEquals(
+            DYNAMIC_CURSOR_CONTINUATION_FAILURE,
+            pagination.continuationFailureMessage(listOf(NativeRecord("1", emptyMap()))),
+        )
+        assertNull(
+            pagination.copy(expectedPageSize = 2)
+                .continuationFailureMessage(listOf(NativeRecord("1", emptyMap()))),
         )
     }
 

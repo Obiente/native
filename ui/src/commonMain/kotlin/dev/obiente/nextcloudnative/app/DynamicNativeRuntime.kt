@@ -1483,6 +1483,18 @@ internal data class DynamicPaginationSpec(
         novelRecordCount > 0 && expectedPageSize?.let { lastPageSize >= it } != false
 }
 
+internal fun DynamicPaginationSpec.continuationFailureMessage(
+    lastPage: List<NativeRecord>,
+    loadedRecordCount: Int = lastPage.size,
+    novelRecordCount: Int = lastPage.size,
+    nextPageNumber: Int = initialPageNumber + 1,
+): String? {
+    if (mode != DynamicPaginationMode.RecordCursor || !canContinue(lastPage.size, novelRecordCount)) return null
+    return DYNAMIC_CURSOR_CONTINUATION_FAILURE.takeIf {
+        nextValue(nextPageNumber, loadedRecordCount, lastPage) == null
+    }
+}
+
 /**
  * Returns pagination only when the signed or advertised contract declares a conventional typed
  * integer page/offset query. Cursor values are deliberately never fabricated.
@@ -1601,7 +1613,7 @@ private fun HttpParameter.declaredInitialPageNumber(): Int? {
     }
     val declaredDefault = exactInteger("default")
     val declaredMinimum = exactInteger("minimum")
-    val start = declaredDefault ?: declaredMinimum ?: 1
+    val start = declaredDefault ?: 1
     val declaredMaximum = exactInteger("maximum")
     if (start < 0) return null
     if (declaredMinimum != null && start < declaredMinimum) return null
@@ -1704,6 +1716,8 @@ internal const val INITIAL_COLLECTION_PAGE_SIZE = 50
 private const val MAX_AUTOMATIC_COLLECTION_PAGE_SIZE = 500
 internal const val DYNAMIC_PAGED_READ_PARTIAL_FAILURE =
     "Could not load the complete collection. A partial result is shown; retry to load all items."
+internal const val DYNAMIC_CURSOR_CONTINUATION_FAILURE =
+    "The server omitted the next-page cursor. Retry before loading more items."
 private val INITIAL_PAGE_SIZE_PARAMETER_NAMES = setOf("limit", "pagesize", "perpage", "maxresults")
 private val PAGE_NUMBER_PARAMETER_NAMES = setOf("page", "pagenumber", "pageno")
 private val OFFSET_PARAMETER_NAMES = setOf("offset")
