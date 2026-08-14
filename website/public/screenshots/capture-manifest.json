@@ -326,7 +326,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "6ce2d4276955fe6383e69b4c0a1966897fe4d9567e6c13e422f9237187871217",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "974db2860a4ebe0cbe0f5ea4a8df26bf644cb52259387e6ba07186c16b92e4d8",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "900407aadd60cbd8a2c85ea6376444ba35f15f799ee9eaf172771514f6ac9b8f",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareDav.kt": "29f49a4a093e33f7c4e24336c9efef1c774d04286b9fdb0019512566dd5edc51",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspaceLayout.kt": "95c8b7c8e01244df96999cfb5afb48191fd78369eaf748d2c0b73ca9b8aa45db",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/HomeWorkspacePersistence.kt": "a6f1e2919f4b68f2301105f8b7919ca1b62b1810bcc4f550d307ea9f127bb55c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ImageDecodeBounds.kt": "6a218194682e175396d57b4d4a3fc8aea2c0b39a11212daa61a4d60bc8ed42a5",
