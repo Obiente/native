@@ -304,7 +304,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIdentityResolution.kt": "f8658c54cf14dec5b60037a27770ea3c2eb06b509bd28d3b9c97c228adfae83a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileIntegrationPlanning.kt": "1421be5a0db7c7d36ad72434e435952d5017ae25db080f2d7eeddc1aea368a1b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenter.kt": "0c599b169d7857f6aaac23fd8ac6d87715fadba0ebe3f032b02acc6837fdbac7",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "f858c60a0094d0fb5a275d833af71b384b500a00a9bb8482cbee16f84d166778",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt": "f95854424b555bdb241b3672eabe9e113a63d4deedea9f44a6cb4ce65b572ec8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueue.kt": "f592e2dcf3fde4467f88e30b570f9612126a7d6a63070c2a17819572ceb68e19",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineQueueSnapshot.kt": "1fb930db8f65e0e410af6eaacde0c4f3d071f4115c39f78a4f49a9532b9f7961",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOperations.kt": "1282adb909c54d559d812689ca9f937cda3a1256c1400fd0d0f91ba3a1ace1d6",
@@ -312,11 +312,11 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileShareDialog.kt": "0a0d071a79c18f12bb0bac2b026aed3901a3a68a13b8ee0d01b3dcd442cb2007",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileShareRecipientPicker.kt": "49e2af9e3c5d69629b167d2ed588103debbada7aba0e4bf4237d88afb5db7585",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSharing.kt": "b1aa1b070e011f1c935db2666682171a3d1fd51e324b192feb64d2edee1910d9",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCenter.kt": "a842634502cafc946dc38ecbf1bf6ab61dd2f674493b58302851ae4269f26f8b",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt": "122fc4ed0ff1ab82d778dd28aff883040827be0bab083aa0a0cfcb14cf2c5300",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "5eeb2256bdafb3d94d8317091b7e473b67b6abc6a8c2c0096f1d266fcd8f2f99",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "0ba52694e8d50583b631ef44ff709d6eb378c010d51a5b52cfce972aacdba079",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "2aac41272bba43287c033cc06bfd394f1c003e09c11655e34e71d74b34dfde51",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCenter.kt": "6580c3ae3f32102337dc9279b212417acb9d79495ac05d80460bbc11b0af08bf",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt": "6fb1a4e4698eb146f14a0dca34d1d857601d682308d08f206096615866178db7",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "5feb33ae361d2d20af8badf58a2e7d54bee42de8b52e61590883f76a986dd14e",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "a08560f00781ed4118f48ea224b0965bae0b9a88bc281f1ec7a89f68cbffe94e",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "3a66544fe239670feeea1c8808f882061344bd27b03ad488accbca96ae902cd3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "fc5d0165cc47bf4e54fd92bf860a0b262c3c5213e0a1e35e16e99db0126657c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspace.kt": "e6854c18811f03674555d32184e2e1a7aea5ea7b421fecd614780869c26c81b7",
@@ -1130,7 +1130,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "deefa93d1383ca96e13f06fdecf0640cd13671ae95a1c8e645a59685e100593f"
+            "sha256": "e82d5b35c1c4b350d98fd019ca977abf3d6819ca664484b7c16edeffb55b5263"
         },
         {
             "scenario": "file-sync-status-mobile-light",
@@ -1146,7 +1146,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "ab72f42f0e85702bc33a484e65fe084784f91c5dd953cd5427c0c3850c0ebc4f"
+            "sha256": "7ade7c535a3a27472f088f766546c8bc959a2fbd660a54978bb1e7e063d6ab35"
         },
         {
             "scenario": "file-sync-status-desktop",
@@ -3564,7 +3564,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "deefa93d1383ca96e13f06fdecf0640cd13671ae95a1c8e645a59685e100593f"
+            "sha256": "e82d5b35c1c4b350d98fd019ca977abf3d6819ca664484b7c16edeffb55b5263"
         },
         {
             "scenario": "guide-android-folder-sync-status-light",
@@ -3580,7 +3580,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "ab72f42f0e85702bc33a484e65fe084784f91c5dd953cd5427c0c3850c0ebc4f"
+            "sha256": "7ade7c535a3a27472f088f766546c8bc959a2fbd660a54978bb1e7e063d6ab35"
         },
         {
             "scenario": "guide-linux-folder-sync-workspace",
