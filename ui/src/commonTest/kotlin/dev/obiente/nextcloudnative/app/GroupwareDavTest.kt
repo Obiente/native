@@ -703,8 +703,30 @@ END:VCALENDAR</c:calendar-data>
         )
         assertEquals("20260707T100000Z", expanded.last().end)
         assertEquals(3, expanded.map(GroupwareCalendarEvent::instanceId).distinct().size)
+        assertNull(expanded.first().recurrenceId)
         assertFalse(expanded.first().isGeneratedOccurrence)
         assertTrue(expanded.last().isGeneratedOccurrence)
+
+        val updatedSeries = updateGroupwareCalendarEventContent(
+            event = expanded.first(),
+            title = "Updated series",
+            start = expanded.first().start,
+            end = expanded.first().end,
+            allDay = expanded.first().allDay,
+            location = expanded.first().location,
+            description = expanded.first().description,
+        )
+        assertEquals(
+            "Updated series",
+            requireNotNull(
+                parseGroupwareCalendarEvent(
+                    calendarHref = expanded.first().calendarHref,
+                    href = expanded.first().href,
+                    etag = expanded.first().etag,
+                    content = updatedSeries,
+                ),
+            ).title,
+        )
     }
 
     @Test

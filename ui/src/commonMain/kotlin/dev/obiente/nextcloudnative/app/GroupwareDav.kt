@@ -700,7 +700,7 @@ fun expandGroupwareCalendarEvents(
                 result += master.copy(
                     start = occurrenceStart,
                     end = master.end?.shiftCalendarValue(master.start, occurrenceStart),
-                    recurrenceId = occurrenceStart,
+                    recurrenceId = occurrenceStart.takeIf { it != master.start },
                     isGeneratedOccurrence = occurrenceStart != master.start,
                 )
             }
