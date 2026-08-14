@@ -12515,6 +12515,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     var confirmSend by rememberSaveable { mutableStateOf(false) }
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
     var showPreview by rememberSaveable { mutableStateOf(false) }
+    var reportPageIndex by rememberSaveable { mutableStateOf(0) }
     val submissionState by remember(services) {
         services.supportDiagnosticsSubmissionStates()
     }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
@@ -12861,6 +12862,12 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         style = MaterialTheme.typography.bodySmall,
                     )
                     is SupportDiagnosticsSubmissionState.Submitted -> {
+                        val reportPage = supportReportPage(current.reports, reportPageIndex)
+                        LaunchedEffect(reportPageIndex, reportPage.pageIndex, current.reports.size) {
+                            if (reportPageIndex != reportPage.pageIndex) {
+                                reportPageIndex = reportPage.pageIndex
+                            }
+                        }
                         Text(
                             if (current.reports.size == 1) {
                                 "Sent privately. Your report remains available until its retention period ends."
@@ -12870,7 +12877,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        current.reports.forEach { report ->
+                        reportPage.items.forEach { report ->
                             Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                                 Text(
                                     "Support code: ${report.supportCode}",
@@ -12900,6 +12907,27 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                                 }
                             }
                         }
+                        if (reportPage.pageCount > 1) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                OutlinedButton(
+                                    enabled = reportPage.pageIndex > 0,
+                                    onClick = { reportPageIndex = reportPage.pageIndex - 1 },
+                                ) { Text("Previous reports") }
+                                Text(
+                                    "Page ${reportPage.pageIndex + 1} of ${reportPage.pageCount}",
+                                    modifier = Modifier.padding(vertical = 12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                OutlinedButton(
+                                    enabled = reportPage.pageIndex + 1 < reportPage.pageCount,
+                                    onClick = { reportPageIndex = reportPage.pageIndex + 1 },
+                                ) { Text("Next reports") }
+                            }
+                        }
                     }
                     is SupportDiagnosticsSubmissionState.Unsupported -> Text(
                         current.reason,
@@ -12922,6 +12950,30 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
         }
     }
 }
+
+internal data class SupportReportPage<T>(
+    val items: List<T>,
+    val pageIndex: Int,
+    val pageCount: Int,
+)
+
+internal fun <T> supportReportPage(
+    reports: List<T>,
+    requestedPageIndex: Int,
+    pageSize: Int = SUPPORT_REPORT_PAGE_SIZE,
+): SupportReportPage<T> {
+    require(pageSize > 0)
+    val pageCount = if (reports.isEmpty()) 1 else ((reports.size - 1) / pageSize) + 1
+    val pageIndex = requestedPageIndex.coerceIn(0, pageCount - 1)
+    val firstIndex = pageIndex * pageSize
+    return SupportReportPage(
+        items = reports.subList(firstIndex, minOf(firstIndex + pageSize, reports.size)),
+        pageIndex = pageIndex,
+        pageCount = pageCount,
+    )
+}
+
+private const val SUPPORT_REPORT_PAGE_SIZE = 5
 
 @Composable
 internal fun DesktopStartOnLoginSettingsCard(

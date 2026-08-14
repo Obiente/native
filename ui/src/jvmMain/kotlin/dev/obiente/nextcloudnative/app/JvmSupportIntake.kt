@@ -69,6 +69,9 @@ class JvmSupportIntake(
     private val pendingDescriptorRead: (File) -> String = { descriptor ->
         descriptor.readText(Charsets.UTF_8)
     },
+    private val completedDescriptorRead: (File) -> String = { descriptor ->
+        descriptor.readText(Charsets.UTF_8)
+    },
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -90,6 +93,7 @@ class JvmSupportIntake(
     private val operationActive = AtomicBoolean(false)
     private val rejectedPendingDescriptorCleanup = AtomicBoolean(false)
     private val pendingDescriptorRestorePending = AtomicBoolean(false)
+    private val completedDescriptorRestorePending = AtomicBoolean(false)
     private val lock = Any()
     private val persistenceLock = Any()
     private var activeAccountIdentity: String? = null
@@ -107,38 +111,19 @@ class JvmSupportIntake(
                 val storageFailure = runCatching { preparePrivateStorage() }.exceptionOrNull()
                 val restored = if (storageFailure == null) restorePendingSubmission() else null
                 val restoredCompleted = if (storageFailure == null) restoreCompletedSubmissions() else emptyList()
+                if (completedDescriptorRestorePending.get()) {
+                    scope.launch { retryCompletedDescriptorRestoration() }
+                }
                 if (storageFailure == null && !pendingDescriptorRestorePending.get()) {
                     pruneTemporaryReports(restored?.archive)
                 }
                 synchronized(lock) {
-                    storageUnavailableMessage = when {
-                        storageFailure != null -> SUPPORT_STORAGE_UNAVAILABLE_MESSAGE
-                        pendingDescriptorRestorePending.get() -> SUPPORT_PENDING_RESTORE_MESSAGE
-                        rejectedPendingDescriptorCleanup.get() -> SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE
-                        else -> null
-                    }
+                    storageUnavailableMessage = storageFailure?.let { SUPPORT_STORAGE_UNAVAILABLE_MESSAGE }
+                        ?: currentRecoveryUnavailableMessage()
                     pending = restored
                     completedSubmissions = restoredCompleted
                     scheduleCompletedExpiryLocked()
-                    val visibleCompleted = latestCompletedFor(activeAccountIdentity)
-                    publishStateLocked(
-                        storageUnavailableMessage?.let { unavailableMessage ->
-                            SupportDiagnosticsSubmissionState.Unsupported(unavailableMessage)
-                        } ?: restored?.let {
-                            SupportDiagnosticsSubmissionState.RetryableFailure(
-                                if (restored.cancellationPending) {
-                                    "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
-                                } else if (restored.archive == null) {
-                                    "Private report preparation was interrupted. You can retry it safely."
-                                } else {
-                                    "A private support submission was interrupted. You can retry it safely."
-                                },
-                                outcomeAmbiguous = restored.outcomeAmbiguous,
-                            )
-                        } ?: visibleCompleted?.let { submittedStateFor(it.originAccountIdentity) }
-                            ?: SupportDiagnosticsSubmissionState.Idle,
-                        restored?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
-                    )
+                    publishRecoveredStateLocked()
                 }
             } finally {
                 initialized.complete(Unit)
@@ -1249,13 +1234,8 @@ class JvmSupportIntake(
             rejectedPendingDescriptorCleanup.set(false)
             synchronized(lock) {
                 if (storageUnavailableMessage == SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE) {
-                    storageUnavailableMessage = null
-                    publishStateLocked(
-                        latestCompletedFor(activeAccountIdentity)
-                            ?.let { submittedStateFor(it.originAccountIdentity) }
-                            ?: SupportDiagnosticsSubmissionState.Idle,
-                        activeAccountIdentity,
-                    )
+                    storageUnavailableMessage = currentRecoveryUnavailableMessage()
+                    publishRecoveredStateLocked()
                 }
             }
             return
@@ -1271,55 +1251,99 @@ class JvmSupportIntake(
             pruneTemporaryReports(restored?.archive)
             synchronized(lock) {
                 pending = restored
-                storageUnavailableMessage = if (rejectedPendingDescriptorCleanup.get()) {
-                    SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE
-                } else {
-                    null
-                }
-                val visibleCompleted = latestCompletedFor(activeAccountIdentity)
-                publishStateLocked(
-                    storageUnavailableMessage?.let { unavailableMessage ->
-                        SupportDiagnosticsSubmissionState.Unsupported(unavailableMessage)
-                    } ?: restored?.let {
-                        SupportDiagnosticsSubmissionState.RetryableFailure(
-                            if (restored.cancellationPending) {
-                                "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
-                            } else if (restored.archive == null) {
-                                "Private report preparation was interrupted. You can retry it safely."
-                            } else {
-                                "A private support submission was interrupted. You can retry it safely."
-                            },
-                            outcomeAmbiguous = restored.outcomeAmbiguous,
-                        )
-                    } ?: visibleCompleted?.let { submittedStateFor(it.originAccountIdentity) }
-                        ?: SupportDiagnosticsSubmissionState.Idle,
-                    restored?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
-                )
+                storageUnavailableMessage = currentRecoveryUnavailableMessage()
+                publishRecoveredStateLocked()
             }
             return
         }
     }
 
+    private suspend fun retryCompletedDescriptorRestoration() {
+        initialized.await()
+        while (!shutdownRequested.get()) {
+            delay(descriptorCleanupRetryMillis)
+            val restored = restoreCompletedSubmissions()
+            if (completedDescriptorRestorePending.get()) continue
+            synchronized(lock) {
+                completedSubmissions = restored
+                scheduleCompletedExpiryLocked()
+                storageUnavailableMessage = currentRecoveryUnavailableMessage()
+                publishRecoveredStateLocked()
+            }
+            return
+        }
+    }
+
+    private fun currentRecoveryUnavailableMessage(): String? = when {
+        pendingDescriptorRestorePending.get() -> SUPPORT_PENDING_RESTORE_MESSAGE
+        completedDescriptorRestorePending.get() -> SUPPORT_COMPLETED_RESTORE_MESSAGE
+        rejectedPendingDescriptorCleanup.get() -> SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE
+        else -> null
+    }
+
+    private fun publishRecoveredStateLocked() {
+        val pendingSubmission = pending
+        val visibleCompleted = latestCompletedFor(activeAccountIdentity)
+        publishStateLocked(
+            storageUnavailableMessage?.let { unavailableMessage ->
+                SupportDiagnosticsSubmissionState.Unsupported(unavailableMessage)
+            } ?: pendingSubmission?.let { submission ->
+                SupportDiagnosticsSubmissionState.RetryableFailure(
+                    if (submission.cancellationPending) {
+                        "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
+                    } else if (submission.archive == null) {
+                        "Private report preparation was interrupted. You can retry it safely."
+                    } else {
+                        "A private support submission was interrupted. You can retry it safely."
+                    },
+                    outcomeAmbiguous = submission.outcomeAmbiguous,
+                )
+            } ?: visibleCompleted?.let { submittedStateFor(it.originAccountIdentity) }
+                ?: SupportDiagnosticsSubmissionState.Idle,
+            pendingSubmission?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
+        )
+    }
+
     private fun pendingDescriptor(): File = File(temporaryRoot, SUPPORT_PENDING_DESCRIPTOR)
 
-    private fun restoreCompletedSubmissions(): List<CompletedSubmission> =
-        temporaryRoot.listFiles().orEmpty()
-            .filter { descriptor -> descriptor.isFile && descriptor.name.matches(SUPPORT_COMPLETED_FILE_PATTERN) }
-            .mapNotNull(::restoreCompletedSubmission)
+    private fun restoreCompletedSubmissions(): List<CompletedSubmission> {
+        completedDescriptorRestorePending.set(false)
+        val descriptors = try {
+            Files.newDirectoryStream(temporaryRoot.toPath()).use { entries ->
+                entries.map { path -> path.toFile() }
+                    .filter { descriptor -> descriptor.name.matches(SUPPORT_COMPLETED_FILE_PATTERN) }
+            }
+        } catch (_: IOException) {
+            completedDescriptorRestorePending.set(true)
+            return emptyList()
+        } catch (_: SecurityException) {
+            completedDescriptorRestorePending.set(true)
+            return emptyList()
+        }
+        return descriptors.mapNotNull(::restoreCompletedSubmission)
+    }
 
-    private fun restoreCompletedSubmission(descriptor: File): CompletedSubmission? = runCatching {
-        require(descriptor.length() in 1L..MAX_COMPLETED_DESCRIPTOR_BYTES)
+    private fun restoreCompletedSubmission(descriptor: File): CompletedSubmission? = try {
+        val descriptorAttributes = Files.readAttributes(descriptor.toPath(), BasicFileAttributes::class.java)
+        require(descriptorAttributes.isRegularFile)
+        require(descriptorAttributes.size() in 1L..MAX_COMPLETED_DESCRIPTOR_BYTES)
         val recordId = requireNotNull(SUPPORT_COMPLETED_FILE_PATTERN.matchEntire(descriptor.name))
             .groupValues[1]
         val persisted = json.decodeFromString(
             PersistedCompletedSubmission.serializer(),
-            descriptor.readText(Charsets.UTF_8),
+            completedDescriptorRead(descriptor),
         )
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         validateReceipt(persisted.receipt)
         require(System.currentTimeMillis() <= Instant.parse(persisted.receipt.retentionUntil).toEpochMilli())
         CompletedSubmission(recordId, persisted.originAccountIdentity, persisted.receipt)
-    }.getOrElse {
+    } catch (_: IOException) {
+        completedDescriptorRestorePending.set(true)
+        null
+    } catch (_: SecurityException) {
+        completedDescriptorRestorePending.set(true)
+        null
+    } catch (_: Throwable) {
         runCatching { deletePrivateDescriptorDurably(descriptor) }
         null
     }
@@ -1630,6 +1654,8 @@ private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
 private const val SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS = 60L * 1_000L
 private const val SUPPORT_PENDING_RESTORE_MESSAGE =
     "Private support report recovery is temporarily unavailable. The app will retry automatically."
+private const val SUPPORT_COMPLETED_RESTORE_MESSAGE =
+    "Submitted support report recovery is temporarily unavailable. The app will retry automatically."
 private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L
 private const val MAX_SUPPORT_RETRY_AFTER_MILLIS = MAX_SUPPORT_RETRY_AFTER_SECONDS * 1_000L
 private const val READ_ONLY_SUPPORT_MESSAGE =

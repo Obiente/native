@@ -207,6 +207,37 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun retriesTransientCompletedDescriptorReadWithoutDeletingTheReceipt() = runBlocking {
+        val failReads = AtomicBoolean(false)
+        testFixture(
+            descriptorCleanupRetryMillis = 10L,
+            completedDescriptorRead = { descriptor ->
+                if (failReads.get()) throw IOException("Synthetic transient completed receipt read failure.")
+                descriptor.readText()
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            val descriptor = fixture.completedDescriptors().single()
+            fixture.intake.close()
+            failReads.set(true)
+
+            fixture.newIntake().use { restored ->
+                val unavailable = assertIs<SupportDiagnosticsSubmissionState.Unsupported>(restored.states().value)
+                assertTrue(unavailable.reason.contains("retry automatically"))
+                assertTrue(descriptor.isFile)
+
+                failReads.set(false)
+                val submitted = withTimeout(5_000) {
+                    restored.states().first { state -> state is SupportDiagnosticsSubmissionState.Submitted }
+                }
+                assertEquals("OBI-ABCDE-23456", assertIs<SupportDiagnosticsSubmissionState.Submitted>(submitted).supportCode)
+                assertTrue(descriptor.isFile)
+            }
+        }
+    }
+
+    @Test
     fun preservesCompletedReceiptsForEachAccountAndReport() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-ABCDE-23456"))
@@ -1310,6 +1341,7 @@ class JvmSupportIntakeTest {
         beforeBundlePackaging: () -> Unit = {},
         privateFileDelete: (File) -> Boolean = File::delete,
         pendingDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
+        completedDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
         submissionStorageBlocked: Boolean = false,
         pendingTemporaryBeforeInitialization: Boolean = false,
         archiveTemporaryBeforeInitialization: Boolean = false,
@@ -1367,6 +1399,7 @@ class JvmSupportIntakeTest {
             beforeBundlePackaging = beforeBundlePackaging,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
+            completedDescriptorRead = completedDescriptorRead,
         )
     }
 
@@ -1408,6 +1441,7 @@ class JvmSupportIntakeTest {
         val beforeBundlePackaging: () -> Unit,
         val privateFileDelete: (File) -> Boolean,
         val pendingDescriptorRead: (File) -> String,
+        val completedDescriptorRead: (File) -> String,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -1429,6 +1463,7 @@ class JvmSupportIntakeTest {
             beforeBundlePackaging = beforeBundlePackaging,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
+            completedDescriptorRead = completedDescriptorRead,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }
