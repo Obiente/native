@@ -31,6 +31,33 @@ internal fun isNewAndroidIncomingLinkDelivery(
     currentDeliveryId: String?,
 ): Boolean = currentDeliveryId == null || currentDeliveryId != lastDeliveryId
 
+internal fun restoreAndroidIncomingLinkQueue(
+    restoredSequence: Long,
+    sequences: LongArray?,
+    urls: List<String>?,
+    legacyUrl: String?,
+): List<NextcloudNativeLinkRequest> {
+    if (restoredSequence < 0L) return emptyList()
+    if (sequences != null || urls != null) {
+        if (sequences == null || urls == null || sequences.size != urls.size) return emptyList()
+        var previous = 0L
+        return sequences.indices.map { index ->
+            val sequence = sequences[index]
+            val url = urls[index]
+            if (sequence <= previous || sequence > restoredSequence || !url.isSupportedAndroidIncomingLink()) {
+                return emptyList()
+            }
+            previous = sequence
+            NextcloudNativeLinkRequest(sequence, url)
+        }
+    }
+    return legacyUrl
+        ?.takeIf(String::isSupportedAndroidIncomingLink)
+        ?.takeIf { restoredSequence > 0L }
+        ?.let { listOf(NextcloudNativeLinkRequest(restoredSequence, it)) }
+        .orEmpty()
+}
+
 private fun String.isSupportedAndroidIncomingLink(): Boolean {
     if (length !in 1..MAX_ANDROID_INCOMING_LINK_LENGTH) return false
     if (any { it.isWhitespace() || it.isISOControl() } || '\\' in this) return false

@@ -165,37 +165,51 @@ fun NativeGroupwareCalendarScreen(
     var deleting by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
     var deletingInProgress by remember { mutableStateOf(false) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
-    var mutationRecoveryState by remember(accountScope, services) {
-        mutableStateOf(
-            services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar),
-        )
-    }
+    var mutationRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
+    var mutationRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
     val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
         mutationRecoveryState?.let { decodeCalendarMutationRecoveryState(it, accountScope) }
     }
-    val mutationInProgress = mutationOperationInProgress || mutationPostcondition != null
+    val mutationInProgress = !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
 
-    fun retainMutationRecovery(postcondition: CalendarMutationPostcondition): Boolean {
-        check(mutationRecoveryState == null && !mutationOperationInProgress) {
-            "Another calendar change is still awaiting server verification."
+    suspend fun retainMutationRecovery(postcondition: CalendarMutationPostcondition): Boolean {
+        if (!mutationRecoveryLoaded || mutationRecoveryState != null || mutationOperationInProgress) {
+            mutationError = "Another calendar change is still awaiting server verification."
+            return false
         }
         val encoded = CalendarMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
-        if (!services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar, encoded)) {
+        mutationOperationInProgress = true
+        onMutationInProgressChanged(true)
+        val saved = try {
+            services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar, encoded)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+        if (!saved) {
             mutationError = "The calendar change could not be safely recorded. Check local storage and try again."
+            mutationOperationInProgress = false
+            onMutationInProgressChanged(mutationRecoveryState != null || !mutationRecoveryLoaded)
             return false
         }
         mutationRecoveryState = encoded
-        mutationOperationInProgress = true
-        onMutationInProgressChanged(true)
         return true
     }
 
-    fun clearMutationRecovery(): Boolean {
-        if (!services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)) {
+    suspend fun clearMutationRecovery(): Boolean {
+        val cleared = try {
+            services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+        if (!cleared) {
             mutationError = "The verified calendar recovery record could not be cleared. Free local storage and refresh."
             return false
         }
@@ -205,9 +219,32 @@ fun NativeGroupwareCalendarScreen(
         return true
     }
 
-    LaunchedEffect(accountScope, mutationRecoveryState, mutationPostcondition) {
-        if (mutationRecoveryState != null && mutationPostcondition == null) {
-            if (services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)) {
+    LaunchedEffect(accountScope, services, loadAttempt) {
+        mutationRecoveryLoaded = false
+        mutationRecoveryState = null
+        try {
+            mutationRecoveryState = services.loadDurableMutationRecovery(
+                accountScope,
+                DurableMutationRecoveryKind.Calendar,
+            )
+            mutationRecoveryLoaded = true
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            mutationError = "Calendar recovery storage could not be read securely. Check local storage and retry."
+        }
+    }
+
+    LaunchedEffect(accountScope, mutationRecoveryLoaded, mutationRecoveryState, mutationPostcondition) {
+        if (mutationRecoveryLoaded && mutationRecoveryState != null && mutationPostcondition == null) {
+            val cleared = try {
+                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                false
+            }
+            if (cleared) {
                 mutationRecoveryState = null
             } else {
                 mutationError = "A damaged calendar recovery record could not be cleared. Free local storage and retry."
@@ -324,7 +361,9 @@ fun NativeGroupwareCalendarScreen(
         refreshing = false
     }
 
-    LaunchedEffect(session, userId, month, queryWindow, loadAttempt) { reload() }
+    LaunchedEffect(session, userId, month, queryWindow, loadAttempt, mutationRecoveryLoaded) {
+        if (mutationRecoveryLoaded) reload()
+    }
 
     Scaffold(
         topBar = {
@@ -521,16 +560,16 @@ fun NativeGroupwareCalendarScreen(
                         recurrenceRule = draft.recurrenceRule,
                     ),
                 ).toGroupwareDavRequest()
-                if (!retainMutationRecovery(
-                    CalendarMutationPostcondition.Upsert(
-                        href = objectHref,
-                        calendarHref = calendar.href,
-                        expectedUid = uid,
-                        previousEtag = null,
-                        draft = draft,
-                    ),
-                )) return@save
                 scope.launch {
+                    if (!retainMutationRecovery(
+                        CalendarMutationPostcondition.Upsert(
+                            href = objectHref,
+                            calendarHref = calendar.href,
+                            expectedUid = uid,
+                            previousEtag = null,
+                            draft = draft,
+                        ),
+                    )) return@launch
                     try {
                         val response = services.executeGroupwareDav(session, request)
                         if (response.status !in 200..299) {
@@ -592,16 +631,16 @@ fun NativeGroupwareCalendarScreen(
                         etag = event.etag,
                         content = updated,
                     ).toGroupwareDavRequest()
-                    if (!retainMutationRecovery(
-                        CalendarMutationPostcondition.Upsert(
-                            href = event.href,
-                            calendarHref = event.calendarHref,
-                            expectedUid = event.uid,
-                            previousEtag = event.etag,
-                            draft = draft,
-                        ),
-                    )) return@save
                     scope.launch {
+                        if (!retainMutationRecovery(
+                            CalendarMutationPostcondition.Upsert(
+                                href = event.href,
+                                calendarHref = event.calendarHref,
+                                expectedUid = event.uid,
+                                previousEtag = event.etag,
+                                draft = draft,
+                            ),
+                        )) return@launch
                         try {
                             val response = services.executeGroupwareDav(session, request)
                             if (response.status !in 200..299) {
@@ -689,11 +728,11 @@ fun NativeGroupwareCalendarScreen(
                             objectHref = event.href,
                             etag = event.etag,
                         ).toGroupwareDavRequest()
-                        if (!retainMutationRecovery(CalendarMutationPostcondition.Delete(event.href))) {
-                            deletingInProgress = false
-                            return@Button
-                        }
                         scope.launch {
+                            if (!retainMutationRecovery(CalendarMutationPostcondition.Delete(event.href))) {
+                                deletingInProgress = false
+                                return@launch
+                            }
                             try {
                                 val response = services.executeGroupwareDav(session, request)
                                 if (response.status !in 200..299) {

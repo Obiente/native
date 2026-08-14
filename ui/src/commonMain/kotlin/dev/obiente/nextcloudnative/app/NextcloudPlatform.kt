@@ -556,18 +556,18 @@ interface NextcloudPlatformServices {
      * Callers persist the intent before contacting the server and clear it only after an
      * authoritative response or a follow-up read proves the postcondition.
      */
-    fun loadDurableMutationRecovery(
+    suspend fun loadDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): String? = null
 
-    fun saveDurableMutationRecovery(
+    suspend fun saveDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
     ): Boolean = false
 
-    fun clearDurableMutationRecovery(
+    suspend fun clearDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): Boolean = false

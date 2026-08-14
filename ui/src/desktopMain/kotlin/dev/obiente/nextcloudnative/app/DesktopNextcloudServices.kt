@@ -3389,21 +3389,21 @@ class DesktopNextcloudServices(
         preferences.put(KEY_LAST_OPENED_APP, appId)
     }
 
-    override fun loadDurableMutationRecovery(
+    override suspend fun loadDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
-    ): String? = durableMutationRecovery.load(accountScope, kind)
+    ): String? = withContext(Dispatchers.IO) { durableMutationRecovery.load(accountScope, kind) }
 
-    override fun saveDurableMutationRecovery(
+    override suspend fun saveDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
-    ): Boolean = durableMutationRecovery.save(accountScope, kind, encoded)
+    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.save(accountScope, kind, encoded) }
 
-    override fun clearDurableMutationRecovery(
+    override suspend fun clearDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
-    ): Boolean = durableMutationRecovery.clear(accountScope, kind)
+    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.clear(accountScope, kind) }
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,

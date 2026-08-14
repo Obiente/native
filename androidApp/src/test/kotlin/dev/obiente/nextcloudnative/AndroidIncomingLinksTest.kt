@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -65,5 +66,39 @@ class AndroidIncomingLinksTest {
             ),
         )
         assertEquals(true, isNewAndroidIncomingLinkDelivery(restoredId, null))
+    }
+
+    @Test
+    fun pendingLinkQueueRestoresEveryOrderedRequest() {
+        val restored = restoreAndroidIncomingLinkQueue(
+            restoredSequence = 4L,
+            sequences = longArrayOf(3L, 4L),
+            urls = listOf(
+                "https://cloud.example.test/f/42",
+                "https://cloud.example.test/f/43",
+            ),
+            legacyUrl = null,
+        )
+
+        assertEquals(listOf(3L, 4L), restored.map(NextcloudNativeLinkRequest::sequence))
+        assertEquals(
+            listOf("https://cloud.example.test/f/42", "https://cloud.example.test/f/43"),
+            restored.map(NextcloudNativeLinkRequest::url),
+        )
+    }
+
+    @Test
+    fun malformedPendingLinkQueueIsRejectedAsOneUnit() {
+        val restored = restoreAndroidIncomingLinkQueue(
+            restoredSequence = 4L,
+            sequences = longArrayOf(4L, 3L),
+            urls = listOf(
+                "https://cloud.example.test/f/42",
+                "https://cloud.example.test/f/43",
+            ),
+            legacyUrl = null,
+        )
+
+        assertEquals(emptyList(), restored)
     }
 }

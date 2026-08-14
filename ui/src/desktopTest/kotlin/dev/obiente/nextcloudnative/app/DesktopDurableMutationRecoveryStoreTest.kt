@@ -1,8 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -43,6 +46,34 @@ class DesktopDurableMutationRecoveryStoreTest {
                 ),
             )
             assertEquals("safe", store.load(scope, DurableMutationRecoveryKind.Contacts))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `recovery state fails closed when owner-only permissions drift`() {
+        val root = Files.createTempDirectory("mutation-recovery-permissions-test").toFile()
+        try {
+            if (Files.getFileAttributeView(root.toPath(), PosixFileAttributeView::class.java) == null) return
+            val store = DesktopDurableMutationRecoveryStore(root)
+            val scope = "c".repeat(64)
+
+            assertTrue(store.save(scope, DurableMutationRecoveryKind.NoteDeletion, "safe"))
+            assertEquals(
+                PosixFilePermissions.fromString("rwx------"),
+                Files.getPosixFilePermissions(root.toPath()),
+            )
+            val record = root.resolve("${DurableMutationRecoveryKind.NoteDeletion.storageKey}-$scope.json")
+            assertEquals(
+                PosixFilePermissions.fromString("rw-------"),
+                Files.getPosixFilePermissions(record.toPath()),
+            )
+
+            Files.setPosixFilePermissions(root.toPath(), PosixFilePermissions.fromString("rwxr-xr-x"))
+            assertFailsWith<IllegalStateException> {
+                store.load(scope, DurableMutationRecoveryKind.NoteDeletion)
+            }
         } finally {
             root.deleteRecursively()
         }

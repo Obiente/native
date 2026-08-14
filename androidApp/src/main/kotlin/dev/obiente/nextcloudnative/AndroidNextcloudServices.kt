@@ -657,36 +657,38 @@ internal class AndroidNextcloudServices(
         preferences.edit().putString(KEY_LAST_OPENED_APP, appId).apply()
     }
 
-    override fun loadDurableMutationRecovery(
+    override suspend fun loadDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
-    ): String? {
-        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return null
-        return preferences.getString(durableMutationRecoveryKey(accountScope, kind), null)
+    ): String? = withContext(Dispatchers.IO) {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext null
+        preferences.getString(durableMutationRecoveryKey(accountScope, kind), null)
             ?.takeIf { encoded ->
                 encoded.isNotEmpty() && encoded.encodeToByteArray().size <= MAX_ANDROID_MUTATION_RECOVERY_BYTES
             }
     }
 
-    override fun saveDurableMutationRecovery(
+    override suspend fun saveDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
-    ): Boolean {
-        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return false
-        if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) return false
-        return preferences.edit()
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
+        if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) {
+            return@withContext false
+        }
+        preferences.edit()
             .putString(durableMutationRecoveryKey(accountScope, kind), encoded)
             .commit()
     }
 
-    override fun clearDurableMutationRecovery(
+    override suspend fun clearDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
-    ): Boolean {
-        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return false
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
         val key = durableMutationRecoveryKey(accountScope, kind)
-        return preferences.edit().remove(key).commit() && !preferences.contains(key)
+        preferences.edit().remove(key).commit() && !preferences.contains(key)
     }
 
     private fun durableMutationRecoveryKey(

@@ -2616,6 +2616,7 @@ private fun AuthenticatedApp(
             session = session,
             onBack = ::navigateBack,
             onOpenNote = { screen = Screen.NoteEditor(it) },
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         is Screen.NoteEditor -> NextcloudNoteEditor(
             services = services,

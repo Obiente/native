@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -95,15 +96,13 @@ internal fun NextcloudNotesScreen(
     session: NextcloudSession,
     onBack: () -> Unit,
     onOpenNote: (NextcloudNote) -> Unit,
+    onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName) {
         durableMutationAccountScope(session)
     }
-    var deletionRecoveryState by remember(accountScope, services) {
-        mutableStateOf(
-            services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion),
-        )
-    }
+    var deletionRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
+    var deletionRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
     val deletionRecovery = remember(accountScope, deletionRecoveryState) {
         deletionRecoveryState?.let { decodeNoteDeletionRecoveryState(it, accountScope) }
     }
@@ -118,10 +117,34 @@ internal fun NextcloudNotesScreen(
     var error by remember(session) { mutableStateOf<String?>(null) }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var refreshing by remember(session) { mutableStateOf(false) }
+    val mutationInProgress = !deletionRecoveryLoaded || deletionRecoveryState != null
 
-    LaunchedEffect(accountScope, deletionRecoveryState, deletionRecovery) {
-        if (deletionRecoveryState != null && deletionRecovery == null) {
-            if (services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion)) {
+    LaunchedEffect(accountScope, services, loadAttempt) {
+        deletionRecoveryLoaded = false
+        deletionRecoveryState = null
+        try {
+            deletionRecoveryState = services.loadDurableMutationRecovery(
+                accountScope,
+                DurableMutationRecoveryKind.NoteDeletion,
+            )
+            deletionRecoveryLoaded = true
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            error = "Note recovery storage could not be read securely. Check local storage and retry."
+        }
+    }
+
+    LaunchedEffect(accountScope, deletionRecoveryLoaded, deletionRecoveryState, deletionRecovery) {
+        if (deletionRecoveryLoaded && deletionRecoveryState != null && deletionRecovery == null) {
+            val cleared = try {
+                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                false
+            }
+            if (cleared) {
                 deletionRecoveryState = null
             } else {
                 error = "A damaged note-deletion recovery record could not be cleared. Free local storage and retry."
@@ -129,7 +152,20 @@ internal fun NextcloudNotesScreen(
         }
     }
 
-    LaunchedEffect(session, loadAttempt) {
+    LaunchedEffect(mutationInProgress) {
+        onMutationInProgressChanged(mutationInProgress)
+        if (mutationInProgress) {
+            createNoteInPath = null
+            renameFolder = null
+            deleteFolder = null
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { onMutationInProgressChanged(false) }
+    }
+
+    LaunchedEffect(session, loadAttempt, deletionRecoveryLoaded, deletionRecoveryState) {
+        if (!deletionRecoveryLoaded) return@LaunchedEffect
         error = null
         refreshing = true
         val cachedEtag = notes?.let { sharedNextcloudNotesCache.listEtag(session) }
@@ -180,7 +216,10 @@ internal fun NextcloudNotesScreen(
             },
             action = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { createNoteInPath = currentPath }) {
+                    IconButton(
+                        onClick = { createNoteInPath = currentPath },
+                        enabled = !mutationInProgress,
+                    ) {
                         Icon(NextcloudIcons.Add, contentDescription = "Create note")
                     }
                     IconButton(onClick = { loadAttempt += 1 }, enabled = !refreshing) {
@@ -270,13 +309,18 @@ internal fun NextcloudNotesScreen(
                             items(location.folders, key = NativeNoteFolder::path) { folder ->
                                 NoteFolderCard(
                                     folder = folder,
+                                    mutationEnabled = !mutationInProgress,
                                     onOpen = { currentPath = folder.path },
                                     onRename = { renameFolder = folder },
                                     onDelete = { deleteFolder = folder },
                                 )
                             }
                             items(visibleNotes, key = NextcloudNote::id) { note ->
-                                NoteCard(note = note, onClick = { onOpenNote(note) })
+                                NoteCard(
+                                    note = note,
+                                    enabled = !mutationInProgress,
+                                    onClick = { onOpenNote(note) },
+                                )
                             }
                             if (location.folders.isEmpty() && visibleNotes.isEmpty()) {
                                 item {
@@ -299,7 +343,11 @@ internal fun NextcloudNotesScreen(
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
                         items(visibleNotes, key = NextcloudNote::id) { note ->
-                            NoteCard(note = note, onClick = { onOpenNote(note) })
+                            NoteCard(
+                                note = note,
+                                enabled = !mutationInProgress,
+                                onClick = { onOpenNote(note) },
+                            )
                         }
                     }
                     }
@@ -307,7 +355,7 @@ internal fun NextcloudNotesScreen(
             }
         }
     }
-    createNoteInPath?.let { category ->
+    createNoteInPath?.takeIf { !mutationInProgress }?.let { category ->
         CreateNoteDialog(
             category = category,
             services = services,
@@ -322,7 +370,7 @@ internal fun NextcloudNotesScreen(
             },
         )
     }
-    renameFolder?.let { folder ->
+    renameFolder?.takeIf { !mutationInProgress }?.let { folder ->
         RenameNoteFolderDialog(
             folder = folder,
             services = services,
@@ -348,7 +396,7 @@ internal fun NextcloudNotesScreen(
             },
         )
     }
-    deleteFolder?.let { folder ->
+    deleteFolder?.takeIf { !mutationInProgress }?.let { folder ->
         DeleteNoteFolderDialog(
             folder = folder,
             services = services,
@@ -395,14 +443,15 @@ private fun NotesBreadcrumbs(
 @Composable
 private fun NoteFolderCard(
     folder: NativeNoteFolder,
+    mutationEnabled: Boolean,
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember(folder.path) { mutableStateOf(false) }
     val actions = listOf(
-        NextcloudCardAction(label = "Rename", onClick = onRename),
-        NextcloudCardAction(label = "Delete", destructive = true, onClick = onDelete),
+        NextcloudCardAction(label = "Rename", enabled = mutationEnabled, onClick = onRename),
+        NextcloudCardAction(label = "Delete", enabled = mutationEnabled, destructive = true, onClick = onDelete),
     )
     Card(
         modifier = Modifier.fillMaxWidth().nextcloudCardInteractions(
@@ -629,9 +678,9 @@ private fun DeleteNoteFolderDialog(
 }
 
 @Composable
-private fun NoteCard(note: NextcloudNote, onClick: () -> Unit) {
+private fun NoteCard(note: NextcloudNote, enabled: Boolean, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
@@ -702,11 +751,8 @@ internal fun NextcloudNoteEditor(
     val accountScope = remember(session.serverUrl, session.loginName) {
         durableMutationAccountScope(session)
     }
-    var deletionRecoveryState by remember(accountScope, services) {
-        mutableStateOf(
-            services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion),
-        )
-    }
+    var deletionRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
+    var deletionRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
     val deletionRecovery = remember(accountScope, deletionRecoveryState) {
         deletionRecoveryState?.let { decodeNoteDeletionRecoveryState(it, accountScope) }
     }
@@ -744,9 +790,32 @@ internal fun NextcloudNoteEditor(
     var viewMode by rememberSaveable(accountKey, note.id) { mutableStateOf(NoteViewMode.Edit) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(accountScope, deletionRecoveryState, deletionRecovery) {
-        if (deletionRecoveryState != null && deletionRecovery == null) {
-            if (services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion)) {
+    LaunchedEffect(accountScope, services, loadAttempt) {
+        deletionRecoveryLoaded = false
+        deletionRecoveryState = null
+        try {
+            deletionRecoveryState = services.loadDurableMutationRecovery(
+                accountScope,
+                DurableMutationRecoveryKind.NoteDeletion,
+            )
+            deletionRecoveryLoaded = true
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            deleteError = "Note recovery storage could not be read securely. Check local storage and retry."
+        }
+    }
+
+    LaunchedEffect(accountScope, deletionRecoveryLoaded, deletionRecoveryState, deletionRecovery) {
+        if (deletionRecoveryLoaded && deletionRecoveryState != null && deletionRecovery == null) {
+            val cleared = try {
+                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                false
+            }
+            if (cleared) {
                 deletionRecoveryState = null
             } else {
                 deleteError = "A damaged note-deletion recovery record could not be cleared. Free local storage and retry."
@@ -754,7 +823,8 @@ internal fun NextcloudNoteEditor(
         }
     }
 
-    LaunchedEffect(note.id, deletionRecovery?.noteId) {
+    LaunchedEffect(note.id, deletionRecoveryLoaded, deletionRecovery?.noteId) {
+        if (!deletionRecoveryLoaded) return@LaunchedEffect
         val recovery = deletionRecovery ?: return@LaunchedEffect
         if (deleting) return@LaunchedEffect
         if (recovery.noteId != note.id) {
@@ -838,7 +908,7 @@ internal fun NextcloudNoteEditor(
         originalFavorite = originalFavorite,
     )
     val readOnly = loaded.readOnly
-    val mutationInProgress = saving || deleting || deletionRecoveryState != null
+    val mutationInProgress = !deletionRecoveryLoaded || saving || deleting || deletionRecoveryState != null
     LaunchedEffect(mutationInProgress) {
         onMutationInProgressChanged(mutationInProgress)
     }
@@ -1131,25 +1201,32 @@ internal fun NextcloudNoteEditor(
             },
             confirmButton = {
                 Button(
-                    enabled = !deleting,
+                    enabled = deletionRecoveryLoaded && !deleting,
                     onClick = delete@{
-                        if (deletionRecoveryState == null) {
-                            val encoded = NoteDeletionRecoveryState(accountScope, loaded.id)
-                                .encodeForDurableStorage()
-                            if (!services.saveDurableMutationRecovery(
-                                    accountScope,
-                                    DurableMutationRecoveryKind.NoteDeletion,
-                                    encoded,
-                                )
-                            ) {
-                                deleteError = "The note deletion could not be safely recorded. Check local storage and try again."
-                                return@delete
-                            }
-                            deletionRecoveryState = encoded
-                        }
                         deleting = true
                         deleteError = null
                         scope.launch {
+                            if (deletionRecoveryState == null) {
+                                val encoded = NoteDeletionRecoveryState(accountScope, loaded.id)
+                                    .encodeForDurableStorage()
+                                val saved = try {
+                                    services.saveDurableMutationRecovery(
+                                        accountScope,
+                                        DurableMutationRecoveryKind.NoteDeletion,
+                                        encoded,
+                                    )
+                                } catch (failure: CancellationException) {
+                                    throw failure
+                                } catch (_: Exception) {
+                                    false
+                                }
+                                if (!saved) {
+                                    deleteError = "The note deletion could not be safely recorded. Check local storage and try again."
+                                    deleting = false
+                                    return@launch
+                                }
+                                deletionRecoveryState = encoded
+                            }
                             var requestFailure: String? = null
                             try {
                                 services.deleteNote(session, loaded.id, loaded.etag)

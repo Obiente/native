@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -27,7 +28,7 @@ class MainActivity : ComponentActivity() {
     private var lastAppUpdateReviewEventId: Long? = null
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
     private var incomingLinkSequence = 0L
-    private var incomingLinkRequest by mutableStateOf<NextcloudNativeLinkRequest?>(null)
+    private val incomingLinkRequests = mutableStateListOf<NextcloudNativeLinkRequest>()
     private var lastIncomingLinkDeliveryId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,11 +47,14 @@ class MainActivity : ComponentActivity() {
         ))
         incomingLinkSequence = savedInstanceState?.getLong(KEY_INCOMING_LINK_SEQUENCE) ?: 0L
         lastIncomingLinkDeliveryId = savedInstanceState?.getString(KEY_INCOMING_LINK_DELIVERY_ID)
-        incomingLinkRequest = savedInstanceState
-            ?.getString(KEY_PENDING_INCOMING_LINK)
-            ?.let { savedUrl ->
-                runCatching { NextcloudNativeLinkRequest(incomingLinkSequence, savedUrl) }.getOrNull()
-            }
+        incomingLinkRequests.addAll(
+            restoreAndroidIncomingLinkQueue(
+                restoredSequence = incomingLinkSequence,
+                sequences = savedInstanceState?.getLongArray(KEY_PENDING_INCOMING_LINK_SEQUENCES),
+                urls = savedInstanceState?.getStringArrayList(KEY_PENDING_INCOMING_LINK_URLS),
+                legacyUrl = savedInstanceState?.getString(KEY_PENDING_INCOMING_LINK),
+            ),
+        )
         receiveIncomingLinkIntent(intent)
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
@@ -121,9 +125,11 @@ class MainActivity : ComponentActivity() {
                 services = services,
                 appUpdateReviewRequest = appUpdateReviewRequest,
                 platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                linkRequest = incomingLinkRequest,
+                linkRequest = incomingLinkRequests.firstOrNull(),
                 onLinkRequestHandled = { sequence ->
-                    if (incomingLinkRequest?.sequence == sequence) incomingLinkRequest = null
+                    if (incomingLinkRequests.firstOrNull()?.sequence == sequence) {
+                        incomingLinkRequests.removeAt(0)
+                    }
                 },
             )
         }
@@ -147,8 +153,15 @@ class MainActivity : ComponentActivity() {
             outState.putLong(KEY_APP_UPDATE_REVIEW_EVENT_ID, eventId)
         }
         outState.putLong(KEY_INCOMING_LINK_SEQUENCE, incomingLinkSequence)
-        incomingLinkRequest?.url?.let { url ->
-            outState.putString(KEY_PENDING_INCOMING_LINK, url)
+        if (incomingLinkRequests.isNotEmpty()) {
+            outState.putLongArray(
+                KEY_PENDING_INCOMING_LINK_SEQUENCES,
+                incomingLinkRequests.map(NextcloudNativeLinkRequest::sequence).toLongArray(),
+            )
+            outState.putStringArrayList(
+                KEY_PENDING_INCOMING_LINK_URLS,
+                ArrayList(incomingLinkRequests.map(NextcloudNativeLinkRequest::url)),
+            )
         }
         lastIncomingLinkDeliveryId?.let { deliveryId ->
             outState.putString(KEY_INCOMING_LINK_DELIVERY_ID, deliveryId)
@@ -180,7 +193,7 @@ class MainActivity : ComponentActivity() {
                 if (intent === this.intent) setIntent(intent)
             }
             lastIncomingLinkDeliveryId = deliveryId
-            incomingLinkRequest = state.request
+            incomingLinkRequests.add(state.request)
         }
     }
 
@@ -194,6 +207,8 @@ class MainActivity : ComponentActivity() {
         const val KEY_APP_UPDATE_REVIEW_EVENT_ID = "app-update-review-event-id"
         const val KEY_INCOMING_LINK_SEQUENCE = "incoming-link-sequence"
         const val KEY_PENDING_INCOMING_LINK = "pending-incoming-link"
+        const val KEY_PENDING_INCOMING_LINK_SEQUENCES = "pending-incoming-link-sequences"
+        const val KEY_PENDING_INCOMING_LINK_URLS = "pending-incoming-link-urls"
         const val KEY_INCOMING_LINK_DELIVERY_ID = "incoming-link-delivery-id"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)

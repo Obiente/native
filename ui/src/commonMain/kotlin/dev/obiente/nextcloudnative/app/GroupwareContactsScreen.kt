@@ -111,34 +111,48 @@ fun NativeGroupwareContactsScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
-    var mutationRecoveryState by remember(accountScope, services) {
-        mutableStateOf(
-            services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts),
-        )
-    }
+    var mutationRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
+    var mutationRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
     val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
         mutationRecoveryState?.let { decodeContactMutationRecoveryState(it, accountScope) }
     }
-    val mutationInProgress = mutationOperationInProgress || mutationPostcondition != null
+    val mutationInProgress = !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
     val scope = rememberCoroutineScope()
 
-    fun retainMutationRecovery(postcondition: ContactMutationPostcondition): Boolean {
-        check(mutationRecoveryState == null && !mutationOperationInProgress) {
-            "Another contact change is still awaiting server verification."
+    suspend fun retainMutationRecovery(postcondition: ContactMutationPostcondition): Boolean {
+        if (!mutationRecoveryLoaded || mutationRecoveryState != null || mutationOperationInProgress) {
+            mutationError = "Another contact change is still awaiting server verification."
+            return false
         }
         val encoded = ContactMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
-        if (!services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts, encoded)) {
+        mutationOperationInProgress = true
+        onMutationInProgressChanged(true)
+        val saved = try {
+            services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts, encoded)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+        if (!saved) {
             mutationError = "The contact change could not be safely recorded. Check local storage and try again."
+            mutationOperationInProgress = false
+            onMutationInProgressChanged(mutationRecoveryState != null || !mutationRecoveryLoaded)
             return false
         }
         mutationRecoveryState = encoded
-        mutationOperationInProgress = true
-        onMutationInProgressChanged(true)
         return true
     }
 
-    fun clearMutationRecovery(): Boolean {
-        if (!services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)) {
+    suspend fun clearMutationRecovery(): Boolean {
+        val cleared = try {
+            services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+        if (!cleared) {
             mutationError = "The verified contact recovery record could not be cleared. Free local storage and refresh."
             return false
         }
@@ -148,9 +162,32 @@ fun NativeGroupwareContactsScreen(
         return true
     }
 
-    LaunchedEffect(accountScope, mutationRecoveryState, mutationPostcondition) {
-        if (mutationRecoveryState != null && mutationPostcondition == null) {
-            if (services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)) {
+    LaunchedEffect(accountScope, services, loadAttempt) {
+        mutationRecoveryLoaded = false
+        mutationRecoveryState = null
+        try {
+            mutationRecoveryState = services.loadDurableMutationRecovery(
+                accountScope,
+                DurableMutationRecoveryKind.Contacts,
+            )
+            mutationRecoveryLoaded = true
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            mutationError = "Contact recovery storage could not be read securely. Check local storage and retry."
+        }
+    }
+
+    LaunchedEffect(accountScope, mutationRecoveryLoaded, mutationRecoveryState, mutationPostcondition) {
+        if (mutationRecoveryLoaded && mutationRecoveryState != null && mutationPostcondition == null) {
+            val cleared = try {
+                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                false
+            }
+            if (cleared) {
                 mutationRecoveryState = null
             } else {
                 mutationError = "A damaged contact recovery record could not be cleared. Free local storage and retry."
@@ -165,7 +202,8 @@ fun NativeGroupwareContactsScreen(
         onDispose { onMutationInProgressChanged(false) }
     }
 
-    LaunchedEffect(session, userId, loadAttempt) {
+    LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
+        if (!mutationRecoveryLoaded) return@LaunchedEffect
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
             runCatching {
                 val response = services.executeGroupwareDav(
@@ -374,16 +412,17 @@ fun NativeGroupwareContactsScreen(
                         draft.organization, draft.address, draft.notes,
                     ),
                 ).toGroupwareDavRequest()
-                if (!retainMutationRecovery(
-                    ContactMutationPostcondition.Upsert(
-                        href = objectHref,
-                        addressBookHref = addressBook.href,
-                        expectedUid = uid,
-                        previousEtag = null,
-                        draft = draft,
-                    ),
-                )) return@save
                 scope.launch {
+                    if (!retainMutationRecovery(
+                            ContactMutationPostcondition.Upsert(
+                                href = objectHref,
+                                addressBookHref = addressBook.href,
+                                expectedUid = uid,
+                                previousEtag = null,
+                                draft = draft,
+                            ),
+                        )
+                    ) return@launch
                     mutationError = null
                     try {
                         val response = services.executeGroupwareDav(session, request)
@@ -434,16 +473,17 @@ fun NativeGroupwareContactsScreen(
                             draft.organization, draft.address, draft.notes,
                         ),
                     ).toGroupwareDavRequest()
-                    if (!retainMutationRecovery(
-                        ContactMutationPostcondition.Upsert(
-                            href = contact.href,
-                            addressBookHref = contact.addressBookHref,
-                            expectedUid = contact.uid,
-                            previousEtag = contact.etag,
-                            draft = draft,
-                        ),
-                    )) return@save
                     scope.launch {
+                        if (!retainMutationRecovery(
+                                ContactMutationPostcondition.Upsert(
+                                    href = contact.href,
+                                    addressBookHref = contact.addressBookHref,
+                                    expectedUid = contact.uid,
+                                    previousEtag = contact.etag,
+                                    draft = draft,
+                                ),
+                            )
+                        ) return@launch
                         mutationError = null
                         try {
                             val response = services.executeGroupwareDav(session, request)
@@ -495,11 +535,11 @@ fun NativeGroupwareContactsScreen(
                                 objectHref = contact.href,
                                 etag = contact.etag,
                             ).toGroupwareDavRequest()
-                            if (!retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))) {
-                                return@delete
-                            }
-                            confirmDelete = false
                             scope.launch {
+                                if (!retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))) {
+                                    return@launch
+                                }
+                                confirmDelete = false
                                 try {
                                     val response = services.executeGroupwareDav(session, request)
                                     if (response.status !in 200..299) {
