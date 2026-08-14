@@ -702,6 +702,11 @@ enum class MarketingCaptureScenario(
         "Mail", "Adaptive mailbox workspace", "Inbox message list", MarketingCapturePurpose.Showcase,
         "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
     ),
+    MailMessageBodyMobile(
+        "mail-message-body-mobile", "mail-message-body-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Uncached selected message body", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
     MailWorkspaceLoadingMobile(
         "mail-workspace-loading-mobile", "mail-workspace-loading-mobile.png", NextcloudPresentation.Adaptive,
         "Mail", "Adaptive mailbox workspace", "Loading inbox", MarketingCapturePurpose.StateCoverage,
@@ -2245,6 +2250,7 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
         scenario in setOf(
             MarketingCaptureScenario.MailWorkspaceDesktop,
             MarketingCaptureScenario.MailWorkspaceMobile,
+            MarketingCaptureScenario.MailMessageBodyMobile,
             MarketingCaptureScenario.MailWorkspaceLoadingMobile,
             MarketingCaptureScenario.MailWorkspaceEmptyMobile,
             MarketingCaptureScenario.MailWorkspaceErrorDesktop,
@@ -2253,8 +2259,9 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
         "${scenario.id} is not a Mail workspace capture."
     }
     val desktop = scenario.presentation == NextcloudPresentation.Desktop
+    val messageDetail = desktop || scenario == MarketingCaptureScenario.MailMessageBodyMobile
     val composeAction = marketingMailDescriptor.preferredNativeMailComposeAction(marketingMailSchema)
-    val currentView = if (desktop) marketingMailBodyView else marketingMailMessageView
+    val currentView = if (messageDetail) marketingMailBodyView else marketingMailMessageView
     val currentState = when (scenario) {
         MarketingCaptureScenario.MailWorkspaceLoadingMobile -> NativeScreenState.Loading
         MarketingCaptureScenario.MailWorkspaceEmptyMobile -> NativeScreenState.Ready(emptyList())
@@ -2264,7 +2271,7 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
             retryLabel = "Try again",
         )
         else -> NativeScreenState.Ready(
-            if (desktop) listOf(marketingMailBodyRecord) else marketingMailMessages,
+            if (messageDetail) listOf(marketingMailBodyRecord) else marketingMailMessages,
         )
     }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -2288,17 +2295,20 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
             actionExecutor = NativeActionExecutor {
                 NativeActionExecutionResult.Failure("This synthetic fixture is read-only.")
             },
-            selectedRecordId = if (desktop) marketingMailSelectedMessage.id else null,
-            selectedRecordResourceId = if (desktop) "messages" else null,
-            showSelectedRecordDetail = desktop,
+            selectedRecordId = if (messageDetail) marketingMailSelectedMessage.id else null,
+            selectedRecordResourceId = if (messageDetail) "messages" else null,
+            showSelectedRecordDetail = messageDetail,
             onSelectRecord = {},
             datasetContext = NativeDatasetContext(
-                parentResourceId = if (desktop) "messages" else "mailboxes",
-                parentRecord = if (desktop) marketingMailSelectedMessage else marketingMailInbox,
+                parentResourceId = if (messageDetail) "messages" else "mailboxes",
+                parentRecord = if (messageDetail) marketingMailSelectedMessage else marketingMailInbox,
                 relatedRecords = mapOf(
                     "accounts" to listOf(marketingMailAccount),
                     "mailboxes" to marketingMailboxes,
-                    "messages" to marketingMailMessages,
+                    // The desktop fixture intentionally renders a selected body after the
+                    // envelope collection has been evicted. This keeps visual QA aligned with
+                    // direct/deep-linked detail behavior instead of relying on a warm list cache.
+                    "messages" to if (messageDetail) emptyList() else marketingMailMessages,
                     "mailboxStats" to listOf(marketingMailInboxStats),
                 ),
             ),

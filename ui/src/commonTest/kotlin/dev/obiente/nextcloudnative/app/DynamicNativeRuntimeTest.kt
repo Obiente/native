@@ -638,6 +638,11 @@ class DynamicNativeRuntimeTest {
                 expected = "12",
             ),
             Case(
+                name = "limit",
+                schema = """{"type":"integer","format":"int64","nullable":true,"default":null}""",
+                expected = "50",
+            ),
+            Case(
                 name = "pageSize",
                 schema = """{"type":"integer","maximum":20}""",
                 expected = "20",
@@ -2381,6 +2386,59 @@ class DynamicNativeRuntimeTest {
         )
         assertEquals(listOf(preferred.id), populated.first)
         assertEquals("primary-1", populated.second.single().id)
+    }
+
+    @Test
+    fun `verified paged fallback prevents a sparse primary route from loading one row`() = runBlocking {
+        fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
+            name = name,
+            required = required,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "messages.list.verified",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/messages",
+                queryParameters = listOf(
+                    integerParameter("mailboxId", required = true),
+                    integerParameter("cursor"),
+                    integerParameter("limit"),
+                ),
+            ),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(
+            id = "messages.list",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/mailboxes/{id}/messages",
+                pathParameters = listOf(integerParameter("id", required = true)),
+            ),
+            fallbackActionIds = listOf(fallback.id),
+        )
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val attempts = mutableListOf<String>()
+
+        val records = executeDynamicReadWithFallback(descriptor, preferred.id) { candidate ->
+            attempts += candidate.id
+            val values = remapReadFallbackValues(
+                preferred = preferred,
+                candidate = candidate,
+                values = mapOf("id" to "9"),
+            )
+            val request = buildDynamicApiRequest(descriptor, candidate, values)
+            assertEquals("50", request.queryParameters["limit"])
+            assertEquals("9", request.queryParameters["mailboxId"])
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"databaseId":"42","subject":"First"},{"databaseId":"41","subject":"Second"}]}}""",
+            )
+        }
+
+        assertEquals(listOf(fallback.id), attempts)
+        assertEquals(listOf("42", "41"), records.map(NativeRecord::id))
+        val pagination = requireNotNull(descriptor.resolvedDynamicPaginationSpec(preferred.id))
+        assertEquals(DynamicPaginationMode.RecordCursor, pagination.mode)
+        assertEquals(50, pagination.expectedPageSize)
     }
 
     @Test

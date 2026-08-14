@@ -176,13 +176,41 @@ internal fun nativeMailWorkspacePlan(
         .filter { item -> item.presentation.kind == NativeMailboxItemKind.Folder }
         .minOfOrNull { item -> item.hierarchyDepth }
         ?: 0
-    val items = rawItems.map { item ->
+    val normalizedItems = rawItems.map { item ->
         if (item.presentation.kind == NativeMailboxItemKind.Folder) {
             item.copy(hierarchyDepth = (item.hierarchyDepth - minimumFolderDepth).coerceAtLeast(0))
         } else {
             item
         }
     }
+    // A detail response is a facet of the selected envelope, not a replacement mailbox
+    // collection. The envelope may no longer be present in relatedRecords after process restore,
+    // cache eviction, or a direct deep link. Preserve that proven parent as a workspace item so
+    // detail rendering does not depend on an incidental list-cache hit.
+    val parentMessageItem = context.parentRecord?.let { parent ->
+        context.parentResourceId
+            ?.let(schema::resource)
+            ?.let { parentResource ->
+                val presentation = nativeMailboxPresentation(parentResource, parent)
+                if (presentation.kind != NativeMailboxItemKind.Message) {
+                    null
+                } else {
+                    NativeMailWorkspaceItem(
+                        resource = parentResource,
+                        record = parent.withNativeResource(parentResource.id, currentResource.id),
+                        presentation = presentation,
+                    )
+                }
+            }
+    }
+    val items = parentMessageItem
+        ?.takeIf { parent ->
+            normalizedItems.none { item ->
+                item.nativeMailWorkspaceRecordKey() == parent.nativeMailWorkspaceRecordKey()
+            }
+        }
+        ?.let { parent -> normalizedItems + parent }
+        ?: normalizedItems
     val currentKeys = currentRecords.mapNotNullTo(hashSetOf()) { record ->
         nativeMailboxPresentation(currentResource, record)
             .takeIf { presentation -> presentation.kind != NativeMailboxItemKind.Unknown }

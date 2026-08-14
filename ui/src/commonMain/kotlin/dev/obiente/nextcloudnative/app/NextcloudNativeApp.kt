@@ -779,7 +779,7 @@ private suspend fun loadInitialDynamicFormRelationRecords(
             runtimeContext = boundValues,
             cachePolicy = cachePolicy,
         ),
-        pagination = action.dynamicPaginationSpec(),
+        pagination = descriptor.resolvedDynamicPaginationSpec(action.id),
     )
 }
 
@@ -1199,6 +1199,7 @@ fun NextcloudNativeMarketingCapture(
                     -> MarketingCalendarWorkspaceScenario(scenario, assets)
                     MarketingCaptureScenario.MailWorkspaceDesktop,
                     MarketingCaptureScenario.MailWorkspaceMobile,
+                    MarketingCaptureScenario.MailMessageBodyMobile,
                     MarketingCaptureScenario.MailWorkspaceLoadingMobile,
                     MarketingCaptureScenario.MailWorkspaceEmptyMobile,
                     MarketingCaptureScenario.MailWorkspaceErrorDesktop,
@@ -3269,8 +3270,7 @@ private fun DynamicDiscoveredAppScreen(
             recordsByResourceId = freshSnapshot.relatedRecords
             viewState = NativeScreenState.Ready(freshSnapshot.records)
             paginationState = freshSnapshot.pagination?.let { checkpoint ->
-                descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
-                    ?.dynamicPaginationSpec()
+                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId)
                     ?.let { spec ->
                         DynamicPaginationState(
                             viewId = view.id,
@@ -3362,8 +3362,7 @@ private fun DynamicDiscoveredAppScreen(
             records
         }.onSuccess { records ->
             val updatedRecords = recordsByResourceId + (view.resourceId to records)
-            val nextPagination = descriptor.actions.firstOrNull { action -> action.id == view.sourceActionId }
-                ?.dynamicPaginationSpec()
+            val nextPagination = descriptor.resolvedDynamicPaginationSpec(view.sourceActionId)
                 ?.toDynamicPaginationState(view.id, records)
             recordsByResourceId = updatedRecords
             viewState = NativeScreenState.Ready(records)

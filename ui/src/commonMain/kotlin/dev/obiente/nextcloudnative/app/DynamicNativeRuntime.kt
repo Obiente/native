@@ -836,7 +836,18 @@ internal suspend fun executeDynamicReadWithFallback(
     require(preferred.binding.method == HttpMethod.GET && !preferred.fallbackOnly) {
         "Only declared preferred GET actions can load a dynamic view."
     }
-    val candidates = listOf(preferred) + preferred.fallbackActionIds.mapNotNull(actionsById::get)
+    val linkedFallbacks = preferred.fallbackActionIds.mapNotNull(actionsById::get)
+    val resolvedPagination = descriptor.resolvedDynamicPaginationSpec(preferred.id)
+    val pagedFallbacks = if (preferred.dynamicPaginationSpec() == null && resolvedPagination != null) {
+        linkedFallbacks.filter { candidate -> candidate.dynamicPaginationSpec() == resolvedPagination }
+    } else {
+        emptyList()
+    }
+    // A successful collection response is not necessarily a complete first page. Some app
+    // OpenAPI documents omit optional pagination parameters even though a linked route from the
+    // same verified package declares them. In that case use the verified paged route first; the
+    // documented operation remains the fallback if that fuller read is unavailable.
+    val candidates = pagedFallbacks + preferred + linkedFallbacks.filterNot(pagedFallbacks::contains)
     var bestFailure: Throwable? = null
     var bestFailureSpecificity = -1
     var successfulEmptyResult: List<NativeRecord>? = null
@@ -1397,6 +1408,23 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
     return DynamicPaginationSpec(pagingParameter.name, mode, pageSize, cursorFields)
 }
 
+/**
+ * Resolves pagination from the visible read or from one unambiguous verified read fallback.
+ * Hidden fallbacks are part of the same acquired contract and can carry optional cursor/limit
+ * parameters omitted by a sparse documented operation. Conflicting fallback declarations remain
+ * unpaged rather than guessing a protocol.
+ */
+internal fun DynamicAppDescriptor.resolvedDynamicPaginationSpec(actionId: String): DynamicPaginationSpec? {
+    val action = actions.singleOrNull { candidate -> candidate.id == actionId } ?: return null
+    action.dynamicPaginationSpec()?.let { return it }
+    return action.fallbackActionIds
+        .mapNotNull { fallbackId -> actions.singleOrNull { candidate -> candidate.id == fallbackId } }
+        .filter(DynamicAction::fallbackOnly)
+        .mapNotNull(DynamicAction::dynamicPaginationSpec)
+        .distinct()
+        .singleOrNull()
+}
+
 private fun HttpParameter.isIntegerNumberParameter(): Boolean {
     val type = (schema as? JsonObject)?.get("type")?.let { it as? JsonPrimitive }?.contentOrNull
     return type == "integer" || type == "number"
@@ -1416,6 +1444,9 @@ private fun HttpParameter.automaticCollectionPageSize(): Int? {
 
     fun declaredNumber(name: String): Double? {
         val element = objectSchema[name] ?: return null
+        // OpenAPI generators commonly serialize an optional nullable numeric default as JSON
+        // null. That is the absence of a default, not a malformed numeric constraint.
+        if (element == JsonNull) return null
         val primitive = element as? JsonPrimitive ?: return Double.NaN
         return primitive
             .takeUnless { it.isString }
@@ -1435,7 +1466,7 @@ private fun HttpParameter.automaticCollectionPageSize(): Int? {
     )
     if (lowerBound > upperBound) return null
 
-    if ("default" in objectSchema) {
+    if (objectSchema["default"]?.let { it != JsonNull } == true) {
         val declaredDefault = declaredNumber("default")
             ?.takeUnless { it.isNaN() }
             ?: return null

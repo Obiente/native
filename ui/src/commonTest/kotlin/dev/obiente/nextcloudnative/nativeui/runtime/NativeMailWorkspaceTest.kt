@@ -501,7 +501,7 @@ class NativeMailWorkspaceTest {
         val context = NativeDatasetContext(
             parentResourceId = "messages",
             parentRecord = parentMessage,
-            relatedRecords = mapOf("messages" to listOf(parentMessage)),
+            relatedRecords = emptyMap(),
         )
         val plan = nativeMailWorkspacePlan(
             schema = schema,
@@ -526,6 +526,51 @@ class NativeMailWorkspaceTest {
         )
         assertEquals("42", detail?.record?.id)
         assertEquals("<p>The build is ready.</p>", detail?.presentation?.body)
+    }
+
+    @Test
+    fun `message detail does not require its envelope to remain in a related list cache`() {
+        val messages = resource("messages", "Messages")
+        val body = resource("body", "Message body")
+        val schema = schema(messages, body)
+        val parentMessage = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Release checklist",
+                "from" to "Ada <ada@example.test>",
+                "mailboxId" to "9",
+            ),
+        )
+        val bodyRecord = NativeRecord(
+            id = "body-42",
+            values = mapOf("body" to "The build is ready."),
+        )
+        val context = NativeDatasetContext(
+            parentResourceId = messages.id,
+            parentRecord = parentMessage,
+            relatedRecords = emptyMap(),
+        )
+
+        val plan = nativeMailWorkspacePlan(
+            schema = schema,
+            currentResource = body,
+            currentRecords = listOf(bodyRecord),
+            context = context,
+            selectedRecordId = bodyRecord.id,
+            selectedRecordResourceId = body.id,
+        )
+        val detail = nativeMailWorkspaceDetailTarget(
+            schema = schema,
+            currentResource = body,
+            currentRecords = listOf(bodyRecord),
+            context = context,
+            selectedMessage = plan.selectedMessage,
+        )
+
+        assertTrue(plan.hasMailData)
+        assertEquals(listOf("42"), plan.messages.map { item -> item.record.id })
+        assertEquals("42", plan.selectedMessage?.record?.id)
+        assertEquals("The build is ready.", detail?.presentation?.body)
     }
 
     @Test
