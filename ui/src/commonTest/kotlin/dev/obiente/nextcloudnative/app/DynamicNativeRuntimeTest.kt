@@ -1628,6 +1628,13 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun `successful no content reads become empty native states`() {
+        val action = readAction().copy(binding = readAction().binding.copy(ocs = null))
+
+        assertTrue(parseDynamicRecords(action, response("", status = 204, contentType = null)).isEmpty())
+    }
+
+    @Test
     fun `collection array with cursor and count metadata becomes native rows`() {
         val records = parseDynamicRecords(
             readAction().copy(binding = readAction().binding.copy(ocs = null)),
@@ -2249,6 +2256,71 @@ class DynamicNativeRuntimeTest {
         assertEquals("write-only", record.id)
         assertEquals("Visible", record.values["title"])
         assertFalse(record.actionSafeIdentity)
+    }
+
+    @Test
+    fun `verified Chores invitation read promotes inviteId to the exact action identity`() = runBlocking {
+        val provenance = listOf(
+            Provenance(
+                kind = ProvenanceKind.verifiedAppPackage,
+                source = "signed Chores package",
+                detail = "Pinned 0.1.0 response schema",
+            ),
+        )
+        val read = readAction().copy(
+            id = "invitations.list",
+            resourceId = "invitations",
+            responseFieldIds = listOf("inviteId", "teamId", "teamName", "userId"),
+            binding = readAction().binding.copy(
+                path = "/apps/chores/api/v1.0/account/invites",
+            ),
+            confidence = Confidence.verified,
+            provenance = provenance,
+        )
+        val base = descriptor(read)
+        val descriptor = base.copy(
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            endpointPolicy = base.endpointPolicy.copy(
+                approvedApiPrefixes = listOf("/apps/chores/api/v1.0"),
+            ),
+            resources = listOf(
+                base.resources.single().copy(
+                    fields = read.responseFieldIds.map { fieldId ->
+                        DynamicField(
+                            id = fieldId,
+                            label = fieldId,
+                            kind = FieldKind.string,
+                            required = true,
+                            readOnly = true,
+                            nullable = false,
+                            multiple = false,
+                            confidence = Confidence.verified,
+                        )
+                    },
+                ),
+            ),
+        )
+
+        val record = executeDynamicReadWithFallback(descriptor, read.id) {
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"inviteId":"invite-7","teamId":42,"teamName":"Home","userId":"alex"}]}}""",
+            )
+        }.single()
+
+        assertEquals("invite-7", record.id)
+        assertTrue(record.actionSafeIdentity)
+        assertEquals("42", record.values["teamId"])
+
+        val unpinned = executeDynamicReadWithFallback(
+            descriptor.copy(app = descriptor.app.copy(version = "0.1.1")),
+            read.id,
+        ) {
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"inviteId":"invite-7","teamId":42,"teamName":"Home","userId":"alex"}]}}""",
+            )
+        }.single()
+        assertEquals("0", unpinned.id)
+        assertFalse(unpinned.actionSafeIdentity)
     }
 
     @Test

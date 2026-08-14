@@ -15,6 +15,55 @@ import kotlin.test.assertTrue
 
 class DynamicAppDescriptorCompilerTest {
     @Test
+    fun `typed collection items do not replace their parent route identity`() {
+        val document = """
+            {
+              "openapi":"3.0.3",
+              "info":{"title":"Shared tasks","version":"1"},
+              "servers":[{"url":"/apps/tasks"}],
+              "paths":{
+                "/api/teams/{teamId}/tasks":{
+                  "parameters":[
+                    {"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}
+                  ],
+                  "get":{
+                    "operationId":"tasks-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"}}}
+                    }}}}}
+                  },
+                  "post":{
+                    "operationId":"tasks-create",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object","required":["title"],"properties":{"title":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("tasks", "Tasks", "1"),
+                endpointPolicy = EndpointPolicy("https://cloud.example.test", listOf("/apps/tasks")),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    "/apps/tasks/openapi.json",
+                    Json.parseToJsonElement(document),
+                    OpenApiTrust.sameOriginAdvertisement,
+                ),
+            ),
+        )
+
+        assertTrue(descriptor.actions.isNotEmpty())
+        assertTrue(descriptor.actions.all { action ->
+            action.binding.path == "/apps/tasks/api/teams/{teamId}/tasks" &&
+                action.binding.pathParameters.single().name == "teamId"
+        })
+    }
+
+    @Test
     fun `read response fields remain separate from write-only resource fields`() {
         val document = """
             {
@@ -258,8 +307,8 @@ class DynamicAppDescriptorCompilerTest {
         assertEquals("lists", list.resourceId)
         assertEquals(list.resourceId, create.resourceId)
         assertEquals(ActionIntent.create, create.intent)
-        assertEquals("/ocs/v2.php/apps/example/api/houses/{id}/lists", create.binding.path)
-        assertEquals(listOf("id"), create.binding.pathParameters.map { it.name })
+        assertEquals("/ocs/v2.php/apps/example/api/houses/{houseId}/lists", create.binding.path)
+        assertEquals(listOf("houseId"), create.binding.pathParameters.map { it.name })
         assertEquals("lists", descriptor.forms.single { it.actionId == create.id }.resourceId)
         assertTrue(descriptor.validationErrors().isEmpty())
     }
@@ -2072,6 +2121,19 @@ class DynamicAppDescriptorCompilerTest {
                 "/apps/example/api/widgets/reorder":{
                   "post":{"operationId":"widgets-reorder","summary":"Reorder widgets","responses":{"200":{"description":"OK"}}}
                 },
+                "/apps/example/api/teams/{teamId}/invites":{
+                  "parameters":[{"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"invite-user-to-team",
+                    "summary":"Invite member",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["userId"],
+                      "properties":{"userId":{"type":"string"}}
+                    }}}},
+                    "responses":{"201":{"description":"Invited"}}
+                  }
+                },
                 "/apps/example/api/widgets/trash":{
                   "delete":{"operationId":"widgets-empty-trash","summary":"Empty trash","responses":{"204":{"description":"Empty"}}}
                 },
@@ -2152,6 +2214,7 @@ class DynamicAppDescriptorCompilerTest {
         }
 
         assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        assertAction("invite-user-to-team", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
         assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
         assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
         assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)

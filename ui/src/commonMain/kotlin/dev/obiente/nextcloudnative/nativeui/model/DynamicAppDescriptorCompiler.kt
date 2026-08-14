@@ -491,6 +491,7 @@ private fun String.observedResourceId(): String = split('/').asReversed().firstO
 private data class KotlinRouteResourceIdentity(
     val resourceId: String,
     val collection: Boolean,
+    val responseFieldIds: Set<String>,
 )
 
 private fun String.collectionRouteForTerminalIdentity(): String? {
@@ -754,6 +755,10 @@ private class KotlinCompilerState(
         return KotlinRouteResourceIdentity(
             resourceId = resourceId,
             collection = responseCollection || filteredCollectionResourceId != null,
+            responseFieldIds = itemSchema
+                ?.let(::fieldsFromSchema)
+                .orEmpty()
+                .mapTo(linkedSetOf()) { field -> field.id.lowercase() },
         )
     }
 
@@ -790,6 +795,7 @@ private class KotlinCompilerState(
             method = method,
             filteredCollectionResourceId = filteredCollectionResourceId,
         )
+        val explicitlyDeclaredResourceId = operation.explicitNativeResourceId()
         val response = responseSchema(operation)
         val binaryResponseContentTypes = if (method == HttpMethod.GET) {
             successfulBinaryResponseContentTypes(operation)
@@ -825,6 +831,7 @@ private class KotlinCompilerState(
         val resourceId =
             recordImagePreviewIdentity?.resourceId
                 ?: filteredCollectionResourceId
+                ?: explicitlyDeclaredResourceId
                 ?: semanticRouteResourceIdentity?.resourceId
                 ?: inferredResourceId
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
@@ -848,6 +855,7 @@ private class KotlinCompilerState(
             defaultBoundPath,
             defaultPathParameters,
             collection,
+            collectionResponseFieldIds = routeResourceIdentity?.responseFieldIds.orEmpty(),
             identifierUsedOutsidePath = queryParameters.any { it.name.equals("id", ignoreCase = true) } ||
                 (declaredBody?.schema as? JsonObject)?.let(::fieldsFromSchema).orEmpty()
                     .any { it.id.equals("id", ignoreCase = true) },
@@ -1576,11 +1584,18 @@ private class KotlinCompilerState(
         path: String,
         parameters: List<HttpParameter>,
         collection: Boolean,
+        collectionResponseFieldIds: Set<String> = emptySet(),
         identifierUsedOutsidePath: Boolean = false,
     ): Pair<String, List<HttpParameter>> {
-        if (!collection || parameters.size != 1 || identifierUsedOutsidePath) return path to parameters
+        if (!collection || parameters.size != 1) return path to parameters
         val parameter = parameters.single()
         if (parameter.name.equals("id", ignoreCase = true) || !parameter.name.endsWith("Id", ignoreCase = true)) {
+            return path to parameters
+        }
+        val parameterFieldId = parameter.name.lowercase()
+        val itemHasOwnIdentity = "id" in collectionResponseFieldIds
+        val itemCarriesParentIdentity = parameterFieldId in collectionResponseFieldIds
+        if (identifierUsedOutsidePath || itemHasOwnIdentity && !itemCarriesParentIdentity) {
             return path to parameters
         }
         val placeholder = "{${parameter.name}}"
@@ -1634,6 +1649,9 @@ private class KotlinCompilerState(
             if (field.boolean("readOnly") == true) return@mapNotNull null
             if (field.string("type") == "array" && !supportsTypedArrays) return@mapNotNull null
             val repeatableObjectInput = field.repeatableObjectInputSpec()
+            val enumValues = field.stringArray("enum")
+            val enumLabels = field.nativeEnumLabels(enumValues)
+            if (ENUM_LABELS_EXTENSION in field && enumLabels == null) return@mapNotNull null
             FormField(
                 fieldId = id,
                 label = field.string("title") ?: id.humanize(),
@@ -1642,7 +1660,8 @@ private class KotlinCompilerState(
                 format = repeatableObjectInput
                     ?.let { DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT }
                     ?: field.dynamicEditorFormat(),
-                enumValues = field.stringArray("enum"),
+                enumValues = enumValues,
+                enumLabels = enumLabels,
                 repeatableObjectInput = repeatableObjectInput,
             )
         }
@@ -1650,13 +1669,17 @@ private class KotlinCompilerState(
 
     private fun formField(parameter: HttpParameter): FormField? {
         val schema = resolveFieldSchema(parameter.schema) as? JsonObject ?: return null
+        val enumValues = schema.stringArray("enum")
+        val enumLabels = schema.nativeEnumLabels(enumValues)
+        if (ENUM_LABELS_EXTENSION in schema && enumLabels == null) return null
         return FormField(
             fieldId = parameter.name,
             label = schema.string("title") ?: parameter.name.humanize(),
             kind = fieldKind(parameter.name, schema),
             required = parameter.required,
             format = schema.string("format"),
-            enumValues = schema.stringArray("enum"),
+            enumValues = enumValues,
+            enumLabels = enumLabels,
         )
     }
 
@@ -1919,10 +1942,7 @@ private fun resourceId(
     filteredCollectionResourceId: String? =
         semanticFilteredCollectionResourceId(operation, path, operationId, method),
 ): String {
-    operation.string(RESOURCE_ID_EXTENSION)
-        ?.stableId()
-        ?.takeIf { it.isNotBlank() && it.length <= 64 }
-        ?.let { return it }
+    operation.explicitNativeResourceId()?.let { return it }
     filteredCollectionResourceId?.let { return it }
     val rawTag = (operation["tags"] as? JsonArray)
         ?.firstOrNull()
@@ -1955,6 +1975,11 @@ private fun resourceId(
     if (operationId.provesResource(pathResource)) return pathResource
     return tagResource
 }
+
+private fun JsonObject.explicitNativeResourceId(): String? =
+    string(RESOURCE_ID_EXTENSION)
+        ?.stableId()
+        ?.takeIf { it.isNotBlank() && it.length <= 64 }
 
 private fun JsonObject.referencesSemanticResource(resourceId: String, operationId: String): Boolean {
     val evidence = listOfNotNull(
@@ -2460,7 +2485,7 @@ private fun actionSemanticWords(
     .filter(String::isNotBlank)
     .toSet()
 
-private val CREATE_WORDS = setOf("add", "create", "new")
+private val CREATE_WORDS = setOf("add", "create", "invite", "new")
 private val TOGGLE_WORDS = setOf("toggle", "complete", "reopen")
 private val COMPLETION_TRANSITION_WORDS = setOf("complete", "reopen")
 private val COMPLETION_STATE_WORDS = setOf(
@@ -2562,6 +2587,8 @@ private fun fieldKind(id: String, schema: JsonObject): FieldKind {
         value.string("type") == "string" && value.string("format") == "binary" -> FieldKind.file
         value.string("type") == "string" && value.string("format") == "date" -> FieldKind.date
         value.string("type") == "string" && value.string("format") == "date-time" -> FieldKind.dateTime
+        value.string("type") == "string" && value.string("format") == "nextcloud-user-id" ->
+            FieldKind.userReference
         value.string("type") == "integer" -> FieldKind.integer
         value.string("type") == "number" -> FieldKind.decimal
         value.string("type") == "boolean" -> FieldKind.boolean
@@ -2664,3 +2691,15 @@ private fun JsonObject.objectValue(key: String): JsonObject? = get(key) as? Json
 private fun JsonObject.stringArray(key: String): List<String>? = (get(key) as? JsonArray)?.mapNotNull {
     (it as? JsonPrimitive)?.contentOrNull
 }
+
+private fun JsonObject.nativeEnumLabels(enumValues: List<String>?): Map<String, String>? =
+    (get(ENUM_LABELS_EXTENSION) as? JsonObject)?.entries
+        ?.mapNotNull { (wireValue, labelElement) ->
+            (labelElement as? JsonPrimitive)
+                ?.takeIf(JsonPrimitive::isString)
+                ?.contentOrNull
+                ?.takeIf { label -> label.isNotBlank() && label.length <= MAX_DYNAMIC_ENUM_LABEL_LENGTH }
+                ?.let { label -> wireValue to label }
+        }
+        ?.toMap()
+        ?.takeIf { labels -> enumValues != null && labels.keys == enumValues.toSet() }

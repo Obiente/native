@@ -12,11 +12,14 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresInvitationAcceptRecoveryPlan
 
 internal data class PendingDynamicDirectAction(
     val action: ActionSpec,
     val values: Map<String, String>,
     val targetLabel: String,
+    val invitationAcceptRecoveryPlan: NativeChoresInvitationAcceptRecoveryPlan? = null,
+    val durableRecoveryRequired: Boolean = false,
 )
 
 internal enum class DynamicActionUiMode {
@@ -112,6 +115,14 @@ internal fun dynamicContextualFormTargetsActiveSurface(
             action.effect == ActionEffect.upload &&
             action.risk == ActionRisk.mutating &&
             hasEditableFileField &&
+            verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
+        action.intent == ActionIntent.execute &&
+            action.effect != ActionEffect.upload &&
+            action.risk == ActionRisk.mutating &&
+            action.binding.requiredBodyFieldNames.isNotEmpty() &&
+            action.binding.requiredBodyFieldNames.all { name ->
+                plannedBindingValues[name]?.isNotBlank() == true
+            } &&
             verifiedActiveRead.intent in setOf(ActionIntent.list, ActionIntent.read) -> true
         action.intent == ActionIntent.update &&
             action.risk == ActionRisk.mutating &&

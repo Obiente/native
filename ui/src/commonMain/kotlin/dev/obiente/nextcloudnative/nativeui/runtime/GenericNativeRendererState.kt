@@ -79,6 +79,9 @@ internal fun nativeRelationOptions(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
 ): List<NativeRelationOption> {
+    context.contextualNativeRelationChoices(field)?.let { projection ->
+        return projection.options
+    }
     val relationship = nativeRelationRelationship(field, formResource, schema) ?: return emptyList()
     val parentResource = schema.resources.singleOrNull { resource ->
         resource.id == relationship.parentResourceId &&
@@ -128,6 +131,9 @@ internal fun nativeRelationChoiceUnavailableReason(
     schema: NativeAppSchema,
     context: NativeDatasetContext,
 ): NativeRelationChoiceUnavailableReason? {
+    context.contextualNativeRelationChoices(field)?.let { projection ->
+        return projection.unavailableReason
+    }
     val relationship = nativeRelationRelationship(field, formResource, schema)
         ?: return NativeRelationChoiceUnavailableReason.relationship
     val parentResource = schema.resources.singleOrNull { resource ->
@@ -171,8 +177,11 @@ internal fun nativeRelationFieldRequiresChoice(
     field: FieldSpec,
     formResource: ResourceSpec,
     schema: NativeAppSchema,
+    context: NativeDatasetContext? = null,
 ): Boolean = nativeRelationRelationship(field, formResource, schema) != null ||
-    field.isOpaqueNativeRelationshipIdentity()
+    field.isOpaqueNativeRelationshipIdentity() ||
+    field.kind == FieldKind.userReference ||
+    context?.fieldChoices?.containsKey(field.id) == true
 
 internal fun nativeRelationChoicesLoaded(
     field: FieldSpec,
@@ -182,7 +191,7 @@ internal fun nativeRelationChoicesLoaded(
 ): Boolean = nativeRelationRelationship(field, formResource, schema)
     ?.parentResourceId
     ?.let(context.relatedRecords::containsKey)
-    ?: false
+    ?: context.fieldChoices.containsKey(field.id)
 
 internal fun nativeRelationChoiceSourceHasRecords(
     field: FieldSpec,
@@ -192,7 +201,60 @@ internal fun nativeRelationChoiceSourceHasRecords(
 ): Boolean = nativeRelationRelationship(field, formResource, schema)
     ?.parentResourceId
     ?.let { resourceId -> context.relatedRecords[resourceId].orEmpty().isNotEmpty() }
-    ?: false
+    ?: context.fieldChoices[field.id].orEmpty().isNotEmpty()
+
+private data class NativeContextualRelationChoiceProjection(
+    val options: List<NativeRelationOption>,
+    val unavailableReason: NativeRelationChoiceUnavailableReason?,
+)
+
+private fun NativeDatasetContext.contextualNativeRelationChoices(
+    field: FieldSpec,
+): NativeContextualRelationChoiceProjection? {
+    val declared = fieldChoices[field.id] ?: return null
+    if (declared.isEmpty()) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.sourceEmpty,
+        )
+    }
+    if (declared.size > 500) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.invalidValue,
+        )
+    }
+    val options = declared.mapNotNull { choice ->
+        val value = choice.value.trim().takeIf(String::isSafeNativeRelationOptionValue)
+            ?: return@mapNotNull null
+        val label = choice.label.trim().takeIf { text ->
+            text.isNotEmpty() && text.length <= 512 && text.none(Char::isISOControl)
+        } ?: return@mapNotNull null
+        val supportingText = choice.supportingText?.trim()?.takeIf { text ->
+            text.isNotEmpty() && text.length <= 512 && text.none(Char::isISOControl)
+        }
+        NativeRelationOption(value, label, supportingText)
+    }
+    if (options.size != declared.size) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.invalidValue,
+        )
+    }
+    if (options.groupingBy(NativeRelationOption::value).eachCount().any { (_, count) -> count > 1 }) {
+        return NativeContextualRelationChoiceProjection(
+            emptyList(),
+            NativeRelationChoiceUnavailableReason.duplicateValue,
+        )
+    }
+    return NativeContextualRelationChoiceProjection(
+        options.sortedWith(
+            compareBy<NativeRelationOption> { option -> option.label.lowercase() }
+                .thenBy(NativeRelationOption::value),
+        ),
+        null,
+    )
+}
 
 internal fun nativeRelationRelationship(
     field: FieldSpec,
@@ -1104,6 +1166,25 @@ private fun ApiBinding.isProvenNativeCreateParentAlias(parameterName: String): B
 
 fun interface NativeActionExecutor {
     suspend fun execute(request: NativeActionRequest): NativeActionExecutionResult
+}
+
+data class NativePendingMutationKey(
+    val actionId: String,
+    val targetRecordId: String,
+)
+
+interface NativePendingMutationStore {
+    suspend fun load(key: NativePendingMutationKey): Map<String, String>?
+
+    suspend fun save(key: NativePendingMutationKey, values: Map<String, String>)
+
+    /** Re-reads authoritative server state and verifies this exact staged mutation identity. */
+    suspend fun postconditionSatisfied(
+        key: NativePendingMutationKey,
+        values: Map<String, String>,
+    ): Boolean = false
+
+    suspend fun clear(key: NativePendingMutationKey)
 }
 
 enum class NativeActionFailureOutcome {

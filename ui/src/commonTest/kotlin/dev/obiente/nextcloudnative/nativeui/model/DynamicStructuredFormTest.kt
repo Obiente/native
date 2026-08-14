@@ -124,6 +124,48 @@ class DynamicStructuredFormTest {
         )
     }
 
+    @Test
+    fun `repeatable enumeration preserves audited labels separately from wire values`() {
+        val spec = assertNotNull(
+            Json.parseToJsonElement(
+                """
+                {
+                  "type":"array",
+                  "format":"$DYNAMIC_REPEATABLE_OBJECT_ARRAY_FORMAT",
+                  "minItems":1,
+                  "maxItems":1,
+                  "items":{
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["repeat"],
+                    "properties":{
+                      "repeat":{
+                        "type":"string",
+                        "enum":["s:1:-","d:1"],
+                        "$ENUM_LABELS_EXTENSION":{
+                          "s:1:-":"Does not repeat",
+                          "d:1":"Every day"
+                        }
+                      }
+                    }
+                  }
+                }
+                """.trimIndent(),
+            ).repeatableObjectInputSpec(),
+        )
+        val repeat = spec.fields.single()
+
+        assertEquals(listOf("s:1:-", "d:1"), repeat.enumValues)
+        assertEquals(
+            mapOf("s:1:-" to "Does not repeat", "d:1" to "Every day"),
+            repeat.enumLabels,
+        )
+        assertEquals(
+            """[{"repeat":"d:1"}]""",
+            spec.encode(listOf(RepeatableObjectInputRow(mapOf("repeat" to "d:1")))),
+        )
+    }
+
     private fun decimalSpec(
         minimum: String? = null,
         maximum: String? = null,

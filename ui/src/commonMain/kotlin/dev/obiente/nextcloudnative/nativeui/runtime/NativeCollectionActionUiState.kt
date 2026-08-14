@@ -1,11 +1,16 @@
 package dev.obiente.nextcloudnative.nativeui.runtime
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import dev.obiente.nextcloudnative.app.publicContentSha256
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 internal fun toggleNativeCollectionSelection(
     selectedRecordIds: List<String>,
@@ -57,6 +62,119 @@ internal fun moveNativeCollectionRecordToIndex(
     return orderedRecordIds.toMutableList().apply {
         removeAt(fromIndex)
         add(targetIndex, recordId)
+    }
+}
+
+internal fun validPendingNativeCollectionOrder(
+    authoritativeRecordIds: List<String>,
+    pendingRecordIds: List<String>?,
+): List<String>? = pendingRecordIds?.takeIf { pending ->
+    pending.size == authoritativeRecordIds.size &&
+        pending.distinct().size == pending.size &&
+        pending.toSet() == authoritativeRecordIds.toSet()
+}
+
+internal data class NativePendingCollectionReorder(
+    val orderedRecordIds: List<String>,
+    val recoveryRequested: Boolean,
+)
+
+internal fun nativePendingCollectionReorderKey(
+    plan: NativeCollectionReorderActionPlan,
+    resourceId: String,
+): NativePendingMutationKey = NativePendingMutationKey(
+    actionId = "$NATIVE_CATEGORY_REORDER_MUTATION_NAMESPACE:${plan.action.id}",
+    targetRecordId = publicContentSha256(plan.pendingMutationScope(resourceId).encodeToByteArray()),
+)
+
+internal fun encodeNativePendingCollectionReorder(
+    orderedRecordIds: List<String>,
+    recoveryRequested: Boolean,
+): Map<String, String>? {
+    if (
+        orderedRecordIds.isEmpty() ||
+        orderedRecordIds.size > MAX_PENDING_CATEGORY_REORDER_RECORDS ||
+        orderedRecordIds.distinct().size != orderedRecordIds.size
+    ) {
+        return null
+    }
+    val encodedOrder = JsonArray(orderedRecordIds.map(::JsonPrimitive)).toString()
+    if (encodedOrder.length > MAX_PENDING_CATEGORY_REORDER_VALUE_LENGTH) return null
+    return mapOf(
+        PENDING_CATEGORY_REORDER_ORDER_KEY to encodedOrder,
+        PENDING_CATEGORY_REORDER_RECOVERY_KEY to recoveryRequested.toString(),
+    )
+}
+
+internal fun decodeNativePendingCollectionReorder(
+    values: Map<String, String>,
+): NativePendingCollectionReorder? {
+    if (values.keys != PENDING_CATEGORY_REORDER_KEYS) return null
+    val recoveryRequested = when (values[PENDING_CATEGORY_REORDER_RECOVERY_KEY]) {
+        "true" -> true
+        "false" -> false
+        else -> return null
+    }
+    val encodedOrder = values[PENDING_CATEGORY_REORDER_ORDER_KEY]
+        ?.takeIf { encoded -> encoded.length <= MAX_PENDING_CATEGORY_REORDER_VALUE_LENGTH }
+        ?: return null
+    val elements = runCatching { Json.parseToJsonElement(encodedOrder) as? JsonArray }
+        .getOrNull() ?: return null
+    val order = elements.mapNotNull { element ->
+        (element as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull
+    }
+        .takeIf { decoded ->
+            decoded.size == elements.size &&
+                decoded.isNotEmpty() &&
+                decoded.size <= MAX_PENDING_CATEGORY_REORDER_RECORDS &&
+                decoded.distinct().size == decoded.size
+        }
+        ?: return null
+    return NativePendingCollectionReorder(order, recoveryRequested)
+}
+
+internal const val NATIVE_CATEGORY_REORDER_MUTATION_NAMESPACE = "category-reorder-v1"
+private const val PENDING_CATEGORY_REORDER_ORDER_KEY = "orderedRecordIds"
+private const val PENDING_CATEGORY_REORDER_RECOVERY_KEY = "recoveryRequested"
+private val PENDING_CATEGORY_REORDER_KEYS = setOf(
+    PENDING_CATEGORY_REORDER_ORDER_KEY,
+    PENDING_CATEGORY_REORDER_RECOVERY_KEY,
+)
+private const val MAX_PENDING_CATEGORY_REORDER_RECORDS = 4_096
+private const val MAX_PENDING_CATEGORY_REORDER_VALUE_LENGTH = 65_536
+
+internal fun nativeVisibleReorderTargetId(
+    orderedRecordIds: List<String>,
+    rowBounds: Map<String, Rect>,
+    pointerPosition: Offset,
+    visibleItemKeys: Set<String>,
+): String? = orderedRecordIds.firstOrNull { recordId ->
+    recordId in visibleItemKeys && rowBounds[recordId]?.contains(pointerPosition) == true
+}
+
+internal fun moveNativeCollectionRecordAcrossAdjacentMidpoint(
+    orderedRecordIds: List<String>,
+    recordId: String,
+    pointerY: Float,
+    movementY: Float,
+    rowBounds: Map<String, Rect>,
+): List<String> {
+    if (!pointerY.isFinite() || !movementY.isFinite() || movementY == 0f) return orderedRecordIds
+    val fromIndex = orderedRecordIds.indexOf(recordId)
+    if (fromIndex < 0) return orderedRecordIds
+    val direction = if (movementY < 0f) -1 else 1
+    val targetIndex = fromIndex + direction
+    val targetId = orderedRecordIds.getOrNull(targetIndex) ?: return orderedRecordIds
+    val targetBounds = rowBounds[targetId] ?: return orderedRecordIds
+    val crossedMidpoint = if (direction < 0) {
+        pointerY <= targetBounds.center.y
+    } else {
+        pointerY >= targetBounds.center.y
+    }
+    return if (crossedMidpoint) {
+        moveNativeCollectionRecord(orderedRecordIds, recordId, direction)
+    } else {
+        orderedRecordIds
     }
 }
 

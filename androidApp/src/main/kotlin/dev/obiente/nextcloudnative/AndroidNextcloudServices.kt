@@ -50,6 +50,10 @@ import dev.obiente.nextcloudnative.app.FileVersionDavRecord
 import dev.obiente.nextcloudnative.app.FileVersionHistory
 import dev.obiente.nextcloudnative.app.NextcloudFileVersion
 import dev.obiente.nextcloudnative.app.isSafeDynamicDiscoveryCacheAppId
+import dev.obiente.nextcloudnative.app.MAX_PERSISTED_DYNAMIC_MUTATION_BYTES
+import dev.obiente.nextcloudnative.app.decodePersistedDynamicMutation
+import dev.obiente.nextcloudnative.app.encodePersistedDynamicMutation
+import dev.obiente.nextcloudnative.app.isSafePendingMutationId
 import dev.obiente.nextcloudnative.app.FileOfflineAvailability
 import dev.obiente.nextcloudnative.app.FileOfflineCenterActionResult
 import dev.obiente.nextcloudnative.app.FileOfflineCenterSnapshot
@@ -206,11 +210,15 @@ import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.io.IOException
 import java.io.OutputStream
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -365,6 +373,34 @@ internal suspend fun executeAndroidDynamicApiGet(
     )
 }
 
+/** Publishes a pre-synced mutation marker before its non-idempotent request may start. */
+internal fun publishAndroidPendingMutation(temporary: File, target: File) {
+    require(temporary.isFile)
+    require(temporary.parentFile == target.parentFile)
+    try {
+        Files.move(
+            temporary.toPath(),
+            target.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    } catch (_: AtomicMoveNotSupportedException) {
+        copyAndSyncAndroidPendingMutation(temporary, target)
+    }
+}
+
+internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
+    require(temporary.isFile)
+    require(temporary.parentFile == target.parentFile)
+    FileInputStream(temporary).use { input ->
+        FileOutputStream(target).use { output ->
+            input.copyTo(output)
+            output.fd.sync()
+        }
+    }
+    check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
+}
+
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
@@ -388,6 +424,7 @@ internal class AndroidNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
     )
     private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
+    private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
@@ -761,6 +798,80 @@ internal class AndroidNextcloudServices(
         return File(
             dynamicDiscoveryCacheDirectory,
             "${NextcloudDocumentIds.cacheAccountId(session)}-$appId.json",
+        )
+    }
+
+    override suspend fun loadPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): Map<String, String>? = withContext(Dispatchers.IO) {
+        val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
+            ?: return@withContext null
+        if (!target.exists()) return@withContext null
+        check(target.isFile && target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong()) {
+            "The pending mutation marker is unreadable."
+        }
+        val encoded = runCatching { target.readText() }.getOrElse { failure ->
+            throw IllegalStateException("The pending mutation marker could not be read.", failure)
+        }
+        requireNotNull(decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)) {
+            "The pending mutation marker is invalid."
+        }
+    }
+
+    override suspend fun savePendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+        values: Map<String, String>,
+    ) = withContext(Dispatchers.IO) {
+        val encoded = requireNotNull(
+            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+        ) { "The pending dynamic mutation is invalid." }
+        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+            "The pending dynamic mutation identity is invalid."
+        }
+        check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
+            "Could not create the pending mutation store."
+        }
+        val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
+        FileOutputStream(temporary).use { output ->
+            output.write(encoded.encodeToByteArray())
+            output.fd.sync()
+        }
+        publishAndroidPendingMutation(temporary, target)
+    }
+
+    override suspend fun clearPendingDynamicMutation(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ) = withContext(Dispatchers.IO) {
+        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        }
+        Unit
+    }
+
+    private fun pendingDynamicMutationFile(
+        session: NextcloudSession,
+        appId: String,
+        actionId: String,
+        targetRecordId: String,
+    ): File? {
+        if (!appId.isSafePendingMutationId() || !actionId.isSafePendingMutationId()) return null
+        if (!targetRecordId.isSafePendingMutationId()) return null
+        val identity = "$actionId\n$targetRecordId"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(identity.encodeToByteArray())
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return File(
+            pendingDynamicMutationDirectory,
+            "${NextcloudDocumentIds.cacheAccountId(session)}-$appId-$digest.json",
         )
     }
 

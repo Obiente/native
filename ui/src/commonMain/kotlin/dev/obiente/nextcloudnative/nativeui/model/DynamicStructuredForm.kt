@@ -112,6 +112,7 @@ data class RepeatableObjectInputFieldSpec(
     val nullable: Boolean = false,
     val format: String? = null,
     val enumValues: List<String>? = null,
+    val enumLabels: Map<String, String>? = null,
     val minimum: String? = null,
     val maximum: String? = null,
     val minimumLength: Int? = null,
@@ -125,6 +126,13 @@ data class RepeatableObjectInputFieldSpec(
                 values.size <= MAX_REPEATABLE_OBJECT_ENUM_VALUES &&
                 values.distinct().size == values.size &&
                 values.all(String::isSafeRepeatableObjectScalar)
+        } != false)
+        require(enumLabels?.let { labels ->
+            enumValues != null &&
+                labels.keys == enumValues.toSet() &&
+                labels.values.all { label ->
+                    label.isNotBlank() && label.length <= MAX_REPEATABLE_OBJECT_INPUT_LABEL_LENGTH
+                }
         } != false)
         require(minimumLength?.let { it >= 0 } != false)
         require(maximumLength?.let { it >= 0 } != false)
@@ -275,6 +283,17 @@ private fun JsonElement.toRepeatableObjectInputField(
         ?.takeIf { values -> values.isNotEmpty() && values.distinct().size == values.size }
     if (DESCRIPTION_ENUM_EXTENSION in schema && recoveredEnum == null) return null
     val allowed = enumValues ?: recoveredEnum
+    val enumLabels = (schema[ENUM_LABELS_EXTENSION] as? JsonObject)?.entries
+        ?.mapNotNull { (wireValue, labelElement) ->
+            (labelElement as? JsonPrimitive)
+                ?.takeIf(JsonPrimitive::isString)
+                ?.contentOrNull
+                ?.takeIf { label -> label.isNotBlank() && label.length <= MAX_REPEATABLE_OBJECT_INPUT_LABEL_LENGTH }
+                ?.let { label -> wireValue to label }
+        }
+        ?.toMap()
+        ?.takeIf { labels -> allowed != null && labels.keys == allowed.toSet() }
+    if (ENUM_LABELS_EXTENSION in schema && enumLabels == null) return null
     val kind = when (type) {
         "string" -> if (allowed != null) {
             RepeatableObjectInputScalarKind.Enumeration
@@ -324,6 +343,7 @@ private fun JsonElement.toRepeatableObjectInputField(
             nullable = nullable,
             format = (schema["format"] as? JsonPrimitive)?.contentOrNull,
             enumValues = allowed,
+            enumLabels = enumLabels,
             minimum = minimum,
             maximum = maximum,
             minimumLength = minimumLength,
@@ -450,6 +470,7 @@ private fun String.structuredHumanize(): String =
         .take(MAX_REPEATABLE_OBJECT_INPUT_LABEL_LENGTH)
 
 internal const val DESCRIPTION_ENUM_EXTENSION = "x-nextcloud-native-description-enum"
+internal const val ENUM_LABELS_EXTENSION = "x-nextcloud-native-enum-labels"
 private const val MAX_REPEATABLE_OBJECT_INPUT_ITEMS = 64
 private const val MAX_REPEATABLE_OBJECT_INPUT_FIELDS = 16
 private const val MAX_REPEATABLE_OBJECT_ENUM_VALUES = 32
@@ -475,6 +496,7 @@ private val REPEATABLE_OBJECT_SCALAR_SCHEMA_KEYS = setOf(
     "type",
     "writeOnly",
     DESCRIPTION_ENUM_EXTENSION,
+    ENUM_LABELS_EXTENSION,
 )
 private val REPEATABLE_OBJECT_ARRAY_SCHEMA_KEYS = setOf(
     "\$comment",

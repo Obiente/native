@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
+import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
@@ -13,6 +14,42 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DynamicNavigationHistoryPersistenceTest {
+    @Test
+    fun `retained team context keeps Chores children available from other destinations`() {
+        val team = DynamicResourceRecordContext(
+            resourceId = "team",
+            recordId = "42",
+            fieldValues = mapOf("id" to "42"),
+        )
+        val invitation = DynamicResourceRecordContext(
+            resourceId = "invitations",
+            recordId = "invite-7",
+            fieldValues = mapOf("teamId" to "42"),
+        )
+
+        assertEquals(team, retainedChoresNavigationContext(team, invitation))
+        assertEquals(invitation, retainedChoresNavigationContext(null, invitation))
+    }
+
+    @Test
+    fun `restored root view marks automatic landing as already consumed`() {
+        assertFalse(DynamicAppNavigationState().hasPersistedDynamicLocation())
+        assertTrue(
+            DynamicAppNavigationState(selectedViewId = "team.list")
+                .hasPersistedDynamicLocation(),
+        )
+        assertTrue(
+            DynamicAppNavigationState(
+                history = listOf(
+                    SavedDynamicNavigationSnapshot(
+                        viewId = "chores.list",
+                        resourceId = "chores",
+                    ),
+                ),
+            ).hasPersistedDynamicLocation(),
+        )
+    }
+
     @Test
     fun `saved history is bounded and excludes complete record payloads`() {
         val largePayload = "private-record-payload-".repeat(2_000)

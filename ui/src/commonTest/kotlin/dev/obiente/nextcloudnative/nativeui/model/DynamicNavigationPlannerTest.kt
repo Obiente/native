@@ -570,6 +570,130 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `verified record execute binds declared body identity only after record selection`() {
+        val listInvitations = action(
+            id = "list-invitations",
+            resourceId = "invites",
+            intent = ActionIntent.list,
+        ).copy(
+            confidence = Confidence.verified,
+            responseFieldIds = listOf("inviteId", "teamId", "teamName"),
+        )
+        val acceptInvitation = action(
+            id = "accept-invitation",
+            resourceId = "invitations",
+            intent = ActionIntent.execute,
+            method = HttpMethod.POST,
+            body = HttpBody(
+                contentType = "application/json",
+                required = true,
+                schema = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put("teamId", buildJsonObject { put("type", "integer") })
+                        },
+                    )
+                    put("required", buildJsonArray { add(JsonPrimitive("teamId")) })
+                },
+            ),
+        ).copy(
+            confidence = Confidence.verified,
+            binding = action(
+                id = "accept-invitation",
+                resourceId = "invitations",
+                intent = ActionIntent.execute,
+                method = HttpMethod.POST,
+                body = HttpBody(
+                    contentType = "application/json",
+                    required = true,
+                    schema = buildJsonObject {
+                        put("type", "object")
+                        put(
+                            "properties",
+                            buildJsonObject {
+                                put("teamId", buildJsonObject { put("type", "integer") })
+                            },
+                        )
+                        put("required", buildJsonArray { add(JsonPrimitive("teamId")) })
+                    },
+                ),
+            ).binding.copy(path = "/apps/chores/api/v1.0/account/invites/accept"),
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "signed Chores 0.1.0 package",
+                    detail = "Exact verified controller contract",
+                ),
+            ),
+        )
+        val invitationForm = DynamicForm(
+            id = "accept-invitation.form",
+            title = "Accept invitation",
+            resourceId = "invitations",
+            actionId = acceptInvitation.id,
+            fields = listOf(
+                FormField("teamId", "Team", FieldKind.integer, required = true),
+            ),
+            confidence = Confidence.verified,
+        )
+        val invitationLayout = layout("invites", listInvitations.id).copy(
+            confidence = Confidence.verified,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            resources = listOf(
+                resource("invites").copy(confidence = Confidence.verified),
+                resource("invitations").copy(confidence = Confidence.verified),
+            ),
+            layouts = listOf(invitationLayout),
+            links = emptyList(),
+            forms = listOf(invitationForm),
+            actions = listOf(listInvitations, acceptInvitation),
+        )
+
+        assertTrue(descriptor.planDynamicNavigation().rootFormActions.isEmpty())
+        assertTrue(
+            descriptor.copy(app = AppIdentity("shared-work", "Shared work", "test"))
+                .planDynamicNavigation(
+                    DynamicResourceRecordContext(
+                        resourceId = "invites",
+                        recordId = "invite-7",
+                        fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
+                        currentLayoutId = invitationLayout.id,
+                    ),
+                ).contextualFormActions.isEmpty(),
+        )
+        val contextual = descriptor.planDynamicNavigation(
+            DynamicResourceRecordContext(
+                resourceId = "invites",
+                recordId = "invite-7",
+                fieldValues = mapOf("teamId" to "42", "teamName" to "Home"),
+                currentLayoutId = invitationLayout.id,
+            ),
+        ).contextualFormActions.single()
+
+        assertEquals(acceptInvitation.id, contextual.actionId)
+        assertEquals(mapOf("teamId" to "42"), contextual.pathParameterValues)
+        assertTrue(
+            descriptor.copy(
+                actions = listOf(
+                    listInvitations.copy(responseFieldIds = listOf("inviteId", "teamName")),
+                    acceptInvitation,
+                ),
+            ).planDynamicNavigation(
+                DynamicResourceRecordContext(
+                    resourceId = "invites",
+                    recordId = "invite-7",
+                    fieldValues = mapOf("teamId" to "42"),
+                    currentLayoutId = invitationLayout.id,
+                ),
+            ).contextualFormActions.isEmpty(),
+        )
+    }
+
+    @Test
     fun `body scoped child create is withheld without a declared relationship or safe parent identity`() {
         val listCollections = action("list-collections", "collections", ActionIntent.list)
         val listEntries = action("list-entries", "entries", ActionIntent.list, "collectionId")

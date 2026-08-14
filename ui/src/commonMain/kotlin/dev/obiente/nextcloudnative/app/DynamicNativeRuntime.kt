@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.nativeui.model.AdvertisedOpenApi
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.AppIdentity
 import dev.obiente.nextcloudnative.nativeui.model.AuthKind
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAction
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
@@ -22,6 +23,7 @@ import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.HttpParameter
 import dev.obiente.nextcloudnative.nativeui.model.OpenApiTrust
 import dev.obiente.nextcloudnative.nativeui.model.ParameterSource
+import dev.obiente.nextcloudnative.nativeui.model.ProvenanceKind
 import dev.obiente.nextcloudnative.nativeui.model.isExactDynamicIntegerArraySchema
 import dev.obiente.nextcloudnative.nativeui.model.parseDynamicIntegerArrayInput
 import dev.obiente.nextcloudnative.nativeui.model.repeatableObjectInputSpec
@@ -779,7 +781,12 @@ internal suspend fun executeDynamicReadWithFallback(
                     intent = preferred.intent,
                 )
             }
-            parseDynamicRecords(parsingAction, execute(candidate), candidate.responseFieldIds.toSet())
+            parseDynamicRecords(
+                action = parsingAction,
+                response = execute(candidate),
+                declaredFieldIds = candidate.responseFieldIds.toSet(),
+                preferredIdentityFieldId = descriptor.verifiedRecordIdentityFieldId(candidate),
+            )
         }.onFailure { failure ->
             val specificity = (failure as? DynamicReadLoadException)?.specificity ?: 0
             if (bestFailure == null || specificity > bestFailureSpecificity) {
@@ -798,8 +805,10 @@ internal fun parseDynamicRecords(
     action: DynamicAction,
     response: NextcloudApiResponse,
     declaredFieldIds: Set<String> = emptySet(),
+    preferredIdentityFieldId: String? = null,
 ): List<NativeRecord> {
     if (response.status !in 200..299) throw response.toDynamicReadLoadException(action)
+    if (response.status == 204) return emptyList()
     check(response.contentType?.contains("json", ignoreCase = true) == true) {
         "The dynamic endpoint did not return JSON."
     }
@@ -812,7 +821,23 @@ internal fun parseDynamicRecords(
         mapCollectionCandidate = action.intent == dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list,
         declaredFieldIds = declaredFieldIds,
         collectionNameHints = action.dynamicCollectionNameHints(),
+        preferredIdentityFieldId = preferredIdentityFieldId,
     )
+}
+
+private fun DynamicAppDescriptor.verifiedRecordIdentityFieldId(action: DynamicAction): String? {
+    if (
+        app.id != "chores" || app.version != "0.1.0" ||
+        action.binding.method != HttpMethod.GET ||
+        action.binding.path != "/apps/chores/api/v1.0/account/invites" ||
+        action.confidence != Confidence.verified ||
+        action.provenance.none { provenance -> provenance.kind == ProvenanceKind.verifiedAppPackage } ||
+        action.responseFieldIds.count { fieldId -> fieldId == "inviteId" } != 1 ||
+        actions.count { candidate -> candidate.id == action.id } != 1
+    ) {
+        return null
+    }
+    return "inviteId"
 }
 
 private fun DynamicAction.dynamicCollectionNameHints(): Set<String> =
@@ -1631,11 +1656,13 @@ private fun JsonElement.toNativeRecords(
     mapCollectionCandidate: Boolean,
     declaredFieldIds: Set<String>,
     collectionNameHints: Set<String> = emptySet(),
+    preferredIdentityFieldId: String? = null,
 ): List<NativeRecord> = (when (this) {
     is JsonArray -> asSequence().take(MAX_DYNAMIC_NATIVE_RECORDS).mapIndexed { index, element ->
         element.toNativeRecord(
             fallbackId = index.toString(),
             declaredFieldIds = declaredFieldIds,
+            preferredIdentityFieldId = preferredIdentityFieldId,
             allowObservedRichText = !mapCollectionCandidate,
         )
     }.toList()
@@ -1646,6 +1673,7 @@ private fun JsonElement.toNativeRecords(
             namedArray != null -> namedArray.toNativeRecords(
                 mapCollectionCandidate = false,
                 declaredFieldIds = declaredFieldIds,
+                preferredIdentityFieldId = preferredIdentityFieldId,
             )
             isObjectMapCollection() -> entries.asSequence()
                 .take(MAX_DYNAMIC_NATIVE_RECORDS)
@@ -1653,14 +1681,29 @@ private fun JsonElement.toNativeRecords(
                 (element as? JsonObject)?.toNativeRecord(
                     fallbackId = mapKey,
                     declaredFieldIds = declaredFieldIds,
+                    preferredIdentityFieldId = preferredIdentityFieldId,
                     stableFallbackIdentity = true,
                     allowObservedRichText = false,
                 )
             }.toList()
-            else -> listOf(toNativeRecord("record", declaredFieldIds, allowObservedRichText = true))
+            else -> listOf(
+                toNativeRecord(
+                    fallbackId = "record",
+                    declaredFieldIds = declaredFieldIds,
+                    preferredIdentityFieldId = preferredIdentityFieldId,
+                    allowObservedRichText = true,
+                ),
+            )
         }
     } else {
-        listOf(toNativeRecord("record", declaredFieldIds, allowObservedRichText = true))
+        listOf(
+            toNativeRecord(
+                fallbackId = "record",
+                declaredFieldIds = declaredFieldIds,
+                preferredIdentityFieldId = preferredIdentityFieldId,
+                allowObservedRichText = true,
+            ),
+        )
     }
     else -> listOf(
         NativeRecord(
@@ -1745,6 +1788,7 @@ private fun JsonObject.isObjectMapCollection(): Boolean {
 private fun JsonElement.toNativeRecord(
     fallbackId: String,
     declaredFieldIds: Set<String>,
+    preferredIdentityFieldId: String? = null,
     stableFallbackIdentity: Boolean = false,
     allowObservedRichText: Boolean = false,
 ): NativeRecord {
@@ -1771,7 +1815,10 @@ private fun JsonElement.toNativeRecord(
     // identity from an incomplete response schema. Read-only child routes can still require that
     // observed `databaseId`. Prefer it for navigation, but keep it action-unsafe unless the
     // contract explicitly declared the field.
-    val identity = declaredIdentity("databaseId")
+    val identity = preferredIdentityFieldId
+        ?.takeIf { preferred -> declaredFieldIds.count { it == preferred } == 1 }
+        ?.let(declaredIdentity)
+        ?: declaredIdentity("databaseId")
         ?: observedIdentity("databaseId")
         ?: declaredIdentity("id")
         ?: declaredIdentity("uuid")
