@@ -655,6 +655,27 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun publishesCancellingWhileAnInterruptedUploadIsReconciled() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build(),
+            )
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertEquals("POST", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+
+            assertTrue(fixture.intake.cancel())
+            assertIs<SupportDiagnosticsSubmissionState.Cancelling>(fixture.intake.states().value)
+
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            withTimeout(5_000) { submission.join() }
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+        }
+        Unit
+    }
+
+    @Test
     fun packagingFailureDoesNotRestoreAReportCancelledDuringPackaging() = runBlocking {
         val packagingEntered = CountDownLatch(1)
         val allowPackagingFailure = CountDownLatch(1)
@@ -724,6 +745,39 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
         }
+    }
+
+    @Test
+    fun retriesTerminalCleanupWhenThePendingDescriptorCannotBeRead() = runBlocking {
+        var descriptorReads = 0
+        val cleanupRetryEntered = CountDownLatch(1)
+        val allowCleanupRetry = CountDownLatch(1)
+        testFixture(
+            pendingDescriptorRead = { descriptor ->
+                descriptorReads += 1
+                if (descriptorReads == 1) {
+                    throw IOException("Synthetic pending descriptor read failure.")
+                }
+                cleanupRetryEntered.countDown()
+                check(allowCleanupRetry.await(5, TimeUnit.SECONDS))
+                descriptor.readText()
+            },
+            descriptorCleanupRetryMillis = 10L,
+        ).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertTrue(cleanupRetryEntered.await(5, TimeUnit.SECONDS))
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            allowCleanupRetry.countDown()
+            withTimeout(5_000) {
+                while (File(fixture.temporaryRoot, "pending.json").exists()) delay(10)
+            }
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+        }
+        Unit
     }
 
     @Test

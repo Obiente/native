@@ -405,15 +405,22 @@ class JvmSupportIntake(
             submission.outcomeAmbiguous = true
             val cancellationPersisted = persistPendingSafely(submission)
             val call = activeCall.getAndSet(null)
-            call?.cancel()
             if (!cancellationPersisted) {
+                call?.cancel()
                 publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
                     "Cancellation could not be stored safely. Keep the app open and retry to reconcile the private report.",
                     outcomeAmbiguous = true,
                 ))
                 return false
             }
-            if (call != null) return true
+            if (call != null) {
+                publishState(
+                    SupportDiagnosticsSubmissionState.Cancelling,
+                    submission.originAccountIdentity,
+                )
+                call.cancel()
+                return true
+            }
         }
         if (submission != null) {
             publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
@@ -1077,12 +1084,14 @@ class JvmSupportIntake(
             runCatching {
                 val descriptor = pendingDescriptor()
                 if (descriptor.isFile) {
-                    val persistedIdempotencyKey = runCatching {
+                    val persistedIdempotencyKey = try {
                         json.decodeFromString(
                             PersistedPendingSubmission.serializer(),
-                            descriptor.readText(Charsets.UTF_8),
+                            pendingDescriptorRead(descriptor),
                         ).idempotencyKey
-                    }.getOrNull()
+                    } catch (_: Throwable) {
+                        return@synchronized false
+                    }
                     if (persistedIdempotencyKey != submission.idempotencyKey) return@synchronized true
                 }
                 deletePrivateDescriptorDurably(descriptor)
