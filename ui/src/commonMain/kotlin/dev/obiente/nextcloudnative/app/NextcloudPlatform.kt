@@ -521,6 +521,25 @@ interface NextcloudPlatformServices {
             "Anonymized support reports are unavailable on this platform.",
         )
 
+    /** Current explicit support submission. No implementation may start one automatically. */
+    fun supportDiagnosticsSubmissionStates(): Flow<SupportDiagnosticsSubmissionState> =
+        flowOf(SupportDiagnosticsSubmissionState.Unsupported("Direct support submission is unavailable on this platform."))
+
+    /** Packages and submits the reviewed report after the UI confirmation step. */
+    suspend fun submitSupportDiagnostics(reproductionSteps: String) = Unit
+
+    /** Retries only a retained, idempotent submission after reconciliation. */
+    suspend fun retrySupportDiagnosticsSubmission() = Unit
+
+    /** Cancels packaging or upload and removes its app-private temporary archive. */
+    suspend fun cancelSupportDiagnosticsSubmission(): Boolean = false
+
+    /** Deletes one retained submitted report after an explicit user confirmation. */
+    suspend fun deleteSubmittedSupportDiagnosticsReport(deletionUrl: String): SupportDiagnosticsDeletionResult =
+        SupportDiagnosticsDeletionResult.Unsupported(
+            "Deleting submitted support reports is unavailable on this platform.",
+        )
+
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
     suspend fun clearSupportDiagnostics(): Boolean = false
 

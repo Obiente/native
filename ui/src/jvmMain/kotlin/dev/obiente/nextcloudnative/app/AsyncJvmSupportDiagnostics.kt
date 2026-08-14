@@ -173,6 +173,31 @@ class AsyncJvmSupportDiagnostics(
         ready.await().also(::drainPendingSnapshot).writeBundle(destination, reproductionSteps, featureState)
     }
 
+    internal suspend fun writeBundleForSubmission(
+        destination: File,
+        context: PreparedSupportSubmissionContext,
+    ): PreparedSupportDiagnosticsBundle = withContext(dispatcher) {
+        ready.await().also(::drainPendingSnapshot)
+            .writeBundleForSubmission(destination, context)
+    }
+
+    internal suspend fun prepareSubmissionContext(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ): PreparedSupportSubmissionContext = withContext(dispatcher) {
+        ready.await().also(::drainPendingSnapshot)
+            .prepareSubmissionContext(reproductionSteps, featureState)
+    }
+
+    internal suspend fun prepareSubmissionContextForAccountIdentity(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountIdentity: String,
+    ): PreparedSupportSubmissionContext = withContext(dispatcher) {
+        ready.await().also(::drainPendingSnapshot)
+            .prepareSubmissionContextForAccountIdentity(reproductionSteps, featureState, accountIdentity)
+    }
+
     override fun close() {
         val shouldClose = synchronized(lock) {
             if (closing) {

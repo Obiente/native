@@ -183,6 +183,32 @@ class JvmSupportDiagnosticsTest {
     }
 
     @Test
+    fun preparedSubmissionKeepsTheConfirmedEventSnapshotAcrossLaterChanges() {
+        val root = createTempDirectory("support-diagnostics-confirmed-snapshot").toFile()
+        var now = 1_000_000L
+        val diagnostics = diagnostics(root) { now }
+        diagnostics.record(failureEvent("/srv/fixtures/confirmed.jpg").copy(operation = "sync.confirmed"))
+        val context = diagnostics.prepareSubmissionContext("The confirmed failure.", emptyList())
+
+        diagnostics.clear()
+        now += 1_000L
+        diagnostics.record(failureEvent("/srv/fixtures/later.jpg").copy(operation = "sync.later"))
+        val first = File(root, "confirmed-first.zip")
+        val second = File(root, "confirmed-second.zip")
+        diagnostics.writeBundleForSubmission(first, context)
+        diagnostics.writeBundleForSubmission(second, context)
+
+        ZipFile(first).use { zip ->
+            val events = zip.getInputStream(assertNotNull(zip.getEntry("events.jsonl")))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue("sync.confirmed" in events)
+            assertFalse("sync.later" in events)
+        }
+        assertEquals(first.readBytes().toList(), second.readBytes().toList())
+    }
+
+    @Test
     fun storageFailurePublishesARevisionAndDisablesExportState() {
         val root = createTempDirectory("support-diagnostics-storage-failure").toFile()
         val diagnostics = diagnostics(root)

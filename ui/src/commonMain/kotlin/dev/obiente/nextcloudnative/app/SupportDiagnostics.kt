@@ -184,6 +184,84 @@ sealed interface SupportDiagnosticsExportResult {
     data class Unsupported(val reason: String) : SupportDiagnosticsExportResult
 }
 
+sealed interface SupportDiagnosticsSubmissionState {
+    data object Initializing : SupportDiagnosticsSubmissionState
+    data object AccountRequired : SupportDiagnosticsSubmissionState
+    data object Idle : SupportDiagnosticsSubmissionState
+    data class BlockedByAnotherAccount(val message: String) : SupportDiagnosticsSubmissionState
+    data object Packaging : SupportDiagnosticsSubmissionState
+    data object Cancelling : SupportDiagnosticsSubmissionState
+    data object DeletingSubmittedReport : SupportDiagnosticsSubmissionState
+    data class Uploading(val progress: Float?) : SupportDiagnosticsSubmissionState {
+        init {
+            require(progress == null || progress in 0f..1f)
+        }
+    }
+    data class RetryableFailure(val message: String, val outcomeAmbiguous: Boolean) :
+        SupportDiagnosticsSubmissionState
+    data class Rejected(val message: String) : SupportDiagnosticsSubmissionState
+    data object Cancelled : SupportDiagnosticsSubmissionState
+    data class SubmittedReport(
+        val supportCode: String,
+        val statusUrl: String,
+        val deletionUrl: String,
+        val retentionUntil: String,
+    )
+    data class Submitted(val reports: List<SubmittedReport>) : SupportDiagnosticsSubmissionState {
+        init {
+            require(reports.isNotEmpty())
+        }
+
+        val supportCode: String get() = reports.first().supportCode
+        val statusUrl: String get() = reports.first().statusUrl
+        val retentionUntil: String get() = reports.first().retentionUntil
+    }
+    data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
+}
+
+sealed interface SupportDiagnosticsDeletionResult {
+    data object Deleted : SupportDiagnosticsDeletionResult
+    data class Failed(val message: String) : SupportDiagnosticsDeletionResult
+    data class Unsupported(val reason: String) : SupportDiagnosticsDeletionResult
+}
+
+@Serializable
+internal data class SupportIntakeRelease(
+    val version: String,
+    val channel: String,
+    val platform: String,
+    val osVersion: String,
+    val architecture: String,
+)
+
+@Serializable
+internal data class SupportIntakeMetadata(
+    val contractVersion: Int = SUPPORT_INTAKE_CONTRACT_VERSION,
+    val productId: String = SUPPORT_INTAKE_PRODUCT_ID,
+    val requestType: String = "bug",
+    val title: String,
+    val description: String,
+    val contact: String = "",
+    val source: String = "app",
+    val release: SupportIntakeRelease,
+    val privacyAccepted: Boolean = true,
+)
+
+@Serializable
+internal data class SupportIntakeReceipt(
+    val contractVersion: Int,
+    val supportCode: String,
+    val status: String,
+    val statusUrl: String,
+    val deletionUrl: String,
+    val createdAt: String,
+    val retentionUntil: String,
+)
+
+internal const val SUPPORT_INTAKE_CONTRACT_VERSION = 1
+internal const val SUPPORT_INTAKE_PRODUCT_ID = "nextcloud-native"
+internal const val DEFAULT_OBIENTE_SUPPORT_URL = "https://support.obiente.org"
+
 internal class SupportDiagnosticSanitizer(
     private val pseudonymize: (String) -> String,
 ) {
@@ -376,7 +454,7 @@ private const val MIN_UNBOUNDED_PRIVATE_VALUE_LENGTH = 3
 private const val MAX_PRIVATE_VALUE_LENGTH = 4_096
 private const val MAX_REGISTERED_PRIVATE_VALUES = 128
 private const val MAX_SUPPORT_DIAGNOSTIC_RAW_TEXT_LENGTH = 16_384
-private const val MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH = 512
+internal const val MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH = 512
 private const val MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH = 96
 private const val MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES = 16
 private const val MAX_SUPPORT_DIAGNOSTIC_CAUSE_DEPTH = 4
@@ -385,7 +463,7 @@ private const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
 private const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
 internal const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
 
-private val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")
+internal val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")
 private val SUPPORT_DIAGNOSTIC_OPERATION = Regex("^[a-z][a-z0-9._-]{0,79}$")
 private val SUPPORT_DIAGNOSTIC_CODE = Regex("^[A-Za-z0-9._:-]{1,96}$")
 private val SUPPORT_DIAGNOSTIC_ALIAS = Regex("^<[a-z-]+:[a-f0-9]{16}>$")

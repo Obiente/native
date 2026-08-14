@@ -32,7 +32,8 @@ import { guides } from "./generated/guides.js";
 import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
-import githubRepository from "../data/github-repository.json";
+import { githubRepository } from "./generated/github-repository.js";
+import { fetchGithubRepository } from "../scripts/github-repository-data.mjs";
 import {
   guidePlatformHubForPath,
   guidePlatformHubs,
@@ -61,10 +62,11 @@ const props = defineProps({
 });
 
 const githubUrl = "https://github.com/Obiente/nc-native";
-const githubStarLabel = `${new Intl.NumberFormat("en", {
+const currentGithubRepository = ref(githubRepository);
+const githubStarLabel = computed(() => `${new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
-}).format(githubRepository.stargazersCount)} stars`;
+}).format(currentGithubRepository.value.stargazersCount)} stars`);
 const downloadPlatforms = [
   {
     id: "android",
@@ -132,7 +134,20 @@ const themeIcon = computed(() => {
 let themeMediaQuery;
 let themeMediaListener;
 let revealObserver;
+let repositoryRefreshTimer;
 const motionEnhanced = ref(false);
+
+async function refreshGithubRepository() {
+  try {
+    currentGithubRepository.value = await fetchGithubRepository();
+  } catch {
+    // Keep the validated build-time snapshot when the live endpoint is unavailable.
+  }
+}
+
+function refreshGithubRepositoryWhenVisible() {
+  if (document.visibilityState === "visible") void refreshGithubRepository();
+}
 
 function applyDocumentTheme() {
   if (typeof document === "undefined") return;
@@ -146,6 +161,10 @@ function cycleTheme() {
 }
 
 onMounted(() => {
+  void refreshGithubRepository();
+  repositoryRefreshTimer = window.setInterval(refreshGithubRepository, 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", refreshGithubRepositoryWhenVisible);
+
   const savedTheme = window.localStorage.getItem("nextcloud-native-theme");
   if (themeOptions.includes(savedTheme)) themePreference.value = savedTheme;
   themeMediaQuery = window.matchMedia("(prefers-color-scheme: light)");
@@ -178,6 +197,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.clearInterval(repositoryRefreshTimer);
+  document.removeEventListener("visibilitychange", refreshGithubRepositoryWhenVisible);
   themeMediaQuery?.removeEventListener("change", themeMediaListener);
   revealObserver?.disconnect();
 });
