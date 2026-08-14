@@ -153,6 +153,8 @@ fun NativeGroupwareCalendarScreen(
     var editing by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
     var deleting by remember { mutableStateOf<GroupwareCalendarEvent?>(null) }
     var deletingInProgress by remember { mutableStateOf(false) }
+    var mutationInProgress by remember { mutableStateOf(false) }
+    var mutationReconciliationAttempt by remember { mutableStateOf<Int?>(null) }
     var creating by rememberSaveable { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -184,7 +186,7 @@ fun NativeGroupwareCalendarScreen(
         selectedEventId = null
     }
 
-    suspend fun reload() {
+    suspend fun reload(attempt: Int) {
         val cached = CalendarWorkspaceMemoryCache.get(session, userId, month, queryWindow)
         if (cached != null) state = cached
         val retained = cached ?: (state as? CalendarLoadState.Ready)?.takeIf { ready ->
@@ -221,6 +223,10 @@ fun NativeGroupwareCalendarScreen(
         }.onSuccess { loaded ->
             state = loaded
             CalendarWorkspaceMemoryCache.store(session, userId, loaded)
+            if (mutationReconciliationAttempt?.let { attempt >= it } == true) {
+                mutationReconciliationAttempt = null
+                mutationInProgress = false
+            }
         }.onFailure { failure ->
             val message = failure.message ?: "Could not load calendars."
             if (retained == null) {
@@ -232,7 +238,7 @@ fun NativeGroupwareCalendarScreen(
         refreshing = false
     }
 
-    LaunchedEffect(session, userId, month, queryWindow, loadAttempt) { reload() }
+    LaunchedEffect(session, userId, month, queryWindow, loadAttempt) { reload(loadAttempt) }
 
     Scaffold(
         topBar = {
@@ -377,8 +383,10 @@ fun NativeGroupwareCalendarScreen(
     val eventEditorVisible = (creating && ready != null) || editing?.let { event ->
         event.status == EDITING_MARKER && ready?.calendars?.any { it.href == event.calendarHref } == true
     } == true
-    LaunchedEffect(navigationRequest?.identity, eventEditorVisible) {
-        navigationRequest?.takeIf { !eventEditorVisible }?.let(onNavigationConfirmed)
+    LaunchedEffect(navigationRequest?.identity, eventEditorVisible, mutationInProgress) {
+        navigationRequest
+            ?.takeIf { !eventEditorVisible && !mutationInProgress }
+            ?.let(onNavigationConfirmed)
     }
     if (creating && ready != null) {
         EventEditorDialog(
@@ -390,8 +398,10 @@ fun NativeGroupwareCalendarScreen(
             navigationRequest = navigationRequest,
             onNavigationConfirmed = onNavigationConfirmed,
             onNavigationCancelled = onNavigationCancelled,
+            mutationInProgress = mutationInProgress,
             onSave = { draft, calendar ->
                 mutationError = null
+                mutationInProgress = true
                 scope.launch {
                     runCatching {
                         val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
@@ -414,8 +424,13 @@ fun NativeGroupwareCalendarScreen(
                         check(response.status in 200..299) { "Creating the event failed (HTTP ${response.status})." }
                     }.onSuccess {
                         creating = false
-                        loadAttempt += 1
-                    }.onFailure { mutationError = it.message ?: "Could not create the event." }
+                        val reconciliationAttempt = loadAttempt + 1
+                        mutationReconciliationAttempt = reconciliationAttempt
+                        loadAttempt = reconciliationAttempt
+                    }.onFailure {
+                        mutationInProgress = false
+                        mutationError = it.message ?: "Could not create the event."
+                    }
                 }
             },
         )
@@ -433,8 +448,10 @@ fun NativeGroupwareCalendarScreen(
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationCancelled = onNavigationCancelled,
+                mutationInProgress = mutationInProgress,
                 onSave = { draft, _ ->
                     mutationError = null
+                    mutationInProgress = true
                     scope.launch {
                         runCatching {
                             val updated = updateGroupwareCalendarEventContent(
@@ -460,8 +477,13 @@ fun NativeGroupwareCalendarScreen(
                             }
                         }.onSuccess {
                             editing = null
-                            loadAttempt += 1
-                        }.onFailure { mutationError = it.message ?: "Could not save the event." }
+                            val reconciliationAttempt = loadAttempt + 1
+                            mutationReconciliationAttempt = reconciliationAttempt
+                            loadAttempt = reconciliationAttempt
+                        }.onFailure {
+                            mutationInProgress = false
+                            mutationError = it.message ?: "Could not save the event."
+                        }
                     }
                 },
             )
@@ -508,6 +530,7 @@ fun NativeGroupwareCalendarScreen(
                     enabled = !deletingInProgress,
                     onClick = {
                         deletingInProgress = true
+                        mutationInProgress = true
                         mutationError = null
                         scope.launch {
                             runCatching {
@@ -524,8 +547,11 @@ fun NativeGroupwareCalendarScreen(
                             }.onSuccess {
                                 deleting = null
                                 selectedEventId = null
-                                loadAttempt += 1
+                                val reconciliationAttempt = loadAttempt + 1
+                                mutationReconciliationAttempt = reconciliationAttempt
+                                loadAttempt = reconciliationAttempt
                             }.onFailure { failure ->
+                                mutationInProgress = false
                                 mutationError = failure.message ?: "Could not delete the event."
                             }
                             deletingInProgress = false
@@ -1134,6 +1160,7 @@ private fun EventEditorDialog(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    mutationInProgress: Boolean = false,
     onSave: (EventDraft, GroupwareCalendar) -> Unit,
 ) {
     val initialIsoDate = (event?.start?.take(8) ?: initialDate).compactDateToIso()
@@ -1207,21 +1234,20 @@ private fun EventEditorDialog(
         currentCalendarHref = calendar?.href,
     )
     var confirmNavigationDiscard by remember(event) { mutableStateOf(false) }
-    LaunchedEffect(navigationRequest?.identity, dirty) {
+    LaunchedEffect(navigationRequest?.identity, dirty, mutationInProgress) {
         val request = navigationRequest
-        if (request == null) {
-            confirmNavigationDiscard = false
-        } else if (dirty) {
-            confirmNavigationDiscard = true
-        } else {
-            onNavigationConfirmed(request)
+        when {
+            request == null -> confirmNavigationDiscard = false
+            mutationInProgress -> confirmNavigationDiscard = false
+            dirty -> confirmNavigationDiscard = true
+            else -> onNavigationConfirmed(request)
         }
     }
     val valid = title.isNotBlank() && date.isIsoCalendarDate() &&
         (allDay || startTime.isCalendarTime() && endTime.isCalendarTime()) && recurrenceValid
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!mutationInProgress) onDismiss() },
         title = { Text(if (event == null) "New event" else "Edit event") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -1335,7 +1361,7 @@ private fun EventEditorDialog(
         },
         confirmButton = {
             Button(
-                enabled = valid && calendar != null,
+                enabled = valid && calendar != null && !mutationInProgress,
                 onClick = {
                     onSave(
                         currentDraft,
@@ -1344,7 +1370,9 @@ private fun EventEditorDialog(
                 },
             ) { Text("Save") }
         },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
+        },
     )
 
     if (confirmNavigationDiscard) {

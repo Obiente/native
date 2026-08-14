@@ -9,6 +9,31 @@ import kotlin.test.assertTrue
 
 class GroupwareDavTest {
     @Test
+    fun `contact navigation detects every editable draft field`() {
+        val initial = ContactDraft(
+            name = "Alex Example",
+            email = "alex@example.test",
+            phone = "+31 6 123",
+            organization = "Example",
+            address = "Main Street 1",
+            notes = "Planning contact",
+        )
+
+        assertFalse(contactDraftIsDirty(initial, initial.copy(), "personal", "personal"))
+        listOf(
+            initial.copy(name = "Alexandra Example"),
+            initial.copy(email = "other@example.test"),
+            initial.copy(phone = "+31 6 456"),
+            initial.copy(organization = "Other"),
+            initial.copy(address = "Side Street 2"),
+            initial.copy(notes = "Updated notes"),
+        ).forEach { changed ->
+            assertTrue(contactDraftIsDirty(initial, changed, "personal", "personal"))
+        }
+        assertTrue(contactDraftIsDirty(initial, initial, "personal", "team"))
+    }
+
+    @Test
     fun `carddav discovery and contact report become native semantic records`() {
         val discovery = NextcloudApiResponse(
             status = 207,

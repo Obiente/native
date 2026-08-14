@@ -82,6 +82,9 @@ fun NativeGroupwareContactsScreen(
     session: NextcloudSession,
     userId: String,
     onBack: () -> Unit,
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
 ) {
     var state by remember(session, userId) {
         mutableStateOf<ContactsLoadState>(
@@ -97,9 +100,12 @@ fun NativeGroupwareContactsScreen(
     var creating by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
+    var mutationInProgress by remember { mutableStateOf(false) }
+    var mutationReconciliationAttempt by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(session, userId, loadAttempt) {
+        val attempt = loadAttempt
         val cached = ContactsWorkspaceMemoryCache.get(session, userId)
         if (cached != null) state = cached
         val retained = cached ?: state as? ContactsLoadState.Ready
@@ -139,6 +145,10 @@ fun NativeGroupwareContactsScreen(
         }.onSuccess { loaded ->
             state = loaded
             ContactsWorkspaceMemoryCache.store(session, userId, loaded)
+            if (mutationReconciliationAttempt?.let { attempt >= it } == true) {
+                mutationReconciliationAttempt = null
+                mutationInProgress = false
+            }
         }.onFailure { failure ->
             val message = failure.message ?: "Could not load contacts."
             if (retained == null) {
@@ -151,6 +161,13 @@ fun NativeGroupwareContactsScreen(
     }
 
     val ready = state as? ContactsLoadState.Ready
+    val editorVisible = (creating && ready != null) ||
+        (editing && selected != null && ready != null)
+    LaunchedEffect(navigationRequest?.identity, editorVisible, mutationInProgress) {
+        navigationRequest
+            ?.takeIf { !editorVisible && !mutationInProgress }
+            ?.let(onNavigationConfirmed)
+    }
     val filtered = remember(ready?.contacts, query) {
         val needle = query.trim().lowercase()
         ready?.contacts.orEmpty().filter { contact ->
@@ -251,7 +268,12 @@ fun NativeGroupwareContactsScreen(
             addressBooks = ready.addressBooks.filter(GroupwareAddressBook::writable),
             error = mutationError,
             onDismiss = { creating = false; mutationError = null },
+            mutationInProgress = mutationInProgress,
+            navigationRequest = navigationRequest,
+            onNavigationConfirmed = onNavigationConfirmed,
+            onNavigationCancelled = onNavigationCancelled,
             onSave = { draft, addressBook ->
+                mutationInProgress = true
                 scope.launch {
                     mutationError = null
                     runCatching {
@@ -271,8 +293,13 @@ fun NativeGroupwareContactsScreen(
                         }
                     }.onSuccess {
                         creating = false
-                        loadAttempt += 1
-                    }.onFailure { mutationError = it.message ?: "Could not create the contact." }
+                        val reconciliationAttempt = loadAttempt + 1
+                        mutationReconciliationAttempt = reconciliationAttempt
+                        loadAttempt = reconciliationAttempt
+                    }.onFailure {
+                        mutationInProgress = false
+                        mutationError = it.message ?: "Could not create the contact."
+                    }
                 }
             },
         )
@@ -286,7 +313,12 @@ fun NativeGroupwareContactsScreen(
                 addressBooks = listOf(addressBook),
                 error = mutationError,
                 onDismiss = { editing = false; mutationError = null },
+                mutationInProgress = mutationInProgress,
+                navigationRequest = navigationRequest,
+                onNavigationConfirmed = onNavigationConfirmed,
+                onNavigationCancelled = onNavigationCancelled,
                 onSave = { draft, _ ->
+                    mutationInProgress = true
                     scope.launch {
                         mutationError = null
                         runCatching {
@@ -307,8 +339,13 @@ fun NativeGroupwareContactsScreen(
                         }.onSuccess {
                             editing = false
                             selected = null
-                            loadAttempt += 1
-                        }.onFailure { mutationError = it.message ?: "Could not save the contact." }
+                            val reconciliationAttempt = loadAttempt + 1
+                            mutationReconciliationAttempt = reconciliationAttempt
+                            loadAttempt = reconciliationAttempt
+                        }.onFailure {
+                            mutationInProgress = false
+                            mutationError = it.message ?: "Could not save the contact."
+                        }
                     }
                 },
             )
@@ -330,6 +367,7 @@ fun NativeGroupwareContactsScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         confirmDelete = false
+                        mutationInProgress = true
                         scope.launch {
                             runCatching {
                                 val request = GroupwareDavMutationSpec(
@@ -344,8 +382,13 @@ fun NativeGroupwareContactsScreen(
                                 }
                             }.onSuccess {
                                 selected = null
-                                loadAttempt += 1
-                            }.onFailure { mutationError = it.message ?: "Could not delete the contact." }
+                                val reconciliationAttempt = loadAttempt + 1
+                                mutationReconciliationAttempt = reconciliationAttempt
+                                loadAttempt = reconciliationAttempt
+                            }.onFailure {
+                                mutationInProgress = false
+                                mutationError = it.message ?: "Could not delete the contact."
+                            }
                         }
                     }) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
@@ -461,7 +504,7 @@ private fun ContactDetailDialog(
     )
 }
 
-private data class ContactDraft(
+internal data class ContactDraft(
     val name: String,
     val email: String,
     val phone: String,
@@ -470,23 +513,67 @@ private data class ContactDraft(
     val notes: String,
 )
 
+internal fun contactDraftIsDirty(
+    initial: ContactDraft,
+    current: ContactDraft,
+    initialAddressBookHref: String?,
+    currentAddressBookHref: String?,
+): Boolean = initial != current || initialAddressBookHref != currentAddressBookHref
+
 @Composable
 private fun ContactEditorDialog(
     contact: GroupwareContact?,
     addressBooks: List<GroupwareAddressBook>,
     error: String?,
     onDismiss: () -> Unit,
+    mutationInProgress: Boolean,
+    navigationRequest: NextcloudPendingNavigationRequest? = null,
+    onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     onSave: (ContactDraft, GroupwareAddressBook) -> Unit,
 ) {
-    var name by remember(contact) { mutableStateOf(contact?.displayName.orEmpty()) }
-    var email by remember(contact) { mutableStateOf(contact?.emails?.firstOrNull().orEmpty()) }
-    var phone by remember(contact) { mutableStateOf(contact?.phones?.firstOrNull().orEmpty()) }
-    var organization by remember(contact) { mutableStateOf(contact?.organization.orEmpty()) }
-    var address by remember(contact) { mutableStateOf(contact?.address.orEmpty()) }
-    var notes by remember(contact) { mutableStateOf(contact?.notes.orEmpty()) }
-    var addressBook by remember(addressBooks) { mutableStateOf(addressBooks.firstOrNull()) }
+    val initialDraft = remember(contact) {
+        ContactDraft(
+            name = contact?.displayName.orEmpty(),
+            email = contact?.emails?.firstOrNull().orEmpty(),
+            phone = contact?.phones?.firstOrNull().orEmpty(),
+            organization = contact?.organization.orEmpty(),
+            address = contact?.address.orEmpty(),
+            notes = contact?.notes.orEmpty(),
+        )
+    }
+    val editorStateKey = contact?.href ?: "new-contact"
+    var name by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.name) }
+    var email by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.email) }
+    var phone by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.phone) }
+    var organization by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.organization) }
+    var address by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.address) }
+    var notes by rememberSaveable(editorStateKey) { mutableStateOf(initialDraft.notes) }
+    val initialAddressBookHref = addressBooks.firstOrNull()?.href
+    var selectedAddressBookHref by rememberSaveable(editorStateKey) {
+        mutableStateOf(initialAddressBookHref)
+    }
+    val addressBook = addressBooks.firstOrNull { it.href == selectedAddressBookHref }
+        ?: addressBooks.firstOrNull()
+    val currentDraft = ContactDraft(name, email, phone, organization, address, notes)
+    val dirty = contactDraftIsDirty(
+        initialDraft,
+        currentDraft,
+        initialAddressBookHref,
+        addressBook?.href,
+    )
+    var confirmNavigationDiscard by remember(contact) { mutableStateOf(false) }
+    LaunchedEffect(navigationRequest?.identity, dirty, mutationInProgress) {
+        val request = navigationRequest
+        when {
+            request == null -> confirmNavigationDiscard = false
+            mutationInProgress -> confirmNavigationDiscard = false
+            dirty -> confirmNavigationDiscard = true
+            else -> onNavigationConfirmed(request)
+        }
+    }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!mutationInProgress) onDismiss() },
         title = { Text(if (contact == null) "New contact" else "Edit contact") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -512,7 +599,7 @@ private fun ContactEditorDialog(
                         addressBooks.forEach { candidate ->
                             FilterChip(
                                 selected = candidate == addressBook,
-                                onClick = { addressBook = candidate },
+                                onClick = { selectedAddressBookHref = candidate.href },
                                 label = { Text(candidate.displayName) },
                             )
                         }
@@ -523,17 +610,48 @@ private fun ContactEditorDialog(
         },
         confirmButton = {
             Button(
-                enabled = name.isNotBlank() && addressBook != null,
+                enabled = name.isNotBlank() && addressBook != null && !mutationInProgress,
                 onClick = {
                     onSave(
-                        ContactDraft(name, email, phone, organization, address, notes),
+                        currentDraft,
                         requireNotNull(addressBook),
                     )
                 },
             ) { Text("Save") }
         },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
+        },
     )
+
+    if (confirmNavigationDiscard) {
+        navigationRequest?.let { request ->
+            AlertDialog(
+                onDismissRequest = {
+                    confirmNavigationDiscard = false
+                    onNavigationCancelled(request)
+                },
+                title = { Text("Discard unsaved contact changes?") },
+                text = { Text("Your contact changes have not been saved.") },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            confirmNavigationDiscard = false
+                            onNavigationCancelled(request)
+                        },
+                    ) { Text("Keep editing") }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            confirmNavigationDiscard = false
+                            onNavigationConfirmed(request)
+                        },
+                    ) { Text("Discard") }
+                },
+            )
+        }
+    }
 }
 
 private fun GroupwareContact.initials(): String = displayName.split(' ')

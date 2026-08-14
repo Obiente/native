@@ -77,6 +77,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -1679,8 +1680,22 @@ private fun AuthenticatedApp(
     val appUpdateResult by remember(services) {
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
-    var pendingEditorNavigationRequest by remember(session) {
-        mutableStateOf<NextcloudPendingNavigationRequest?>(null)
+    val pendingEditorNavigationRequests = remember(session) {
+        mutableStateListOf<NextcloudPendingNavigationRequest>()
+    }
+    var pendingEditorLinkNavigationInProgress by remember(session) { mutableStateOf(false) }
+    val pendingEditorNavigationRequest = pendingEditorNavigationRequests
+        .firstOrNull()
+        ?.takeUnless { pendingEditorLinkNavigationInProgress }
+
+    fun queueEditorNavigationRequest(request: NextcloudPendingNavigationRequest) {
+        if (pendingEditorNavigationRequests.none { queued -> queued.identity == request.identity }) {
+            pendingEditorNavigationRequests += request
+        }
+    }
+
+    fun removeEditorNavigationRequest(request: NextcloudPendingNavigationRequest) {
+        pendingEditorNavigationRequests.removeAll { queued -> queued.identity == request.identity }
     }
 
     fun leaveAppWorkspace() {
@@ -1710,16 +1725,17 @@ private fun AuthenticatedApp(
             }
         }
         onNavigationRequestHandled(request.sequence)
-        pendingEditorNavigationRequest = null
+        pendingEditorNavigationRequests.removeAll { queued ->
+            queued is NextcloudPendingNavigationRequest.Native &&
+                queued.request.sequence == request.sequence
+        }
     }
 
     fun cancelNavigationRequest(request: NextcloudNativeNavigationRequest) {
         onNavigationRequestHandled(request.sequence)
-        if (
-            (pendingEditorNavigationRequest as? NextcloudPendingNavigationRequest.Native)
-                ?.request?.sequence == request.sequence
-        ) {
-            pendingEditorNavigationRequest = null
+        pendingEditorNavigationRequests.removeAll { queued ->
+            queued is NextcloudPendingNavigationRequest.Native &&
+                queued.request.sequence == request.sequence
         }
     }
 
@@ -1740,9 +1756,10 @@ private fun AuthenticatedApp(
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
-            screen is Screen.Calendar
+            screen is Screen.Calendar ||
+            screen is Screen.Contacts
         ) {
-            pendingEditorNavigationRequest = NextcloudPendingNavigationRequest.Native(request)
+            queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
         } else {
             applyNavigationRequest(request)
         }
@@ -1908,7 +1925,11 @@ private fun AuthenticatedApp(
                 val userId = serverInfo?.userId
                 if (userId == null) {
                     showLinkFailure(
-                        message = "Your Nextcloud account is still loading. Try this link again.",
+                        message = if (discoveryError == null) {
+                            "Your Nextcloud account is still loading. Try this link again."
+                        } else {
+                            "Your Nextcloud account details could not be loaded. Check your connection and try again."
+                        },
                         retryLink = rawLink,
                         browserUrl = target.browserUrl,
                         incomingRequestSequence = incomingRequestSequence,
@@ -2038,12 +2059,16 @@ private fun AuthenticatedApp(
         when (request) {
             is NextcloudPendingNavigationRequest.Native -> applyNavigationRequest(request.request)
             is NextcloudPendingNavigationRequest.IncomingLink -> {
-                pendingEditorNavigationRequest = null
+                removeEditorNavigationRequest(request)
+                pendingEditorLinkNavigationInProgress = true
                 launchNextcloudLinkNavigation(
                     rawLink = request.request.url,
                     source = NextcloudLinkSource.OperatingSystem,
                     incomingRequestSequence = request.request.sequence,
-                    onFinished = { onLinkRequestHandled(request.request.sequence) },
+                    onFinished = {
+                        onLinkRequestHandled(request.request.sequence)
+                        pendingEditorLinkNavigationInProgress = false
+                    },
                 )
             }
         }
@@ -2054,25 +2079,41 @@ private fun AuthenticatedApp(
             is NextcloudPendingNavigationRequest.Native -> cancelNavigationRequest(request.request)
             is NextcloudPendingNavigationRequest.IncomingLink -> {
                 onLinkRequestHandled(request.request.sequence)
-                if (pendingEditorNavigationRequest == request) pendingEditorNavigationRequest = null
+                removeEditorNavigationRequest(request)
             }
         }
     }
 
-    LaunchedEffect(linkRequest?.sequence, serverInfo?.userId) {
+    LaunchedEffect(pendingEditorNavigationRequest?.identity, screen) {
+        val request = pendingEditorNavigationRequest ?: return@LaunchedEffect
+        val guarded = screen is Screen.NoteEditor ||
+            screen is Screen.TextEditor ||
+            screen is Screen.MediaViewer ||
+            screen is Screen.Calendar ||
+            screen is Screen.Contacts
+        if (!guarded) applyPendingNavigationRequest(request)
+    }
+
+    LaunchedEffect(linkRequest?.sequence, serverInfo?.userId, discoveryError) {
         val request = linkRequest ?: return@LaunchedEffect
-        if (serverInfo == null) return@LaunchedEffect
         if (linkNavigationFailure?.incomingRequestSequence == request.sequence) {
+            return@LaunchedEffect
+        }
+        val target = nextcloudLinkDestination(session, request.url)
+        val needsServerInfo = target is NextcloudLinkDestination.FileId ||
+            target is NextcloudLinkDestination.App
+        if (needsServerInfo && serverInfo == null && discoveryError == null) {
             return@LaunchedEffect
         }
         if (
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
-            screen is Screen.Calendar
+            screen is Screen.Calendar ||
+            screen is Screen.Contacts
         ) {
             linkNavigationJob?.cancel()
-            pendingEditorNavigationRequest = NextcloudPendingNavigationRequest.IncomingLink(request)
+            queueEditorNavigationRequest(NextcloudPendingNavigationRequest.IncomingLink(request))
         } else {
             launchNextcloudLinkNavigation(
                 rawLink = request.url,
@@ -2152,6 +2193,7 @@ private fun AuthenticatedApp(
     linkNavigationFailure?.let { failure ->
         fun acknowledgeFailedIncomingLink() {
             failure.incomingRequestSequence?.let(onLinkRequestHandled)
+            pendingEditorLinkNavigationInProgress = false
         }
 
         AlertDialog(
@@ -2173,6 +2215,7 @@ private fun AuthenticatedApp(
                                 incomingRequestSequence = failure.incomingRequestSequence,
                                 onFinished = {
                                     failure.incomingRequestSequence?.let(onLinkRequestHandled)
+                                    pendingEditorLinkNavigationInProgress = false
                                 },
                             )
                         },
@@ -2436,6 +2479,9 @@ private fun AuthenticatedApp(
             session = session,
             userId = serverInfo?.userId ?: session.loginName,
             onBack = ::navigateBack,
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
         )
         Screen.Deck -> NativeDeckScreen(
             services = services,
