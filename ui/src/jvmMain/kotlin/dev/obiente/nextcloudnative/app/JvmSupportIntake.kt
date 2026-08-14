@@ -3,12 +3,15 @@ package dev.obiente.nextcloudnative.app
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.security.SecureRandom
+import java.time.Duration
 import java.time.Instant
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -77,16 +80,19 @@ class JvmSupportIntake(
     private var actualState: SupportDiagnosticsSubmissionState = SupportDiagnosticsSubmissionState.Initializing
     private var actualStateAccountIdentity: String? = null
     private var pending: PendingSubmission? = null
+    private var completedSubmissions: List<CompletedSubmission> = emptyList()
 
     init {
         scope.launch {
             try {
                 val storageReady = runCatching { preparePrivateStorage() }.isSuccess
                 val restored = if (storageReady) restorePendingSubmission() else null
-                val restoredCompleted = if (storageReady) restoreCompletedSubmission() else null
+                val restoredCompleted = if (storageReady) restoreCompletedSubmissions() else emptyList()
                 if (storageReady) pruneTemporaryReports(restored?.archive)
                 synchronized(lock) {
                     pending = restored
+                    completedSubmissions = restoredCompleted
+                    val visibleCompleted = latestCompletedFor(activeAccountIdentity)
                     publishStateLocked(
                         restored?.let {
                             SupportDiagnosticsSubmissionState.RetryableFailure(
@@ -99,8 +105,8 @@ class JvmSupportIntake(
                                 },
                                 outcomeAmbiguous = restored.outcomeAmbiguous,
                             )
-                        } ?: restoredCompleted?.toSubmissionState() ?: SupportDiagnosticsSubmissionState.Idle,
-                        restored?.originAccountIdentity ?: restoredCompleted?.originAccountIdentity,
+                        } ?: visibleCompleted?.toSubmissionState() ?: SupportDiagnosticsSubmissionState.Idle,
+                        restored?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
                     )
                 }
             } finally {
@@ -114,7 +120,7 @@ class JvmSupportIntake(
     fun setActiveAccountIdentity(accountIdentity: String?) {
         synchronized(lock) {
             activeAccountIdentity = accountIdentity?.takeIf(String::isNotBlank)
-            publishStateLocked(actualState, actualStateAccountIdentity)
+            refreshVisibleStateLocked()
         }
     }
 
@@ -486,6 +492,7 @@ class JvmSupportIntake(
     }
 
     private fun finishReceived(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
+        validateReceipt(receipt, enforceCurrentRetentionWindow = true)
         val submitReceivedReport = synchronized(lock) {
             if (pending !== submission) return
             if (cancellationRequested.get()) {
@@ -597,7 +604,11 @@ class JvmSupportIntake(
 
     private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
         validateReceipt(receipt)
-        val completedSubmission = CompletedSubmission(submission.originAccountIdentity, receipt)
+        val completedSubmission = CompletedSubmission(
+            recordId = UUID.randomUUID().toString(),
+            originAccountIdentity = submission.originAccountIdentity,
+            receipt = receipt,
+        )
         if (!persistCompletedSafely(completedSubmission)) {
             synchronized(lock) { pending = submission }
             publishState(
@@ -609,11 +620,15 @@ class JvmSupportIntake(
             )
             return
         }
+        synchronized(lock) { completedSubmissions = completedSubmissions + completedSubmission }
         finishTerminal(submission)
         publishState(completedSubmission.toSubmissionState(), submission.originAccountIdentity)
     }
 
-    private fun validateReceipt(receipt: SupportIntakeReceipt): okhttp3.HttpUrl {
+    private fun validateReceipt(
+        receipt: SupportIntakeReceipt,
+        enforceCurrentRetentionWindow: Boolean = false,
+    ): okhttp3.HttpUrl {
         require(receipt.contractVersion == SUPPORT_INTAKE_CONTRACT_VERSION)
         require(receipt.supportCode.matches(SUPPORT_CODE_PATTERN))
         require(receipt.status.matches(SUPPORT_RECEIPT_STATUS_PATTERN))
@@ -622,6 +637,19 @@ class JvmSupportIntake(
         val retentionUntil = runCatching { Instant.parse(receipt.retentionUntil) }
             .getOrElse { throw IllegalArgumentException("Invalid receipt timestamp.", it) }
         require(!retentionUntil.isBefore(createdAt))
+        val now = Instant.now()
+        require(
+            Duration.between(createdAt, retentionUntil) <=
+                Duration.ofMillis(SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS),
+        )
+        if (enforceCurrentRetentionWindow) {
+            require(!createdAt.isAfter(now.plusMillis(SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS)))
+            require(
+                !retentionUntil.isAfter(
+                    now.plusMillis(SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS + SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS),
+                ),
+            )
+        }
         val statusUrl = receipt.statusUrl.toHttpUrl()
         require(
             statusUrl.scheme == baseUrl.scheme &&
@@ -797,6 +825,7 @@ class JvmSupportIntake(
                 )
             }.getOrThrow()
             restrictOwnerOnlyFile(descriptor)
+            syncDirectoryEntry(parent)
         } finally {
             temporary.delete()
         }
@@ -807,7 +836,7 @@ class JvmSupportIntake(
     }
 
     private fun persistCompleted(submission: CompletedSubmission) {
-        val descriptor = completedDescriptor()
+        val descriptor = completedDescriptor(submission.recordId)
         preparePrivateStorage()
         writePrivateDescriptorAtomically(
             descriptor,
@@ -847,8 +876,16 @@ class JvmSupportIntake(
                 )
             }.getOrThrow()
             restrictOwnerOnlyFile(descriptor)
+            syncDirectoryEntry(parent)
         } finally {
             temporary.delete()
+        }
+    }
+
+    private fun syncDirectoryEntry(directory: File) {
+        if (Files.getFileAttributeView(directory.toPath(), PosixFileAttributeView::class.java) == null) return
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+            channel.force(true)
         }
     }
 
@@ -908,10 +945,15 @@ class JvmSupportIntake(
 
     private fun pendingDescriptor(): File = File(temporaryRoot, SUPPORT_PENDING_DESCRIPTOR)
 
-    private fun restoreCompletedSubmission(): CompletedSubmission? = runCatching {
-        val descriptor = completedDescriptor()
-        if (!descriptor.isFile) return@runCatching null
+    private fun restoreCompletedSubmissions(): List<CompletedSubmission> =
+        temporaryRoot.listFiles().orEmpty()
+            .filter { descriptor -> descriptor.isFile && descriptor.name.matches(SUPPORT_COMPLETED_FILE_PATTERN) }
+            .mapNotNull(::restoreCompletedSubmission)
+
+    private fun restoreCompletedSubmission(descriptor: File): CompletedSubmission? = runCatching {
         require(descriptor.length() in 1L..MAX_COMPLETED_DESCRIPTOR_BYTES)
+        val recordId = requireNotNull(SUPPORT_COMPLETED_FILE_PATTERN.matchEntire(descriptor.name))
+            .groupValues[1]
         val persisted = json.decodeFromString(
             PersistedCompletedSubmission.serializer(),
             descriptor.readText(Charsets.UTF_8),
@@ -919,13 +961,16 @@ class JvmSupportIntake(
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         validateReceipt(persisted.receipt)
         require(System.currentTimeMillis() <= Instant.parse(persisted.receipt.retentionUntil).toEpochMilli())
-        CompletedSubmission(persisted.originAccountIdentity, persisted.receipt)
+        CompletedSubmission(recordId, persisted.originAccountIdentity, persisted.receipt)
     }.getOrElse {
-        completedDescriptor().delete()
+        descriptor.delete()
         null
     }
 
-    private fun completedDescriptor(): File = File(temporaryRoot, SUPPORT_COMPLETED_DESCRIPTOR)
+    private fun completedDescriptor(recordId: String): File {
+        require(recordId.matches(SUPPORT_COMPLETED_RECORD_ID_PATTERN))
+        return File(temporaryRoot, "completed-$recordId.json")
+    }
 
     private data class PendingSubmission(
         var archive: File?,
@@ -950,6 +995,7 @@ class JvmSupportIntake(
     }
 
     private data class CompletedSubmission(
+        val recordId: String,
         val originAccountIdentity: String,
         val receipt: SupportIntakeReceipt,
     ) {
@@ -1007,6 +1053,21 @@ class JvmSupportIntake(
             next
         }
     }
+
+    private fun refreshVisibleStateLocked() {
+        val pendingSubmission = pending
+        when {
+            actualState is SupportDiagnosticsSubmissionState.Initializing -> state.value = actualState
+            pendingSubmission != null -> publishStateLocked(actualState, pendingSubmission.originAccountIdentity)
+            actualStateAccountIdentity == activeAccountIdentity -> state.value = actualState
+            else -> state.value = latestCompletedFor(activeAccountIdentity)?.toSubmissionState()
+                ?: SupportDiagnosticsSubmissionState.Idle
+        }
+    }
+
+    private fun latestCompletedFor(accountIdentity: String?): CompletedSubmission? =
+        completedSubmissions.filter { it.originAccountIdentity == accountIdentity }
+            .maxByOrNull { Instant.parse(it.receipt.createdAt) }
 }
 
 private fun Long.saturatingAdd(increment: Long): Long =
@@ -1103,6 +1164,9 @@ private val SUPPORT_RECEIPT_STATUS_PATTERN = Regex("[a-z][a-z_]{1,31}")
 private val SUPPORT_STATUS_PATH_PATTERN = Regex("/r/[A-Za-z0-9_-]{43}")
 private val SUPPORT_TEMPORARY_FILE_PATTERN = Regex("support-[0-9a-f-]{36}\\.zip")
 private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.(?:pending|completed)-[A-Za-z0-9._-]+\\.tmp")
+private val SUPPORT_COMPLETED_RECORD_ID_PATTERN =
+    Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+private val SUPPORT_COMPLETED_FILE_PATTERN = Regex("completed-(${SUPPORT_COMPLETED_RECORD_ID_PATTERN.pattern})\\.json")
 private val SUPPORT_IDEMPOTENCY_PATTERN = Regex("[A-Za-z0-9_-]{43}")
 private val SUPPORT_ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{32}(?:[0-9a-f]{32})?")
 private val RETRYABLE_CLIENT_STATUS_CODES = setOf(425, 429)
@@ -1115,8 +1179,9 @@ private const val MAX_PENDING_DESCRIPTOR_BYTES = 4L * 1024L * 1024L
 private const val MAX_COMPLETED_DESCRIPTOR_BYTES = 64L * 1024L
 private const val MAX_SUPPORT_ARCHIVE_BYTES = 4L * 1024L * 1024L
 private const val SUPPORT_PENDING_DESCRIPTOR = "pending.json"
-private const val SUPPORT_COMPLETED_DESCRIPTOR = "completed.json"
 private const val SUPPORT_TEMPORARY_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
+private const val SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
+private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
 private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L
 private const val MAX_SUPPORT_RETRY_AFTER_MILLIS = MAX_SUPPORT_RETRY_AFTER_SECONDS * 1_000L

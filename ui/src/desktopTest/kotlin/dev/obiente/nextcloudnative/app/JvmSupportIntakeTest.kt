@@ -33,8 +33,8 @@ class JvmSupportIntakeTest {
             val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertEquals("OBI-ABCDE-23456", submitted.supportCode)
             assertEquals(
-                setOf("completed.json"),
-                fixture.temporaryRoot.listFiles().orEmpty().map(File::getName).toSet(),
+                1,
+                fixture.completedDescriptors().size,
             )
             val request = fixture.server.takeRequest(2, TimeUnit.SECONDS)
             requireNotNull(request)
@@ -64,8 +64,8 @@ class JvmSupportIntakeTest {
             assertEquals(upload.headers["Idempotency-Key"], reconcile.headers["Idempotency-Key"])
             assertEquals("/api/v1/receipts", reconcile.url.encodedPath)
             assertEquals(
-                setOf("completed.json"),
-                fixture.temporaryRoot.listFiles().orEmpty().map(File::getName).toSet(),
+                1,
+                fixture.completedDescriptors().size,
             )
         }
     }
@@ -113,8 +113,8 @@ class JvmSupportIntakeTest {
             val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertEquals(idempotencyKey, retry.headers["Idempotency-Key"])
             assertEquals(
-                setOf("completed.json"),
-                fixture.temporaryRoot.listFiles().orEmpty().map(File::getName).toSet(),
+                1,
+                fixture.completedDescriptors().size,
             )
         }
     }
@@ -192,11 +192,67 @@ class JvmSupportIntakeTest {
             val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
             assertEquals("OBI-ABCDE-23456", submitted.supportCode)
             assertEquals(fixture.statusUrl, submitted.statusUrl)
-            assertTrue(File(fixture.temporaryRoot, "completed.json").isFile)
+            assertEquals(1, fixture.completedDescriptors().size)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
             restored.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
             assertIs<SupportDiagnosticsSubmissionState.Idle>(restored.states().value)
             Unit
+        }
+    }
+
+    @Test
+    fun preservesCompletedReceiptsForEachAccountAndReport() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-ABCDE-23456"))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            fixture.intake.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+            fixture.diagnostics.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-FGHJK-6789A"))
+            fixture.intake.submit("B refresh failed.", "nightly", emptyList())
+
+            assertEquals(2, fixture.completedDescriptors().size)
+            fixture.intake.close()
+            val restored = fixture.newIntake()
+            val accountA = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            assertEquals("OBI-ABCDE-23456", accountA.supportCode)
+
+            restored.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+
+            val accountB = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            assertEquals("OBI-FGHJK-6789A", accountB.supportCode)
+        }
+    }
+
+    @Test
+    fun rejectsReceiptBeyondTheConsentedRetentionWindow() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionDays = 31))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(
+                fixture.intake.states().value,
+            )
+            assertTrue(retryable.outcomeAmbiguous)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            assertTrue(fixture.completedDescriptors().isEmpty())
+        }
+    }
+
+    @Test
+    fun rejectsFreshReceiptWithAFutureServerTimestamp() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, createdAtOffsetDays = 1))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(
+                fixture.intake.states().value,
+            )
+            assertTrue(retryable.outcomeAmbiguous)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            assertTrue(fixture.completedDescriptors().isEmpty())
         }
     }
 
@@ -795,14 +851,19 @@ class JvmSupportIntakeTest {
         )
     }
 
-    private fun receiptResponse(statusUrl: String): MockResponse {
-        val createdAt = Instant.now().truncatedTo(ChronoUnit.SECONDS)
-        val retentionUntil = createdAt.plus(30, ChronoUnit.DAYS)
+    private fun receiptResponse(
+        statusUrl: String,
+        supportCode: String = "OBI-ABCDE-23456",
+        retentionDays: Long = 30,
+        createdAtOffsetDays: Long = 0,
+    ): MockResponse {
+        val createdAt = Instant.now().plus(createdAtOffsetDays, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS)
+        val retentionUntil = createdAt.plus(retentionDays, ChronoUnit.DAYS)
         return MockResponse.Builder().code(201).body(
             """
                 {
                   "contractVersion": 1,
-                  "supportCode": "OBI-ABCDE-23456",
+                  "supportCode": "$supportCode",
                   "status": "new",
                   "statusUrl": "$statusUrl",
                   "deletionUrl": "$statusUrl",
@@ -822,6 +883,9 @@ class JvmSupportIntakeTest {
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
+
+        fun completedDescriptors(): List<File> = temporaryRoot.listFiles().orEmpty()
+            .filter { file -> file.name.matches(Regex("completed-[0-9a-f-]{36}\\.json")) }
 
         fun newIntake() = JvmSupportIntake(
             diagnostics = diagnostics,
