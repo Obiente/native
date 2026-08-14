@@ -10,6 +10,7 @@ import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -581,6 +582,17 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun removesArchiveTemporariesLeftByInterruptedPackaging() = runBlocking {
+        testFixture(archiveTemporaryBeforeInitialization = true).use { fixture ->
+            assertTrue(
+                fixture.temporaryRoot.listFiles().orEmpty().none { file ->
+                    file.name.startsWith(".support-") && file.name.endsWith(".tmp")
+                },
+            )
+        }
+    }
+
+    @Test
     fun reportsUnavailableSubmissionStorageDuringInitialization() = runBlocking {
         testFixture(submissionStorageBlocked = true).use { fixture ->
             val state = assertIs<SupportDiagnosticsSubmissionState.Unsupported>(fixture.intake.states().value)
@@ -776,6 +788,45 @@ class JvmSupportIntakeTest {
 
             assertFalse(orphan.exists())
             assertFalse(descriptor.exists())
+        }
+    }
+
+    @Test
+    fun retriesTransientPendingDescriptorReadWithoutDeletingRecoveryFiles() = runBlocking {
+        val failReads = AtomicBoolean(false)
+        testFixture(
+            descriptorCleanupRetryMillis = 10L,
+            pendingDescriptorRead = { descriptor ->
+                if (failReads.get()) throw IOException("Synthetic transient descriptor read failure.")
+                descriptor.readText()
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            val archive = requireNotNull(
+                fixture.temporaryRoot.listFiles().orEmpty().singleOrNull { file -> file.extension == "zip" },
+            )
+            assertTrue(descriptor.isFile)
+            assertTrue(archive.isFile)
+            fixture.intake.close()
+            failReads.set(true)
+
+            fixture.newIntake().use { restored ->
+                val unavailable = assertIs<SupportDiagnosticsSubmissionState.Unsupported>(restored.states().value)
+                assertTrue(unavailable.reason.contains("retry automatically"))
+                assertTrue(descriptor.isFile)
+                assertTrue(archive.isFile)
+
+                failReads.set(false)
+                withTimeout(5_000) {
+                    restored.states().first { state ->
+                        state is SupportDiagnosticsSubmissionState.RetryableFailure
+                    }
+                }
+                assertTrue(descriptor.isFile)
+                assertTrue(archive.isFile)
+            }
         }
     }
 
@@ -1258,8 +1309,10 @@ class JvmSupportIntakeTest {
         beforeSubmissionPreparation: () -> Unit = {},
         beforeBundlePackaging: () -> Unit = {},
         privateFileDelete: (File) -> Boolean = File::delete,
+        pendingDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
         submissionStorageBlocked: Boolean = false,
         pendingTemporaryBeforeInitialization: Boolean = false,
+        archiveTemporaryBeforeInitialization: Boolean = false,
         invalidPendingBeforeInitialization: Boolean = false,
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
@@ -1273,6 +1326,11 @@ class JvmSupportIntakeTest {
         if (pendingTemporaryBeforeInitialization) {
             require(temporaryRoot.mkdirs())
             File(temporaryRoot, ".pending-orphan.tmp").writeText("private context")
+        }
+        if (archiveTemporaryBeforeInitialization) {
+            require(temporaryRoot.isDirectory || temporaryRoot.mkdirs())
+            File(temporaryRoot, ".support-${UUID.randomUUID()}.zip.123456789.tmp")
+                .writeText("private context")
         }
         if (invalidPendingBeforeInitialization) {
             require(temporaryRoot.isDirectory || temporaryRoot.mkdirs())
@@ -1308,6 +1366,7 @@ class JvmSupportIntakeTest {
             beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
             privateFileDelete = privateFileDelete,
+            pendingDescriptorRead = pendingDescriptorRead,
         )
     }
 
@@ -1348,6 +1407,7 @@ class JvmSupportIntakeTest {
         val beforeSubmissionPreparation: () -> Unit,
         val beforeBundlePackaging: () -> Unit,
         val privateFileDelete: (File) -> Boolean,
+        val pendingDescriptorRead: (File) -> String,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -1368,6 +1428,7 @@ class JvmSupportIntakeTest {
             beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
             privateFileDelete = privateFileDelete,
+            pendingDescriptorRead = pendingDescriptorRead,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }

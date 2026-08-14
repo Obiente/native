@@ -6,8 +6,10 @@ import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.security.SecureRandom
@@ -64,6 +66,9 @@ class JvmSupportIntake(
     private val beforeSubmissionPreparation: () -> Unit = {},
     private val beforeBundlePackaging: () -> Unit = {},
     private val privateFileDelete: (File) -> Boolean = File::delete,
+    private val pendingDescriptorRead: (File) -> String = { descriptor ->
+        descriptor.readText(Charsets.UTF_8)
+    },
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -84,6 +89,7 @@ class JvmSupportIntake(
     private val shutdownRequested = AtomicBoolean(false)
     private val operationActive = AtomicBoolean(false)
     private val rejectedPendingDescriptorCleanup = AtomicBoolean(false)
+    private val pendingDescriptorRestorePending = AtomicBoolean(false)
     private val lock = Any()
     private val persistenceLock = Any()
     private var activeAccountIdentity: String? = null
@@ -101,10 +107,13 @@ class JvmSupportIntake(
                 val storageFailure = runCatching { preparePrivateStorage() }.exceptionOrNull()
                 val restored = if (storageFailure == null) restorePendingSubmission() else null
                 val restoredCompleted = if (storageFailure == null) restoreCompletedSubmissions() else emptyList()
-                if (storageFailure == null) pruneTemporaryReports(restored?.archive)
+                if (storageFailure == null && !pendingDescriptorRestorePending.get()) {
+                    pruneTemporaryReports(restored?.archive)
+                }
                 synchronized(lock) {
                     storageUnavailableMessage = when {
                         storageFailure != null -> SUPPORT_STORAGE_UNAVAILABLE_MESSAGE
+                        pendingDescriptorRestorePending.get() -> SUPPORT_PENDING_RESTORE_MESSAGE
                         rejectedPendingDescriptorCleanup.get() -> SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE
                         else -> null
                     }
@@ -986,7 +995,12 @@ class JvmSupportIntake(
             }
             .forEach(::deletePrivateFileOrRetry)
         temporaryRoot.listFiles().orEmpty()
-            .filter { file -> file.isFile && file.name.matches(SUPPORT_PENDING_TEMPORARY_FILE_PATTERN) }
+            .filter { file ->
+                file.isFile && (
+                    file.name.matches(SUPPORT_PENDING_TEMPORARY_FILE_PATTERN) ||
+                        file.name.matches(SUPPORT_ARCHIVE_TEMPORARY_FILE_PATTERN)
+                    )
+            }
             .forEach(::deletePrivateFileOrRetry)
     }
 
@@ -1127,13 +1141,19 @@ class JvmSupportIntake(
         syncDirectoryEntry(parent)
     }
 
-    private fun restorePendingSubmission(): PendingSubmission? = runCatching {
+    private fun restorePendingSubmission(scheduleRetry: Boolean = true): PendingSubmission? = try {
         val descriptor = pendingDescriptor()
-        if (!descriptor.isFile) return@runCatching null
-        require(descriptor.length() in 1L..MAX_PENDING_DESCRIPTOR_BYTES)
+        val descriptorAttributes = try {
+            Files.readAttributes(descriptor.toPath(), BasicFileAttributes::class.java)
+        } catch (_: NoSuchFileException) {
+            pendingDescriptorRestorePending.set(false)
+            return null
+        }
+        require(descriptorAttributes.isRegularFile)
+        require(descriptorAttributes.size() in 1L..MAX_PENDING_DESCRIPTOR_BYTES)
         val persisted = json.decodeFromString(
             PersistedPendingSubmission.serializer(),
-            descriptor.readText(Charsets.UTF_8),
+            pendingDescriptorRead(descriptor),
         )
         require(persisted.archiveName == null || persisted.archiveName.matches(SUPPORT_TEMPORARY_FILE_PATTERN))
         require(persisted.idempotencyKey.matches(SUPPORT_IDEMPOTENCY_PATTERN))
@@ -1157,13 +1177,20 @@ class JvmSupportIntake(
             File(temporaryRoot, archiveName).absoluteFile.normalize().also { candidate ->
                 require(candidate.parentFile == temporaryRoot.absoluteFile.normalize())
                 if (archiveIsRetained) {
-                    require(candidate.isFile && candidate.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
+                    val archiveAttributes = try {
+                        Files.readAttributes(candidate.toPath(), BasicFileAttributes::class.java)
+                    } catch (failure: NoSuchFileException) {
+                        throw IllegalArgumentException("Pending support archive is missing.", failure)
+                    }
+                    require(archiveAttributes.isRegularFile)
+                    require(archiveAttributes.size() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
                     restrictOwnerOnlyFile(candidate)
                 } else {
-                    candidate.delete()
+                    deletePrivateFileOrRetry(candidate)
                 }
             }
         }?.takeIf { archiveIsRetained }
+        pendingDescriptorRestorePending.set(false)
         PendingSubmission(
             archive = archive,
             metadata = persisted.metadata,
@@ -1176,7 +1203,15 @@ class JvmSupportIntake(
             retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
         )
-    }.getOrElse {
+    } catch (failure: Throwable) {
+        if (failure is IOException || failure is SecurityException) {
+            val retryWasNotScheduled = pendingDescriptorRestorePending.compareAndSet(false, true)
+            if (scheduleRetry && retryWasNotScheduled) {
+                scope.launch { retryPendingDescriptorRestoration() }
+            }
+            return null
+        }
+        pendingDescriptorRestorePending.set(false)
         if (!quarantineRejectedPendingDescriptorSafely()) {
             rejectedPendingDescriptorCleanup.set(true)
             scope.launch { retryRejectedPendingDescriptorCleanup() }
@@ -1222,6 +1257,44 @@ class JvmSupportIntake(
                         activeAccountIdentity,
                     )
                 }
+            }
+            return
+        }
+    }
+
+    private suspend fun retryPendingDescriptorRestoration() {
+        initialized.await()
+        while (!shutdownRequested.get()) {
+            delay(descriptorCleanupRetryMillis)
+            val restored = restorePendingSubmission(scheduleRetry = false)
+            if (pendingDescriptorRestorePending.get()) continue
+            pruneTemporaryReports(restored?.archive)
+            synchronized(lock) {
+                pending = restored
+                storageUnavailableMessage = if (rejectedPendingDescriptorCleanup.get()) {
+                    SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE
+                } else {
+                    null
+                }
+                val visibleCompleted = latestCompletedFor(activeAccountIdentity)
+                publishStateLocked(
+                    storageUnavailableMessage?.let { unavailableMessage ->
+                        SupportDiagnosticsSubmissionState.Unsupported(unavailableMessage)
+                    } ?: restored?.let {
+                        SupportDiagnosticsSubmissionState.RetryableFailure(
+                            if (restored.cancellationPending) {
+                                "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
+                            } else if (restored.archive == null) {
+                                "Private report preparation was interrupted. You can retry it safely."
+                            } else {
+                                "A private support submission was interrupted. You can retry it safely."
+                            },
+                            outcomeAmbiguous = restored.outcomeAmbiguous,
+                        )
+                    } ?: visibleCompleted?.let { submittedStateFor(it.originAccountIdentity) }
+                        ?: SupportDiagnosticsSubmissionState.Idle,
+                    restored?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
+                )
             }
             return
         }
@@ -1533,6 +1606,8 @@ private val SUPPORT_RECEIPT_STATUS_PATTERN = Regex("[a-z][a-z_]{1,31}")
 private val SUPPORT_STATUS_PATH_PATTERN = Regex("/r/[A-Za-z0-9_-]{43}")
 private val SUPPORT_TEMPORARY_FILE_PATTERN = Regex("support-[0-9a-f-]{36}\\.zip")
 private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.(?:pending|completed)-[A-Za-z0-9._-]+\\.tmp")
+private val SUPPORT_ARCHIVE_TEMPORARY_FILE_PATTERN =
+    Regex("\\.support-[0-9a-f-]{36}\\.zip\\.[A-Za-z0-9._-]+\\.tmp")
 private val SUPPORT_COMPLETED_RECORD_ID_PATTERN =
     Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 private val SUPPORT_COMPLETED_FILE_PATTERN = Regex("completed-(${SUPPORT_COMPLETED_RECORD_ID_PATTERN.pattern})\\.json")
@@ -1553,6 +1628,8 @@ private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_00
 private const val SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
 private const val SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS = 60L * 1_000L
+private const val SUPPORT_PENDING_RESTORE_MESSAGE =
+    "Private support report recovery is temporarily unavailable. The app will retry automatically."
 private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L
 private const val MAX_SUPPORT_RETRY_AFTER_MILLIS = MAX_SUPPORT_RETRY_AFTER_SECONDS * 1_000L
 private const val READ_ONLY_SUPPORT_MESSAGE =

@@ -12522,6 +12522,8 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
         submissionState is SupportDiagnosticsSubmissionState.Packaging ||
         submissionState is SupportDiagnosticsSubmissionState.Cancelling ||
         submissionState is SupportDiagnosticsSubmissionState.Uploading
+    val submissionCancellable = submissionState is SupportDiagnosticsSubmissionState.Packaging ||
+        submissionState is SupportDiagnosticsSubmissionState.Uploading
     val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
         submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
     val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported
@@ -12782,7 +12784,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     }
                     Text(if (exporting) "Preparing..." else "Save a copy")
                 }
-                if (submissionBusy) {
+                if (submissionCancellable) {
                     OutlinedButton(onClick = {
                         scope.launch { services.cancelSupportDiagnosticsSubmission() }
                     }) {
