@@ -244,6 +244,8 @@ enum class GroupwareDavMutation {
 internal fun groupwareMutationResponseProvesRejection(status: Int): Boolean =
     status in 400..499 && status != 408 && status != 499
 
+internal fun groupwareDeleteResponseProvesAbsence(status: Int): Boolean = status == 404 || status == 410
+
 data class GroupwareDavMutationSpec(
     val kind: GroupwareDavKind,
     val mutation: GroupwareDavMutation,

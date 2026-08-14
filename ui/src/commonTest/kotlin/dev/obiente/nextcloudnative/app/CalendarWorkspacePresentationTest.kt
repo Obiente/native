@@ -259,8 +259,30 @@ class CalendarWorkspacePresentationTest {
         assertFalse(upsert.isSatisfiedBy(stale))
         assertFalse(upsert.isSatisfiedBy(staleEnd))
         assertTrue(upsert.isSatisfiedBy(updated))
+        val blankOptionalDraft = draft.copy(location = "   ", description = "\t")
+        val blankOptionalResponse = updated.copy(
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = blankOptionalDraft.title,
+                start = blankOptionalDraft.startValue(),
+                end = blankOptionalDraft.endValue(),
+                allDay = blankOptionalDraft.allDay,
+                location = blankOptionalDraft.location,
+                description = blankOptionalDraft.description,
+            ).encodeToByteArray(),
+        )
+        assertTrue(
+            CalendarMutationPostcondition.Upsert(
+                href,
+                "/remote.php/dav/calendars/synthetic/team/",
+                "planning",
+                "\"old\"",
+                blankOptionalDraft,
+            ).isSatisfiedBy(blankOptionalResponse),
+        )
         assertFalse(deletion.isSatisfiedBy(updated))
         assertTrue(deletion.isSatisfiedBy(missing))
+        assertTrue(deletion.isSatisfiedBy(missing.copy(status = 410)))
 
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",

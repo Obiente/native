@@ -17,6 +17,9 @@ class GroupwareDavTest {
         assertFalse(groupwareMutationResponseProvesRejection(499))
         assertFalse(groupwareMutationResponseProvesRejection(500))
         assertFalse(groupwareMutationResponseProvesRejection(504))
+        assertTrue(groupwareDeleteResponseProvesAbsence(404))
+        assertTrue(groupwareDeleteResponseProvesAbsence(410))
+        assertFalse(groupwareDeleteResponseProvesAbsence(409))
     }
 
     @Test

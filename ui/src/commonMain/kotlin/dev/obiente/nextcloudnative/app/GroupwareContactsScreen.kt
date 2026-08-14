@@ -503,7 +503,12 @@ fun NativeGroupwareContactsScreen(
                                 try {
                                     val response = services.executeGroupwareDav(session, request)
                                     if (response.status !in 200..299) {
-                                        if (groupwareMutationResponseProvesRejection(response.status)) {
+                                        if (groupwareDeleteResponseProvesAbsence(response.status)) {
+                                            if (clearMutationRecovery()) {
+                                                selectedContactHref = null
+                                                loadAttempt += 1
+                                            }
+                                        } else if (groupwareMutationResponseProvesRejection(response.status)) {
                                             if (clearMutationRecovery()) {
                                                 mutationError = "Deleting the contact failed (HTTP ${response.status})."
                                             }
@@ -700,7 +705,7 @@ internal sealed interface ContactMutationPostcondition {
     @Serializable
     data class Delete(override val href: String) : ContactMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean =
-            response.status == 404 || response.status == 410
+            groupwareDeleteResponseProvesAbsence(response.status)
     }
 }
 

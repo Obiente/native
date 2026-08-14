@@ -697,7 +697,13 @@ fun NativeGroupwareCalendarScreen(
                             try {
                                 val response = services.executeGroupwareDav(session, request)
                                 if (response.status !in 200..299) {
-                                    if (groupwareMutationResponseProvesRejection(response.status)) {
+                                    if (groupwareDeleteResponseProvesAbsence(response.status)) {
+                                        if (clearMutationRecovery()) {
+                                            deleting = null
+                                            selectedEventId = null
+                                            loadAttempt += 1
+                                        }
+                                    } else if (groupwareMutationResponseProvesRejection(response.status)) {
                                         if (clearMutationRecovery()) {
                                             mutationError = "Deleting the event failed (HTTP ${response.status})."
                                         }
@@ -1214,6 +1220,12 @@ internal data class EventDraft(
     val description: String,
     val recurrenceRule: String?,
 ) {
+    fun normalizedForDav(): EventDraft = copy(
+        location = location.takeUnless(String::isBlank).orEmpty(),
+        description = description.takeUnless(String::isBlank).orEmpty(),
+        recurrenceRule = recurrenceRule?.trim()?.takeUnless(String::isBlank),
+    )
+
     fun startValue(): String = date.isoDateToCompact() + if (allDay) "" else "T${startTime.timeToCompact()}00Z"
     fun endValue(): String? = if (allDay) nextIsoDate(date)?.isoDateToCompact()
     else date.isoDateToCompact() + "T${endTime.timeToCompact()}00Z"
@@ -1234,6 +1246,7 @@ internal sealed interface CalendarMutationPostcondition {
     ) : CalendarMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
+            val expected = draft.normalizedForDav()
             val event = parseGroupwareCalendarEvent(
                 calendarHref = calendarHref,
                 href = href,
@@ -1243,20 +1256,20 @@ internal sealed interface CalendarMutationPostcondition {
             return event.href == href &&
                 event.uid == expectedUid &&
                 (previousEtag == null || event.etag != null && event.etag != previousEtag) &&
-                event.title == draft.title &&
-                event.allDay == draft.allDay &&
-                event.location.orEmpty() == draft.location &&
-                event.description.orEmpty() == draft.description &&
-                event.recurrenceRule == draft.recurrenceRule &&
-                event.start == draft.startValue() &&
-                event.end == draft.endValue()
+                event.title == expected.title &&
+                event.allDay == expected.allDay &&
+                event.location.orEmpty() == expected.location &&
+                event.description.orEmpty() == expected.description &&
+                event.recurrenceRule == expected.recurrenceRule &&
+                event.start == expected.startValue() &&
+                event.end == expected.endValue()
         }
     }
 
     @Serializable
     data class Delete(override val href: String) : CalendarMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean =
-            response.status == 404 || response.status == 410
+            groupwareDeleteResponseProvesAbsence(response.status)
     }
 }
 

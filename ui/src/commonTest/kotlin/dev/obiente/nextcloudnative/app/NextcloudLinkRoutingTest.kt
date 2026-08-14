@@ -179,6 +179,9 @@ class NextcloudLinkRoutingTest {
             "/index.php/apps/files/files/42?openfile=43",
             "/index.php/apps/files/?dir=%2FPhotos&dir=%2FProjects",
             "/index.php/apps/files/files/not-a-number",
+            "/f//42",
+            "/index.php//apps/calendar/",
+            "https://cloud.example.test/nextcloud/f//42",
             "https://person@cloud.example.test/nextcloud/f/42",
             "javascript:alert(1)",
         ).forEach { link ->

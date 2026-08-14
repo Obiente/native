@@ -256,7 +256,11 @@ private fun parseRelativeAccountLink(value: String): ParsedRelativeAccountLink? 
     if (!value.startsWith('/') || value.startsWith("//") || value.length > MAX_NEXTCLOUD_LINK_LENGTH) return null
     val beforeFragment = value.substringBefore('#')
     val path = beforeFragment.substringBefore('?')
-    val pathSegments = path.split('/').filter(String::isNotEmpty).map { rawSegment ->
+    val segmentsAfterRoot = path.split('/').drop(1).let { segments ->
+        if (segments.lastOrNull().isNullOrEmpty()) segments.dropLast(1) else segments
+    }
+    if (segmentsAfterRoot.any(String::isEmpty)) return null
+    val pathSegments = segmentsAfterRoot.map { rawSegment ->
         decodeUrlComponent(rawSegment, plusAsSpace = false)?.takeIf { segment ->
             segment.isNotBlank() && segment != "." && segment != ".." &&
                 '/' !in segment && '\\' !in segment &&
