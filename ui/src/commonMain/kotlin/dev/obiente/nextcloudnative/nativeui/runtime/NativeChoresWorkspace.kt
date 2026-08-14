@@ -203,7 +203,10 @@ private fun nativeChoresItem(
             NativeChoresItem(
                 record = record,
                 kind = kind,
-                title = semantic?.title ?: values.string("name") ?: "Completed chore",
+                title = values.displayString("chore_id")
+                    ?: semantic?.title?.takeUnless { title -> title == "Completed task" }
+                    ?: values.string("name")
+                    ?: "Chore details unavailable",
                 subtitle = (semantic?.member ?: values.string("member"))?.let { "Completed by $it" },
                 metrics = listOfNotNull(
                     points?.let { NativeChoresMetric("Points", it.toString()) },
@@ -216,6 +219,7 @@ private fun nativeChoresItem(
 }
 
 private class ChoresValues(record: NativeRecord) {
+    private val displayValues = record.displayValues.mapKeys { (key, _) -> key.choresKey() }
     private val values = buildMap {
         record.values.forEach { (key, value) -> value?.let { put(key.choresKey(), it) } }
         record.displayValues.forEach { (key, value) -> put(key.choresKey(), value) }
@@ -224,6 +228,10 @@ private class ChoresValues(record: NativeRecord) {
 
     fun string(vararg names: String): String? = names.firstNotNullOfOrNull { name ->
         values[name.choresKey()]?.trim()?.takeIf(String::isNotBlank)
+    }
+
+    fun displayString(vararg names: String): String? = names.firstNotNullOfOrNull { name ->
+        displayValues[name.choresKey()]?.trim()?.takeIf(String::isNotBlank)
     }
 
     fun int(vararg names: String): Int? = string(*names)?.toIntOrNull()

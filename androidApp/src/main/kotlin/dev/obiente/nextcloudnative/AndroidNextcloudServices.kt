@@ -214,6 +214,9 @@ import java.io.OutputStream
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -366,6 +369,34 @@ internal suspend fun executeAndroidDynamicApiGet(
         },
         commit = commit,
     )
+}
+
+/** Publishes a pre-synced mutation marker before its non-idempotent request may start. */
+internal fun publishAndroidPendingMutation(temporary: File, target: File) {
+    require(temporary.isFile)
+    require(temporary.parentFile == target.parentFile)
+    try {
+        Files.move(
+            temporary.toPath(),
+            target.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    } catch (_: AtomicMoveNotSupportedException) {
+        copyAndSyncAndroidPendingMutation(temporary, target)
+    }
+}
+
+internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
+    require(temporary.isFile)
+    require(temporary.parentFile == target.parentFile)
+    FileInputStream(temporary).use { input ->
+        FileOutputStream(target).use { output ->
+            input.copyTo(output)
+            output.fd.sync()
+        }
+    }
+    check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
 }
 
 internal class AndroidNextcloudServices(
@@ -742,12 +773,7 @@ internal class AndroidNextcloudServices(
             output.write(encoded.encodeToByteArray())
             output.fd.sync()
         }
-        check(temporary.renameTo(target) || runCatching {
-            temporary.copyTo(target, overwrite = true)
-            temporary.delete()
-        }.isSuccess) {
-            "Could not publish the pending mutation."
-        }
+        publishAndroidPendingMutation(temporary, target)
     }
 
     override suspend fun clearPendingDynamicMutation(

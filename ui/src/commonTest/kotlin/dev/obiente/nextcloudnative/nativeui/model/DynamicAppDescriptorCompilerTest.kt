@@ -2121,6 +2121,19 @@ class DynamicAppDescriptorCompilerTest {
                 "/apps/example/api/widgets/reorder":{
                   "post":{"operationId":"widgets-reorder","summary":"Reorder widgets","responses":{"200":{"description":"OK"}}}
                 },
+                "/apps/example/api/teams/{teamId}/invites":{
+                  "parameters":[{"name":"teamId","in":"path","required":true,"schema":{"type":"integer"}}],
+                  "post":{
+                    "operationId":"invite-user-to-team",
+                    "summary":"Invite member",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["userId"],
+                      "properties":{"userId":{"type":"string"}}
+                    }}}},
+                    "responses":{"201":{"description":"Invited"}}
+                  }
+                },
                 "/apps/example/api/widgets/trash":{
                   "delete":{"operationId":"widgets-empty-trash","summary":"Empty trash","responses":{"204":{"description":"Empty"}}}
                 },
@@ -2201,6 +2214,7 @@ class DynamicAppDescriptorCompilerTest {
         }
 
         assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        assertAction("invite-user-to-team", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
         assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
         assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
         assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)

@@ -34,7 +34,7 @@ internal fun nativeRosterPresentation(record: NativeRecord): NativeRosterPresent
     val structured = record.structuredValues.entries.associate { (key, value) -> key.rosterKey() to value }
     val owner = values.firstRosterValue("owner", "ownerUserId", "ownerId")
     val peopleProjection = structured.firstRosterObjects("members", "people", "participants", "users")
-    val people = peopleProjection.items
+    val parsedPeople = peopleProjection.items
         .mapNotNull { person ->
             val userId = person.firstRosterValue("member", "memberUserId", "userId", "uid", "user")
                 ?: return@mapNotNull null
@@ -45,12 +45,14 @@ internal fun nativeRosterPresentation(record: NativeRecord): NativeRosterPresent
                 owner = owner != null && userId == owner,
             )
         }
+    val people = parsedPeople.distinctBy(NativeRosterPerson::userId)
     val invitationProjection = structured.firstRosterObjects("invites", "invitations", "pendingInvitations")
-    val invitations = invitationProjection.items
+    val parsedInvitations = invitationProjection.items
         .mapNotNull { invitation ->
             invitation.firstRosterValue("userId", "uid", "user", "invitee")
                 ?.let(::NativeRosterInvitation)
         }
+    val invitations = parsedInvitations.distinctBy(NativeRosterInvitation::userId)
     val omittedPeople = peopleProjection.omittedItems + (peopleProjection.items.size - people.size)
     val omittedInvitations = invitationProjection.omittedItems +
         (invitationProjection.items.size - invitations.size)

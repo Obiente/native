@@ -107,6 +107,29 @@ class ChoresLiveContractCompatibilityTest {
         assertEquals(setOf("teamId", "choreId"), choreDelete.binding.pathParameters.mapTo(linkedSetOf()) { it.name })
 
         val nativeSchema = descriptor.toNativeAppSchema()
+        assertTrue(nativeSchema.relationships.any { relationship ->
+            relationship.parentResourceId == choreRead.resourceId &&
+                relationship.childResourceId == workRead.resourceId &&
+                relationship.parentFieldId == "id" &&
+                relationship.childFieldId == "chore_id"
+        })
+        val nativeTeam = nativeSchema.resources.single { resource -> resource.id == teamRead.resourceId }
+        val contextualTeamCreate = nativeRecordActions(
+            schema = nativeSchema,
+            resource = nativeTeam,
+            navigationContext = mapOf("teamId" to "opaque-team"),
+        ).create
+        assertEquals(
+            inviteMember.id,
+            contextualTeamCreate?.action?.id,
+            "team=${nativeTeam.id}:${nativeTeam.fields.map { field -> field.id to field.readOnly }}; " +
+                "inviteResource=${inviteMember.resourceId}; " +
+                "creates=${nativeSchema.actions.filter { action ->
+                    action.resourceId == nativeTeam.id && action.intent == ActionIntent.create
+                }.map { action ->
+                    Triple(action.id, action.binding.pathParameterNames, action.binding.bodyFieldNames)
+                }}; selected=${contextualTeamCreate?.action?.id}",
+        )
         val nativeChores = nativeSchema.resources.single { resource -> resource.id == choreRead.resourceId }
         val assignee = assertNotNull(
             nativeChores.fields.singleOrNull { field -> field.id == "assignee" },

@@ -86,6 +86,33 @@ class NativeRosterPresentationTest {
         assertTrue(roster.invitations.isEmpty())
     }
 
+    @Test
+    fun `duplicate roster identities are omitted before rendering keyed rows`() {
+        val roster = requireNotNull(
+            nativeRosterPresentation(
+                NativeRecord(
+                    id = "team-1",
+                    values = mapOf("name" to "Shared home"),
+                    structuredValues = mapOf(
+                        "members" to listValue(
+                            objectValue("member" to "alex", "displayName" to "Alex"),
+                            objectValue("member" to "alex", "displayName" to "Duplicate Alex"),
+                        ),
+                        "invites" to listValue(
+                            objectValue("userId" to "sam"),
+                            objectValue("userId" to "sam"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("alex"), roster.people.map(NativeRosterPerson::userId))
+        assertEquals(listOf("sam"), roster.invitations.map(NativeRosterInvitation::userId))
+        assertEquals(1, roster.omittedPeople)
+        assertEquals(1, roster.omittedInvitations)
+    }
+
     private fun listValue(vararg values: NativeStructuredValue): NativeStructuredValue.ListValue =
         NativeStructuredValue.ListValue(values.toList())
 

@@ -76,7 +76,7 @@ internal fun NativeRosterSurface(
             }
         }
         item { Text("Members", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-        items(roster.people, key = NativeRosterPerson::userId) { person ->
+        items(roster.people, key = { person -> "member:${person.userId}" }) { person ->
             NativeRosterPersonRow(
                 title = person.displayName,
                 subtitle = buildString {
@@ -94,7 +94,7 @@ internal fun NativeRosterSurface(
         if (roster.invitations.isEmpty() && roster.omittedInvitations == 0) {
             item { Text("No pending invitations", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         } else {
-            items(roster.invitations, key = NativeRosterInvitation::userId) { invitation ->
+            items(roster.invitations, key = { invitation -> "invitation:${invitation.userId}" }) { invitation ->
                 NativeRosterPersonRow(invitation.userId, "Waiting to join")
             }
         }

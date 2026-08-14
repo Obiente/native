@@ -834,6 +834,27 @@ private fun desktopContractCacheDirectory(name: String): File {
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
 
+internal fun desktopPendingDynamicMutationDirectory(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    environment: Map<String, String> = System.getenv(),
+    userHome: File = File(System.getProperty("user.home")),
+): File = when {
+    osName.startsWith("Windows", ignoreCase = true) -> {
+        val localAppData = environment["LOCALAPPDATA"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, "AppData/Local")
+        File(localAppData, "Nextcloud Native/State/Pending Mutations")
+    }
+    osName.startsWith("Mac", ignoreCase = true) ->
+        File(userHome, "Library/Application Support/Nextcloud Native/Pending Mutations")
+    else -> {
+        val stateRoot = environment["XDG_STATE_HOME"]?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: File(userHome, ".local/state")
+        File(stateRoot, "nextcloud-native/pending-mutations-v1")
+    }
+}.absoluteFile
+
 internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
 internal const val DESKTOP_PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
@@ -964,7 +985,7 @@ class DesktopNextcloudServices(
         verifiedContractCache = FileVerifiedContractCache(desktopContractCacheDirectory("verified")),
     )
     private val dynamicDiscoveryCacheDirectory = desktopContractCacheDirectory("discoveries-v1")
-    private val pendingDynamicMutationDirectory = desktopContractCacheDirectory("pending-mutations-v1")
+    private val pendingDynamicMutationDirectory = desktopPendingDynamicMutationDirectory()
     private val fileReadCache = defaultDesktopFileReadCache()
     private val virtualRangeCaches = mutableMapOf<String, DesktopVirtualRangeCache>()
     private val virtualFolderHydrationJobs = mutableMapOf<String, Job>()

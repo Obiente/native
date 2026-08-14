@@ -127,6 +127,9 @@ internal data class NativeRecordFormActionPlan(
         ),
         confirmed = confirmed,
     )
+
+    internal fun bindsAny(contextualSources: Map<String, String>): Boolean =
+        bindingValues.any { (name, value) -> contextualSources[name] == value }
 }
 
 internal data class NativeRecordDeleteActionPlan(
@@ -447,7 +450,7 @@ internal fun nativeRecordActions(
         allowReadOnly = permittedRecordActions.any { action -> action.effect == ActionEffect.toggle },
     )
 
-    val create = resourceActions.mapNotNull { action ->
+    val createCandidates = resourceActions.mapNotNull { action ->
         action.recordFormPlan(
             kind = NativeRecordFormActionKind.Create,
             resource = authoritativeResource,
@@ -457,7 +460,8 @@ internal fun nativeRecordActions(
             relationshipFieldIds = verifiedRelationshipFieldIds,
             completionFieldId = completionSemantics?.field?.id,
         )
-    }.singleOrNull()
+    }
+    val create = nativePreferredCreatePlan(createCandidates, contextualSources)
 
     val edit = if (record?.actionSafeIdentity == true && !record.hasNativeDeletedState()) {
         permittedRecordActions.mapNotNull { action ->
@@ -552,6 +556,18 @@ internal fun nativeRecordActions(
         commands = commands,
         commandForms = commandForms,
     )
+}
+
+/** Prefers one fully bound child create over an unscoped root create in an active context. */
+internal fun nativePreferredCreatePlan(
+    candidates: List<NativeRecordFormActionPlan>,
+    contextualSources: Map<String, String>,
+): NativeRecordFormActionPlan? {
+    if (candidates.size <= 1) return candidates.singleOrNull()
+    val contextBound = candidates.filter { plan ->
+        plan.bindsAny(contextualSources)
+    }
+    return contextBound.singleOrNull()
 }
 
 private fun ActionSpec.recordFormPlan(

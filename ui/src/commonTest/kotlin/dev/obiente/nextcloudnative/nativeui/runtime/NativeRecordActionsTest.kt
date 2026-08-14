@@ -35,6 +35,42 @@ import kotlin.test.assertTrue
 
 class NativeRecordActionsTest {
     @Test
+    fun `context-bound child create wins over an unscoped root create`() {
+        val team = resource(
+            fields = listOf(
+                field("name", "Team name", FieldKind.string),
+                field("userId", "Member", FieldKind.userReference),
+            ),
+        )
+        val createTeam = action(
+            id = "create-team",
+            intent = ActionIntent.create,
+            method = HttpMethod.POST,
+            bodyNames = listOf("name"),
+            requiredBodyNames = listOf("name"),
+        )
+        val inviteMember = action(
+            id = "invite-member",
+            intent = ActionIntent.create,
+            method = HttpMethod.POST,
+            pathNames = listOf("teamId"),
+            bodyNames = listOf("userId"),
+            requiredBodyNames = listOf("userId"),
+        )
+        val schema = schema(team, listOf(createTeam, inviteMember))
+
+        assertEquals(createTeam.id, nativeRecordActions(schema, team).create?.action?.id)
+        assertEquals(
+            inviteMember.id,
+            nativeRecordActions(
+                schema,
+                team,
+                navigationContext = mapOf("teamId" to "team-12"),
+            ).create?.action?.id,
+        )
+    }
+
+    @Test
     fun `structural record actions bind exact parent and item identities`() {
         val resource = resource(
             fields = listOf(

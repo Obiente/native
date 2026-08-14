@@ -14,6 +14,7 @@ import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -87,6 +88,57 @@ class NativeChoresWorkspaceTest {
         assertEquals("3", item.metrics.first { it.label == "Points" }.value)
         assertTrue(item.metrics.any { it.label == "Due" })
         assertEquals("Weekly", item.metrics.first { it.label == "Repeats" }.value)
+    }
+
+    @Test
+    fun `history resolves the completed chore through the typed dataset relationship`() {
+        val fixture = fixture()
+        val historyResource = requireNotNull(fixture.schema.resource("work"))
+        val rawHistory = NativeRecord(
+            id = "completion-1",
+            values = mapOf(
+                "chore_id" to "7",
+                "member" to "alex",
+                "work_time" to "2026-08-14T18:00:00Z",
+            ),
+        )
+        val hydrated = hydrateNativeDataset(
+            schema = fixture.schema,
+            resource = historyResource,
+            records = listOf(rawHistory),
+            context = NativeDatasetContext(
+                relatedRecords = mapOf(
+                    fixture.choresResource.id to listOf(
+                        NativeRecord(id = "7", values = mapOf("id" to "7", "name" to "Clean the kitchen")),
+                    ),
+                ),
+            ),
+        )
+        val resolved = requireNotNull(
+            nativeChoresPresentation(
+                fixture.schema,
+                fixture.historyView,
+                historyResource,
+                NativeScreenState.Ready(hydrated.records),
+            ),
+        )
+        val unavailable = requireNotNull(
+            nativeChoresPresentation(
+                fixture.schema,
+                fixture.historyView,
+                historyResource,
+                NativeScreenState.Ready(listOf(rawHistory)),
+            ),
+        )
+
+        assertEquals(
+            "Clean the kitchen",
+            assertIs<NativeChoresContent.Ready>(resolved.content).items.single().title,
+        )
+        assertEquals(
+            "Chore details unavailable",
+            assertIs<NativeChoresContent.Ready>(unavailable.content).items.single().title,
+        )
     }
 
     @Test
@@ -239,8 +291,25 @@ class NativeChoresWorkspaceTest {
 
     private fun fixture(): Fixture {
         val team = ResourceSpec("team", "Team", Confidence.verified)
-        val chores = ResourceSpec("chores", "Chores", Confidence.verified)
-        val history = ResourceSpec("work", "History", Confidence.verified)
+        val chores = ResourceSpec(
+            "chores",
+            "Chores",
+            Confidence.verified,
+            fields = listOf(
+                FieldSpec("id", "ID", FieldKind.integer, required = true, readOnly = true),
+                FieldSpec("name", "Name", FieldKind.string, required = true, readOnly = true),
+            ),
+        )
+        val history = ResourceSpec(
+            "work",
+            "History",
+            Confidence.verified,
+            fields = listOf(
+                FieldSpec("chore_id", "Chore", FieldKind.integer, required = true, readOnly = true),
+                FieldSpec("member", "Member", FieldKind.userReference, required = true, readOnly = true),
+                FieldSpec("work_time", "Completed", FieldKind.dateTime, required = true, readOnly = true),
+            ),
+        )
         val teamAction = action("team", team.id, "/apps/chores/api/v1.0/team")
         val choresAction = action("chores", chores.id, "/apps/chores/api/v1.0/team/{teamId}/chores")
         val historyAction = action("history", history.id, "/apps/chores/api/v1.0/team/{teamId}/work")
@@ -255,6 +324,15 @@ class NativeChoresWorkspaceTest {
                 resources = listOf(team, chores, history),
                 views = listOf(teamView, choresView, historyView),
                 actions = listOf(teamAction, choresAction, historyAction),
+                relationships = listOf(
+                    ResourceRelationshipSpec(
+                        parentResourceId = chores.id,
+                        childResourceId = history.id,
+                        parentFieldId = "id",
+                        childFieldId = "chore_id",
+                        confidence = Confidence.high,
+                    ),
+                ),
             ),
             team,
             chores,

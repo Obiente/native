@@ -795,6 +795,7 @@ private class KotlinCompilerState(
             method = method,
             filteredCollectionResourceId = filteredCollectionResourceId,
         )
+        val explicitlyDeclaredResourceId = operation.explicitNativeResourceId()
         val response = responseSchema(operation)
         val binaryResponseContentTypes = if (method == HttpMethod.GET) {
             successfulBinaryResponseContentTypes(operation)
@@ -830,6 +831,7 @@ private class KotlinCompilerState(
         val resourceId =
             recordImagePreviewIdentity?.resourceId
                 ?: filteredCollectionResourceId
+                ?: explicitlyDeclaredResourceId
                 ?: semanticRouteResourceIdentity?.resourceId
                 ?: inferredResourceId
         val resource = resources.getOrPut(resourceId) { KotlinResourceBuilder(resourceId) }
@@ -1940,10 +1942,7 @@ private fun resourceId(
     filteredCollectionResourceId: String? =
         semanticFilteredCollectionResourceId(operation, path, operationId, method),
 ): String {
-    operation.string(RESOURCE_ID_EXTENSION)
-        ?.stableId()
-        ?.takeIf { it.isNotBlank() && it.length <= 64 }
-        ?.let { return it }
+    operation.explicitNativeResourceId()?.let { return it }
     filteredCollectionResourceId?.let { return it }
     val rawTag = (operation["tags"] as? JsonArray)
         ?.firstOrNull()
@@ -1976,6 +1975,11 @@ private fun resourceId(
     if (operationId.provesResource(pathResource)) return pathResource
     return tagResource
 }
+
+private fun JsonObject.explicitNativeResourceId(): String? =
+    string(RESOURCE_ID_EXTENSION)
+        ?.stableId()
+        ?.takeIf { it.isNotBlank() && it.length <= 64 }
 
 private fun JsonObject.referencesSemanticResource(resourceId: String, operationId: String): Boolean {
     val evidence = listOfNotNull(
@@ -2481,7 +2485,7 @@ private fun actionSemanticWords(
     .filter(String::isNotBlank)
     .toSet()
 
-private val CREATE_WORDS = setOf("add", "create", "new")
+private val CREATE_WORDS = setOf("add", "create", "invite", "new")
 private val TOGGLE_WORDS = setOf("toggle", "complete", "reopen")
 private val COMPLETION_TRANSITION_WORDS = setOf("complete", "reopen")
 private val COMPLETION_STATE_WORDS = setOf(

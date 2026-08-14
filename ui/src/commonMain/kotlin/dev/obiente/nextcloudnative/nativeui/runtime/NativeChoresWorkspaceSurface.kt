@@ -32,7 +32,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +61,7 @@ internal fun NativeChoresWorkspaceSurface(
     onCreate: (() -> Unit)?,
     roster: NativeRosterPresentation? = null,
 ) {
+    val destinationStateHolder = rememberSaveableStateHolder()
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
         if (wide && navigationItems.size > 1 && onNavigate != null) {
@@ -73,6 +76,7 @@ internal fun NativeChoresWorkspaceSurface(
                     createLabel = createLabel,
                     onCreate = onCreate,
                     roster = roster,
+                    destinationStateHolder = destinationStateHolder,
                 )
             }
         } else {
@@ -89,6 +93,7 @@ internal fun NativeChoresWorkspaceSurface(
                     createLabel = createLabel,
                     onCreate = onCreate,
                     roster = roster,
+                    destinationStateHolder = destinationStateHolder,
                 )
             }
         }
@@ -193,6 +198,7 @@ private fun ChoresContent(
     createLabel: String?,
     onCreate: (() -> Unit)?,
     roster: NativeRosterPresentation?,
+    destinationStateHolder: SaveableStateHolder,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         if (showHeader) {
@@ -250,7 +256,9 @@ private fun ChoresContent(
                     onCreate = onCreate,
                 )
             } else {
-                ChoresList(content.items, onSelectRecord, recordActions)
+                destinationStateHolder.SaveableStateProvider(presentation.kind.name) {
+                    ChoresList(content.items, onSelectRecord, recordActions)
+                }
             }
         }
     }
