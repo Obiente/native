@@ -361,6 +361,59 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun cancellationStopsTheActiveCallWhenIntentPersistenceFails() = runBlocking {
+        var directorySyncs = 0
+        testFixture(
+            directorySync = {
+                directorySyncs += 1
+                if (directorySyncs == 4) throw IOException("Synthetic cancellation persistence failure.")
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build(),
+            )
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertEquals("POST", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+
+            assertFalse(fixture.intake.cancel())
+
+            withTimeout(5_000) { submission.join() }
+            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+        }
+        Unit
+    }
+
+    @Test
+    fun packagingFailureDoesNotRestoreAReportCancelledDuringPackaging() = runBlocking {
+        val packagingEntered = CountDownLatch(1)
+        val allowPackagingFailure = CountDownLatch(1)
+        testFixture(
+            beforeBundlePackaging = {
+                packagingEntered.countDown()
+                check(allowPackagingFailure.await(5, TimeUnit.SECONDS))
+                throw IOException("Synthetic packaging failure.")
+            },
+        ).use { fixture ->
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertTrue(packagingEntered.await(5, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            allowPackagingFailure.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
+            assertEquals(0, fixture.server.requestCount)
+        }
+    }
+
+    @Test
     fun expiresCompletedReceiptWhileTheProcessRemainsOpen() = runBlocking {
         testFixture().use { fixture ->
             val retentionUntil = Instant.now().plusSeconds(2)
@@ -404,6 +457,41 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
         }
+    }
+
+    @Test
+    fun retriesTerminalArchiveDeletionWithoutChangingSubmittedState() = runBlocking {
+        var archiveDeleteAttempts = 0
+        val retryEntered = CountDownLatch(1)
+        val allowRetry = CountDownLatch(1)
+        testFixture(
+            archiveDelete = { archive ->
+                archiveDeleteAttempts += 1
+                if (archiveDeleteAttempts == 1) {
+                    false
+                } else {
+                    retryEntered.countDown()
+                    check(allowRetry.await(5, TimeUnit.SECONDS))
+                    archive.delete()
+                }
+            },
+            descriptorCleanupRetryMillis = 10L,
+        ).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertTrue(retryEntered.await(5, TimeUnit.SECONDS))
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            allowRetry.countDown()
+            withTimeout(5_000) {
+                while (fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" }) delay(10)
+            }
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().none { it.extension == "zip" })
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+        }
+        Unit
     }
 
     @Test
@@ -1028,6 +1116,8 @@ class JvmSupportIntakeTest {
         directorySync: (File) -> Unit = {},
         descriptorCleanupRetryMillis: Long = 60_000L,
         beforeCallRegistration: () -> Unit = {},
+        beforeBundlePackaging: () -> Unit = {},
+        archiveDelete: (File) -> Boolean = File::delete,
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
@@ -1059,6 +1149,8 @@ class JvmSupportIntakeTest {
             directorySync = directorySync,
             descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
             beforeCallRegistration = beforeCallRegistration,
+            beforeBundlePackaging = beforeBundlePackaging,
+            archiveDelete = archiveDelete,
         )
     }
 
@@ -1096,6 +1188,8 @@ class JvmSupportIntakeTest {
         val directorySync: (File) -> Unit,
         val descriptorCleanupRetryMillis: Long,
         val beforeCallRegistration: () -> Unit,
+        val beforeBundlePackaging: () -> Unit,
+        val archiveDelete: (File) -> Boolean,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -1113,6 +1207,8 @@ class JvmSupportIntakeTest {
             directorySync = directorySync,
             descriptorCleanupRetryMillis = descriptorCleanupRetryMillis,
             beforeCallRegistration = beforeCallRegistration,
+            beforeBundlePackaging = beforeBundlePackaging,
+            archiveDelete = archiveDelete,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }

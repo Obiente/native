@@ -61,6 +61,8 @@ class JvmSupportIntake(
     private val directorySync: (File) -> Unit = ::syncPosixDirectoryEntry,
     private val descriptorCleanupRetryMillis: Long = SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS,
     private val beforeCallRegistration: () -> Unit = {},
+    private val beforeBundlePackaging: () -> Unit = {},
+    private val archiveDelete: (File) -> Boolean = File::delete,
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -346,18 +348,17 @@ class JvmSupportIntake(
             }
             submission.cancellationPending = true
             submission.outcomeAmbiguous = true
-            if (!persistPendingSafely(submission)) {
+            val cancellationPersisted = persistPendingSafely(submission)
+            val call = activeCall.getAndSet(null)
+            call?.cancel()
+            if (!cancellationPersisted) {
                 publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
                     "Cancellation could not be stored safely. Keep the app open and retry to reconcile the private report.",
                     outcomeAmbiguous = true,
                 ))
                 return false
             }
-        }
-        val call = activeCall.getAndSet(null)
-        if (call != null) {
-            call.cancel()
-            return true
+            if (call != null) return true
         }
         if (submission != null) {
             publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
@@ -403,26 +404,35 @@ class JvmSupportIntake(
         publishState(SupportDiagnosticsSubmissionState.Packaging)
         val destination = File(temporaryRoot, "support-${UUID.randomUUID()}.zip")
         val prepared = try {
+            beforeBundlePackaging()
             diagnostics.writeBundleForSubmission(destination, submission.context)
         } catch (cancellation: CancellationException) {
-            retainForRetry(
-                submission,
-                "Private report preparation was interrupted. You can retry it safely.",
-                ambiguous = false,
-            )
+            if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
+                finishCancelled(submission)
+            } else {
+                retainForRetry(
+                    submission,
+                    "Private report preparation was interrupted. You can retry it safely.",
+                    ambiguous = false,
+                )
+            }
             throw cancellation
         } catch (_: Throwable) {
-            retainForRetry(
-                submission,
-                "The private diagnostic report could not be prepared. You can retry safely.",
-                ambiguous = false,
-            )
+            if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
+                finishCancelled(submission)
+            } else {
+                retainForRetry(
+                    submission,
+                    "The private diagnostic report could not be prepared. You can retry safely.",
+                    ambiguous = false,
+                )
+            }
             return false
         }
         try {
             restrictOwnerOnlyFile(prepared.archive)
         } catch (_: Throwable) {
-            prepared.archive.delete()
+            deleteArchiveOrRetry(prepared.archive)
             retainForRetry(
                 submission,
                 "The private report could not be protected on this device. You can retry safely.",
@@ -431,7 +441,7 @@ class JvmSupportIntake(
             return false
         }
         if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
-            prepared.archive.delete()
+            deleteArchiveOrRetry(prepared.archive)
             return false
         }
         submission.archive = prepared.archive
@@ -824,11 +834,24 @@ class JvmSupportIntake(
         synchronized(lock) {
             if (pending === submission) pending = null
         }
-        runCatching { submission.archive?.delete() }
+        deleteArchiveOrRetry(submission.archive)
         if (!cleanupPendingDescriptorSafely(submission)) {
             scope.launch { retryPendingDescriptorCleanup(submission) }
         }
     }
+
+    private fun deleteArchiveOrRetry(archive: File?) {
+        if (archive == null || deleteArchiveSafely(archive)) return
+        scope.launch {
+            while (!shutdownRequested.get()) {
+                delay(descriptorCleanupRetryMillis)
+                if (deleteArchiveSafely(archive)) return@launch
+            }
+        }
+    }
+
+    private fun deleteArchiveSafely(archive: File): Boolean =
+        !archive.exists() || runCatching { archiveDelete(archive) }.getOrDefault(false) || !archive.exists()
 
     private fun cleanupPendingDescriptorSafely(submission: PendingSubmission): Boolean =
         synchronized(persistenceLock) {
@@ -938,7 +961,7 @@ class JvmSupportIntake(
                 file.isFile && file.name.matches(SUPPORT_TEMPORARY_FILE_PATTERN) &&
                     (file != retainedArchive || file.lastModified() < cutoff)
             }
-            .forEach(File::delete)
+            .forEach(::deleteArchiveOrRetry)
         temporaryRoot.listFiles().orEmpty()
             .filter { file -> file.isFile && file.name.matches(SUPPORT_PENDING_TEMPORARY_FILE_PATTERN) }
             .forEach(File::delete)
