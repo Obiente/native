@@ -861,6 +861,7 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
                     onLoadMore = onLoadMore,
                     loadingMore = loadingMore,
@@ -874,6 +875,7 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
                     onLoadMore = onLoadMore,
                     loadingMore = loadingMore,
@@ -911,6 +913,7 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
                     onLoadMore = onLoadMore,
                     loadingMore = loadingMore,
@@ -953,6 +956,7 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
                     onLoadMore = onLoadMore,
                     loadingMore = loadingMore,

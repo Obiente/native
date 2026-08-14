@@ -900,6 +900,8 @@ internal suspend fun executeDynamicReadWithFallbackOutcome(
     var bestFailureSpecificity = -1
     var successfulEmptyResult: List<NativeRecord>? = null
     var pagedFallbackUnavailable = false
+    var pagedFallbackSucceeded = false
+    var pagedFallbackReturnedEmpty = false
     val continuationRequested = resolvedPagination?.let { pagination ->
         boundValues.entries.any { (name, value) ->
             name.equals(pagination.parameterName, ignoreCase = true) && value.isNotBlank()
@@ -932,15 +934,19 @@ internal suspend fun executeDynamicReadWithFallbackOutcome(
             }
         }
         val records = attempt.getOrNull() ?: return@forEach
-        if (candidate in pagedFallbacks && records.isEmpty()) {
-            if (continuationRequested) return DynamicRecordLoadOutcome(emptyList())
-            pagedFallbackUnavailable = true
+        if (candidate in pagedFallbacks) {
+            pagedFallbackSucceeded = true
+            if (records.isEmpty()) {
+                if (continuationRequested) return DynamicRecordLoadOutcome(emptyList())
+                pagedFallbackReturnedEmpty = true
+            }
         }
         if (records.isNotEmpty()) {
             return DynamicRecordLoadOutcome(
                 records = records,
                 partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
-                    candidate !in pagedFallbacks && pagedFallbackUnavailable
+                    candidate !in pagedFallbacks &&
+                        (pagedFallbackUnavailable || pagedFallbackReturnedEmpty)
                 },
             )
         }
@@ -950,7 +956,7 @@ internal suspend fun executeDynamicReadWithFallbackOutcome(
         return DynamicRecordLoadOutcome(
             records = records,
             partialFailureMessage = DYNAMIC_PAGED_READ_PARTIAL_FAILURE.takeIf {
-                pagedFallbackUnavailable
+                pagedFallbackUnavailable && !pagedFallbackSucceeded
             },
         )
     }

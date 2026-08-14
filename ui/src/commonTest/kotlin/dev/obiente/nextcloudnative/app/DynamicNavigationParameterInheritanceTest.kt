@@ -423,6 +423,30 @@ class DynamicNavigationParameterInheritanceTest {
     }
 
     @Test
+    fun `partial composite refresh keeps only affected complete datasets`() {
+        val cachedRows = listOf(
+            NativeRecord("row-2", emptyMap()),
+            NativeRecord("row-1", emptyMap()),
+        )
+        val sparseRows = listOf(NativeRecord("row-2", emptyMap()))
+        val freshColumns = listOf(NativeRecord("column-1", emptyMap()))
+
+        val preferred = preferredDynamicCompositeRefreshRecords(
+            loaded = listOf(
+                "rows" to DynamicRecordLoadOutcome(sparseRows, "Could not load every row."),
+                "columns" to DynamicRecordLoadOutcome(freshColumns),
+            ),
+            staleRecordsByResourceId = mapOf(
+                "rows" to cachedRows,
+                "columns" to listOf(NativeRecord("old-column", emptyMap())),
+            ),
+        )
+
+        assertEquals(cachedRows, preferred["rows"])
+        assertEquals(freshColumns, preferred["columns"])
+    }
+
+    @Test
     fun `mailbox summary state is cleared before a different mailbox summary loads`() {
         assertTrue(
             shouldRetainDynamicMailboxSummaryState(

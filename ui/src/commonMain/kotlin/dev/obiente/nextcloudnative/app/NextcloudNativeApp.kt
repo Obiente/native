@@ -3943,7 +3943,10 @@ private fun DynamicDiscoveredAppScreen(
                 currentCoroutineContext().ensureActive()
                 loaded
             }.onSuccess { loaded ->
-                val loadedRecords = loaded.associate { (resourceId, outcome) -> resourceId to outcome.records }
+                val loadedRecords = preferredDynamicCompositeRefreshRecords(
+                    loaded = loaded,
+                    staleRecordsByResourceId = staleSnapshot?.relatedRecords,
+                )
                 val partialFailure = loaded.firstNotNullOfOrNull { (_, outcome) ->
                     outcome.partialFailureMessage
                 }
@@ -6794,6 +6797,17 @@ internal fun preferredDynamicPartialRefreshRecords(
 ): List<NativeRecord> = staleRecords
     ?.takeIf { records -> partialFailureMessage != null && records.isNotEmpty() }
     ?: freshRecords
+
+internal fun preferredDynamicCompositeRefreshRecords(
+    loaded: List<Pair<String, DynamicRecordLoadOutcome>>,
+    staleRecordsByResourceId: Map<String, List<NativeRecord>>?,
+): Map<String, List<NativeRecord>> = loaded.associate { (resourceId, outcome) ->
+    resourceId to preferredDynamicPartialRefreshRecords(
+        freshRecords = outcome.records,
+        staleRecords = staleRecordsByResourceId?.get(resourceId),
+        partialFailureMessage = outcome.partialFailureMessage,
+    )
+}
 
 internal fun mergeDynamicRelatedRecordsPreservingResource(
     currentRecords: Map<String, List<NativeRecord>>,

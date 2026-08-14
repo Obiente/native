@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -565,6 +566,7 @@ internal fun DynamicAppDescriptor.preferredNativeMailComposeAction(
 internal fun NativeMailWorkspace(
     plan: NativeMailWorkspacePlan,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    collectionStateKey: String,
     modifier: Modifier = Modifier,
     detailContent: (@Composable () -> Unit)? = null,
     contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
@@ -574,8 +576,9 @@ internal fun NativeMailWorkspace(
     searchQuery: String = "",
     onSearchQueryChanged: ((String) -> Unit)? = null,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        when {
+    key(collectionStateKey) {
+        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+            when {
             maxWidth >= 980.dp -> Row(modifier = Modifier.fillMaxSize()) {
                 NativeMailRail(
                     plan = plan,
@@ -688,6 +691,7 @@ internal fun NativeMailWorkspace(
                         loadMoreError = loadMoreError,
                     )
                 }
+            }
             }
         }
     }
