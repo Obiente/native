@@ -335,7 +335,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingBudgetCaptureScenario.kt": "e28c89ee88d466abab6a8412d87d0ae2c0c5812a2b7b4104851f8d0ae0f640fc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "1c903f197dabca8b18f35366543e67e4cc0989c5b2c5aed41f67bebb9fc7d482",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "c4629f9fab011b7d4e50dd7de58ab1ff2eb40c33dae6bb77effec70281ecb76d",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "f9b34a4c1e468d194a7559d695d538adb100739be36fa708824d86a8133d06c5",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "5c98c07c65751c9648d43cdd61b0f788e0b72eba2b9f3a442750bccdcad5f4cc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
