@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -134,6 +135,7 @@ fun NativeGroupwareCalendarScreen(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName, userId) {
         groupwareMutationAccountScope(session, userId)
@@ -179,11 +181,20 @@ fun NativeGroupwareCalendarScreen(
         }
         mutationRecoveryState = CalendarMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
         mutationOperationInProgress = true
+        onMutationInProgressChanged(true)
     }
 
     fun clearMutationRecovery() {
         mutationRecoveryState = null
         mutationOperationInProgress = false
+        onMutationInProgressChanged(false)
+    }
+
+    LaunchedEffect(mutationInProgress) {
+        onMutationInProgressChanged(mutationInProgress)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onMutationInProgressChanged(false) }
     }
 
     fun selectMonth(value: CalendarMonth) {
@@ -272,8 +283,7 @@ fun NativeGroupwareCalendarScreen(
                             selectedEventId = null
                         }
                     }
-                    mutationRecoveryState = null
-                    mutationOperationInProgress = false
+                    clearMutationRecovery()
                 } else {
                     refreshError = "The calendar change has not appeared on the server yet. Refresh to verify it before leaving."
                 }

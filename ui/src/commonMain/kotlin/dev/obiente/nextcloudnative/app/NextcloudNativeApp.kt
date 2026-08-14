@@ -1640,6 +1640,7 @@ private fun AuthenticatedApp(
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
+    var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1709,6 +1710,10 @@ private fun AuthenticatedApp(
     }
 
     fun applyNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        if (groupwareMutationInProgress) {
+            queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
+            return
+        }
         leaveAppWorkspace()
         when (request.route) {
             NextcloudNativeRoute.Home -> {
@@ -1745,13 +1750,17 @@ private fun AuthenticatedApp(
         }
     }
 
-    LaunchedEffect(appUpdateReviewRequest) {
-        if (appUpdateReviewRequest > 0) {
+    LaunchedEffect(appUpdateReviewRequest, groupwareMutationInProgress) {
+        if (appUpdateReviewRequest > 0 && !groupwareMutationInProgress) {
             leaveAppWorkspace()
             screen = Screen.Root
             destination = NextcloudDestination.Settings
             onAppUpdateReviewHandled(appUpdateReviewRequest)
         }
+    }
+
+    LaunchedEffect(groupwareMutationInProgress) {
+        if (groupwareMutationInProgress) linkNavigationJob?.cancel()
     }
 
     LaunchedEffect(navigationRequest?.sequence, screen) {
@@ -1794,6 +1803,7 @@ private fun AuthenticatedApp(
     }
 
     fun openApp(app: NextcloudAppEntry, from: NextcloudDestination) {
+        if (groupwareMutationInProgress) return
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
         lastOpenedAppId = app.id
@@ -1832,6 +1842,7 @@ private fun AuthenticatedApp(
     }
 
     fun openSearch() {
+        if (groupwareMutationInProgress) return
         returnDestination = destination
         leaveAppWorkspace()
         screen = Screen.Search
@@ -1997,6 +2008,14 @@ private fun AuthenticatedApp(
                 if (app != null) {
                     openApp(app, destination)
                     return NextcloudLinkNavigationResult.Completed
+                } else if (serverInfo == null && source == NextcloudLinkSource.OperatingSystem) {
+                    showLinkFailure(
+                        message = "Your installed Nextcloud apps could not be loaded. Check your connection and try again.",
+                        retryLink = rawLink,
+                        browserUrl = target.browserUrl,
+                        incomingRequestSequence = incomingRequestSequence,
+                    )
+                    return NextcloudLinkNavigationResult.NeedsUserDecision
                 } else if (source == NextcloudLinkSource.InApp) {
                     services.openExternalUrl(target.browserUrl)
                     return NextcloudLinkNavigationResult.Completed
@@ -2053,9 +2072,14 @@ private fun AuthenticatedApp(
                 val result = navigateNextcloudLink(rawLink, source, incomingRequestSequence) {
                     linkNavigationGeneration == generation &&
                         screen == originScreen &&
-                        destination == originDestination
+                        destination == originDestination &&
+                        !groupwareMutationInProgress
                 }
-                if (result != NextcloudLinkNavigationResult.NeedsUserDecision) onFinished()
+                when (result) {
+                    NextcloudLinkNavigationResult.Completed -> onFinished()
+                    NextcloudLinkNavigationResult.NeedsUserDecision -> Unit
+                    NextcloudLinkNavigationResult.Superseded -> onCancelled()
+                }
             } catch (cancelled: CancellationException) {
                 onCancelled()
                 throw cancelled
@@ -2147,6 +2171,7 @@ private fun AuthenticatedApp(
     }
 
     fun navigateBack() {
+        if (groupwareMutationInProgress) return
         when (val current = screen) {
             Screen.Root -> destination = NextcloudDestination.Home
             is Screen.Files -> {
@@ -2204,7 +2229,7 @@ private fun AuthenticatedApp(
     }
 
     PlatformBackHandler(
-        enabled = when (screen) {
+        enabled = !groupwareMutationInProgress && when (screen) {
             is Screen.NoteEditor, is Screen.TextEditor -> false
             Screen.Root -> destination != NextcloudDestination.Home
             else -> true
@@ -2231,9 +2256,11 @@ private fun AuthenticatedApp(
                     TextButton(
                         onClick = {
                             linkNavigationFailure = null
+                            val target = nextcloudLinkDestination(session, retryLink)
                             val needsAccountDiscovery = serverInfo == null &&
                                 failure.incomingRequestSequence != null &&
-                                nextcloudLinkDestination(session, retryLink) is NextcloudLinkDestination.FileId
+                                (target is NextcloudLinkDestination.FileId ||
+                                    target is NextcloudLinkDestination.App)
                             if (needsAccountDiscovery) {
                                 discoveryAttempt += 1
                             } else {
@@ -2505,6 +2532,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Contacts -> NativeGroupwareContactsScreen(
             services = services,
@@ -2514,6 +2542,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Deck -> NativeDeckScreen(
             services = services,
@@ -2737,10 +2766,13 @@ private fun AuthenticatedApp(
         availableUpdate?.let { update ->
             AppUpdateAvailableBanner(
                 release = update.release,
+                enabled = !groupwareMutationInProgress,
                 onReview = {
-                    leaveAppWorkspace()
-                    screen = Screen.Root
-                    destination = NextcloudDestination.Settings
+                    if (!groupwareMutationInProgress) {
+                        leaveAppWorkspace()
+                        screen = Screen.Root
+                        destination = NextcloudDestination.Settings
+                    }
                 },
             )
         }
@@ -2754,16 +2786,21 @@ private fun AuthenticatedApp(
                     } else {
                         NextcloudDesktopWorkspaceKind.AppWorkspace
                     },
+                    navigationEnabled = !groupwareMutationInProgress,
                     onSelected = {
-                        leaveAppWorkspace()
-                        destination = it
-                        screen = Screen.Root
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            destination = it
+                            screen = Screen.Root
+                        }
                     },
                     identity = desktopIdentity,
                     activeAppId = appWorkspaceNavigation.activeAppId,
                     onOpenApp = { appId ->
-                        serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
-                            openApp(app, destination)
+                        if (!groupwareMutationInProgress) {
+                            serverInfo?.apps?.firstOrNull { it.id == appId }?.let { app ->
+                                openApp(app, destination)
+                            }
                         }
                     },
                     content = {
@@ -2794,6 +2831,7 @@ private fun AuthenticatedApp(
 @Composable
 private fun AppUpdateAvailableBanner(
     release: AppUpdateRelease,
+    enabled: Boolean = true,
     onReview: () -> Unit,
 ) {
     Surface(
@@ -2816,7 +2854,7 @@ private fun AppUpdateAvailableBanner(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            TextButton(onClick = onReview) { Text("Review update") }
+            TextButton(onClick = onReview, enabled = enabled) { Text("Review update") }
         }
     }
 }
@@ -2826,6 +2864,7 @@ private fun RootShell(
     presentation: NextcloudPresentation,
     selected: NextcloudDestination,
     desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
+    navigationEnabled: Boolean = true,
     onSelected: (NextcloudDestination) -> Unit,
     identity: NextcloudDesktopIdentity?,
     onOpenApp: (String) -> Unit = {},
@@ -2841,6 +2880,7 @@ private fun RootShell(
                 onOpenApp = onOpenApp,
                 activeAppId = activeAppId,
                 workspaceKind = desktopWorkspaceKind,
+                navigationEnabled = navigationEnabled,
                 content = content,
             )
         } else {
@@ -2853,7 +2893,11 @@ private fun RootShell(
                 NextcloudNavigationStyle.BottomBar -> {
                     Column(modifier = Modifier.fillMaxSize()) {
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
-                        NextcloudBottomNavigation(selected = selected, onSelected = onSelected)
+                        NextcloudBottomNavigation(
+                            selected = selected,
+                            onSelected = onSelected,
+                            enabled = navigationEnabled,
+                        )
                     }
                 }
 
@@ -2861,7 +2905,11 @@ private fun RootShell(
                 NextcloudNavigationStyle.ExpandedSidebar,
                 -> {
                     Row(modifier = Modifier.fillMaxSize()) {
-                        NextcloudNavigationRail(selected = selected, onSelected = onSelected)
+                        NextcloudNavigationRail(
+                            selected = selected,
+                            onSelected = onSelected,
+                            enabled = navigationEnabled,
+                        )
                         Box(
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                             contentAlignment = Alignment.TopCenter,

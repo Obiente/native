@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,6 +91,7 @@ fun NativeGroupwareContactsScreen(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName, userId) {
         groupwareMutationAccountScope(session, userId)
@@ -122,11 +124,20 @@ fun NativeGroupwareContactsScreen(
         }
         mutationRecoveryState = ContactMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
         mutationOperationInProgress = true
+        onMutationInProgressChanged(true)
     }
 
     fun clearMutationRecovery() {
         mutationRecoveryState = null
         mutationOperationInProgress = false
+        onMutationInProgressChanged(false)
+    }
+
+    LaunchedEffect(mutationInProgress) {
+        onMutationInProgressChanged(mutationInProgress)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onMutationInProgressChanged(false) }
     }
 
     LaunchedEffect(session, userId, loadAttempt) {
