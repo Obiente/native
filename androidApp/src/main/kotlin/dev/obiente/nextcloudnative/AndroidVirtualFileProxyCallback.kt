@@ -24,8 +24,11 @@ internal class AndroidVirtualFileProxyCallback(
     private val publishCompleteHydration: (File) -> Boolean,
     private val discardIncompleteHydration: (File) -> Unit = File::delete,
     private val blockSizeBytes: Int = DEFAULT_BLOCK_SIZE_BYTES,
+    private val accessAllowed: () -> Boolean = { true },
+    private val onReleased: () -> Unit = {},
 ) : ProxyFileDescriptorCallback() {
     private val cancelled = AtomicBoolean(false)
+    private val sourceClosed = AtomicBoolean(false)
     private val size = source.size
     private val effectiveBlockSize = blockSizeBytes.also { require(it > 0) }
     private val blockCount = staging?.let {
@@ -35,7 +38,19 @@ internal class AndroidVirtualFileProxyCallback(
     } ?: 0
     private val hydratedBlocks = staging?.let { BooleanArray(blockCount) }
     private val stagedContent = staging?.let { file ->
-        RandomAccessFile(file, "rw").also { random -> random.setLength(size) }
+        RandomAccessFile(file, "rw").also { random ->
+            try {
+                random.setLength(size)
+            } catch (failure: Throwable) {
+                random.close()
+                throw failure
+            }
+        }
+    }
+    private val transientBlocks = if (staging == null) {
+        LinkedHashMap<Long, ByteArray>(MAX_TRANSIENT_BLOCKS, 0.75f, true)
+    } else {
+        null
     }
     private var hydratedBlockCount = 0
     private var published = false
@@ -45,7 +60,9 @@ internal class AndroidVirtualFileProxyCallback(
 
     @Synchronized
     override fun onRead(offset: Long, requestedSize: Int, data: ByteArray): Int {
-        if (released || cancelled.get()) throw OperationCanceledException("Virtual file read cancelled")
+        if (released || cancelled.get() || !accessAllowed()) {
+            throw OperationCanceledException("Virtual file read cancelled")
+        }
         if (offset < 0L || requestedSize < 0 || requestedSize > data.size) {
             throw ErrnoException("virtual file read", OsConstants.EINVAL)
         }
@@ -55,9 +72,7 @@ internal class AndroidVirtualFileProxyCallback(
             val random = stagedContent
             val blocks = hydratedBlocks
             if (random == null || blocks == null) {
-                val bytes = readRange(offset, readLength)
-                bytes.copyInto(data)
-                bytes.size
+                readTransientBlocks(offset, readLength, data)
             } else {
                 hydrateBlocks(offset, readLength, random, blocks)
                 random.seek(offset)
@@ -79,14 +94,58 @@ internal class AndroidVirtualFileProxyCallback(
         if (released) return
         released = true
         cancelled.set(true)
-        source.close()
-        runCatching { stagedContent?.close() }
-        if (!published) staging?.let(discardIncompleteHydration)
+        try {
+            runCatching(::closeSource)
+            runCatching { stagedContent?.close() }
+            transientBlocks?.clear()
+            if (!published) staging?.let(discardIncompleteHydration)
+        } finally {
+            onReleased()
+        }
     }
 
     fun cancel() {
         cancelled.set(true)
-        source.close()
+        runCatching(::closeSource)
+    }
+
+    private fun closeSource() {
+        if (sourceClosed.compareAndSet(false, true)) source.close()
+    }
+
+    private fun readTransientBlocks(offset: Long, length: Int, destination: ByteArray): Int {
+        val cache = requireNotNull(transientBlocks)
+        var copied = 0
+        while (copied < length) {
+            if (cancelled.get() || !accessAllowed()) {
+                throw OperationCanceledException("Virtual file read cancelled")
+            }
+            val position = offset + copied
+            val block = position / effectiveBlockSize
+            val blockOffset = block * effectiveBlockSize
+            val blockBytes = cache[block] ?: run {
+                val blockLength = minOf(effectiveBlockSize.toLong(), size - blockOffset).toInt()
+                readRange(blockOffset, blockLength).also { loaded ->
+                    cache[block] = loaded
+                    while (cache.size > MAX_TRANSIENT_BLOCKS) {
+                        cache.entries.iterator().run {
+                            next()
+                            remove()
+                        }
+                    }
+                }
+            }
+            val sourceOffset = (position - blockOffset).toInt()
+            val chunkLength = minOf(length - copied, blockBytes.size - sourceOffset)
+            blockBytes.copyInto(
+                destination = destination,
+                destinationOffset = copied,
+                startIndex = sourceOffset,
+                endIndex = sourceOffset + chunkLength,
+            )
+            copied += chunkLength
+        }
+        return copied
     }
 
     private fun hydrateBlocks(
@@ -124,6 +183,7 @@ internal class AndroidVirtualFileProxyCallback(
 
     private companion object {
         const val DEFAULT_BLOCK_SIZE_BYTES = 1024 * 1024
+        const val MAX_TRANSIENT_BLOCKS = 4
     }
 }
 

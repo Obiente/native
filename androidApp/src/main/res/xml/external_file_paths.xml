@@ -4,6 +4,9 @@
         name="external_share_files"
         path="external-share/" />
     <cache-path
+        name="external_large_share_files"
+        path="external-large-share/" />
+    <cache-path
         name="verified_app_updates"
         path="app-updates/" />
     <cache-path

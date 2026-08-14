@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.os.OperationCanceledException
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import java.nio.file.Files
 import kotlin.test.Test
@@ -138,7 +139,7 @@ class AndroidVirtualFileProxyCallbackTest {
     }
 
     @Test
-    fun `uncached large file reads only the exact requested range`() {
+    fun `uncached large file reuses bounded aligned range blocks`() {
         val sourceBytes = "abcdefghij".encodeToByteArray()
         val ranges = mutableListOf<Pair<Long, Int>>()
         val callback = AndroidVirtualFileProxyCallback(
@@ -157,8 +158,73 @@ class AndroidVirtualFileProxyCallbackTest {
         val destination = ByteArray(3)
         assertEquals(3, callback.onRead(6L, destination.size, destination))
         assertContentEquals("ghi".encodeToByteArray(), destination)
-        assertEquals(listOf(6L to 3), ranges)
+        assertEquals(listOf(4L to 4, 8L to 2), ranges)
+
+        val repeated = ByteArray(2)
+        assertEquals(2, callback.onRead(7L, repeated.size, repeated))
+        assertContentEquals("hi".encodeToByteArray(), repeated)
+        assertEquals(listOf(4L to 4, 8L to 2), ranges)
         callback.onRelease()
+    }
+
+    @Test
+    fun `revoked external access cancels future range reads and releases once`() {
+        var allowed = true
+        var closed = 0
+        var released = 0
+        val callback = AndroidVirtualFileProxyCallback(
+            source = NextcloudFileRangeSession(
+                size = 4L,
+                readBlock = { _, length -> ByteArray(length) },
+                closeBlock = { closed += 1 },
+            ),
+            staging = null,
+            publishCompleteHydration = { true },
+            accessAllowed = { allowed },
+            onReleased = { released += 1 },
+        )
+
+        allowed = false
+        assertFailsWith<OperationCanceledException> {
+            callback.onRead(0L, 1, ByteArray(1))
+        }
+        callback.cancel()
+        callback.onRelease()
+        callback.onRelease()
+
+        assertEquals(1, closed)
+        assertEquals(1, released)
+    }
+
+    @Test
+    fun `revoked external access cancels exact local cache reads and releases once`() {
+        val content = Files.createTempFile("local-handoff-proxy-", ".bin").toFile().apply {
+            writeText("cached bytes")
+        }
+        var allowed = true
+        var released = 0
+        val callback = AndroidLocalFileProxyCallback(
+            content = content,
+            accessAllowed = { allowed },
+            onReleased = { released += 1 },
+        )
+        try {
+            val destination = ByteArray(6)
+            assertEquals(6, callback.onRead(0L, destination.size, destination))
+            assertContentEquals("cached".encodeToByteArray(), destination)
+
+            allowed = false
+            callback.cancel()
+            assertFailsWith<OperationCanceledException> {
+                callback.onRead(0L, 1, ByteArray(1))
+            }
+            callback.onRelease()
+            callback.onRelease()
+            assertEquals(1, released)
+        } finally {
+            callback.onRelease()
+            content.delete()
+        }
     }
 
     @Test

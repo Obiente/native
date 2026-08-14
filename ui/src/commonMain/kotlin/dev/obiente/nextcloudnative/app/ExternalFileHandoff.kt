@@ -10,12 +10,21 @@ enum class ExternalFileHandoffAction {
 data class ExternalFileHandoffCapability(
     val supportedActions: Set<ExternalFileHandoffAction>,
     val maximumFileBytes: Long,
+    val supportsSeekableRemoteStreaming: Boolean = false,
 ) {
     init {
         require(supportedActions.isNotEmpty()) { "At least one external file action must be supported." }
         require(maximumFileBytes > 0L) { "The external file size limit must be positive." }
     }
 }
+
+fun NextcloudFile.canUseSeekableRemoteHandoff(
+    capability: ExternalFileHandoffCapability,
+): Boolean = capability.supportsSeekableRemoteStreaming &&
+    !isDirectory &&
+    originalAccessAllowed &&
+    size?.let { it >= 0L } == true &&
+    !etag.isNullOrBlank()
 
 sealed interface ExternalFileHandoffSupport {
     data class Available(val capability: ExternalFileHandoffCapability) : ExternalFileHandoffSupport
@@ -62,7 +71,9 @@ fun validateExternalFileHandoff(
         ExternalFileHandoffRejection.MissingVersion,
         "Refresh the folder before sending this file to another app.",
     )
-    file.size != null && file.size > capability.maximumFileBytes -> ExternalFileHandoffResult.Rejected(
+    file.size != null &&
+        file.size > capability.maximumFileBytes &&
+        !file.canUseSeekableRemoteHandoff(capability) -> ExternalFileHandoffResult.Rejected(
         ExternalFileHandoffRejection.FileTooLarge,
         "${file.name} is larger than the ${formatHandoffByteLimit(capability.maximumFileBytes)} handoff limit.",
     )
