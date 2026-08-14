@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
     private var platformCapabilityRefreshRequest by mutableLongStateOf(0L)
     private var incomingLinkSequence = 0L
     private val incomingLinkRequests = mutableStateListOf<NextcloudNativeLinkRequest>()
+    private var incomingLinkQueueOverflowEvent by mutableLongStateOf(0L)
     private var lastIncomingLinkDeliveryId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,6 +47,9 @@ class MainActivity : ComponentActivity() {
             intentEventId = intent.appUpdateReviewEventId(),
         ))
         incomingLinkSequence = savedInstanceState?.getLong(KEY_INCOMING_LINK_SEQUENCE) ?: 0L
+        incomingLinkQueueOverflowEvent = savedInstanceState
+            ?.getLong(KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT)
+            ?: 0L
         lastIncomingLinkDeliveryId = savedInstanceState?.getString(KEY_INCOMING_LINK_DELIVERY_ID)
         incomingLinkRequests.addAll(
             restoreAndroidIncomingLinkQueue(
@@ -131,6 +135,10 @@ class MainActivity : ComponentActivity() {
                         incomingLinkRequests.removeAt(0)
                     }
                 },
+                linkQueueOverflowEvent = incomingLinkQueueOverflowEvent,
+                onLinkQueueOverflowHandled = { event ->
+                    if (incomingLinkQueueOverflowEvent == event) incomingLinkQueueOverflowEvent = 0L
+                },
             )
         }
     }
@@ -153,6 +161,7 @@ class MainActivity : ComponentActivity() {
             outState.putLong(KEY_APP_UPDATE_REVIEW_EVENT_ID, eventId)
         }
         outState.putLong(KEY_INCOMING_LINK_SEQUENCE, incomingLinkSequence)
+        outState.putLong(KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT, incomingLinkQueueOverflowEvent)
         if (incomingLinkRequests.isNotEmpty()) {
             outState.putLongArray(
                 KEY_PENDING_INCOMING_LINK_SEQUENCES,
@@ -193,7 +202,14 @@ class MainActivity : ComponentActivity() {
                 if (intent === this.intent) setIntent(intent)
             }
             lastIncomingLinkDeliveryId = deliveryId
-            incomingLinkRequests.add(state.request)
+            if (canEnqueueAndroidIncomingLink(incomingLinkRequests, state.request)) {
+                incomingLinkRequests.add(state.request)
+            } else {
+                check(incomingLinkQueueOverflowEvent < Long.MAX_VALUE) {
+                    "The incoming link overflow sequence is exhausted."
+                }
+                incomingLinkQueueOverflowEvent += 1L
+            }
         }
     }
 
@@ -206,6 +222,7 @@ class MainActivity : ComponentActivity() {
         const val KEY_APP_UPDATE_REVIEW_REQUEST = "app-update-review-request"
         const val KEY_APP_UPDATE_REVIEW_EVENT_ID = "app-update-review-event-id"
         const val KEY_INCOMING_LINK_SEQUENCE = "incoming-link-sequence"
+        const val KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT = "incoming-link-queue-overflow-event"
         const val KEY_PENDING_INCOMING_LINK = "pending-incoming-link"
         const val KEY_PENDING_INCOMING_LINK_SEQUENCES = "pending-incoming-link-sequences"
         const val KEY_PENDING_INCOMING_LINK_URLS = "pending-incoming-link-urls"

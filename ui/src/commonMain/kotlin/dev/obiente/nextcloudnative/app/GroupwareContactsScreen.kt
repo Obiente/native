@@ -110,6 +110,8 @@ fun NativeGroupwareContactsScreen(
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
+    var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
+    var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     var mutationOperationInProgress by remember(accountScope) { mutableStateOf(false) }
     var mutationRecoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
     var mutationRecoveryState by remember(accountScope, services) { mutableStateOf<String?>(null) }
@@ -158,6 +160,8 @@ fun NativeGroupwareContactsScreen(
         }
         mutationRecoveryState = null
         mutationOperationInProgress = false
+        mutationError = null
+        refreshError = null
         onMutationInProgressChanged(false)
         return true
     }
@@ -174,24 +178,16 @@ fun NativeGroupwareContactsScreen(
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            mutationError = "Contact recovery storage could not be read securely. Check local storage and retry."
+            val message = "Contact recovery storage could not be read securely. Check local storage and retry."
+            mutationError = message
+            refreshError = message
         }
     }
 
     LaunchedEffect(accountScope, mutationRecoveryLoaded, mutationRecoveryState, mutationPostcondition) {
         if (mutationRecoveryLoaded && mutationRecoveryState != null && mutationPostcondition == null) {
-            val cleared = try {
-                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                false
-            }
-            if (cleared) {
-                mutationRecoveryState = null
-            } else {
-                mutationError = "A damaged contact recovery record could not be cleared. Free local storage and retry."
-            }
+            refreshError = "The previous contact recovery record cannot be read. Writes remain blocked."
+            showRecoveryOptions = true
         }
     }
 
@@ -274,6 +270,7 @@ fun NativeGroupwareContactsScreen(
             } else {
                 refreshError = message
             }
+            if (mutationRecoveryState != null) showRecoveryOptions = true
         }
         refreshing = false
     }
@@ -359,6 +356,9 @@ fun NativeGroupwareContactsScreen(
                     ) {
                         Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                        if (mutationRecoveryState != null) {
+                            TextButton(onClick = { showRecoveryOptions = true }) { Text("Recovery options") }
+                        }
                     }
                 }
             }
@@ -388,6 +388,28 @@ fun NativeGroupwareContactsScreen(
                 }
             }
         }
+    }
+
+    if (showRecoveryOptions && mutationRecoveryState != null) {
+        DurableMutationRecoveryDialog(
+            title = "Resolve contact recovery",
+            recordReadable = mutationPostcondition != null,
+            resetting = recoveryResetInProgress,
+            onCheckAgain = {
+                showRecoveryOptions = false
+                loadAttempt += 1
+            },
+            onReset = {
+                if (!recoveryResetInProgress) {
+                    recoveryResetInProgress = true
+                    scope.launch {
+                        if (clearMutationRecovery()) showRecoveryOptions = false
+                        recoveryResetInProgress = false
+                    }
+                }
+            },
+            onDismiss = { showRecoveryOptions = false },
+        )
     }
 
     if (creating && ready != null) {

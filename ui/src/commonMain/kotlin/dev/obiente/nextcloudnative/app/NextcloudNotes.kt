@@ -117,6 +117,9 @@ internal fun NextcloudNotesScreen(
     var error by remember(session) { mutableStateOf<String?>(null) }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var refreshing by remember(session) { mutableStateOf(false) }
+    var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
+    var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val mutationInProgress = !deletionRecoveryLoaded || deletionRecoveryState != null
 
     LaunchedEffect(accountScope, services, loadAttempt) {
@@ -137,18 +140,8 @@ internal fun NextcloudNotesScreen(
 
     LaunchedEffect(accountScope, deletionRecoveryLoaded, deletionRecoveryState, deletionRecovery) {
         if (deletionRecoveryLoaded && deletionRecoveryState != null && deletionRecovery == null) {
-            val cleared = try {
-                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion)
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                false
-            }
-            if (cleared) {
-                deletionRecoveryState = null
-            } else {
-                error = "A damaged note-deletion recovery record could not be cleared. Free local storage and retry."
-            }
+            error = "The previous note-deletion recovery record cannot be read. Writes remain blocked."
+            showRecoveryOptions = true
         }
     }
 
@@ -196,7 +189,10 @@ internal fun NextcloudNotesScreen(
                     }
                 }
             }
-            .onFailure { error = it.message ?: "Could not load Notes." }
+            .onFailure {
+                error = it.message ?: "Could not load Notes."
+                if (deletionRecoveryState != null) showRecoveryOptions = true
+            }
         refreshing = false
     }
     PlatformBackHandler(
@@ -417,6 +413,43 @@ internal fun NextcloudNotesScreen(
                 }
                 deleteFolder = null
             },
+        )
+    }
+    if (showRecoveryOptions && deletionRecoveryState != null) {
+        DurableMutationRecoveryDialog(
+            title = "Resolve note recovery",
+            recordReadable = deletionRecovery != null,
+            resetting = recoveryResetInProgress,
+            onCheckAgain = {
+                showRecoveryOptions = false
+                loadAttempt += 1
+            },
+            onReset = {
+                if (!recoveryResetInProgress) {
+                    recoveryResetInProgress = true
+                    scope.launch {
+                        val cleared = try {
+                            services.clearDurableMutationRecovery(
+                                accountScope,
+                                DurableMutationRecoveryKind.NoteDeletion,
+                            )
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (cleared) {
+                            deletionRecoveryState = null
+                            error = null
+                            showRecoveryOptions = false
+                        } else {
+                            error = "The note recovery record could not be reset. Free local storage and retry."
+                        }
+                        recoveryResetInProgress = false
+                    }
+                }
+            },
+            onDismiss = { showRecoveryOptions = false },
         )
     }
 }
@@ -787,6 +820,8 @@ internal fun NextcloudNoteEditor(
     var refreshing by remember(note.id, session) { mutableStateOf(false) }
     var showDiscardConfirmation by remember(note.id, session) { mutableStateOf(false) }
     var showDeleteConfirmation by remember(note.id, session) { mutableStateOf(false) }
+    var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
+    var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     var viewMode by rememberSaveable(accountKey, note.id) { mutableStateOf(NoteViewMode.Edit) }
     val scope = rememberCoroutineScope()
 
@@ -802,24 +837,16 @@ internal fun NextcloudNoteEditor(
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            deleteError = "Note recovery storage could not be read securely. Check local storage and retry."
+            val message = "Note recovery storage could not be read securely. Check local storage and retry."
+            deleteError = message
+            saveError = message
         }
     }
 
     LaunchedEffect(accountScope, deletionRecoveryLoaded, deletionRecoveryState, deletionRecovery) {
         if (deletionRecoveryLoaded && deletionRecoveryState != null && deletionRecovery == null) {
-            val cleared = try {
-                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.NoteDeletion)
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                false
-            }
-            if (cleared) {
-                deletionRecoveryState = null
-            } else {
-                deleteError = "A damaged note-deletion recovery record could not be cleared. Free local storage and retry."
-            }
+            deleteError = "The previous note-deletion recovery record cannot be read. Writes remain blocked."
+            showRecoveryOptions = true
         }
     }
 
@@ -1274,11 +1301,56 @@ internal fun NextcloudNoteEditor(
                 ) { Text(if (deleting) "Deleting..." else "Delete") }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { showDeleteConfirmation = false },
-                    enabled = !deleting && deletionRecoveryState == null,
-                ) { Text("Cancel") }
+                if (deletionRecoveryState != null) {
+                    TextButton(
+                        onClick = { showRecoveryOptions = true },
+                        enabled = !deleting,
+                    ) { Text("Recovery options") }
+                } else {
+                    TextButton(
+                        onClick = { showDeleteConfirmation = false },
+                        enabled = !deleting,
+                    ) { Text("Cancel") }
+                }
             },
+        )
+    }
+    if (showRecoveryOptions && deletionRecoveryState != null) {
+        DurableMutationRecoveryDialog(
+            title = "Resolve note recovery",
+            recordReadable = deletionRecovery != null,
+            resetting = recoveryResetInProgress,
+            onCheckAgain = {
+                showRecoveryOptions = false
+                loadAttempt += 1
+            },
+            onReset = {
+                if (!recoveryResetInProgress) {
+                    recoveryResetInProgress = true
+                    scope.launch {
+                        val cleared = try {
+                            services.clearDurableMutationRecovery(
+                                accountScope,
+                                DurableMutationRecoveryKind.NoteDeletion,
+                            )
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (cleared) {
+                            deletionRecoveryState = null
+                            deleteError = null
+                            showDeleteConfirmation = false
+                            showRecoveryOptions = false
+                        } else {
+                            deleteError = "The note recovery record could not be reset. Free local storage and retry."
+                        }
+                        recoveryResetInProgress = false
+                    }
+                }
+            },
+            onDismiss = { showRecoveryOptions = false },
         )
     }
 }

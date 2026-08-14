@@ -1035,6 +1035,8 @@ fun NextcloudNativeApp(
     onNavigationRequestHandled: (Long) -> Unit = {},
     linkRequest: NextcloudNativeLinkRequest? = null,
     onLinkRequestHandled: (Long) -> Unit = {},
+    linkQueueOverflowEvent: Long = 0L,
+    onLinkQueueOverflowHandled: (Long) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var themePreference by remember { mutableStateOf(services.loadThemePreference()) }
@@ -1114,6 +1116,23 @@ fun NextcloudNativeApp(
                     onLoggedOut = {
                         services.clearSession()
                         session = null
+                    },
+                )
+            }
+            if (linkQueueOverflowEvent > 0L) {
+                AlertDialog(
+                    onDismissRequest = { onLinkQueueOverflowHandled(linkQueueOverflowEvent) },
+                    title = { Text("Some links are still waiting") },
+                    text = {
+                        Text(
+                            "Too many links were opened at once to keep all of them safely. " +
+                                "Finish the pending links, then open the skipped link again.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { onLinkQueueOverflowHandled(linkQueueOverflowEvent) }) {
+                            Text("OK")
+                        }
                     },
                 )
             }
@@ -2111,7 +2130,10 @@ private fun AuthenticatedApp(
                         onLinkRequestHandled(request.request.sequence)
                         releasePendingEditorLinkNavigation(request.request.sequence)
                     },
-                    onCancelled = { releasePendingEditorLinkNavigation(request.request.sequence) },
+                    onCancelled = {
+                        onLinkRequestHandled(request.request.sequence)
+                        releasePendingEditorLinkNavigation(request.request.sequence)
+                    },
                 )
             }
         }
@@ -2157,7 +2179,10 @@ private fun AuthenticatedApp(
                     onLinkRequestHandled(request.sequence)
                     releasePendingEditorLinkNavigation(request.sequence)
                 },
-                onCancelled = { releasePendingEditorLinkNavigation(request.sequence) },
+                onCancelled = {
+                    onLinkRequestHandled(request.sequence)
+                    releasePendingEditorLinkNavigation(request.sequence)
+                },
             )
         } else if (
             screen is Screen.NoteEditor ||
@@ -2174,6 +2199,7 @@ private fun AuthenticatedApp(
                 source = NextcloudLinkSource.OperatingSystem,
                 incomingRequestSequence = request.sequence,
                 onFinished = { onLinkRequestHandled(request.sequence) },
+                onCancelled = { onLinkRequestHandled(request.sequence) },
             )
         }
     }
@@ -2281,6 +2307,7 @@ private fun AuthenticatedApp(
                                         failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
                                     },
                                     onCancelled = {
+                                        failure.incomingRequestSequence?.let(onLinkRequestHandled)
                                         failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
                                     },
                                 )

@@ -101,4 +101,31 @@ class AndroidIncomingLinksTest {
 
         assertEquals(emptyList(), restored)
     }
+
+    @Test
+    fun pendingLinkQueueEnforcesCountAndBundleByteBudgets() {
+        val smallQueue = (1L..MAX_ANDROID_INCOMING_LINK_QUEUE_COUNT.toLong()).map { sequence ->
+            NextcloudNativeLinkRequest(sequence, "https://cloud.example.test/f/$sequence")
+        }
+        assertEquals(
+            false,
+            canEnqueueAndroidIncomingLink(
+                smallQueue,
+                NextcloudNativeLinkRequest(17L, "https://cloud.example.test/f/17"),
+            ),
+        )
+
+        val prefix = "https://cloud.example.test/"
+        val maximumUrl = prefix + "a".repeat(8_192 - prefix.length)
+        val byteLimitedQueue = (1L..8L).map { sequence ->
+            NextcloudNativeLinkRequest(sequence, maximumUrl)
+        }
+        assertEquals(
+            false,
+            canEnqueueAndroidIncomingLink(
+                byteLimitedQueue,
+                NextcloudNativeLinkRequest(9L, "https://cloud.example.test/f/9"),
+            ),
+        )
+    }
 }

@@ -40,22 +40,36 @@ internal fun restoreAndroidIncomingLinkQueue(
     if (restoredSequence < 0L) return emptyList()
     if (sequences != null || urls != null) {
         if (sequences == null || urls == null || sequences.size != urls.size) return emptyList()
+        if (sequences.size > MAX_ANDROID_INCOMING_LINK_QUEUE_COUNT) return emptyList()
         var previous = 0L
-        return sequences.indices.map { index ->
+        val restored = mutableListOf<NextcloudNativeLinkRequest>()
+        sequences.indices.forEach { index ->
             val sequence = sequences[index]
             val url = urls[index]
             if (sequence <= previous || sequence > restoredSequence || !url.isSupportedAndroidIncomingLink()) {
                 return emptyList()
             }
             previous = sequence
-            NextcloudNativeLinkRequest(sequence, url)
+            val request = NextcloudNativeLinkRequest(sequence, url)
+            if (!canEnqueueAndroidIncomingLink(restored, request)) return emptyList()
+            restored += request
         }
+        return restored
     }
     return legacyUrl
         ?.takeIf(String::isSupportedAndroidIncomingLink)
         ?.takeIf { restoredSequence > 0L }
         ?.let { listOf(NextcloudNativeLinkRequest(restoredSequence, it)) }
         .orEmpty()
+}
+
+internal fun canEnqueueAndroidIncomingLink(
+    queued: List<NextcloudNativeLinkRequest>,
+    request: NextcloudNativeLinkRequest,
+): Boolean {
+    if (queued.size >= MAX_ANDROID_INCOMING_LINK_QUEUE_COUNT) return false
+    val queuedBytes = queued.sumOf { pending -> pending.url.encodeToByteArray().size }
+    return queuedBytes + request.url.encodeToByteArray().size <= MAX_ANDROID_INCOMING_LINK_QUEUE_BYTES
 }
 
 private fun String.isSupportedAndroidIncomingLink(): Boolean {
@@ -71,3 +85,5 @@ private fun String.isSupportedAndroidIncomingLink(): Boolean {
 
 internal const val ANDROID_ACTION_VIEW = "android.intent.action.VIEW"
 private const val MAX_ANDROID_INCOMING_LINK_LENGTH = 8_192
+internal const val MAX_ANDROID_INCOMING_LINK_QUEUE_COUNT = 16
+internal const val MAX_ANDROID_INCOMING_LINK_QUEUE_BYTES = 64 * 1024

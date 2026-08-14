@@ -173,6 +173,8 @@ fun NativeGroupwareCalendarScreen(
     val mutationInProgress = !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
+    var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
+    var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
 
@@ -215,6 +217,8 @@ fun NativeGroupwareCalendarScreen(
         }
         mutationRecoveryState = null
         mutationOperationInProgress = false
+        mutationError = null
+        refreshError = null
         onMutationInProgressChanged(false)
         return true
     }
@@ -231,24 +235,16 @@ fun NativeGroupwareCalendarScreen(
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            mutationError = "Calendar recovery storage could not be read securely. Check local storage and retry."
+            val message = "Calendar recovery storage could not be read securely. Check local storage and retry."
+            mutationError = message
+            refreshError = message
         }
     }
 
     LaunchedEffect(accountScope, mutationRecoveryLoaded, mutationRecoveryState, mutationPostcondition) {
         if (mutationRecoveryLoaded && mutationRecoveryState != null && mutationPostcondition == null) {
-            val cleared = try {
-                services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                false
-            }
-            if (cleared) {
-                mutationRecoveryState = null
-            } else {
-                mutationError = "A damaged calendar recovery record could not be cleared. Free local storage and retry."
-            }
+            refreshError = "The previous calendar recovery record cannot be read. Writes remain blocked."
+            showRecoveryOptions = true
         }
     }
 
@@ -357,6 +353,7 @@ fun NativeGroupwareCalendarScreen(
             } else {
                 refreshError = message
             }
+            if (mutationRecoveryState != null) showRecoveryOptions = true
         }
         refreshing = false
     }
@@ -510,10 +507,35 @@ fun NativeGroupwareCalendarScreen(
                     ) {
                         Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                        if (mutationRecoveryState != null) {
+                            TextButton(onClick = { showRecoveryOptions = true }) { Text("Recovery options") }
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (showRecoveryOptions && mutationRecoveryState != null) {
+        DurableMutationRecoveryDialog(
+            title = "Resolve calendar recovery",
+            recordReadable = mutationPostcondition != null,
+            resetting = recoveryResetInProgress,
+            onCheckAgain = {
+                showRecoveryOptions = false
+                loadAttempt += 1
+            },
+            onReset = {
+                if (!recoveryResetInProgress) {
+                    recoveryResetInProgress = true
+                    scope.launch {
+                        if (clearMutationRecovery()) showRecoveryOptions = false
+                        recoveryResetInProgress = false
+                    }
+                }
+            },
+            onDismiss = { showRecoveryOptions = false },
+        )
     }
 
     val ready = state as? CalendarLoadState.Ready
