@@ -38,7 +38,6 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
 
     suspend fun launchRemote(
         session: NextcloudSession,
-        userId: String,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -49,19 +48,19 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "This file does not provide the size and version needed for seekable streaming.",
             )
         }
-        return registerAndLaunchRemote(session, userId, file, action)
+        return registerAndLaunchRemote(session, file, action)
     }
 
     private suspend fun registerAndLaunchRemote(
         session: NextcloudSession,
-        userId: String,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         staged: StagedExternalFile.Ready? = null,
     ): ExternalFileHandoffResult {
+        val registeredFile = externalHandoffFile(file, staged?.mimeType)
         val record = try {
             withContext(Dispatchers.IO) {
-                AndroidExternalFileHandoffRegistry.register(session, userId, file)
+                AndroidExternalFileHandoffRegistry.register(session, registeredFile)
             }
         } catch (_: AndroidExternalFileHandoffStoreException) {
             staged?.file?.parentFile?.deleteRecursively()
@@ -116,8 +115,8 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         }
         return launchUri(
             uri = uri,
-            mimeType = sanitizeExternalMimeType(file.mimeType),
-            displayName = sanitizeExternalFileName(file.name),
+            mimeType = sanitizeExternalMimeType(record.file.mimeType),
+            displayName = sanitizeExternalFileName(record.file.name),
             action = action,
             onFailure = {
                 withContext(Dispatchers.IO) {
@@ -156,7 +155,6 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
 
     suspend fun launchLargeStagedRemote(
         session: NextcloudSession,
-        userId: String,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -177,7 +175,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "The file could not be cached for another app. Check the connection and available storage, then try again.",
             )
         }
-        return registerAndLaunchRemote(session, userId, file, action, staged)
+        return registerAndLaunchRemote(session, file, action, staged)
     }
 
     suspend fun launchDetached(
@@ -318,10 +316,14 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 requiredBytes = expectedBytes,
                 protectedDirectoryNames = AndroidExternalFileHandoffRegistry.activeManagedContentDirectoryNames(),
             )
+            val availableAfterReservations = androidLargeExternalHandoffAvailableBytes(
+                root = canonicalRoot,
+                availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
+            )
             check(
                 androidLargeExternalHandoffFitsCapacity(
                     requiredBytes = expectedBytes,
-                    availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
+                    availableBytes = availableAfterReservations,
                 ),
             ) { "There is not enough free space for the temporary external-file copy." }
             createLargeExternalShareOperationDirectory(canonicalRoot, expectedBytes)
@@ -466,6 +468,19 @@ internal fun pruneExternalShareCache(root: File, requiredBytes: Long, nowMillis:
 
 internal fun androidExternalLargeShareCacheRoot(cacheDirectory: File): File =
     File(cacheDirectory, EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY)
+
+internal fun externalHandoffFile(file: NextcloudFile, stagedMimeType: String?): NextcloudFile =
+    stagedMimeType?.let { file.copy(mimeType = sanitizeExternalMimeType(it)) } ?: file
+
+internal fun androidLargeExternalHandoffAvailableBytes(root: File, availableBytes: Long): Long {
+    require(root.isDirectory) { "The large external-share cache root is not a directory." }
+    require(availableBytes >= 0L) { "Available storage must not be negative." }
+    val reservedBytes = root.listFiles().orEmpty().fold(0L) { total, entry ->
+        val reservation = File(entry, LARGE_EXTERNAL_SHARE_RESERVATION_FILE)
+        if (reservation.isFile) saturatingAdd(total, reservation.length()) else total
+    }
+    return (availableBytes - reservedBytes).coerceAtLeast(0L)
+}
 
 internal fun androidExternalHandoffContentDirectory(root: File, documentId: String): File {
     require(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {

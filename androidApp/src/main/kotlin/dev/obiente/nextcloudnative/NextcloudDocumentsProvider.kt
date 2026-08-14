@@ -340,10 +340,16 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
         }
 
+        val account = try {
+            resolveAccount(session)
+        } catch (failure: Throwable) {
+            lease.release()
+            throw failure
+        }
         val rangeSession = try {
             services.openFileRangeSession(
                 session = session,
-                userId = record.userId,
+                userId = account.userId,
                 path = file.path,
                 size = size,
                 expectedEtag = etag,

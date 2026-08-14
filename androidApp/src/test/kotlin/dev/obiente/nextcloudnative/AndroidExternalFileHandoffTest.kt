@@ -1,7 +1,12 @@
 package dev.obiente.nextcloudnative
 
-import java.nio.file.Files
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -32,6 +37,14 @@ class AndroidExternalFileHandoffTest {
         assertEquals("android.intent.action.VIEW", open.action)
         assertEquals("Open file with", open.chooserTitle)
         assertFalse(open.attachStream)
+    }
+
+    @Test
+    fun `staged handoff keeps the response mime type for the external chooser`() {
+        val generic = handoffFile(size = 12L).copy(mimeType = "application/octet-stream")
+
+        assertEquals("video/mp4", externalHandoffFile(generic, "video/mp4").mimeType)
+        assertEquals(generic, externalHandoffFile(generic, stagedMimeType = null))
     }
 
     @Test
@@ -136,6 +149,29 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
+    fun `large handoff admission subtracts concurrent logical reservations`() {
+        val root = Files.createTempDirectory("nextcloud-large-handoff-capacity-test-").toFile()
+        try {
+            root.resolve("first").apply {
+                mkdir()
+                resolve(LARGE_EXTERNAL_SHARE_RESERVATION_FILE).writeBytes(ByteArray(30))
+            }
+            root.resolve("completed").apply {
+                mkdir()
+                resolve("payload").writeBytes(ByteArray(20))
+            }
+
+            val available = androidLargeExternalHandoffAvailableBytes(root, availableBytes = 100L)
+
+            assertEquals(70L, available)
+            assertTrue(androidLargeExternalHandoffFitsCapacity(10L, available, reserveBytes = 60L))
+            assertFalse(androidLargeExternalHandoffFitsCapacity(11L, available, reserveBytes = 60L))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `failed large handoff reservation removes its operation directory`() {
         val root = Files.createTempDirectory("nextcloud-large-handoff-reservation-test-").toFile()
         try {
@@ -164,7 +200,6 @@ class AndroidExternalFileHandoffTest {
             AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
             val record = AndroidExternalFileHandoffRegistry.register(
                 session,
-                "person-id",
                 file,
                 nowEpochMillis = 10L,
             )
@@ -210,7 +245,7 @@ class AndroidExternalFileHandoffTest {
         )
         AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         try {
-            val record = AndroidExternalFileHandoffRegistry.register(session, "person-id", file, nowEpochMillis = 10L)
+            val record = AndroidExternalFileHandoffRegistry.register(session, file, nowEpochMillis = 10L)
             assertTrue(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(record.documentId))
             assertEquals(record, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, 11L))
             assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, otherSession, 11L))
@@ -246,7 +281,7 @@ class AndroidExternalFileHandoffTest {
         )
         AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         try {
-            val record = AndroidExternalFileHandoffRegistry.register(session, "person-id", file, nowEpochMillis = 10L)
+            val record = AndroidExternalFileHandoffRegistry.register(session, file, nowEpochMillis = 10L)
             assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, Long.MAX_VALUE))
         } finally {
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
@@ -263,7 +298,6 @@ class AndroidExternalFileHandoffTest {
             AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
             val record = AndroidExternalFileHandoffRegistry.register(
                 session,
-                "person-id",
                 handoffFile(size = 4L),
                 nowEpochMillis = 10L,
             )
@@ -295,7 +329,6 @@ class AndroidExternalFileHandoffTest {
             val existing = List(AndroidExternalFileHandoffRegistry.MAX_RECORDS) { index ->
                 AndroidExternalFileHandoffRegistry.register(
                     session,
-                    "person-id",
                     handoffFile(size = 4L),
                     nowEpochMillis = 10L + index,
                 )
@@ -308,7 +341,6 @@ class AndroidExternalFileHandoffTest {
             assertFailsWith<AndroidExternalFileHandoffStoreException> {
                 AndroidExternalFileHandoffRegistry.register(
                     session,
-                    "person-id",
                     handoffFile(size = 4L),
                     nowEpochMillis = 100L,
                 )
@@ -365,7 +397,6 @@ class AndroidExternalFileHandoffTest {
         val record = AndroidExternalFileHandoffRecord(
             documentId = "nch1:" + "a".repeat(32),
             accountId = "account",
-            userId = "person-id",
             file = NextcloudFile(
                 path = "Videos/clip.mp4",
                 name = "clip.mp4",
@@ -447,7 +478,11 @@ class AndroidExternalFileHandoffTest {
     fun `remote handoff records survive process restoration without persisting credentials`() {
         val root = Files.createTempDirectory("nextcloud-handoff-store-test-").toFile()
         val store = AndroidExternalFileHandoffStore(root.resolve("records.bin"))
-        val session = NextcloudSession("https://cloud.example.test", "person", "private-app-password")
+        val session = NextcloudSession(
+            "https://cloud.example.test",
+            "raw-user-identifier",
+            "private-app-password",
+        )
         val file = NextcloudFile(
             path = "Videos/restored.mp4",
             name = "restored.mp4",
@@ -464,12 +499,13 @@ class AndroidExternalFileHandoffTest {
             AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
             val registered = AndroidExternalFileHandoffRegistry.register(
                 session,
-                "person-id",
                 file,
                 nowEpochMillis = 10L,
             )
             assertTrue(store.stateFile.isFile)
-            assertFalse(store.stateFile.readBytes().decodeToString().contains(session.appPassword))
+            val durableState = store.stateFile.readBytes().decodeToString()
+            assertFalse(durableState.contains(session.appPassword))
+            assertFalse(durableState.contains(session.loginName))
 
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
             AndroidExternalFileHandoffRegistry.bind(
@@ -484,12 +520,73 @@ class AndroidExternalFileHandoffTest {
             assertEquals(file.path, restored.file.path)
             assertEquals(file.size, restored.file.size)
             assertEquals(file.etag, restored.file.etag)
-            assertEquals("person-id", restored.userId)
         } finally {
             AndroidExternalFileHandoffRegistry.clear()
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `legacy handoff state is migrated without retaining its raw user id`() {
+        val root = Files.createTempDirectory("nextcloud-legacy-handoff-store-test-").toFile()
+        val stateFile = root.resolve("records.bin")
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        val record = AndroidExternalFileHandoffRecord(
+            documentId = "nch1:" + "b".repeat(32),
+            accountId = NextcloudDocumentIds.accountKey(session),
+            file = handoffFile(size = 12L),
+            createdAtEpochMillis = 10L,
+            expiresAtEpochMillis = 100L,
+        )
+        try {
+            writeLegacyHandoffState(stateFile, record, legacyUserId = "raw-legacy-user-id")
+
+            assertEquals(listOf(record), AndroidExternalFileHandoffStore(stateFile).load())
+            assertFalse(stateFile.readBytes().decodeToString().contains("raw-legacy-user-id"))
+            DataInputStream(FileInputStream(stateFile)).use { input ->
+                assertEquals(0x4e434848, input.readInt())
+                assertEquals(2, input.readInt())
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    private fun writeLegacyHandoffState(
+        stateFile: java.io.File,
+        record: AndroidExternalFileHandoffRecord,
+        legacyUserId: String,
+    ) {
+        DataOutputStream(FileOutputStream(stateFile)).use { output ->
+            output.writeInt(0x4e434848)
+            output.writeInt(1)
+            output.writeInt(1)
+            output.writeLegacyString(record.documentId)
+            output.writeLegacyString(record.accountId)
+            output.writeLegacyString(legacyUserId)
+            output.writeLegacyString(record.file.path)
+            output.writeLegacyString(record.file.name)
+            output.writeBoolean(record.file.mimeType != null)
+            record.file.mimeType?.let { output.writeLegacyString(it) }
+            output.writeLong(requireNotNull(record.file.size))
+            output.writeBoolean(record.file.lastModified != null)
+            record.file.lastModified?.let { output.writeLegacyString(it) }
+            output.writeBoolean(record.file.fileId != null)
+            record.file.fileId?.let(output::writeLong)
+            output.writeBoolean(record.file.hasPreview)
+            output.writeLegacyString(requireNotNull(record.file.etag))
+            output.writeBoolean(record.file.originalAccessAllowed)
+            output.writeBoolean(record.file.davPathAuthoritative)
+            output.writeLong(record.createdAtEpochMillis)
+            output.writeLong(record.expiresAtEpochMillis)
+        }
+    }
+
+    private fun DataOutputStream.writeLegacyString(value: String) {
+        val bytes = value.toByteArray(StandardCharsets.UTF_8)
+        writeInt(bytes.size)
+        write(bytes)
     }
 
     private fun handoffFile(size: Long) = NextcloudFile(

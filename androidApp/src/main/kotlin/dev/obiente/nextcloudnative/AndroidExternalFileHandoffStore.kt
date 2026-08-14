@@ -34,17 +34,18 @@ internal class AndroidExternalFileHandoffStore(
         if (!stateFile.isFile || stateFile.length() !in 1L..MAX_STATE_BYTES) {
             throw AndroidExternalFileHandoffStoreException("External handoff state exceeds its safe storage limit.")
         }
-        return try {
+        val loaded = try {
             DataInputStream(BufferedInputStream(FileInputStream(stateFile))).use { input ->
                 requireStored(input.readInt() == MAGIC) { "External handoff state has an invalid header." }
-                requireStored(input.readInt() == FORMAT_VERSION) {
+                val formatVersion = input.readInt()
+                requireStored(formatVersion in LEGACY_FORMAT_VERSION..FORMAT_VERSION) {
                     "External handoff state uses an unsupported format."
                 }
                 val count = input.readInt()
                 requireStored(count in 0..MAX_RECORDS) { "External handoff state has too many records." }
-                val records = List(count) { input.readRecord() }
+                val records = List(count) { input.readRecord(formatVersion) }
                 requireStored(input.read() == -1) { "External handoff state contains trailing data." }
-                records
+                LoadedRecords(formatVersion, records)
             }
         } catch (failure: AndroidExternalFileHandoffStoreException) {
             throw failure
@@ -53,6 +54,8 @@ internal class AndroidExternalFileHandoffStore(
         } catch (failure: Throwable) {
             throw AndroidExternalFileHandoffStoreException("External handoff state is invalid.", failure)
         }
+        if (loaded.formatVersion < FORMAT_VERSION) save(loaded.records)
+        return loaded.records
     }
 
     @Synchronized
@@ -105,7 +108,6 @@ internal class AndroidExternalFileHandoffStore(
     private fun DataOutputStream.writeRecord(record: AndroidExternalFileHandoffRecord) {
         writeBoundedString(record.documentId, MAX_DOCUMENT_ID_BYTES)
         writeBoundedString(record.accountId, MAX_ACCOUNT_ID_BYTES)
-        writeBoundedString(record.userId, MAX_USER_ID_BYTES)
         writeBoundedString(record.file.path, MAX_PATH_BYTES)
         writeBoundedString(record.file.name, MAX_NAME_BYTES)
         writeNullableBoundedString(record.file.mimeType, MAX_MIME_TYPE_BYTES)
@@ -121,10 +123,14 @@ internal class AndroidExternalFileHandoffStore(
         writeLong(record.expiresAtEpochMillis)
     }
 
-    private fun DataInputStream.readRecord(): AndroidExternalFileHandoffRecord {
+    private fun DataInputStream.readRecord(formatVersion: Int): AndroidExternalFileHandoffRecord {
         val documentId = readBoundedString(MAX_DOCUMENT_ID_BYTES)
         val accountId = readBoundedString(MAX_ACCOUNT_ID_BYTES)
-        val userId = readBoundedString(MAX_USER_ID_BYTES)
+        val legacyUserId = if (formatVersion == LEGACY_FORMAT_VERSION) {
+            readBoundedString(MAX_LEGACY_USER_ID_BYTES)
+        } else {
+            null
+        }
         val path = readBoundedString(MAX_PATH_BYTES)
         val name = readBoundedString(MAX_NAME_BYTES)
         val mimeType = readNullableBoundedString(MAX_MIME_TYPE_BYTES)
@@ -140,7 +146,7 @@ internal class AndroidExternalFileHandoffStore(
         requireStored(
             AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId) &&
                 accountId.isNotBlank() &&
-                userId.isNotBlank() &&
+                legacyUserId?.isNotBlank() != false &&
                 path.isNotBlank() &&
                 name.isNotBlank() &&
                 size >= 0L &&
@@ -153,7 +159,6 @@ internal class AndroidExternalFileHandoffStore(
         return AndroidExternalFileHandoffRecord(
             documentId = documentId,
             accountId = accountId,
-            userId = userId,
             file = NextcloudFile(
                 path = path,
                 name = name,
@@ -213,13 +218,19 @@ internal class AndroidExternalFileHandoffStore(
     }
 
     private companion object {
+        data class LoadedRecords(
+            val formatVersion: Int,
+            val records: List<AndroidExternalFileHandoffRecord>,
+        )
+
         const val MAGIC = 0x4e434848
-        const val FORMAT_VERSION = 1
+        const val LEGACY_FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
         const val MAX_RECORDS = 32
         const val MAX_STATE_BYTES = 512L * 1024L
         const val MAX_DOCUMENT_ID_BYTES = 64
         const val MAX_ACCOUNT_ID_BYTES = 256
-        const val MAX_USER_ID_BYTES = 4 * 1024
+        const val MAX_LEGACY_USER_ID_BYTES = 4 * 1024
         const val MAX_PATH_BYTES = 64 * 1024
         const val MAX_NAME_BYTES = 4 * 1024
         const val MAX_MIME_TYPE_BYTES = 1024

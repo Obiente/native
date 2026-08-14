@@ -9,7 +9,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal data class AndroidExternalFileHandoffRecord(
     val documentId: String,
     val accountId: String,
-    val userId: String,
     val file: NextcloudFile,
     val createdAtEpochMillis: Long,
     val expiresAtEpochMillis: Long,
@@ -111,11 +110,9 @@ internal object AndroidExternalFileHandoffRegistry {
 
     fun register(
         session: NextcloudSession,
-        userId: String,
         file: NextcloudFile,
         nowEpochMillis: Long = System.currentTimeMillis(),
     ): AndroidExternalFileHandoffRecord {
-        require(userId.isNotBlank()) { "A resolved account is required for external file handoff." }
         require(!file.isDirectory) { "Folders cannot be registered for external file handoff." }
         require(file.size?.let { it >= 0L } == true) {
             "A known non-negative size is required for seekable external file handoff."
@@ -144,7 +141,6 @@ internal object AndroidExternalFileHandoffRegistry {
                 AndroidExternalFileHandoffRecord(
                     documentId = documentId,
                     accountId = NextcloudDocumentIds.accountKey(session),
-                    userId = userId,
                     file = file,
                     createdAtEpochMillis = nowEpochMillis,
                     expiresAtEpochMillis = (nowEpochMillis + RECORD_LIFETIME_MILLIS)

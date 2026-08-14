@@ -1081,7 +1081,6 @@ internal class AndroidNextcloudServices(
             if (probeSeekableExternalHandoff(session, userId, file)) {
                 return externalFileHandoff.launchRemote(
                     session = session,
-                    userId = userId,
                     file = file,
                     action = action,
                     capability = capability,
@@ -1090,7 +1089,6 @@ internal class AndroidNextcloudServices(
             if (fileSize != null && fileSize > capability.maximumFileBytes) {
                 return externalFileHandoff.launchLargeStagedRemote(
                     session = session,
-                    userId = userId,
                     file = file,
                     action = action,
                     capability = capability,
@@ -2420,6 +2418,7 @@ internal class AndroidNextcloudServices(
                                     response.header("Content-Range"),
                                     offset,
                                     endInclusive,
+                                    size,
                                 )
                             ) {
                                 throw AndroidFileRangeUnsupportedException(
