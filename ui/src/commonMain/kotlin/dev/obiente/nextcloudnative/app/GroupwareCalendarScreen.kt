@@ -598,6 +598,10 @@ fun NativeGroupwareCalendarScreen(
             error = mutationError,
             navigationRequest = navigationRequest,
             onNavigationConfirmed = onNavigationConfirmed,
+            onNavigationDiscardConfirmed = { request ->
+                creating = false
+                onNavigationConfirmed(request)
+            },
             onNavigationCancelled = onNavigationCancelled,
             mutationInProgress = mutationInProgress,
             onSave = save@{ draft, calendar ->
@@ -675,6 +679,11 @@ fun NativeGroupwareCalendarScreen(
                 error = mutationError,
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
+                onNavigationDiscardConfirmed = { request ->
+                    activeEventInstanceId = null
+                    eventEditorActive = false
+                    onNavigationConfirmed(request)
+                },
                 onNavigationCancelled = onNavigationCancelled,
                 mutationInProgress = mutationInProgress,
                 onSave = save@{ draft, _ ->
@@ -1531,6 +1540,7 @@ private fun EventEditorDialog(
     error: String?,
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationDiscardConfirmed: (NextcloudPendingNavigationRequest) -> Unit = onNavigationConfirmed,
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     mutationInProgress: Boolean = false,
     onSave: (EventDraft, GroupwareCalendar) -> Unit,
@@ -1768,7 +1778,7 @@ private fun EventEditorDialog(
                     Button(
                         onClick = {
                             confirmNavigationDiscard = false
-                            onNavigationConfirmed(request)
+                            onNavigationDiscardConfirmed(request)
                         },
                     ) { Text("Discard") }
                 },

@@ -1072,6 +1072,13 @@ internal fun NextcloudNoteEditor(
         if (mutationInProgress) return
         if (dirty) showDiscardConfirmation = true else onBack()
     }
+    fun discardDraft() {
+        title = originalTitle
+        content = TextFieldValue(originalContent)
+        category = originalCategory
+        favorite = originalFavorite
+        saveError = null
+    }
     LaunchedEffect(navigationRequest?.identity, mutationInProgress) {
         navigationRequest?.let { request ->
             if (!mutationInProgress) {
@@ -1332,6 +1339,7 @@ internal fun NextcloudNoteEditor(
             confirmButton = {
                 Button(onClick = {
                     showDiscardConfirmation = false
+                    discardDraft()
                     navigationRequest?.let(onNavigationConfirmed) ?: onBack()
                 }) { Text("Discard") }
             },

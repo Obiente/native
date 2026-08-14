@@ -209,6 +209,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeScreenState
 import dev.obiente.nextcloudnative.nativeui.runtime.settingsFormPrefillView
 import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1958,6 +1959,23 @@ private fun AuthenticatedApp(
         )
     }
 
+    fun openBrowserForLink(
+        browserUrl: String,
+        incomingRequestSequence: Long?,
+    ): NextcloudLinkNavigationResult = runCatching {
+        services.openExternalUrl(browserUrl)
+    }.fold(
+        onSuccess = { NextcloudLinkNavigationResult.Completed },
+        onFailure = {
+            showLinkFailure(
+                message = "A web browser could not be opened. Check your installed apps and try again.",
+                browserUrl = browserUrl,
+                incomingRequestSequence = incomingRequestSequence,
+            )
+            NextcloudLinkNavigationResult.NeedsUserDecision
+        },
+    )
+
     fun navigateToResolvedFile(file: NextcloudFile) {
         returnDestination = destination
         leaveAppWorkspace()
@@ -2081,8 +2099,7 @@ private fun AuthenticatedApp(
                     )
                     return NextcloudLinkNavigationResult.NeedsUserDecision
                 } else if (source == NextcloudLinkSource.InApp) {
-                    services.openExternalUrl(target.browserUrl)
-                    return NextcloudLinkNavigationResult.Completed
+                    return openBrowserForLink(target.browserUrl, incomingRequestSequence)
                 } else {
                     showLinkFailure(
                         message = "This link does not have a native destination in the current account.",
@@ -2093,8 +2110,7 @@ private fun AuthenticatedApp(
                 }
             }
             is NextcloudLinkDestination.Browser -> if (source == NextcloudLinkSource.InApp) {
-                services.openExternalUrl(target.browserUrl)
-                return NextcloudLinkNavigationResult.Completed
+                return openBrowserForLink(target.browserUrl, incomingRequestSequence)
             } else {
                 showLinkFailure(
                     message = if (target.sameAccount) {
@@ -2131,7 +2147,7 @@ private fun AuthenticatedApp(
         linkNavigationGeneration = generation
         linkNavigationJob?.cancel()
         linkNavigationFailure = null
-        linkNavigationJob = linkNavigationScope.launch {
+        val job = linkNavigationScope.launch(start = CoroutineStart.LAZY) {
             try {
                 val result = navigateNextcloudLink(rawLink, source, incomingRequestSequence) {
                     linkNavigationGeneration == generation &&
@@ -2151,6 +2167,8 @@ private fun AuthenticatedApp(
                 if (linkNavigationGeneration == generation) linkNavigationJob = null
             }
         }
+        linkNavigationJob = job
+        job.start()
     }
 
     fun applyPendingNavigationRequest(request: NextcloudPendingNavigationRequest) {
@@ -2357,9 +2375,16 @@ private fun AuthenticatedApp(
                 {
                     TextButton(
                         onClick = {
-                            acknowledgeFailedIncomingLink()
-                            linkNavigationFailure = null
-                            services.openExternalUrl(browserUrl)
+                            runCatching { services.openExternalUrl(browserUrl) }
+                                .onSuccess {
+                                    acknowledgeFailedIncomingLink()
+                                    linkNavigationFailure = null
+                                }
+                                .onFailure {
+                                    linkNavigationFailure = failure.copy(
+                                        message = "A web browser could not be opened. Check your installed apps and try again.",
+                                    )
+                                }
                         },
                     ) {
                         Text("Open in browser")
@@ -11626,6 +11651,11 @@ private fun TextEditorScreen(
         if (saving || navigationCommitInProgress) return
         if (dirty) confirmDiscard = true else onBack()
     }
+    fun discardDraft() {
+        draft = originalText.orEmpty()
+        saveError = null
+        savedMessage = null
+    }
     LaunchedEffect(navigationRequest?.identity, saving, navigationCommitInProgress) {
         navigationRequest?.let { request ->
             if (!saving && !navigationCommitInProgress) {
@@ -11823,6 +11853,7 @@ private fun TextEditorScreen(
             confirmButton = {
                 Button(onClick = {
                     confirmDiscard = false
+                    discardDraft()
                     navigationRequest?.let(onNavigationConfirmed) ?: onBack()
                 }) { Text("Discard") }
             },

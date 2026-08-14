@@ -458,6 +458,10 @@ fun NativeGroupwareContactsScreen(
             mutationInProgress = mutationInProgress,
             navigationRequest = navigationRequest,
             onNavigationConfirmed = onNavigationConfirmed,
+            onNavigationDiscardConfirmed = { request ->
+                creating = false
+                onNavigationConfirmed(request)
+            },
             onNavigationCancelled = onNavigationCancelled,
             onSave = save@{ draft, addressBook ->
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
@@ -526,6 +530,10 @@ fun NativeGroupwareContactsScreen(
                 mutationInProgress = mutationInProgress,
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
+                onNavigationDiscardConfirmed = { request ->
+                    editing = false
+                    onNavigationConfirmed(request)
+                },
                 onNavigationCancelled = onNavigationCancelled,
                 onSave = save@{ draft, _ ->
                     val prepared = prepareGroupwareDavMutation(
@@ -889,6 +897,7 @@ private fun ContactEditorDialog(
     mutationInProgress: Boolean,
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
+    onNavigationDiscardConfirmed: (NextcloudPendingNavigationRequest) -> Unit = onNavigationConfirmed,
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
     onSave: (ContactDraft, GroupwareAddressBook) -> Unit,
 ) {
@@ -1022,7 +1031,7 @@ private fun ContactEditorDialog(
                     Button(
                         onClick = {
                             confirmNavigationDiscard = false
-                            onNavigationConfirmed(request)
+                            onNavigationDiscardConfirmed(request)
                         },
                     ) { Text("Discard") }
                 },
