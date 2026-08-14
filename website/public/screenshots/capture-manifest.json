@@ -378,7 +378,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt": "4ea7b9a1979db26b71944ade4b1f8eafff7e10c85b79479cf79f3da8b473dfbf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewerActions.kt": "48aaed6948d1423113d300cc3ab86d244ab76e8225e24988e9855edf74553944",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt": "915d3f7b652c5bc2907142750fae1802e6186cae776533f35c2041356bf35635",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "09a28116d5f04c422cb7b148d86c31f3ffea47d467138fd45d4de932f5cd6fab",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt": "58c5fa5cae1fc4b7c4c349a71afc1b50227bdb93674801678f7248d376e31f44",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotesCache.kt": "9223dd455c6a1c35a10769616fceb9dfb2d92ef4d43b0a52c2c29e40f1a196cf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPeople.kt": "cff910ea2cc77211ef81779c49ee0c957851f2b4a3ed32b857b12ded1cee643b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt": "34d9b43cf3bbfc8342958dc40f2df7b4573f30a2ae1bd9bcb8bb470151313a3d",
