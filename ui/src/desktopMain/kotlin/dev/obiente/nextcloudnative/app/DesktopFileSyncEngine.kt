@@ -726,8 +726,14 @@ internal class DesktopFileSyncEngine(
 internal fun FileSyncPair.retainsResolvedFileSyncDecision(workId: Long): Boolean =
     workItems.any { work ->
         work.id == workId &&
-            work.state == FileSyncExecutionState.Ready &&
-            work.decision?.state is FileSyncDecisionState.Resolved
+            work.decision?.state is FileSyncDecisionState.Resolved &&
+            when (work.state) {
+                FileSyncExecutionState.Ready ->
+                    work.operation !is FileSyncOperation.NeedsDecision &&
+                        work.operation !is FileSyncOperation.Skipped
+                FileSyncExecutionState.Skipped -> work.operation is FileSyncOperation.Skipped
+                else -> false
+            }
     }
 
 internal fun FileSyncPair.prepareForDesktopExecution(resetExhaustedFailures: Boolean): FileSyncPair =

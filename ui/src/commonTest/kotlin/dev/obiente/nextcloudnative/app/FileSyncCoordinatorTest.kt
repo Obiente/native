@@ -143,6 +143,67 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `display timestamps refresh without replacing a resolved decision`() {
+        var state = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "l1")),
+            listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "r1")),
+            10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.UseLocal)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "l1", modifiedEpochMillis = 1_000L)),
+            listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "r1", modifiedEpochMillis = 2_000L)),
+            20,
+        )
+
+        val retained = state.pair().workItems.single()
+        assertEquals(workId, retained.id)
+        assertEquals(FileSyncExecutionState.Ready, retained.state)
+        assertEquals(1_000L, retained.observedLocal?.modifiedEpochMillis)
+        assertEquals(2_000L, retained.observedRemote?.modifiedEpochMillis)
+        assertEquals(
+            FileSyncDecisionState.Resolved(FileSyncDecisionChoice.UseLocal),
+            retained.decision?.state,
+        )
+    }
+
+    @Test
+    fun `display timestamps do not reset exhausted retry state`() {
+        val localWithoutTimestamp = LocalSyncEntry("note.md", SyncEntryKind.File, "l1")
+        val exhausted = FileSyncWorkItem(
+            id = 1L,
+            relativePath = "note.md",
+            observedLocal = localWithoutTimestamp,
+            observedRemote = null,
+            observedBaseline = null,
+            operation = FileSyncOperation.Upload("note.md", expectedRemoteEtag = null),
+            state = FileSyncExecutionState.Failed,
+            attemptCount = MAX_FILE_SYNC_ATTEMPTS,
+            lastAttemptEpochMillis = 9L,
+            failureMessage = "Automatic retries exhausted",
+        )
+
+        val scanned = scanFileSyncPair(
+            state(workItems = listOf(exhausted), nextWorkId = 2L),
+            PAIR_ID,
+            listOf(localWithoutTimestamp.copy(modifiedEpochMillis = 1_000L)),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        ).pair().workItems.single()
+
+        assertEquals(exhausted.id, scanned.id)
+        assertEquals(FileSyncExecutionState.Failed, scanned.state)
+        assertEquals(MAX_FILE_SYNC_ATTEMPTS, scanned.attemptCount)
+        assertEquals(1_000L, scanned.observedLocal?.modifiedEpochMillis)
+    }
+
+    @Test
     fun `restore local follows the latest surviving remote source`() {
         var state = scanFileSyncPair(
             state(baselines = listOf(baseline("note.md", "l1", "r1"))),

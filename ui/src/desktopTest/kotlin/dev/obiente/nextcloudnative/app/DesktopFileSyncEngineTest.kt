@@ -48,6 +48,41 @@ class DesktopFileSyncEngineTest {
     }
 
     @Test
+    fun `resolved conflict guard accepts a retained skip decision`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Notes",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        var state = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "local-1")),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val resolvedWorkId = state.pairs.single().workItems.single().id
+        state = resolveFileSyncDecision(
+            state,
+            pair.id,
+            resolvedWorkId,
+            FileSyncDecisionChoice.Skip,
+        )
+        state = scanFileSyncPair(
+            state,
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("note.md", SyncEntryKind.File, "local-1")),
+            remoteEntries = listOf(RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1")),
+            nowEpochMillis = 20L,
+        )
+
+        assertTrue(state.pairs.single().retainsResolvedFileSyncDecision(resolvedWorkId))
+        assertEquals(FileSyncExecutionState.Skipped, state.pairs.single().workItems.single().state)
+    }
+
+    @Test
     fun `baseline capacity is checked before executing expanding operations`() {
         val baselines = setOf("existing.jpg", "second.jpg")
 

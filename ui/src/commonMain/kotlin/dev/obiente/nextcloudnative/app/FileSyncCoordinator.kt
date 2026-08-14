@@ -251,6 +251,7 @@ fun scanFileSyncPair(
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
         return current.takeIf { it.sameGeneration(operation, local, remote, baseline) }
+            ?.copy(observedLocal = local, observedRemote = remote)
             ?: current.rebindResolvedSourceGeneration(operation, local, remote, baseline)
     }
     val operationComparator = fileSyncOperationComparator(pair.configuration, localByPath, remoteByPath)
@@ -664,7 +665,13 @@ private fun FileSyncWorkItem.sameGeneration(
     remote: RemoteSyncEntry?,
     baseline: FileSyncBaseline?,
 ): Boolean {
-    if (observedLocal != local || observedRemote != remote || observedBaseline != baseline) return false
+    if (
+        !observedLocal.hasSameGenerationAs(local) ||
+        !observedRemote.hasSameGenerationAs(remote) ||
+        observedBaseline != baseline
+    ) {
+        return false
+    }
     return when {
         planned is FileSyncOperation.NeedsDecision ->
             decision?.reason == planned.reason
@@ -706,9 +713,9 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
             local
                 ?.takeIf {
                     observedLocal != null &&
-                        it != observedLocal &&
+                        !it.hasSameGenerationAs(observedLocal) &&
                         it.kind == observedLocal.kind &&
-                        remote == observedRemote
+                        remote.hasSameGenerationAs(observedRemote)
                 }
                 ?.let { latestLocal ->
                     copy(
@@ -725,9 +732,9 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
             remote
                 ?.takeIf {
                     observedRemote != null &&
-                        it != observedRemote &&
+                        !it.hasSameGenerationAs(observedRemote) &&
                         it.kind == observedRemote.kind &&
-                        local == observedLocal
+                        local.hasSameGenerationAs(observedLocal)
                 }
                 ?.let { latestRemote ->
                     copy(
@@ -744,7 +751,7 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
                     local == null &&
                         observedLocal == null &&
                         observedRemote != null &&
-                        it != observedRemote &&
+                        !it.hasSameGenerationAs(observedRemote) &&
                         it.kind == observedRemote.kind
                 }
                 ?.let { latestRemote ->
@@ -760,7 +767,7 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
                     remote == null &&
                         observedRemote == null &&
                         observedLocal != null &&
-                        it != observedLocal &&
+                        !it.hasSameGenerationAs(observedLocal) &&
                         it.kind == observedLocal.kind
                 }
                 ?.let { latestLocal ->
@@ -776,6 +783,30 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
         FileSyncDecisionChoice.Skip,
         -> null
     }
+}
+
+// Modification time is presentation metadata. Revision, ETag, size, and content identity remain
+// the durable generation guards while timestamps can be added or refreshed without resetting work.
+private fun LocalSyncEntry?.hasSameGenerationAs(other: LocalSyncEntry?): Boolean = when {
+    this == null -> other == null
+    other == null -> false
+    else ->
+        relativePath == other.relativePath &&
+            kind == other.kind &&
+            revision == other.revision &&
+            size == other.size &&
+            contentHash == other.contentHash
+}
+
+private fun RemoteSyncEntry?.hasSameGenerationAs(other: RemoteSyncEntry?): Boolean = when {
+    this == null -> other == null
+    other == null -> false
+    else ->
+        relativePath == other.relativePath &&
+            kind == other.kind &&
+            etag == other.etag &&
+            size == other.size &&
+            contentHash == other.contentHash
 }
 
 private fun FileSyncOperation.initialExecutionState(): FileSyncExecutionState = when (this) {
