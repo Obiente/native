@@ -314,24 +314,25 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         offline.availableContent(session, file.path)
             ?.takeIf { cached -> cached.file.etag == etag && cached.content.length() == size }
             ?.let { cached ->
-                return openExternalLocalContent(cached.content, lease)
+                return openExternalLocalContent(cached.content, lease, signal = signal)
             }
         virtualFiles.acquire(session, file.path, expectedRemoteEtag = etag)?.let { cached ->
             if (cached.content.length() == size) {
-                return openExternalLocalContent(cached.content, lease, cached)
+                return openExternalLocalContent(cached.content, lease, cached, signal)
             }
             cached.release()
         }
         if (size == 0L) {
             val empty = virtualFiles.createHydrationStagingFile()
             return try {
-                ParcelFileDescriptor.open(empty, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
-                    virtualFiles.discardHydrationStagingFile(empty)
-                    lease.release()
-                }
+                openExternalLocalContent(
+                    content = empty,
+                    handoffLease = lease,
+                    signal = signal,
+                    onReleased = { virtualFiles.discardHydrationStagingFile(empty) },
+                )
             } catch (failure: Throwable) {
                 virtualFiles.discardHydrationStagingFile(empty)
-                lease.release()
                 throw failure
             }
         }
@@ -401,15 +402,40 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         content: File,
         handoffLease: AndroidExternalFileHandoffLease,
         virtualLease: AndroidVirtualFileLease? = null,
-    ): ParcelFileDescriptor = try {
-        ParcelFileDescriptor.open(content, ParcelFileDescriptor.MODE_READ_ONLY, WRITE_HANDLER) {
+        signal: CancellationSignal? = null,
+        onReleased: () -> Unit = {},
+    ): ParcelFileDescriptor {
+        val callback = try {
+            AndroidLocalFileProxyCallback(
+                content = content,
+                accessAllowed = handoffLease::isValid,
+                onReleased = {
+                    try {
+                        onReleased()
+                    } finally {
+                        virtualLease?.release()
+                        handoffLease.release()
+                    }
+                },
+            )
+        } catch (failure: Throwable) {
             virtualLease?.release()
             handoffLease.release()
+            throw failure
         }
-    } catch (failure: Throwable) {
-        virtualLease?.release()
-        handoffLease.release()
-        throw failure
+        handoffLease.onRevoked(callback::cancel)
+        signal?.setOnCancelListener(callback::cancel)
+        if (!handoffLease.isValid() || signal?.isCanceled == true) {
+            callback.onRelease()
+            throw OperationCanceledException()
+        }
+        return try {
+            requireNotNull(context?.getSystemService(StorageManager::class.java))
+                .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, nextProxyHandler())
+        } catch (failure: Throwable) {
+            callback.onRelease()
+            throw failure
+        }
     }
 
     private fun openVirtualFileLease(lease: AndroidVirtualFileLease): ParcelFileDescriptor = try {

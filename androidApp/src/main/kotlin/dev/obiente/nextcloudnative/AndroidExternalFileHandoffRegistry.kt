@@ -18,17 +18,20 @@ internal data class AndroidExternalFileHandoffRecord(
 internal class AndroidExternalFileHandoffLease internal constructor(
     val record: AndroidExternalFileHandoffRecord,
     private val onRelease: (AndroidExternalFileHandoffLease) -> Unit,
+    private val nowEpochMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val released = AtomicBoolean(false)
     private val callbackLock = Any()
     private var revoked = false
     private val revocationCallbacks = mutableListOf<() -> Unit>()
 
-    fun isValid(): Boolean = synchronized(callbackLock) { !revoked && !released.get() }
+    fun isValid(): Boolean = synchronized(callbackLock) {
+        !revoked && !released.get() && nowEpochMillis() < record.expiresAtEpochMillis
+    }
 
     fun onRevoked(callback: () -> Unit) {
         val invokeImmediately = synchronized(callbackLock) {
-            if (revoked || released.get()) {
+            if (revoked || released.get() || nowEpochMillis() >= record.expiresAtEpochMillis) {
                 true
             } else {
                 revocationCallbacks += callback
@@ -195,9 +198,12 @@ internal object AndroidExternalFileHandoffRegistry {
                 return@synchronized null
             }
             lateinit var created: AndroidExternalFileHandoffLease
-            created = AndroidExternalFileHandoffLease(entry.record) { released ->
-                synchronized(lock) { entries[documentId]?.readers?.remove(released) }
-            }
+            created = AndroidExternalFileHandoffLease(
+                record = entry.record,
+                onRelease = { released ->
+                    synchronized(lock) { entries[documentId]?.readers?.remove(released) }
+                },
+            )
             entry.readers += created
             created
         }

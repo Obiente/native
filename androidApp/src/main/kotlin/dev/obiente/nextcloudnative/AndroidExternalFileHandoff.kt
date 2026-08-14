@@ -49,7 +49,9 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             )
         }
         val record = try {
-            AndroidExternalFileHandoffRegistry.register(session, userId, file)
+            withContext(Dispatchers.IO) {
+                AndroidExternalFileHandoffRegistry.register(session, userId, file)
+            }
         } catch (_: AndroidExternalFileHandoffStoreException) {
             return ExternalFileHandoffResult.Unsupported(
                 "Android could not persist this temporary file handoff. Check available storage and try again.",
@@ -63,13 +65,17 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         val uri = try {
             DocumentsContract.buildDocumentUri(authority, record.documentId)
         } catch (_: IllegalArgumentException) {
-            AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            withContext(Dispatchers.IO) {
+                AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            }
             return ExternalFileHandoffResult.Unsupported(
                 "The scoped external-file provider is unavailable.",
             )
         }
         if (uri.scheme != "content" || uri.authority != authority) {
-            AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            withContext(Dispatchers.IO) {
+                AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+            }
             return ExternalFileHandoffResult.Unsupported(
                 "The scoped external-file provider is unavailable.",
             )
@@ -79,7 +85,11 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
             mimeType = sanitizeExternalMimeType(file.mimeType),
             displayName = sanitizeExternalFileName(file.name),
             action = action,
-            onFailure = { AndroidExternalFileHandoffRegistry.revoke(record.documentId) },
+            onFailure = {
+                withContext(Dispatchers.IO) {
+                    AndroidExternalFileHandoffRegistry.revoke(record.documentId)
+                }
+            },
         )
     }
 
@@ -189,7 +199,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         mimeType: String,
         displayName: String,
         action: ExternalFileHandoffAction,
-        onFailure: () -> Unit,
+        onFailure: suspend () -> Unit,
     ): ExternalFileHandoffResult {
         return withContext(Dispatchers.Main) {
             try {
@@ -274,14 +284,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                     availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
                 ),
             ) { "There is not enough free space for the temporary external-file copy." }
-            File(canonicalRoot, UUID.randomUUID().toString()).also { operation ->
-                check(operation.mkdir()) { "Could not create a private large-file handoff directory." }
-                check(operation.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-file directory." }
-                RandomAccessFile(File(operation, LARGE_EXTERNAL_SHARE_RESERVATION_FILE), "rw").use { reservation ->
-                    reservation.setLength(expectedBytes)
-                    reservation.fd.sync()
-                }
-            }
+            createLargeExternalShareOperationDirectory(canonicalRoot, expectedBytes)
         }
         val target = File(operationDirectory, sanitizeExternalFileName(file.name))
         check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) { "Unsafe external-file name." }
@@ -449,6 +452,32 @@ internal fun prepareLargeExternalShareCache(
     }
     check(saturatingAdd(storedBytes, requiredBytes) <= budgetBytes) {
         "There is not enough room in the bounded large-file handoff cache."
+    }
+}
+
+internal fun createLargeExternalShareOperationDirectory(
+    canonicalRoot: File,
+    expectedBytes: Long,
+    reserve: (File, Long) -> Unit = ::reserveLargeExternalShareBytes,
+): File {
+    require(canonicalRoot.isDirectory) { "The large external-share cache root is not a directory." }
+    require(expectedBytes > 0L) { "The large external-share reservation must be positive." }
+    val operation = File(canonicalRoot, UUID.randomUUID().toString())
+    try {
+        check(operation.mkdir()) { "Could not create a private large-file handoff directory." }
+        check(operation.canonicalFile.parentFile == canonicalRoot) { "Unsafe external-file directory." }
+        reserve(File(operation, LARGE_EXTERNAL_SHARE_RESERVATION_FILE), expectedBytes)
+        return operation
+    } catch (failure: Throwable) {
+        operation.deleteRecursively()
+        throw failure
+    }
+}
+
+private fun reserveLargeExternalShareBytes(reservationFile: File, expectedBytes: Long) {
+    RandomAccessFile(reservationFile, "rw").use { reservation ->
+        reservation.setLength(expectedBytes)
+        reservation.fd.sync()
     }
 }
 

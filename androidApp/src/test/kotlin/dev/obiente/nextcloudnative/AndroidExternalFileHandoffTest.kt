@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import java.nio.file.Files
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,7 +9,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import kotlinx.coroutines.runBlocking
 
 class AndroidExternalFileHandoffTest {
     @Test
@@ -116,6 +119,22 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
+    fun `failed large handoff reservation removes its operation directory`() {
+        val root = Files.createTempDirectory("nextcloud-large-handoff-reservation-test-").toFile()
+        try {
+            assertFailsWith<IOException> {
+                createLargeExternalShareOperationDirectory(root.canonicalFile, expectedBytes = 10L) { file, _ ->
+                    file.writeBytes(byteArrayOf(1))
+                    throw IOException("reservation failed")
+                }
+            }
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `remote handoff records are account scoped bounded and revocable`() {
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test",
@@ -180,6 +199,90 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
+    fun `active remote handoff lease stops authorizing reads at its deadline`() {
+        var now = 99L
+        val record = AndroidExternalFileHandoffRecord(
+            documentId = "nch1:" + "a".repeat(32),
+            accountId = "account",
+            userId = "person-id",
+            file = NextcloudFile(
+                path = "Videos/clip.mp4",
+                name = "clip.mp4",
+                isDirectory = false,
+                mimeType = "video/mp4",
+                size = 1L,
+                lastModified = null,
+                fileId = null,
+                hasPreview = false,
+                etag = "\"v1\"",
+            ),
+            createdAtEpochMillis = 0L,
+            expiresAtEpochMillis = 100L,
+        )
+        val lease = AndroidExternalFileHandoffLease(
+            record = record,
+            onRelease = {},
+            nowEpochMillis = { now },
+        )
+        assertTrue(lease.isValid())
+
+        now = 100L
+        assertFalse(lease.isValid())
+        var rejected = false
+        lease.onRevoked { rejected = true }
+        assertTrue(rejected)
+    }
+
+    @Test
+    fun `seekable handoff probe verifies empty generations and only falls back for confirmed incompatibility`() {
+        val empty = handoffFile(size = 0L)
+        var emptyVerified = false
+        assertTrue(
+            runBlocking {
+                probeSeekableExternalHandoffGeneration(
+                    file = empty,
+                    verifyEmptyGeneration = { emptyVerified = true },
+                    openRangeSession = { _, _ -> error("Empty files do not open a range session") },
+                )
+            },
+        )
+        assertTrue(emptyVerified)
+
+        var closed = false
+        assertFalse(
+            runBlocking {
+                probeSeekableExternalHandoffGeneration(
+                    file = handoffFile(size = 4L),
+                    verifyEmptyGeneration = {},
+                    openRangeSession = { size, _ ->
+                        NextcloudFileRangeSession(
+                            size = size,
+                            readBlock = { _, _ -> throw AndroidFileRangeUnsupportedException("no ranges") },
+                            closeBlock = { closed = true },
+                        )
+                    },
+                )
+            },
+        )
+        assertTrue(closed)
+
+        assertFailsWith<IOException> {
+            runBlocking {
+                probeSeekableExternalHandoffGeneration(
+                    file = handoffFile(size = 4L),
+                    verifyEmptyGeneration = {},
+                    openRangeSession = { size, _ ->
+                        NextcloudFileRangeSession(
+                            size = size,
+                            readBlock = { _, _ -> throw IOException("temporary outage") },
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    @Test
     fun `remote handoff records survive process restoration without persisting credentials`() {
         val root = Files.createTempDirectory("nextcloud-handoff-store-test-").toFile()
         val store = AndroidExternalFileHandoffStore(root.resolve("records.bin"))
@@ -227,4 +330,16 @@ class AndroidExternalFileHandoffTest {
             root.deleteRecursively()
         }
     }
+
+    private fun handoffFile(size: Long) = NextcloudFile(
+        path = "Videos/probe.mp4",
+        name = "probe.mp4",
+        isDirectory = false,
+        mimeType = "video/mp4",
+        size = size,
+        lastModified = null,
+        fileId = null,
+        hasPreview = false,
+        etag = "\"probe-v1\"",
+    )
 }

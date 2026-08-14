@@ -1103,11 +1103,24 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
         file: NextcloudFile,
-    ): Boolean {
-        val size = file.size ?: return false
-        if (size == 0L) return true
-        val etag = file.etag?.takeIf(String::isNotBlank) ?: return false
-        val rangeSession = try {
+    ): Boolean = probeSeekableExternalHandoffGeneration(
+        file = file,
+        verifyEmptyGeneration = {
+            withContext(Dispatchers.IO) {
+                val result = NextcloudDocumentWebDav(client = noRedirectHttpClient).readFile(
+                    session = session,
+                    userId = userId,
+                    path = file.path,
+                    destination = ByteArrayOutputStream(1),
+                    maximumBytes = 1L,
+                    expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag)),
+                )
+                check(result.byteCount == 0L) {
+                    "The server file changed after it was listed as empty."
+                }
+            }
+        },
+        openRangeSession = { size, etag ->
             openFileRangeSession(
                 session = session,
                 userId = userId,
@@ -1115,21 +1128,8 @@ internal class AndroidNextcloudServices(
                 size = size,
                 expectedEtag = etag,
             )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            return false
-        }
-        return try {
-            rangeSession.read(0L, 1).size == 1
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            false
-        } finally {
-            rangeSession.close()
-        }
-    }
+        },
+    )
 
     private suspend fun downloadExternalHandoffCopy(
         session: NextcloudSession,
@@ -2395,18 +2395,25 @@ internal class AndroidNextcloudServices(
                     }
                     try {
                         call.execute().use { response ->
-                            check(response.code == 206) {
-                                "The server did not honor the bounded file range request " +
-                                    "(HTTP ${response.code})."
+                            if (response.code != 206) {
+                                if (response.code in 200..299) {
+                                    throw AndroidFileRangeUnsupportedException(
+                                        "The server did not honor the bounded file range request " +
+                                            "(HTTP ${response.code}).",
+                                    )
+                                }
+                                error("The bounded file range request failed (HTTP ${response.code}).")
                             }
-                            check(
-                                isExactHttpByteContentRange(
+                            if (
+                                !isExactHttpByteContentRange(
                                     response.header("Content-Range"),
                                     offset,
                                     endInclusive,
-                                ),
+                                )
                             ) {
-                                "The server returned a different file range than requested."
+                                throw AndroidFileRangeUnsupportedException(
+                                    "The server returned a different file range than requested.",
+                                )
                             }
                             val responseBody = response.body
                             val contentLength = responseBody.contentLength()
@@ -3871,6 +3878,29 @@ internal class AndroidNextcloudServices(
             <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>
         """.trimIndent()
         val NON_APP_CAPABILITIES = setOf("core", "theming")
+    }
+}
+
+internal class AndroidFileRangeUnsupportedException(message: String) : Exception(message)
+
+internal suspend fun probeSeekableExternalHandoffGeneration(
+    file: NextcloudFile,
+    verifyEmptyGeneration: suspend () -> Unit,
+    openRangeSession: (size: Long, etag: String) -> NextcloudFileRangeSession,
+): Boolean {
+    val size = file.size ?: return false
+    val etag = file.etag?.takeIf(String::isNotBlank) ?: return false
+    if (size == 0L) {
+        verifyEmptyGeneration()
+        return true
+    }
+    val rangeSession = openRangeSession(size, etag)
+    return try {
+        rangeSession.read(0L, 1).size == 1
+    } catch (_: AndroidFileRangeUnsupportedException) {
+        false
+    } finally {
+        rangeSession.close()
     }
 }
 

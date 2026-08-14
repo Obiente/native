@@ -197,6 +197,37 @@ class AndroidVirtualFileProxyCallbackTest {
     }
 
     @Test
+    fun `revoked external access cancels exact local cache reads and releases once`() {
+        val content = Files.createTempFile("local-handoff-proxy-", ".bin").toFile().apply {
+            writeText("cached bytes")
+        }
+        var allowed = true
+        var released = 0
+        val callback = AndroidLocalFileProxyCallback(
+            content = content,
+            accessAllowed = { allowed },
+            onReleased = { released += 1 },
+        )
+        try {
+            val destination = ByteArray(6)
+            assertEquals(6, callback.onRead(0L, destination.size, destination))
+            assertContentEquals("cached".encodeToByteArray(), destination)
+
+            allowed = false
+            callback.cancel()
+            assertFailsWith<OperationCanceledException> {
+                callback.onRead(0L, 1, ByteArray(1))
+            }
+            callback.onRelease()
+            callback.onRelease()
+            assertEquals(1, released)
+        } finally {
+            callback.onRelease()
+            content.delete()
+        }
+    }
+
+    @Test
     fun `failed publication leaves staging disposable on release`() {
         val bytes = "abcd".encodeToByteArray()
         val staging = Files.createTempFile("virtual-proxy-failed-", ".part").toFile()
