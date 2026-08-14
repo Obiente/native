@@ -72,6 +72,21 @@ class NativeMailWorkspaceTest {
         assertFalse(nativeMailCompactSearchAvailable(messages, searchHandlerAvailable = false))
         assertFalse(nativeMailCompactSearchAvailable(listOf(folder), searchHandlerAvailable = true))
         assertFalse(nativeMailCompactSearchAvailable(emptyList(), searchHandlerAvailable = true))
+        assertTrue(
+            nativeMailCompactSearchAvailable(
+                items = emptyList(),
+                searchHandlerAvailable = true,
+                query = "release",
+            ),
+        )
+    }
+
+    @Test
+    fun `active mail search remains clearable after a refresh shrinks the mailbox`() {
+        assertTrue(nativeMailWorkspaceSearchAvailable(stateReady = true, messageCount = 1, query = "release"))
+        assertTrue(nativeMailWorkspaceSearchAvailable(stateReady = false, messageCount = 0, query = "release"))
+        assertFalse(nativeMailWorkspaceSearchAvailable(stateReady = true, messageCount = 1, query = ""))
+        assertTrue(nativeMailWorkspaceSearchAvailable(stateReady = true, messageCount = 2, query = ""))
     }
 
     @Test

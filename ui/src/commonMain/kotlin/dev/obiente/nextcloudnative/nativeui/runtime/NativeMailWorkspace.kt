@@ -658,7 +658,13 @@ internal fun NativeMailWorkspace(
                     plan.folders.isNotEmpty() -> plan.folders
                     else -> plan.accounts
                 }
-                if (nativeMailCompactSearchAvailable(compactItems, onSearchQueryChanged != null)) {
+                if (
+                    nativeMailCompactSearchAvailable(
+                        items = compactItems,
+                        searchHandlerAvailable = onSearchQueryChanged != null,
+                        query = searchQuery,
+                    )
+                ) {
                     NativeMailSearchableMessageList(
                         items = compactItems,
                         selectedMessage = plan.selectedMessage,
@@ -689,9 +695,20 @@ internal fun NativeMailWorkspace(
 internal fun nativeMailCompactSearchAvailable(
     items: List<NativeMailWorkspaceItem>,
     searchHandlerAvailable: Boolean,
-): Boolean = searchHandlerAvailable &&
-    items.isNotEmpty() &&
-    items.all { item -> item.presentation.kind == NativeMailboxItemKind.Message }
+    query: String = "",
+): Boolean = searchHandlerAvailable && (
+    query.isNotBlank() ||
+        (
+            items.isNotEmpty() &&
+                items.all { item -> item.presentation.kind == NativeMailboxItemKind.Message }
+            )
+    )
+
+internal fun nativeMailWorkspaceSearchAvailable(
+    stateReady: Boolean,
+    messageCount: Int,
+    query: String,
+): Boolean = query.isNotBlank() || (stateReady && messageCount > 1)
 
 internal fun nativeMailVisibleMessages(
     items: List<NativeMailWorkspaceItem>,

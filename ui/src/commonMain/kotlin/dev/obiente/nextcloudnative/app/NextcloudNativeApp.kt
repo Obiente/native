@@ -2846,6 +2846,9 @@ private fun DynamicDiscoveredAppScreen(
     var refreshingDynamicContent by remember(descriptor) { mutableStateOf(false) }
     var dynamicRefreshError by remember(descriptor) { mutableStateOf<String?>(null) }
     var mailCollectionSummaryError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var trackedMailCollectionSummaryResourceIds by remember(descriptor) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
@@ -3949,14 +3952,16 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         mailCollectionSummaryError = null
-        if (mailCollectionSummaryDestinations.isEmpty()) return@LaunchedEffect
         val summaryResourceIds = mailCollectionSummaryDestinations
             .mapTo(linkedSetOf(), DynamicNavigationDestination::resourceId)
-        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+        val preparation = prepareDynamicMailboxCollectionSummaries(
             recordsByResourceId = recordsByResourceId,
-            summaryResourceIds = summaryResourceIds,
-            loadedSummaries = emptyMap(),
+            previouslyTrackedResourceIds = trackedMailCollectionSummaryResourceIds,
+            currentResourceIds = summaryResourceIds,
         )
+        recordsByResourceId = preparation.recordsByResourceId
+        trackedMailCollectionSummaryResourceIds = preparation.trackedResourceIds
+        if (mailCollectionSummaryDestinations.isEmpty()) return@LaunchedEffect
         val loaded = coroutineScope {
             mailCollectionSummaryDestinations.map { destination ->
                 async {
@@ -6057,6 +6062,20 @@ internal fun replaceDynamicMailboxCollectionSummaries(
     loadedSummaries: Map<String, List<NativeRecord>>,
 ): Map<String, List<NativeRecord>> =
     (recordsByResourceId - summaryResourceIds) + loadedSummaries.filterKeys(summaryResourceIds::contains)
+
+internal data class DynamicMailboxCollectionSummaryPreparation(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val trackedResourceIds: Set<String>,
+)
+
+internal fun prepareDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    previouslyTrackedResourceIds: Set<String>,
+    currentResourceIds: Set<String>,
+): DynamicMailboxCollectionSummaryPreparation = DynamicMailboxCollectionSummaryPreparation(
+    recordsByResourceId = recordsByResourceId - (previouslyTrackedResourceIds + currentResourceIds),
+    trackedResourceIds = currentResourceIds.toSet(),
+)
 
 internal data class DynamicMailboxCollectionSummaryResult(
     val resourceId: String,

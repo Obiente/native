@@ -724,8 +724,11 @@ fun GenericNativeAppScreen(
                 )
             }
     }
-    val mailWorkspaceSearchable = state is NativeScreenState.Ready &&
-        (mailWorkspacePlan?.messages?.size ?: 0) > 1
+    val mailWorkspaceSearchable = nativeMailWorkspaceSearchAvailable(
+        stateReady = state is NativeScreenState.Ready,
+        messageCount = mailWorkspacePlan?.messages?.size ?: 0,
+        query = collectionQuery,
+    )
     val mailWorkspaceDetailTarget = remember(
         schema,
         presentedResource,

@@ -306,6 +306,24 @@ class DynamicNavigationParameterInheritanceTest {
     }
 
     @Test
+    fun `mailbox summary state clears when the next mailbox has no resolved summary route`() {
+        val previousSummary = NativeRecord("inbox-summary", mapOf("total" to "120", "unread" to "8"))
+        val records = mapOf(
+            "messages" to listOf(NativeRecord("message-1", mapOf("subject" to "Hello"))),
+            "mailboxStats" to listOf(previousSummary),
+        )
+
+        val preparation = prepareDynamicMailboxCollectionSummaries(
+            recordsByResourceId = records,
+            previouslyTrackedResourceIds = setOf("mailboxStats"),
+            currentResourceIds = emptySet(),
+        )
+
+        assertEquals(setOf("messages"), preparation.recordsByResourceId.keys)
+        assertTrue(preparation.trackedResourceIds.isEmpty())
+    }
+
+    @Test
     fun `selecting a board opens its lane hierarchy before technical overview views`() {
         val permissions = DynamicNavigationDestination(
             layoutId = "permissions.detail",
