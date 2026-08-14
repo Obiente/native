@@ -496,6 +496,14 @@ fun GenericNativeAppScreen(
             records = presentedRecords,
             navigationContext = datasetContext.bindingValues,
             collectionComplete = onLoadMore == null,
+        ) ?: nativeChoresInviteMutationRecoveryPlan(
+            schema = schema,
+            activeReadAction = activeReadAction,
+            resource = presentedResource,
+            createPlan = createPlan,
+            records = presentedRecords,
+            navigationContext = datasetContext.bindingValues,
+            collectionComplete = onLoadMore == null,
         )
     }
     // Non-idempotent creates remain unavailable until the active collection supplies the exact

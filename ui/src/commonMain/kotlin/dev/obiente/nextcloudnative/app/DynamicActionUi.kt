@@ -12,11 +12,14 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeComponent
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionFailureOutcome
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresInvitationAcceptRecoveryPlan
 
 internal data class PendingDynamicDirectAction(
     val action: ActionSpec,
     val values: Map<String, String>,
     val targetLabel: String,
+    val invitationAcceptRecoveryPlan: NativeChoresInvitationAcceptRecoveryPlan? = null,
+    val durableRecoveryRequired: Boolean = false,
 )
 
 internal enum class DynamicActionUiMode {

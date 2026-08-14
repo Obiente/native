@@ -143,6 +143,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.Confidence
 import dev.obiente.nextcloudnative.nativeui.model.EvidenceSource
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -163,9 +164,14 @@ import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
 import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationKey
 import dev.obiente.nextcloudnative.nativeui.runtime.NativePendingMutationStore
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCreateMutationMatchKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NATIVE_CHORES_COMPLETION_MUTATION_NAMESPACE
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresCompletionPostcondition
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeCreateMutationPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.executeNativeChoresInvitationAccept
+import dev.obiente.nextcloudnative.nativeui.runtime.isNativeChoresInvitationAcceptAction
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInvitationAcceptPostcondition
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInvitationAcceptRecoveryPlan
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoader
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionBatchRelationLoadResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeDatasetContext
@@ -3626,26 +3632,74 @@ private fun DynamicDiscoveredAppScreen(
                 key: NativePendingMutationKey,
                 values: Map<String, String>,
             ): Boolean {
+                val invitationAccept = nativeChoresInvitationAcceptPostcondition(key, values)
+                if (invitationAccept != null) {
+                    if (schema.app.id != "chores" || schema.app.version != "0.1.0") return false
+                    if (schema.action(invitationAccept.actionId)?.takeIf { action ->
+                        isNativeChoresInvitationAcceptAction(schema, action)
+                    } == null) return false
+                    val read = schema.action(invitationAccept.readActionId)?.takeIf { action ->
+                        action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.binding.method == HttpMethod.GET &&
+                            action.binding.path == "/apps/chores/api/v1.0/account/invites" &&
+                            action.confidence == Confidence.verified &&
+                            action.evidence.any { evidence ->
+                                evidence.source == EvidenceSource.verifiedAppPackage
+                            }
+                    } ?: return false
+                    delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
+                    return runCatching {
+                        invitationAccept.satisfiedBy(
+                            loadDynamicRecords(
+                                services = services,
+                                session = session,
+                                descriptor = descriptor,
+                                actionId = read.id,
+                                values = emptyMap(),
+                                runtimeContext = emptyMap(),
+                                cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+                            ),
+                        )
+                    }.getOrElse { failure ->
+                        if (failure is CancellationException) throw failure
+                        false
+                    }
+                }
                 val createPostcondition = nativeCreateMutationPostcondition(key, values)
                 if (createPostcondition != null) {
                     val create = schema.action(createPostcondition.actionId)?.takeIf { action ->
                         action.intent == ActionIntent.create &&
                             action.binding.method == HttpMethod.POST &&
                             action.resourceId == createPostcondition.resourceId &&
+                            action.confidence == Confidence.verified &&
                             action.evidence.any { evidence ->
                                 evidence.source == EvidenceSource.verifiedAppPackage
                             }
                     } ?: return false
                     val read = schema.action(createPostcondition.readActionId)?.takeIf { action ->
-                        action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
+                            action.intent in setOf(ActionIntent.list, ActionIntent.read) &&
                             action.binding.method == HttpMethod.GET &&
                             action.resourceId == createPostcondition.resourceId &&
-                            action.binding.path.substringBefore('?').trimEnd('/') ==
-                            create.binding.path.substringBefore('?').trimEnd('/') &&
+                            action.confidence == Confidence.verified &&
                             action.evidence.any { evidence ->
                                 evidence.source == EvidenceSource.verifiedAppPackage
                             }
                     } ?: return false
+                    val validRoutePair = when (createPostcondition.matchKind) {
+                        NativeCreateMutationMatchKind.NewRecord ->
+                            read.binding.path.substringBefore('?').trimEnd('/') ==
+                                create.binding.path.substringBefore('?').trimEnd('/')
+                        NativeCreateMutationMatchKind.NestedRecord ->
+                            schema.app.id == "chores" && schema.app.version == "0.1.0" &&
+                                create.binding.path ==
+                                "/apps/chores/api/v1.0/team/{teamId}/invites" &&
+                                create.binding.bodyFieldNames == listOf("userId") &&
+                                read.binding.path == "/apps/chores/api/v1.0/team" &&
+                                createPostcondition.nestedCollectionFieldId == "invites" &&
+                                createPostcondition.parentRecordId ==
+                                createPostcondition.bindingValues["teamId"]
+                    }
+                    if (!validRoutePair) return false
                     delay(DYNAMIC_MUTATION_AUTHORITATIVE_READ_DELAY_MILLIS)
                     return runCatching {
                         loadDynamicRecords(
@@ -4496,10 +4550,30 @@ private fun DynamicDiscoveredAppScreen(
             }?.value ?: selectedRecord?.id ?: schema.resource(actionSpec.resourceId)?.name ?: "item"
             directActionError = null
             directActionFailureState = null
+            val invitationRecoveryRequired = isNativeChoresInvitationAcceptAction(schema, actionSpec)
+            val invitationRecoveryPlan = if (invitationRecoveryRequired) {
+                val activeRead = schema.action(selectedView.sourceActionId)
+                val record = selectedRecord
+                if (activeRead != null && record != null) {
+                    nativeChoresInvitationAcceptRecoveryPlan(
+                        schema = schema,
+                        activeReadAction = activeRead,
+                        action = actionSpec,
+                        record = record,
+                        values = action.pathParameterValues,
+                    )
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
             pendingDirectAction = PendingDynamicDirectAction(
                 action = actionSpec,
                 values = action.pathParameterValues,
                 targetLabel = label,
+                invitationAcceptRecoveryPlan = invitationRecoveryPlan,
+                durableRecoveryRequired = invitationRecoveryRequired,
             )
             return
         }
@@ -5069,6 +5143,8 @@ private fun DynamicDiscoveredAppScreen(
     }
     pendingDirectAction?.let { pending ->
         val outcomeUnknown = directActionFailureState?.requiresReconciliation == true
+        val durableRecoveryUnavailable = pending.durableRecoveryRequired &&
+            pending.invitationAcceptRecoveryPlan == null
         AlertDialog(
             onDismissRequest = {
                 if (!directActionRunning) {
@@ -5081,6 +5157,8 @@ private fun DynamicDiscoveredAppScreen(
                 Text(
                     if (outcomeUnknown) {
                         "${dynamicHeaderActionLabel(pending.action, pending.action.label)} result unknown"
+                    } else if (durableRecoveryUnavailable) {
+                        "Refresh invitations"
                     } else {
                         dynamicDirectActionTitle(pending.action, pending.targetLabel)
                     },
@@ -5092,6 +5170,11 @@ private fun DynamicDiscoveredAppScreen(
                         Text(
                             "The server may already have completed this action. The view is being refreshed " +
                                 "to reconcile the result. Review the refreshed state before trying again.",
+                        )
+                    } else if (durableRecoveryUnavailable) {
+                        Text(
+                            "Refresh invitations before accepting this item. Its verified identity " +
+                                "is not available for crash-safe recovery yet.",
                         )
                     } else {
                         Text(dynamicDirectActionDescription(pending.action))
@@ -5118,7 +5201,7 @@ private fun DynamicDiscoveredAppScreen(
                 }
             },
             confirmButton = {
-                if (directActionFailureState?.retryAllowed != false) {
+                if (directActionFailureState?.retryAllowed != false && !durableRecoveryUnavailable) {
                     Button(
                         enabled = !directActionRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -5127,15 +5210,20 @@ private fun DynamicDiscoveredAppScreen(
                             directActionError = null
                             directActionFailureState = null
                             dynamicActionScope.launch {
-                                when (
-                                    val result = executor.execute(
-                                        NativeActionRequest.Submit(
-                                            action = pending.action,
-                                            values = pending.values,
-                                            confirmed = true,
-                                        ),
+                                val request = NativeActionRequest.Submit(
+                                    action = pending.action,
+                                    values = pending.values,
+                                    confirmed = true,
+                                )
+                                val executionResult = pending.invitationAcceptRecoveryPlan?.let { plan ->
+                                    executeNativeChoresInvitationAccept(
+                                        plan = plan,
+                                        request = request,
+                                        actionExecutor = executor,
+                                        pendingMutationStore = pendingMutationStore,
                                     )
-                                ) {
+                                } ?: executor.execute(request)
+                                when (val result = executionResult) {
                                     is NativeActionExecutionResult.Success -> {
                                         pendingDirectAction = null
                                         reconcileSuccessfulMutation(

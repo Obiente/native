@@ -24,6 +24,11 @@ internal enum class NativeCreateMutationPhase {
     TransportMayHaveObserved,
 }
 
+internal enum class NativeCreateMutationMatchKind {
+    NewRecord,
+    NestedRecord,
+}
+
 internal data class NativeCreateMutationPostcondition(
     val actionId: String,
     val readActionId: String,
@@ -34,14 +39,33 @@ internal data class NativeCreateMutationPostcondition(
     val requestValues: Map<String, String>,
     val confirmed: Boolean,
     val phase: NativeCreateMutationPhase,
+    val matchKind: NativeCreateMutationMatchKind,
+    val parentRecordId: String?,
+    val nestedCollectionFieldId: String?,
 ) {
-    internal fun matches(record: NativeRecord): Boolean =
-        record.id !in baselineRecordIds &&
-            record.actionSafeIdentity &&
-            record.actionBindingProvenanceValid &&
-            expectedRecordValues.all { (fieldId, expected) ->
-                record.values[fieldId]?.trim() == expected
+    internal fun matches(record: NativeRecord): Boolean {
+        if (!record.actionSafeIdentity || !record.actionBindingProvenanceValid) return false
+        return when (matchKind) {
+            NativeCreateMutationMatchKind.NewRecord ->
+                record.id !in baselineRecordIds && expectedRecordValues.all { (fieldId, expected) ->
+                    record.values[fieldId]?.trim() == expected
+                }
+            NativeCreateMutationMatchKind.NestedRecord -> {
+                if (record.id != parentRecordId) return false
+                val fieldId = nestedCollectionFieldId ?: return false
+                val items = record.completeStructuredObjectList(fieldId) ?: return false
+                items.any { values ->
+                    expectedRecordValues.all { (expectedFieldId, expected) ->
+                        values[expectedFieldId]?.trim() == expected
+                    } && nativeCreateExpectedIdentity(
+                        expectedRecordValues.keys.associateWith { expectedFieldId ->
+                            values[expectedFieldId]?.trim().orEmpty()
+                        },
+                    ) !in baselineRecordIds
+                }
             }
+        }
+    }
 }
 
 internal data class NativeCreateMutationRecoveryPlan(
@@ -52,10 +76,20 @@ internal data class NativeCreateMutationRecoveryPlan(
     private val baselineRecordIds: Set<String>,
     private val expectedFieldIds: Set<String>,
     private val nestedBodyFieldId: String?,
+    private val matchKind: NativeCreateMutationMatchKind = NativeCreateMutationMatchKind.NewRecord,
+    private val parentRecordId: String? = null,
+    private val nestedCollectionFieldId: String? = null,
 ) {
     val pendingKey: NativePendingMutationKey = NativePendingMutationKey(
         actionId = "$NATIVE_CREATE_MUTATION_NAMESPACE:${action.id}",
-        targetRecordId = nativeCreateMutationScopeDigest(resourceId, readActionId, bindingValues),
+        targetRecordId = nativeCreateMutationScopeDigest(
+            resourceId = resourceId,
+            readActionId = readActionId,
+            bindingValues = bindingValues,
+            matchKind = matchKind,
+            parentRecordId = parentRecordId,
+            nestedCollectionFieldId = nestedCollectionFieldId,
+        ),
     )
 
     internal fun stage(
@@ -85,6 +119,9 @@ internal data class NativeCreateMutationRecoveryPlan(
             CREATE_MARKER_EXPECTED_KEY to expected.encodeStringMap(),
             CREATE_MARKER_REQUEST_KEY to request.values.encodeStringMap(),
             CREATE_MARKER_CONFIRMED_KEY to request.confirmed.toString(),
+            CREATE_MARKER_MATCH_KIND_KEY to matchKind.name,
+            CREATE_MARKER_PARENT_RECORD_KEY to parentRecordId.orEmpty(),
+            CREATE_MARKER_NESTED_COLLECTION_KEY to nestedCollectionFieldId.orEmpty(),
         )
     }
 
@@ -104,6 +141,58 @@ internal data class NativeCreateMutationRecoveryPlan(
         }.mapValues { (_, value) -> value.trim() }
             .takeIf { values -> values.values.all(String::isNotEmpty) }
     }
+}
+
+internal fun nativeChoresInviteMutationRecoveryPlan(
+    schema: NativeAppSchema,
+    activeReadAction: ActionSpec,
+    resource: ResourceSpec,
+    createPlan: NativeRecordFormActionPlan,
+    records: List<NativeRecord>,
+    navigationContext: Map<String, String>,
+    collectionComplete: Boolean,
+): NativeCreateMutationRecoveryPlan? {
+    val action = createPlan.action
+    if (
+        schema.app.id != "chores" || schema.app.version != "0.1.0" || !collectionComplete ||
+        action.intent != ActionIntent.create || action.effect != ActionEffect.create ||
+        action.risk == ActionRisk.readOnly || action.binding.method != HttpMethod.POST ||
+        action.binding.path != "/apps/chores/api/v1.0/team/{teamId}/invites" ||
+        action.resourceId != resource.id || action.binding.bodyFieldNames != listOf("userId") ||
+        action.binding.requiredBodyFieldNames.toSet() != setOf("userId") ||
+        activeReadAction.intent !in setOf(ActionIntent.list, ActionIntent.read) ||
+        activeReadAction.binding.method != HttpMethod.GET ||
+        activeReadAction.binding.path != "/apps/chores/api/v1.0/team" ||
+        activeReadAction.resourceId != resource.id ||
+        action.confidence != Confidence.verified || activeReadAction.confidence != Confidence.verified ||
+        action.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
+        activeReadAction.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+    ) {
+        return null
+    }
+    val team = records.singleOrNull()?.takeIf { record ->
+        record.actionSafeIdentity && record.actionBindingProvenanceValid && record.id.isNotBlank()
+    } ?: return null
+    val teamId = navigationContext["teamId"]?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    if (team.id != teamId || teamId.length > MAX_CREATE_RECORD_ID_LENGTH) return null
+    val invites = team.completeStructuredObjectList("invites") ?: return null
+    val baseline = invites.map { invite ->
+        val userId = invite["userId"]?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        nativeCreateExpectedIdentity(mapOf("userId" to userId))
+    }
+    if (baseline.distinct().size != baseline.size || baseline.size > MAX_CREATE_BASELINE_RECORDS) return null
+    return NativeCreateMutationRecoveryPlan(
+        action = action,
+        readActionId = activeReadAction.id,
+        resourceId = resource.id,
+        bindingValues = mapOf("teamId" to teamId),
+        baselineRecordIds = baseline.toSet(),
+        expectedFieldIds = setOf("userId"),
+        nestedBodyFieldId = null,
+        matchKind = NativeCreateMutationMatchKind.NestedRecord,
+        parentRecordId = team.id,
+        nestedCollectionFieldId = "invites",
+    )
 }
 
 internal fun nativeCreateMutationRecoveryPlan(
@@ -207,12 +296,23 @@ internal suspend fun executeNativeCreateMutation(
                 NativeActionFailureOutcome.Unknown,
             )
         }
-        persistedRequest = NativeActionRequest.Submit(
-            action = plan.action,
-            values = pending.requestValues,
-            confirmed = pending.confirmed,
-        )
-    } else {
+        if (pending.requestValues != request.values || pending.confirmed != request.confirmed) {
+            runCatching { pendingMutationStore.clear(key) }.getOrElse { failure ->
+                return NativeActionExecutionResult.Failure(
+                    failure.message ?: "The superseded staged create could not be cleared.",
+                    NativeActionFailureOutcome.Rejected,
+                )
+            }
+            stagedMarker = null
+        } else {
+            persistedRequest = NativeActionRequest.Submit(
+                action = plan.action,
+                values = pending.requestValues,
+                confirmed = pending.confirmed,
+            )
+        }
+    }
+    if (stagedMarker == null) {
         stagedMarker = plan.stage(request, NativeCreateMutationPhase.Staged)
             ?: return NativeActionExecutionResult.Failure(
                 "This create request could not be staged safely.",
@@ -273,7 +373,6 @@ internal fun nativeCreateMutationPostcondition(
     val readActionId = values[CREATE_MARKER_READ_ACTION_KEY]?.takeSafeCreateId() ?: return null
     val resourceId = values[CREATE_MARKER_RESOURCE_KEY]?.takeSafeCreateId() ?: return null
     val bindings = values[CREATE_MARKER_BINDINGS_KEY]?.decodeStringMap() ?: return null
-    if (key.targetRecordId != nativeCreateMutationScopeDigest(resourceId, readActionId, bindings)) return null
     val baseline = values[CREATE_MARKER_BASELINE_KEY]?.decodeStringSet(MAX_CREATE_BASELINE_RECORDS) ?: return null
     val expected = values[CREATE_MARKER_EXPECTED_KEY]?.decodeStringMap() ?: return null
     val request = values[CREATE_MARKER_REQUEST_KEY]?.decodeStringMap() ?: return null
@@ -286,6 +385,35 @@ internal fun nativeCreateMutationPostcondition(
     val phase = NativeCreateMutationPhase.entries.firstOrNull {
         it.name == values[CREATE_MARKER_PHASE_KEY]
     } ?: return null
+    val matchKind = NativeCreateMutationMatchKind.entries.firstOrNull {
+        it.name == values[CREATE_MARKER_MATCH_KIND_KEY]
+    } ?: return null
+    val parentRecordId = values[CREATE_MARKER_PARENT_RECORD_KEY]
+        ?.takeIf(String::isNotEmpty)
+        ?.takeSafeCreateRecordId()
+    val nestedCollectionFieldId = values[CREATE_MARKER_NESTED_COLLECTION_KEY]
+        ?.takeIf(String::isNotEmpty)
+        ?.takeSafeCreateId()
+    if (
+        (matchKind == NativeCreateMutationMatchKind.NewRecord &&
+            (parentRecordId != null || nestedCollectionFieldId != null)) ||
+        (matchKind == NativeCreateMutationMatchKind.NestedRecord &&
+            (parentRecordId == null || nestedCollectionFieldId == null))
+    ) {
+        return null
+    }
+    if (
+        key.targetRecordId != nativeCreateMutationScopeDigest(
+            resourceId = resourceId,
+            readActionId = readActionId,
+            bindingValues = bindings,
+            matchKind = matchKind,
+            parentRecordId = parentRecordId,
+            nestedCollectionFieldId = nestedCollectionFieldId,
+        )
+    ) {
+        return null
+    }
     return NativeCreateMutationPostcondition(
         actionId = actionId,
         readActionId = readActionId,
@@ -296,6 +424,9 @@ internal fun nativeCreateMutationPostcondition(
         requestValues = request,
         confirmed = confirmed,
         phase = phase,
+        matchKind = matchKind,
+        parentRecordId = parentRecordId,
+        nestedCollectionFieldId = nestedCollectionFieldId,
     )
 }
 
@@ -375,13 +506,26 @@ private fun String.takeSafeCreateId(): String? = takeIf { value ->
     value.isNotBlank() && value.length <= MAX_CREATE_FIELD_ID_LENGTH && '\u0000' !in value
 }
 
+private fun String.takeSafeCreateRecordId(): String? = takeIf { value ->
+    value.isNotBlank() && value.length <= MAX_CREATE_RECORD_ID_LENGTH && '\u0000' !in value
+}
+
 private fun nativeCreateMutationScopeDigest(
     resourceId: String,
     readActionId: String,
     bindingValues: Map<String, String>,
+    matchKind: NativeCreateMutationMatchKind,
+    parentRecordId: String?,
+    nestedCollectionFieldId: String?,
 ): String = publicContentSha256(
     buildString {
-        listOf(resourceId, readActionId).forEach { value ->
+        listOf(
+            resourceId,
+            readActionId,
+            matchKind.name,
+            parentRecordId.orEmpty(),
+            nestedCollectionFieldId.orEmpty(),
+        ).forEach { value ->
             append(value.length)
             append(':')
             append(value)
@@ -400,6 +544,24 @@ private fun nativeCreateMutationScopeDigest(
     }.encodeToByteArray(),
 )
 
+private fun NativeRecord.completeStructuredObjectList(fieldId: String): List<Map<String, String?>>? {
+    val list = structuredValues[fieldId] as? NativeStructuredValue.ListValue ?: return null
+    if (list.omittedItems != 0) return null
+    return list.items.map { item ->
+        val objectValue = item as? NativeStructuredValue.ObjectValue ?: return null
+        if (objectValue.omittedEntries != 0) return null
+        objectValue.entries.associate { entry ->
+            val scalar = entry.value as? NativeStructuredValue.Scalar ?: return null
+            entry.key to scalar.value
+        }
+    }
+}
+
+private fun nativeCreateExpectedIdentity(values: Map<String, String>): String = publicContentSha256(
+    values.toSortedMap().entries.joinToString("\u0000") { (name, value) -> "$name\u0000$value" }
+        .encodeToByteArray(),
+)
+
 private const val CREATE_MARKER_VERSION = "1"
 private const val CREATE_MARKER_VERSION_KEY = "version"
 private const val CREATE_MARKER_PHASE_KEY = "phase"
@@ -411,6 +573,9 @@ private const val CREATE_MARKER_BASELINE_KEY = "baselineRecordIds"
 private const val CREATE_MARKER_EXPECTED_KEY = "expectedRecordValues"
 private const val CREATE_MARKER_REQUEST_KEY = "requestValues"
 private const val CREATE_MARKER_CONFIRMED_KEY = "confirmed"
+private const val CREATE_MARKER_MATCH_KIND_KEY = "matchKind"
+private const val CREATE_MARKER_PARENT_RECORD_KEY = "parentRecordId"
+private const val CREATE_MARKER_NESTED_COLLECTION_KEY = "nestedCollectionFieldId"
 private val CREATE_MARKER_KEYS = setOf(
     CREATE_MARKER_VERSION_KEY,
     CREATE_MARKER_PHASE_KEY,
@@ -422,6 +587,9 @@ private val CREATE_MARKER_KEYS = setOf(
     CREATE_MARKER_EXPECTED_KEY,
     CREATE_MARKER_REQUEST_KEY,
     CREATE_MARKER_CONFIRMED_KEY,
+    CREATE_MARKER_MATCH_KIND_KEY,
+    CREATE_MARKER_PARENT_RECORD_KEY,
+    CREATE_MARKER_NESTED_COLLECTION_KEY,
 )
 
 private const val MAX_CREATE_BASELINE_RECORDS = 512

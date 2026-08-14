@@ -21,8 +21,11 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
@@ -886,6 +889,80 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
             destination.toPath(),
             StandardCopyOption.REPLACE_EXISTING,
         )
+    }
+}
+
+private val PENDING_MUTATION_DIRECTORY_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+    PosixFilePermission.OWNER_EXECUTE,
+)
+private val PENDING_MUTATION_FILE_PERMISSIONS = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+)
+
+internal fun ensurePrivatePendingMutationDirectory(directory: File) {
+    Files.createDirectories(directory.toPath())
+    setPendingMutationPosixPermissions(directory.toPath(), PENDING_MUTATION_DIRECTORY_PERMISSIONS)
+}
+
+internal fun setPrivatePendingMutationFilePermissions(file: File) {
+    setPendingMutationPosixPermissions(file.toPath(), PENDING_MUTATION_FILE_PERMISSIONS)
+}
+
+private fun setPendingMutationPosixPermissions(path: Path, permissions: Set<PosixFilePermission>) {
+    if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
+        Files.setPosixFilePermissions(path, permissions)
+    }
+}
+
+private fun createPrivatePendingMutationTemporary(directory: File, targetName: String): Path {
+    val directoryPath = directory.toPath()
+    return if (Files.getFileStore(directoryPath).supportsFileAttributeView("posix")) {
+        Files.createTempFile(
+            directoryPath,
+            "$targetName-",
+            ".part",
+            PosixFilePermissions.asFileAttribute(PENDING_MUTATION_FILE_PERMISSIONS),
+        )
+    } else {
+        Files.createTempFile(directoryPath, "$targetName-", ".part")
+    }
+}
+
+internal fun writePrivatePendingMutationFile(
+    directory: File,
+    target: File,
+    bytes: ByteArray,
+) {
+    require(target.parentFile?.absoluteFile == directory.absoluteFile) {
+        "The pending mutation target must be inside its private directory."
+    }
+    ensurePrivatePendingMutationDirectory(directory)
+    val temporary = createPrivatePendingMutationTemporary(directory, target.name)
+    try {
+        FileOutputStream(temporary.toFile()).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+        try {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                temporary,
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        setPrivatePendingMutationFilePermissions(target)
+    } finally {
+        Files.deleteIfExists(temporary)
     }
 }
 
@@ -3469,9 +3546,16 @@ class DesktopNextcloudServices(
         val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
             ?: return@withContext null
         if (!target.exists()) return@withContext null
-        check(target.isFile && target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong()) {
+        if (pendingDynamicMutationDirectory.isDirectory) {
+            ensurePrivatePendingMutationDirectory(pendingDynamicMutationDirectory)
+        }
+        check(
+            Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong(),
+        ) {
             "The pending mutation marker is unreadable."
         }
+        setPrivatePendingMutationFilePermissions(target)
         val encoded = runCatching { target.readText() }.getOrElse { failure ->
             throw IllegalStateException("The pending mutation marker could not be read.", failure)
         }
@@ -3493,28 +3577,11 @@ class DesktopNextcloudServices(
         val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
             "The pending dynamic mutation identity is invalid."
         }
-        check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
-            "Could not create the pending mutation store."
-        }
-        val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
-        FileOutputStream(temporary).use { output ->
-            output.write(encoded.encodeToByteArray())
-            output.fd.sync()
-        }
-        try {
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
+        writePrivatePendingMutationFile(
+            directory = pendingDynamicMutationDirectory,
+            target = target,
+            bytes = encoded.encodeToByteArray(),
+        )
         Unit
     }
 

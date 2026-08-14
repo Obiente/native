@@ -1,7 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 class DesktopPendingDynamicMutationDirectoryTest {
@@ -33,5 +37,35 @@ class DesktopPendingDynamicMutationDirectoryTest {
                 userHome = home,
             ),
         )
+    }
+
+    @Test
+    fun `pending mutation payload and directory are owner only on posix stores`() {
+        val root = createTempDirectory("pending-mutation-permissions-").toFile()
+        try {
+            if (!Files.getFileStore(root.toPath()).supportsFileAttributeView("posix")) return
+            val directory = File(root, "nested/pending")
+            val target = File(directory, "marker.json")
+            val payload = "private chore payload".encodeToByteArray()
+
+            writePrivatePendingMutationFile(directory, target, payload)
+
+            assertEquals(
+                setOf(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.OWNER_EXECUTE,
+                ),
+                Files.getPosixFilePermissions(directory.toPath()),
+            )
+            assertEquals(
+                setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                Files.getPosixFilePermissions(target.toPath()),
+            )
+            assertContentEquals(payload, target.readBytes())
+            assertEquals(emptyList(), directory.listFiles().orEmpty().filter { it.name.endsWith(".part") })
+        } finally {
+            root.deleteRecursively()
+        }
     }
 }

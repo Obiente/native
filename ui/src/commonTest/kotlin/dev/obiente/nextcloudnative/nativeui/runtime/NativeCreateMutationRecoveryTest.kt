@@ -152,7 +152,7 @@ class NativeCreateMutationRecoveryTest {
     }
 
     @Test
-    fun `a staged request resumes the exact persisted payload before entering transport`() = runBlocking {
+    fun `a superseded staged request is cleared before the current payload enters transport`() = runBlocking {
         val fixture = fixture("7")
         val staged = assertNotNull(
             fixture.plan.stage(fixture.request, NativeCreateMutationPhase.Staged),
@@ -180,14 +180,17 @@ class NativeCreateMutationRecoveryTest {
                 stored = null
             }
         }
+        val retryRequest = fixture.request.copy(
+            values = fixture.request.values.mapValues { (name, value) ->
+                if (name == "chores") value.replace("Clean kitchen", "Clean bathroom") else value
+            },
+        )
         val result = executeNativeCreateMutation(
             plan = fixture.plan,
-            request = fixture.request.copy(
-                values = fixture.request.values + ("chores" to "a different retry payload"),
-            ),
+            request = retryRequest,
             actionExecutor = NativeActionExecutor { request ->
                 events += "execute"
-                assertEquals(fixture.request, request)
+                assertEquals(retryRequest, request)
                 created = true
                 NativeActionExecutionResult.Success("Created")
             },
@@ -199,6 +202,8 @@ class NativeCreateMutationRecoveryTest {
             listOf(
                 "load",
                 "reconcile",
+                "clear",
+                "save:Staged",
                 "save:TransportMayHaveObserved",
                 "execute",
                 "reconcile",
@@ -207,6 +212,111 @@ class NativeCreateMutationRecoveryTest {
             events,
         )
         assertNull(stored)
+    }
+
+    @Test
+    fun `verified chores invite reconciles against a new nested team invitation`() {
+        val evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed package route"))
+        val resource = ResourceSpec(
+            id = "team",
+            name = "Team",
+            confidence = Confidence.verified,
+            fields = listOf(
+                field("id", FieldKind.integer, readOnly = true),
+                field("name", FieldKind.string),
+                field("owner", FieldKind.string),
+                field("members", FieldKind.objectValue),
+                field("invites", FieldKind.objectValue),
+            ),
+        )
+        val read = ActionSpec(
+            id = "team.read",
+            label = "Team",
+            resourceId = resource.id,
+            binding = ApiBinding(HttpMethod.GET, "/apps/chores/api/v1.0/team", "team.read"),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            evidence = evidence,
+            effect = ActionEffect.read,
+        )
+        val invite = ActionSpec(
+            id = "team.invite",
+            label = "Invite member",
+            resourceId = resource.id,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/apps/chores/api/v1.0/team/{teamId}/invites",
+                operationId = "team.invite",
+                pathParameterNames = listOf("teamId"),
+                requiredPathParameterNames = listOf("teamId"),
+                bodyFieldNames = listOf("userId"),
+                requiredBodyFieldNames = listOf("userId"),
+            ),
+            intent = ActionIntent.create,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            evidence = evidence,
+            effect = ActionEffect.create,
+        )
+        val schema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(resource),
+            actions = listOf(read, invite),
+        )
+        fun invitation(userId: String) = NativeStructuredValue.ObjectValue(
+            entries = listOf(
+                NativeStructuredEntry(
+                    key = "userId",
+                    label = "User",
+                    value = NativeStructuredValue.Scalar(userId, NativeStructuredScalarKind.string),
+                ),
+            ),
+        )
+        fun teamRecord(vararg userIds: String) = NativeRecord(
+            id = "7",
+            values = mapOf("id" to "7", "name" to "Home"),
+            structuredValues = mapOf(
+                "invites" to NativeStructuredValue.ListValue(userIds.map(::invitation)),
+            ),
+        )
+        val formPlan = NativeRecordFormActionPlan(
+            kind = NativeRecordFormActionKind.Create,
+            action = invite,
+            fields = listOf(field("userId", FieldKind.string)),
+            initialValues = emptyMap(),
+            bindingValues = mapOf("teamId" to "7"),
+        )
+        val plan = assertNotNull(
+            nativeChoresInviteMutationRecoveryPlan(
+                schema = schema,
+                activeReadAction = read,
+                resource = resource,
+                createPlan = formPlan,
+                records = listOf(teamRecord("existing-user")),
+                navigationContext = mapOf("teamId" to "7"),
+                collectionComplete = true,
+            ),
+        )
+        val request = formPlan.request(mapOf("userId" to "new-user"))
+        val marker = assertNotNull(plan.stage(request, NativeCreateMutationPhase.TransportMayHaveObserved))
+        val pending = assertNotNull(nativeCreateMutationPostcondition(plan.pendingKey, marker))
+
+        assertEquals(NativeCreateMutationMatchKind.NestedRecord, pending.matchKind)
+        assertTrue(!pending.matches(teamRecord("existing-user")))
+        assertTrue(pending.matches(teamRecord("existing-user", "new-user")))
+        val existingRequest = formPlan.request(mapOf("userId" to "existing-user"))
+        val existingMarker = assertNotNull(
+            plan.stage(existingRequest, NativeCreateMutationPhase.TransportMayHaveObserved),
+        )
+        val existingPending = assertNotNull(
+            nativeCreateMutationPostcondition(plan.pendingKey, existingMarker),
+        )
+        assertTrue(!existingPending.matches(teamRecord("existing-user")))
     }
 
     private data class Fixture(
