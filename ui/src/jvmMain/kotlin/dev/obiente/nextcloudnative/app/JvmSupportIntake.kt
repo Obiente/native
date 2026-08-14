@@ -1344,8 +1344,17 @@ class JvmSupportIntake(
         completedDescriptorRestorePending.set(true)
         null
     } catch (_: Throwable) {
-        runCatching { deletePrivateDescriptorDurably(descriptor) }
+        deleteCompletedDescriptorOrRetry(descriptor)
         null
+    }
+
+    private fun deleteCompletedDescriptorOrRetry(descriptor: File) {
+        if (deleteCompletedDescriptorSafely(descriptor)) return
+        scope.launch { deleteCompletedDescriptorsWithRetry(listOf(descriptor)) }
+    }
+
+    private fun deleteCompletedDescriptorSafely(descriptor: File): Boolean = synchronized(persistenceLock) {
+        runCatching { deletePrivateDescriptorDurably(descriptor) }.isSuccess
     }
 
     private fun completedDescriptor(recordId: String): File {
@@ -1510,21 +1519,17 @@ class JvmSupportIntake(
                 ?.let { submittedStateFor(it.originAccountIdentity) }
                 ?: SupportDiagnosticsSubmissionState.Idle
         }
-        scope.launch { deleteCompletedDescriptorsWithRetry(expired) }
+        scope.launch {
+            deleteCompletedDescriptorsWithRetry(expired.map { submission -> completedDescriptor(submission.recordId) })
+        }
         return true
     }
 
-    private suspend fun deleteCompletedDescriptorsWithRetry(submissions: List<CompletedSubmission>) {
-        var remaining = submissions
+    private suspend fun deleteCompletedDescriptorsWithRetry(descriptors: List<File>) {
+        var remaining = descriptors
         while (remaining.isNotEmpty()) {
-            remaining = synchronized(persistenceLock) {
-                remaining.filterNot { submission ->
-                    runCatching {
-                        deletePrivateDescriptorDurably(completedDescriptor(submission.recordId))
-                    }.isSuccess
-                }
-            }
-            if (remaining.isNotEmpty()) delay(SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS)
+            remaining = remaining.filterNot(::deleteCompletedDescriptorSafely)
+            if (remaining.isNotEmpty()) delay(descriptorCleanupRetryMillis)
         }
     }
 }

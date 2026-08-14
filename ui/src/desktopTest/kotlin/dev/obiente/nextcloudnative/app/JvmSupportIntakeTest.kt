@@ -238,6 +238,24 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun retriesDurableCleanupOfRejectedCompletedReceipt() = runBlocking {
+        var directorySyncAttempts = 0
+        testFixture(
+            directorySync = {
+                directorySyncAttempts += 1
+                if (directorySyncAttempts == 1) throw IOException("Synthetic completed receipt sync failure.")
+            },
+            descriptorCleanupRetryMillis = 10L,
+            invalidCompletedBeforeInitialization = true,
+        ).use { fixture ->
+            withTimeout(5_000) {
+                while (directorySyncAttempts < 2) delay(10)
+            }
+            assertTrue(fixture.completedDescriptors().isEmpty())
+        }
+    }
+
+    @Test
     fun preservesCompletedReceiptsForEachAccountAndReport() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, supportCode = "OBI-ABCDE-23456"))
@@ -1346,6 +1364,7 @@ class JvmSupportIntakeTest {
         pendingTemporaryBeforeInitialization: Boolean = false,
         archiveTemporaryBeforeInitialization: Boolean = false,
         invalidPendingBeforeInitialization: Boolean = false,
+        invalidCompletedBeforeInitialization: Boolean = false,
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
@@ -1367,6 +1386,10 @@ class JvmSupportIntakeTest {
         if (invalidPendingBeforeInitialization) {
             require(temporaryRoot.isDirectory || temporaryRoot.mkdirs())
             File(temporaryRoot, "pending.json").writeText("not-json")
+        }
+        if (invalidCompletedBeforeInitialization) {
+            require(temporaryRoot.isDirectory || temporaryRoot.mkdirs())
+            File(temporaryRoot, "completed-${UUID.randomUUID()}.json").writeText("not-json")
         }
         val environment = SupportDiagnosticsEnvironment(
             appVersion = "0.1.0-test",
