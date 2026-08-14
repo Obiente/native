@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -24,7 +26,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.selected
@@ -42,6 +46,7 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 internal data class NativeMailWorkspaceItem(
     val resource: ResourceSpec,
@@ -468,6 +473,11 @@ internal fun NativeMailWorkspace(
     modifier: Modifier = Modifier,
     detailContent: (@Composable () -> Unit)? = null,
     contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
+    searchQuery: String = "",
+    onSearchQueryChanged: ((String) -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         when {
@@ -478,11 +488,16 @@ internal fun NativeMailWorkspace(
                     modifier = Modifier.width(252.dp).fillMaxHeight(),
                 )
                 MailPaneDivider()
-                NativeMailMessageList(
+                NativeMailSearchableMessageList(
                     items = plan.visibleMessages,
                     selectedMessage = plan.selectedMessage,
                     onSelectRecord = onSelectRecord,
                     contentState = contentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    searchQuery = searchQuery,
+                    onSearchQueryChanged = onSearchQueryChanged,
                     emptyContent = {
                         NativeMailSelectionPlaceholder(plan)
                     },
@@ -519,11 +534,16 @@ internal fun NativeMailWorkspace(
                     ) {
                         NativeMailWorkspaceStatus(contentState)
                     } else {
-                        NativeMailMessageList(
+                        NativeMailSearchableMessageList(
                             items = plan.visibleMessages,
                             selectedMessage = plan.selectedMessage,
                             onSelectRecord = onSelectRecord,
                             contentState = contentState,
+                            onLoadMore = onLoadMore,
+                            loadingMore = loadingMore,
+                            loadMoreError = loadMoreError,
+                            searchQuery = searchQuery,
+                            onSearchQueryChanged = onSearchQueryChanged,
                             emptyContent = {
                                 NativeMailSelectionPlaceholder(plan)
                             },
@@ -549,7 +569,147 @@ internal fun NativeMailWorkspace(
                     selectedMessage = plan.selectedMessage,
                     onSelectRecord = onSelectRecord,
                     contentState = contentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
                 )
+            }
+        }
+    }
+}
+
+internal fun nativeMailVisibleMessages(
+    items: List<NativeMailWorkspaceItem>,
+    query: String,
+): List<NativeMailWorkspaceItem> = if (query.isBlank()) {
+    items
+} else {
+    items.filter { item ->
+        nativeRecordMatchesCollectionQuery(
+            resource = item.resource,
+            record = item.record,
+            query = query,
+        )
+    }
+}
+
+@Composable
+private fun NativeMailSearchableMessageList(
+    items: List<NativeMailWorkspaceItem>,
+    selectedMessage: NativeMailWorkspaceItem?,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    modifier: Modifier = Modifier,
+    contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
+    emptyContent: (@Composable () -> Unit)? = null,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
+    searchQuery: String,
+    onSearchQueryChanged: ((String) -> Unit)?,
+) {
+    val visibleItems = remember(items, searchQuery) {
+        nativeMailVisibleMessages(items, searchQuery)
+    }
+    LaunchedEffect(
+        searchQuery,
+        visibleItems.size,
+        items.size,
+        onLoadMore,
+        loadingMore,
+        loadMoreError,
+    ) {
+        if (
+            searchQuery.isNotBlank() &&
+            visibleItems.isEmpty() &&
+            onLoadMore != null &&
+            !loadingMore &&
+            loadMoreError == null
+        ) {
+            onLoadMore()
+        }
+    }
+    Column(modifier = modifier) {
+        onSearchQueryChanged?.let { onQueryChanged ->
+            GenericCollectionSearchField(
+                resourceName = "Messages",
+                query = searchQuery,
+                onQueryChanged = onQueryChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = NextcloudSpacing.Medium,
+                        vertical = NextcloudSpacing.Small,
+                    ),
+            )
+        }
+        NativeMailMessageList(
+            items = visibleItems,
+            selectedMessage = selectedMessage,
+            onSelectRecord = onSelectRecord,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentState = contentState,
+            emptyContent = if (searchQuery.isBlank()) {
+                emptyContent
+            } else {
+                {
+                    NativeMailSearchEmpty(
+                        query = searchQuery,
+                        loading = loadingMore,
+                        error = loadMoreError,
+                        onRetry = onLoadMore,
+                        onClear = { onSearchQueryChanged?.invoke("") },
+                    )
+                }
+            },
+            onLoadMore = onLoadMore,
+            loadingMore = loadingMore,
+            loadMoreError = loadMoreError,
+        )
+    }
+}
+
+@Composable
+private fun NativeMailSearchEmpty(
+    query: String,
+    loading: Boolean,
+    error: String?,
+    onRetry: (() -> Unit)?,
+    onClear: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+            Text(
+                "Searching more messages...",
+                modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                if (error == null) "No matching messages" else "Could not finish searching",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                error ?: "Nothing matches \"$query\".",
+                modifier = Modifier.padding(top = NextcloudSpacing.Small),
+                color = if (error == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+            Row(
+                modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                if (error != null && onRetry != null) {
+                    Button(onClick = onRetry) { Text("Retry") }
+                }
+                Button(onClick = onClear) { Text("Clear search") }
             }
         }
     }
@@ -700,6 +860,9 @@ private fun NativeMailMessageList(
     modifier: Modifier = Modifier,
     contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
     emptyContent: (@Composable () -> Unit)? = null,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
 ) {
     if (items.isEmpty()) {
         if (contentState == NativeMailWorkspaceContentState.Ready && emptyContent != null) {
@@ -715,7 +878,17 @@ private fun NativeMailMessageList(
         }
         return
     }
+    val listState = rememberLazyListState()
+    val pagingMessages = items.all { item -> item.presentation.kind == NativeMailboxItemKind.Message }
+    NativeMailAutoPager(
+        listState = listState,
+        itemCount = items.size,
+        onLoadMore = onLoadMore.takeIf { pagingMessages },
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Medium,
@@ -834,6 +1007,80 @@ private fun NativeMailMessageList(
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        if (pagingMessages && (loadingMore || loadMoreError != null)) {
+            item(key = "mail-paging-footer") {
+                NativeMailPagingStatus(
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    onRetry = onLoadMore,
+                )
+            }
+        }
+    }
+}
+
+internal fun nativeMailShouldLoadMore(
+    lastVisibleIndex: Int,
+    totalItems: Int,
+    prefetchDistance: Int = 3,
+): Boolean = totalItems > 0 && lastVisibleIndex >= (totalItems - prefetchDistance).coerceAtLeast(0)
+
+@Composable
+private fun NativeMailAutoPager(
+    listState: LazyListState,
+    itemCount: Int,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    LaunchedEffect(listState, itemCount, onLoadMore, loadingMore, loadMoreError) {
+        if (onLoadMore == null || loadingMore || loadMoreError != null) return@LaunchedEffect
+        snapshotFlow {
+            nativeMailShouldLoadMore(
+                lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1,
+                totalItems = listState.layoutInfo.totalItemsCount,
+            )
+        }.distinctUntilChanged().collect { nearEnd ->
+            if (nearEnd) onLoadMore()
+        }
+    }
+}
+
+@Composable
+private fun NativeMailPagingStatus(
+    loadingMore: Boolean,
+    loadMoreError: String?,
+    onRetry: (() -> Unit)?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (loadingMore) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+            )
+            Text(
+                "Loading more messages...",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                loadMoreError ?: "Could not load more messages.",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            if (onRetry != null) {
+                Button(onClick = onRetry) {
+                    Text("Retry")
+                }
+            }
         }
     }
 }

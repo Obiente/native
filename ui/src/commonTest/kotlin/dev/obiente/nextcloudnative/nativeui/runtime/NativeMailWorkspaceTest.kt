@@ -12,6 +12,8 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicForm
 import dev.obiente.nextcloudnative.nativeui.model.DynamicHttpBinding
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResource
 import dev.obiente.nextcloudnative.nativeui.model.EndpointPolicy
+import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.HttpParameter
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
@@ -26,6 +28,30 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NativeMailWorkspaceTest {
+    @Test
+    fun `mail paging starts within the shared prefetch window`() {
+        assertFalse(nativeMailShouldLoadMore(lastVisibleIndex = -1, totalItems = 0))
+        assertFalse(nativeMailShouldLoadMore(lastVisibleIndex = 6, totalItems = 10))
+        assertTrue(nativeMailShouldLoadMore(lastVisibleIndex = 7, totalItems = 10))
+        assertTrue(nativeMailShouldLoadMore(lastVisibleIndex = 9, totalItems = 10))
+        assertTrue(nativeMailShouldLoadMore(lastVisibleIndex = 0, totalItems = 1))
+    }
+
+    @Test
+    fun `mail search filters message metadata without changing the source list`() {
+        val messages = listOf(
+            mailItem(id = "release", sender = "Ada", subject = "Release candidate is ready"),
+            mailItem(id = "review", sender = "Mira", subject = "Design review notes"),
+        )
+
+        assertEquals(
+            listOf("release"),
+            nativeMailVisibleMessages(messages, "Ada release").map { it.record.id },
+        )
+        assertEquals(messages, nativeMailVisibleMessages(messages, ""))
+        assertTrue(nativeMailVisibleMessages(messages, "budget").isEmpty())
+    }
+
     @Test
     fun `semantic mail datasets become account mailbox and message panes`() {
         val account = resource("accounts", "Accounts")
@@ -721,6 +747,34 @@ class NativeMailWorkspaceTest {
             accountId?.let { value -> put("accountId", value) }
         },
     )
+
+    private fun mailItem(
+        id: String,
+        sender: String,
+        subject: String,
+    ): NativeMailWorkspaceItem {
+        val resource = ResourceSpec(
+            id = "messages",
+            name = "Messages",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("from", "From", FieldKind.string, required = false, readOnly = true),
+                FieldSpec("subject", "Subject", FieldKind.string, required = false, readOnly = true),
+            ),
+        )
+        val record = NativeRecord(
+            id = id,
+            values = mapOf(
+                "from" to sender,
+                "subject" to subject,
+            ),
+        )
+        return NativeMailWorkspaceItem(
+            resource = resource,
+            record = record,
+            presentation = nativeMailboxPresentation(resource, record),
+        )
+    }
 
     private fun resource(id: String, name: String): ResourceSpec = ResourceSpec(
         id = id,

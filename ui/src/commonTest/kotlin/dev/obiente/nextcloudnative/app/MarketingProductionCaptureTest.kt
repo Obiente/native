@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
+import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.runtime.formatNativeField
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeDatasetInsights
 import dev.obiente.nextcloudnative.nativeui.runtime.shouldUseCompactTableRecordList
@@ -11,6 +12,20 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class MarketingProductionCaptureTest {
+    @Test
+    fun `mail visual QA uses upstream routes with synthetic records`() {
+        val schemaRoutes = marketingMailSchema.actions.associate { action -> action.id to action.binding.path }
+        val compose = assertNotNull(
+            marketingMailDescriptor.actions.singleOrNull { action -> action.id == "route.drafts.create" },
+        )
+
+        assertEquals("/apps/mail/api/messages", schemaRoutes["route.messages.index"])
+        assertEquals("/apps/mail/api/messages/{id}/body", schemaRoutes["route.messages.getbody"])
+        assertEquals("/apps/mail/api/drafts", compose.binding.path)
+        assertEquals(HttpMethod.POST, compose.binding.method)
+        assertEquals("5.10.12", marketingMailSchema.app.version)
+    }
+
     @Test
     fun `homepage captures cover every story in matched dark and light themes`() {
         val homepageCaptures = marketingCaptureVariants.filter { it.scenario.feature == "Homepage" }

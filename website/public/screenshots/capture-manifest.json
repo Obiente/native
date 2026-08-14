@@ -335,7 +335,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingBudgetCaptureScenario.kt": "e28c89ee88d466abab6a8412d87d0ae2c0c5812a2b7b4104851f8d0ae0f640fc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "1c903f197dabca8b18f35366543e67e4cc0989c5b2c5aed41f67bebb9fc7d482",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "89c6b4d82e4ffb2a9b2ed69af78624da29f5480278177a1dae32a47cd91c9be2",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "b404c703c1285b682e770c663b494324939b00c97acef7171233841e863546e9",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "5c98c07c65751c9648d43cdd61b0f788e0b72eba2b9f3a442750bccdcad5f4cc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
@@ -448,7 +448,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/SemanticConceptTokens.kt": "14bf3d4fcdf65ebc1c6cd8071ccacde698b68415adb3132a27a51b9c56bf89b8",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/preview/NativeRuntimePreviewApp.kt": "5c578985b0651f665c29900a68d8582c852f8ab2862dc9d533604e16653c7a0f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/AdaptiveNativeScreen.kt": "7be3f023a4e75e097b26d57232b48b917bd279b717bd18eb68ae29a9afc1400d",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt": "ee3721da27c27d431e382ed7afa4f082d5e1842793e3f55a9b5f65620116adb1",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt": "5aa683f40f338320bfc1cc29328794040f26d76ed1ef1e91ded0c45d8da3f651",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt": "438851e5fe777fe6a72cf9af959f68a58e50c1acdd08a2becb21e735abb7cee4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericRecipeSurface.kt": "4361de556a4ac05c50b8ca5999548ad750c6774927917e2aea9453ce0aa9550b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeAudioLibrary.kt": "9beb05d3fd9321ebd0d6e4da79aac29975489cbc11d812ed7a6e30001c4756ac",
@@ -466,7 +466,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeFormMutationRecovery.kt": "f4fe6434bf09d8d83b3229808cda4fec69f00b197ba4cb937d1327f74ed594e2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailActions.kt": "71ef21d87d2fca4bc9ef906186438ab53ceb5d407bcffaa02d554958dc087e74",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailMarkup.kt": "607a51b042821788d611065a8c96c1372e0d0cf462b6b5b2cbc3ab45bc1a4062",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailWorkspace.kt": "d157bd86c3426a0dadcc6d7c17bab36dac855713e64bb52b589e4459d946552d",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMailWorkspace.kt": "70bdc999e293d27739506e1d355e9f196df66f657353204ffadc8df43436c605",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeMusicWorkspace.kt": "c35a49d9ca4403e480246e6deb25d265e6e43dd6bf6480c3f01b2ebc956f366e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipePresentations.kt": "0489fa512e5f63500a636b4fa5b151bcbf804ce114f32dc72e0733a5b91ad7da",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeRecipeScaling.kt": "97cc41b9c332897e0607867ef1244485917255acb842766ca9249569ef0dc6e6",
@@ -2219,7 +2219,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 54,
-            "sha256": "1fb0f45d3c5fe9bb2582a95d14567115f845422d063834bafc6eefcd9f09482d"
+            "sha256": "36ace45a7fe667eaa99961d707b49f11955ef79088a3619a67c87b5cbb14eb63"
         },
         {
             "scenario": "mail-workspace-desktop-light",
@@ -2236,7 +2236,7 @@
             "platform": "desktop",
             "viewport": "wide",
             "issue": 54,
-            "sha256": "ac34ad8dd131ad767b7df9d2c13b1697c6ffe64e83e492976b7f44f7b10af9f3"
+            "sha256": "53e990af8a4928ce6c4adc144dbc81b627c67fc36c0bc8b46fd02ad828444d8b"
         },
         {
             "scenario": "mail-workspace-mobile",
@@ -2253,7 +2253,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "54f1cdf144ee63a74395fe738a0e978ee8fec41ba8d0c2d6bac93c719dbec328"
+            "sha256": "7a5f55c6a162bcd755b8507805680f6ee1a52d19171aab04107367f46200222c"
         },
         {
             "scenario": "mail-workspace-mobile-light",
@@ -2270,7 +2270,7 @@
             "platform": "mobile",
             "viewport": "phone-portrait",
             "issue": 54,
-            "sha256": "cd19e7be5f24daea3818441587787972aa0ef64c6182aa8f442f27eb4e735fc1"
+            "sha256": "ef927c59d3693486c78afaeac216739c679551e8c156de7fc1346e30d579520b"
         },
         {
             "scenario": "mail-workspace-loading-mobile",

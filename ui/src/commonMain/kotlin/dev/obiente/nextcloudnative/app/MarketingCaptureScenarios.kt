@@ -2481,19 +2481,21 @@ internal val marketingAdaptiveRecords = listOf(
 )
 
 private val marketingMailComposeAction = DynamicAction(
-    id = "compose-message",
+    id = "route.drafts.create",
     label = "Compose",
-    resourceId = "messages",
+    resourceId = "drafts",
     intent = ActionIntent.create,
     risk = ActionRisk.mutating,
     requiresConfirmation = false,
-    binding = DynamicHttpBinding(method = HttpMethod.POST, path = "/fixture/messages"),
+    // Exact Nextcloud Mail v5.10.x route. Capture data remains synthetic, but the visual QA
+    // exercises the same contract identities used by signed-package discovery.
+    binding = DynamicHttpBinding(method = HttpMethod.POST, path = "/apps/mail/api/drafts"),
     confidence = Confidence.verified,
 )
 
-private val marketingMailSchema = NativeAppSchema(
+internal val marketingMailSchema = NativeAppSchema(
     schemaVersion = "0.1",
-    app = AppIdentity("fixture-mail", "Mail", "fixture"),
+    app = AppIdentity("fixture-mail", "Mail", "5.10.12"),
     confidence = Confidence.verified,
     resources = listOf(
         ResourceSpec(
@@ -2538,6 +2540,18 @@ private val marketingMailSchema = NativeAppSchema(
                 FieldSpec("hasHtmlBody", "HTML", FieldKind.boolean, required = false, readOnly = true),
             ),
         ),
+        ResourceSpec(
+            id = "drafts",
+            name = "Drafts",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("accountId", "From", FieldKind.integer, required = true, readOnly = false),
+                FieldSpec("subject", "Subject", FieldKind.string, required = true, readOnly = false),
+                FieldSpec("bodyPlain", "Message", FieldKind.longText, required = false, readOnly = false),
+                FieldSpec("editorBody", "Message", FieldKind.longText, required = false, readOnly = false),
+                FieldSpec("isHtml", "Rich text", FieldKind.boolean, required = true, readOnly = false),
+            ),
+        ),
     ),
     views = listOf(
         ViewSpec(
@@ -2545,7 +2559,7 @@ private val marketingMailSchema = NativeAppSchema(
             title = "Inbox",
             resourceId = "messages",
             component = NativeComponent.mailbox,
-            sourceActionId = "fixture.messages.list",
+            sourceActionId = "route.messages.index",
             confidence = Confidence.verified,
         ),
         ViewSpec(
@@ -2553,11 +2567,43 @@ private val marketingMailSchema = NativeAppSchema(
             title = "Message",
             resourceId = "messageBody",
             component = NativeComponent.detail,
-            sourceActionId = "fixture.message.body",
+            sourceActionId = "route.messages.getbody",
             confidence = Confidence.verified,
         ),
     ),
     actions = listOf(
+        ActionSpec(
+            id = "route.messages.index",
+            label = "Messages",
+            resourceId = "messages",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/messages",
+                operationId = "route.messages.index",
+                queryParameterNames = listOf("mailboxId", "cursor", "filter", "limit", "view", "v"),
+                requiredQueryParameterNames = listOf("mailboxId"),
+            ),
+            intent = ActionIntent.list,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
+            id = "route.messages.getbody",
+            label = "Message body",
+            resourceId = "messageBody",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/messages/{id}/body",
+                operationId = "route.messages.getbody",
+                pathParameterNames = listOf("id"),
+                requiredPathParameterNames = listOf("id"),
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
         ActionSpec(
             id = marketingMailComposeAction.id,
             label = marketingMailComposeAction.label,
@@ -2575,9 +2621,9 @@ private val marketingMailSchema = NativeAppSchema(
     ),
 )
 
-private val marketingMailDescriptor = DynamicAppDescriptor(
+internal val marketingMailDescriptor = DynamicAppDescriptor(
     descriptorVersion = "0.1",
-    app = AppIdentity("fixture-mail", "Mail", "fixture"),
+    app = AppIdentity("fixture-mail", "Mail", "5.10.12"),
     endpointPolicy = EndpointPolicy(serverOrigin = "https://fixture.invalid"),
     resources = emptyList(),
     actions = listOf(marketingMailComposeAction),
