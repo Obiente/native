@@ -116,6 +116,39 @@ class NativeMailWorkspaceTest {
     }
 
     @Test
+    fun `complementary mailbox summary resources merge without accepting conflicts`() {
+        val totalStats = ResourceSpec("mailboxStats", "Mailbox stats", confidence = Confidence.verified)
+        val unreadStatus = ResourceSpec("mailboxStatus", "Mailbox status", confidence = Confidence.verified)
+        val schema = schema(totalStats, unreadStatus)
+
+        val complementary = NativeDatasetContext(
+            relatedRecords = mapOf(
+                totalStats.id to listOf(NativeRecord("total", values = mapOf("total" to "84"))),
+                unreadStatus.id to listOf(NativeRecord("unread", values = mapOf("unread" to "7"))),
+            ),
+        )
+        assertEquals(
+            NativeMailCollectionSummary(total = 84, unread = 7),
+            complementary.nativeMailCollectionSummary(schema),
+        )
+
+        val conflictingTotal = complementary.copy(
+            relatedRecords = complementary.relatedRecords + (
+                "mailboxStatistics" to listOf(NativeRecord("other-total", values = mapOf("total" to "85")))
+                ),
+        )
+        val schemaWithConflict = schema(
+            totalStats,
+            unreadStatus,
+            ResourceSpec("mailboxStatistics", "Mailbox statistics", confidence = Confidence.verified),
+        )
+        assertEquals(
+            NativeMailCollectionSummary(total = null, unread = 7),
+            conflictingTotal.nativeMailCollectionSummary(schemaWithConflict),
+        )
+    }
+
+    @Test
     fun `message body keeps its proven mailbox selected and enriched`() {
         val mailboxes = ResourceSpec(
             id = "mailboxes",

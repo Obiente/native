@@ -313,6 +313,38 @@ class DynamicFormRelationsTest {
     }
 
     @Test
+    fun `relation pagination continues after a zero based first page`() {
+        val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
+        val schema = schema(
+            form = form,
+            relationship = ResourceRelationshipSpec(
+                "categories",
+                "entries",
+                "id",
+                "categoryId",
+                Confidence.verified,
+            ),
+            reads = listOf(action("category-index", "categories", "/api/categories", emptyList())),
+        )
+        val request = dynamicFormRelationLoadRequests(schema, form, emptyMap()).single()
+        val pagination = DynamicPaginationSpec(
+            parameterName = "page",
+            mode = DynamicPaginationMode.PageNumber,
+            expectedPageSize = 50,
+            initialPageNumber = 0,
+        )
+
+        val firstPage = DynamicFormRelationCacheState().loadSucceeded(
+            request = request,
+            records = records(1..50),
+            pagination = pagination,
+        )
+
+        assertEquals(1, firstPage.continuation(request)?.nextPageNumber)
+        assertEquals("1", firstPage.continuation(request)?.nextRequestValue)
+    }
+
+    @Test
     fun `relation pagination remains reachable beyond the bounded cache window`() {
         val form = view("entries.create", "entries", NativeComponent.form, "entry-create")
         val schema = schema(

@@ -702,6 +702,7 @@ suspend fun loadDynamicRecords(
     return executeDynamicReadWithFallback(
         descriptor = descriptor,
         actionId = actionId,
+        boundValues = runtimeContext + values,
         execute = { candidate ->
             val candidateValues = remapReadFallbackValues(action, candidate, values)
             val request = buildDynamicApiRequest(
@@ -829,6 +830,7 @@ private fun DynamicHttpBinding.requiredReadParameters(): List<HttpParameter> =
 internal suspend fun executeDynamicReadWithFallback(
     descriptor: DynamicAppDescriptor,
     actionId: String,
+    boundValues: Map<String, String> = emptyMap(),
     execute: suspend (DynamicAction) -> NextcloudApiResponse,
 ): List<NativeRecord> {
     val actionsById = descriptor.actions.associateBy(DynamicAction::id)
@@ -838,8 +840,14 @@ internal suspend fun executeDynamicReadWithFallback(
     }
     val linkedFallbacks = preferred.fallbackActionIds.mapNotNull(actionsById::get)
     val resolvedPagination = descriptor.resolvedDynamicPaginationSpec(preferred.id)
-    val pagedFallbacks = if (preferred.dynamicPaginationSpec() == null && resolvedPagination != null) {
-        linkedFallbacks.filter { candidate -> candidate.dynamicPaginationSpec() == resolvedPagination }
+    val pagedFallbacks = if (
+        descriptor.dynamicPaginationSpec(preferred) == null &&
+        resolvedPagination != null
+    ) {
+        linkedFallbacks.filter { candidate ->
+            descriptor.dynamicPaginationSpec(candidate) == resolvedPagination &&
+                candidatePreservesBoundReadParameters(preferred, candidate, boundValues)
+        }
     } else {
         emptyList()
     }
@@ -881,6 +889,40 @@ internal suspend fun executeDynamicReadWithFallback(
     }
     successfulEmptyResult?.let { return it }
     throw bestFailure ?: error("No usable declared read action was available.")
+}
+
+/**
+ * A verified fallback relationship proves equivalent acquisition for the required parent scope,
+ * but it does not prove that an optional filter has the same meaning or can be discarded. Keep a
+ * paged fallback behind the preferred route unless every currently bound preferred parameter is
+ * accepted by name or is covered by the narrow required-identity remapping above.
+ */
+private fun candidatePreservesBoundReadParameters(
+    preferred: DynamicAction,
+    candidate: DynamicAction,
+    boundValues: Map<String, String>,
+): Boolean {
+    val preferredParameters = preferred.binding.pathParameters + preferred.binding.queryParameters
+    val candidateParameters = candidate.binding.pathParameters + candidate.binding.queryParameters
+    val remappedValues = remapReadFallbackValues(preferred, candidate, boundValues)
+    return preferredParameters.all { parameter ->
+        val boundValue = boundValues.entries
+            .firstOrNull { (name, value) -> name.equals(parameter.name, ignoreCase = true) && value.isNotBlank() }
+            ?.value
+            ?: return@all true
+        candidateParameters.any { candidateParameter ->
+            candidateParameter.name.equals(parameter.name, ignoreCase = true) &&
+                remappedValues.entries.any { (name, value) ->
+                    name.equals(candidateParameter.name, ignoreCase = true) && value == boundValue
+                }
+        } || (
+            parameter.required && candidate.binding.requiredReadParameters().any { candidateParameter ->
+                remappedValues.entries.any { (name, value) ->
+                    name.equals(candidateParameter.name, ignoreCase = true) && value == boundValue
+                }
+            }
+            )
+    }
 }
 
 internal fun parseDynamicRecords(
@@ -1352,6 +1394,7 @@ internal data class DynamicPaginationSpec(
     val mode: DynamicPaginationMode,
     val expectedPageSize: Int?,
     val recordCursorFieldNames: List<String> = emptyList(),
+    val initialPageNumber: Int = 1,
 ) {
     fun nextValue(
         nextPageNumber: Int,
@@ -1392,20 +1435,22 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
         parameter.name.normalizedDynamicParameterName() in PAGE_NUMBER_PARAMETER_NAMES
     } ?: optionalIntegerParameters.firstOrNull { parameter ->
         parameter.name.normalizedDynamicParameterName() in OFFSET_PARAMETER_NAMES
-    } ?: optionalIntegerParameters.firstOrNull { parameter ->
-        parameter.name.normalizedDynamicParameterName() in RECORD_CURSOR_PARAMETER_NAMES
     } ?: return null
     val mode = when (pagingParameter.name.normalizedDynamicParameterName()) {
         in OFFSET_PARAMETER_NAMES -> DynamicPaginationMode.Offset
-        in RECORD_CURSOR_PARAMETER_NAMES -> DynamicPaginationMode.RecordCursor
         else -> DynamicPaginationMode.PageNumber
     }
-    val cursorFields = if (mode == DynamicPaginationMode.RecordCursor) {
-        DATE_RECORD_CURSOR_FIELD_NAMES
+    val initialPageNumber = if (mode == DynamicPaginationMode.PageNumber) {
+        pagingParameter.declaredInitialPageNumber() ?: return null
     } else {
-        emptyList()
+        1
     }
-    return DynamicPaginationSpec(pagingParameter.name, mode, pageSize, cursorFields)
+    return DynamicPaginationSpec(
+        parameterName = pagingParameter.name,
+        mode = mode,
+        expectedPageSize = pageSize,
+        initialPageNumber = initialPageNumber,
+    )
 }
 
 /**
@@ -1416,13 +1461,85 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
  */
 internal fun DynamicAppDescriptor.resolvedDynamicPaginationSpec(actionId: String): DynamicPaginationSpec? {
     val action = actions.singleOrNull { candidate -> candidate.id == actionId } ?: return null
-    action.dynamicPaginationSpec()?.let { return it }
+    dynamicPaginationSpec(action)?.let { return it }
     return action.fallbackActionIds
         .mapNotNull { fallbackId -> actions.singleOrNull { candidate -> candidate.id == fallbackId } }
         .filter(DynamicAction::fallbackOnly)
-        .mapNotNull(DynamicAction::dynamicPaginationSpec)
+        .mapNotNull(::dynamicPaginationSpec)
         .distinct()
         .singleOrNull()
+}
+
+private fun DynamicAppDescriptor.dynamicPaginationSpec(action: DynamicAction): DynamicPaginationSpec? =
+    action.dynamicPaginationSpec() ?: action.verifiedRecordCursorPaginationSpec(app.id)
+
+/**
+ * Cursor continuation needs an explicit response-field binding; a parameter name alone cannot
+ * establish that relationship. A narrow app adapter may bind a field only when the signed package
+ * also declares that field, until the descriptor format can carry the relationship directly.
+ */
+private fun DynamicAction.verifiedRecordCursorPaginationSpec(appId: String): DynamicPaginationSpec? {
+    if (
+        appId != "mail" ||
+        binding.method != HttpMethod.GET ||
+        intent != dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list ||
+        provenance.none { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
+    ) {
+        return null
+    }
+    val cursorParameter = binding.queryParameters.singleOrNull { parameter ->
+        !parameter.required &&
+            parameter.isIntegerNumberParameter() &&
+            parameter.name.normalizedDynamicParameterName() == "cursor"
+    } ?: return null
+    val cursorField = responseFieldIds.singleOrNull { fieldId ->
+        fieldId.normalizedDynamicParameterName() == "dateint"
+    } ?: return null
+    val pageSize = binding.queryParameters.firstOrNull { parameter ->
+        parameter.name.normalizedDynamicParameterName() in INITIAL_PAGE_SIZE_PARAMETER_NAMES
+    }?.automaticCollectionPageSize()
+    return DynamicPaginationSpec(
+        parameterName = cursorParameter.name,
+        mode = DynamicPaginationMode.RecordCursor,
+        expectedPageSize = pageSize,
+        recordCursorFieldNames = listOf(cursorField),
+    )
+}
+
+private fun HttpParameter.declaredInitialPageNumber(): Int? {
+    val objectSchema = schema as? JsonObject ?: return null
+    fun exactInteger(name: String): Int? {
+        val element = objectSchema[name] ?: return null
+        if (element == JsonNull) return null
+        val number = (element as? JsonPrimitive)
+            ?.takeUnless(JsonPrimitive::isString)
+            ?.doubleOrNull
+            ?.takeIf(Double::isFinite)
+            ?: return null
+        if (number % 1.0 != 0.0 || number < Int.MIN_VALUE || number > Int.MAX_VALUE) return null
+        return number.toInt()
+    }
+
+    if (
+        listOf("minimum", "maximum").any { name ->
+            name in objectSchema && (objectSchema[name] == JsonNull || exactInteger(name) == null)
+        } ||
+        (
+            "default" in objectSchema &&
+                objectSchema["default"] != JsonNull &&
+                exactInteger("default") == null
+            )
+    ) {
+        return null
+    }
+    val declaredDefault = exactInteger("default")
+    val declaredMinimum = exactInteger("minimum")
+    val start = declaredDefault ?: declaredMinimum ?: 1
+    val declaredMaximum = exactInteger("maximum")
+    if (start < 0) return null
+    if (declaredMinimum != null && start < declaredMinimum) return null
+    if (declaredMaximum != null && start > declaredMaximum) return null
+    return start
 }
 
 private fun HttpParameter.isIntegerNumberParameter(): Boolean {
@@ -1521,8 +1638,6 @@ private const val MAX_AUTOMATIC_COLLECTION_PAGE_SIZE = 500
 private val INITIAL_PAGE_SIZE_PARAMETER_NAMES = setOf("limit", "pagesize", "perpage", "maxresults")
 private val PAGE_NUMBER_PARAMETER_NAMES = setOf("page", "pagenumber", "pageno")
 private val OFFSET_PARAMETER_NAMES = setOf("offset")
-private val RECORD_CURSOR_PARAMETER_NAMES = setOf("cursor")
-private val DATE_RECORD_CURSOR_FIELD_NAMES = listOf("dateInt")
 
 private fun String.runtimeResourceIdentity(): String {
     val normalized = lowercase().filter(Char::isLetterOrDigit)

@@ -309,11 +309,17 @@ internal fun nativeMailWorkspacePlan(
 
 internal fun NativeDatasetContext.nativeMailCollectionSummary(
     schema: NativeAppSchema,
-): NativeMailCollectionSummary? = relatedRecords.mapNotNull { (resourceId, records) ->
-    val resource = schema.resource(resourceId) ?: return@mapNotNull null
-    if (!resource.isNativeMailCollectionSummaryResource()) return@mapNotNull null
-    records.singleOrNull()?.nativeMailCollectionSummary()
-}.distinct().singleOrNull()
+): NativeMailCollectionSummary? {
+    val summaries = relatedRecords.mapNotNull { (resourceId, records) ->
+        val resource = schema.resource(resourceId) ?: return@mapNotNull null
+        if (!resource.isNativeMailCollectionSummaryResource()) return@mapNotNull null
+        records.singleOrNull()?.nativeMailCollectionSummary()
+    }
+    val total = summaries.mapNotNull(NativeMailCollectionSummary::total).distinct().singleOrNull()
+    val unread = summaries.mapNotNull(NativeMailCollectionSummary::unread).distinct().singleOrNull()
+    return NativeMailCollectionSummary(total = total, unread = unread)
+        .takeIf { summary -> summary.total != null || summary.unread != null }
+}
 
 private fun ResourceSpec.isNativeMailCollectionSummaryResource(): Boolean =
     listOf(id, name).flatMap(String::mailSemanticWords).any { word ->

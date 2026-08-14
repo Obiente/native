@@ -766,7 +766,41 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
-    fun `offset pagination uses loaded count and cursor needs a declared record value`() {
+    fun `page number pagination honors a zero based contract default`() {
+        val action = readAction().copy(
+            binding = readAction().binding.copy(
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "page",
+                        required = false,
+                        schema = json.parseToJsonElement(
+                            """{"type":"integer","default":0,"minimum":0}""",
+                        ),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+        )
+
+        val pagination = requireNotNull(action.dynamicPaginationSpec())
+
+        assertEquals(0, pagination.initialPageNumber)
+        assertEquals("1", pagination.nextValue(pagination.initialPageNumber + 1, loadedRecordCount = 50))
+        assertNull(
+            action.copy(
+                binding = action.binding.copy(
+                    queryParameters = listOf(
+                        action.binding.queryParameters.single().copy(
+                            schema = json.parseToJsonElement("""{"type":"integer","minimum":null}"""),
+                        ),
+                    ),
+                ),
+            ).dynamicPaginationSpec(),
+        )
+    }
+
+    @Test
+    fun `offset pagination uses loaded count and generic cursor contracts stay unpaged`() {
         fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
             name = name,
             required = required,
@@ -781,20 +815,10 @@ class DynamicNativeRuntimeTest {
         assertEquals(DynamicPaginationMode.Offset, offset.mode)
         assertEquals("75", offset.nextValue(nextPageNumber = 3, loadedRecordCount = 75))
         assertTrue(offset.canContinue(lastPageSize = 20))
-        val cursor = requireNotNull(
+        assertNull(
             readAction().copy(
                 binding = readAction().binding.copy(queryParameters = listOf(integerParameter("cursor"))),
             ).dynamicPaginationSpec(),
-        )
-        assertEquals(DynamicPaginationMode.RecordCursor, cursor.mode)
-        assertNull(cursor.nextValue(2, 50, listOf(NativeRecord("1", mapOf("id" to "1")))))
-        assertEquals(
-            "1721734567",
-            cursor.nextValue(
-                2,
-                50,
-                listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
-            ),
         )
         assertNull(
             readAction().copy(
@@ -805,6 +829,44 @@ class DynamicNativeRuntimeTest {
             readAction().copy(intent = ActionIntent.update).copy(
                 binding = readAction().binding.copy(queryParameters = listOf(integerParameter("page"))),
             ).dynamicPaginationSpec(),
+        )
+    }
+
+    @Test
+    fun `verified Mail cursor adapter requires its declared response field`() {
+        fun cursorAction(responseFieldIds: List<String>) = readAction().copy(
+            responseFieldIds = responseFieldIds,
+            binding = readAction().binding.copy(
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "cursor",
+                        required = false,
+                        schema = json.parseToJsonElement("""{"type":"integer"}"""),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "mail package", "Signed Mail contract"),
+            ),
+        )
+        fun mailDescriptor(action: DynamicAction) = descriptor(action).copy(
+            app = AppIdentity("mail", "Mail", "5.10.9"),
+        )
+
+        assertNull(mailDescriptor(cursorAction(listOf("databaseId"))).resolvedDynamicPaginationSpec("items.list"))
+        val pagination = requireNotNull(
+            mailDescriptor(cursorAction(listOf("databaseId", "dateInt")))
+                .resolvedDynamicPaginationSpec("items.list"),
+        )
+        assertEquals(DynamicPaginationMode.RecordCursor, pagination.mode)
+        assertEquals(
+            "1721734567",
+            pagination.nextValue(
+                2,
+                50,
+                listOf(NativeRecord("1", emptyMap(), displayValues = mapOf("dateInt" to "1721734567"))),
+            ),
         )
     }
 
@@ -2417,6 +2479,10 @@ class DynamicNativeRuntimeTest {
                 ),
             ),
             fallbackOnly = true,
+            responseFieldIds = listOf("databaseId", "dateInt", "subject"),
+            provenance = listOf(
+                Provenance(ProvenanceKind.verifiedAppPackage, "mail package", "Signed Mail contract"),
+            ),
         )
         val preferred = readAction().copy(
             id = "messages.list",
@@ -2426,7 +2492,26 @@ class DynamicNativeRuntimeTest {
             ),
             fallbackActionIds = listOf(fallback.id),
         )
-        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val descriptor = descriptor(preferred).copy(
+            app = AppIdentity("mail", "Mail", "5.10.9"),
+            actions = listOf(preferred, fallback),
+            resources = descriptor(preferred).resources.map { resource ->
+                resource.copy(
+                    fields = fallback.responseFieldIds.map { fieldId ->
+                        DynamicField(
+                            id = fieldId,
+                            label = fieldId,
+                            kind = FieldKind.string,
+                            required = false,
+                            readOnly = true,
+                            nullable = true,
+                            multiple = false,
+                            confidence = Confidence.high,
+                        )
+                    },
+                )
+            },
+        )
         val attempts = mutableListOf<String>()
 
         val records = executeDynamicReadWithFallback(descriptor, preferred.id) { candidate ->
@@ -2449,6 +2534,56 @@ class DynamicNativeRuntimeTest {
         val pagination = requireNotNull(descriptor.resolvedDynamicPaginationSpec(preferred.id))
         assertEquals(DynamicPaginationMode.RecordCursor, pagination.mode)
         assertEquals(50, pagination.expectedPageSize)
+    }
+
+    @Test
+    fun `bound optional filter keeps the preferred read ahead of a paged fallback`() = runBlocking {
+        fun integerParameter(name: String, required: Boolean = false) = HttpParameter(
+            name = name,
+            required = required,
+            schema = json.parseToJsonElement("""{"type":"integer"}"""),
+            source = ParameterSource.userInput,
+        )
+        val fallback = readAction().copy(
+            id = "messages.list.paged",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/messages",
+                queryParameters = listOf(integerParameter("mailboxId", required = true), integerParameter("page")),
+            ),
+            fallbackOnly = true,
+        )
+        val preferred = readAction().copy(
+            id = "messages.list",
+            binding = readAction().binding.copy(
+                path = "/ocs/v2.php/apps/example/api/mailboxes/{id}/messages",
+                pathParameters = listOf(integerParameter("id", required = true)),
+                queryParameters = listOf(
+                    HttpParameter(
+                        name = "filter",
+                        required = false,
+                        schema = json.parseToJsonElement("""{"type":"string"}"""),
+                        source = ParameterSource.userInput,
+                    ),
+                ),
+            ),
+            fallbackActionIds = listOf(fallback.id),
+        )
+        val descriptor = descriptor(preferred).copy(actions = listOf(preferred, fallback))
+        val attempts = mutableListOf<String>()
+
+        val records = executeDynamicReadWithFallback(
+            descriptor = descriptor,
+            actionId = preferred.id,
+            boundValues = mapOf("id" to "9", "filter" to "unread"),
+        ) { candidate ->
+            attempts += candidate.id
+            response(
+                """{"ocs":{"meta":{"status":"ok","statuscode":100},"data":[{"id":"filtered"}]}}""",
+            )
+        }
+
+        assertEquals(listOf(preferred.id), attempts)
+        assertEquals("filtered", records.single().id)
     }
 
     @Test

@@ -751,11 +751,12 @@ private fun DynamicPaginationSpec.nextDynamicFormRelationContinuation(
     lastPage: List<NativeRecord>,
     loadedRecordCount: Int,
     novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int = 2,
+    nextPageNumber: Int? = null,
 ): DynamicFormRelationContinuation? {
     if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicFormRelationContinuation(this, nextPageNumber, nextValue, loadedRecordCount)
+    val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
+    val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
+    return DynamicFormRelationContinuation(this, continuationPageNumber, nextValue, loadedRecordCount)
 }
 
 private suspend fun loadInitialDynamicFormRelationRecords(
@@ -5946,11 +5947,12 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
     lastPage: List<NativeRecord>,
     loadedRecordCount: Int = lastPage.size,
     novelRecordCount: Int = lastPage.size,
-    nextPageNumber: Int = 2,
+    nextPageNumber: Int? = null,
 ): DynamicPaginationState? {
     if (!canContinue(lastPage.size, novelRecordCount)) return null
-    val nextValue = nextValue(nextPageNumber, loadedRecordCount, lastPage) ?: return null
-    return DynamicPaginationState(viewId, this, nextPageNumber, nextValue)
+    val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
+    val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
+    return DynamicPaginationState(viewId, this, continuationPageNumber, nextValue)
 }
 
 private fun String.dynamicUiLabel(appName: String): String {
