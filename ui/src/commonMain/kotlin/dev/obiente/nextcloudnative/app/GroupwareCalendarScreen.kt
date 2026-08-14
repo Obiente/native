@@ -597,6 +597,11 @@ fun NativeGroupwareCalendarScreen(
             onDismiss = { creating = false },
             error = mutationError,
             navigationRequest = navigationRequest,
+            recoveryAvailable = mutationRecoveryState != null,
+            onOpenRecovery = {
+                creating = false
+                showRecoveryOptions = true
+            },
             onNavigationConfirmed = onNavigationConfirmed,
             onNavigationDiscardConfirmed = { request ->
                 creating = false
@@ -678,6 +683,12 @@ fun NativeGroupwareCalendarScreen(
                 },
                 error = mutationError,
                 navigationRequest = navigationRequest,
+                recoveryAvailable = mutationRecoveryState != null,
+                onOpenRecovery = {
+                    activeEventInstanceId = null
+                    eventEditorActive = false
+                    showRecoveryOptions = true
+                },
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationDiscardConfirmed = { request ->
                     activeEventInstanceId = null
@@ -1384,7 +1395,6 @@ internal sealed interface CalendarMutationPostcondition {
             } ?: return false
             return event.href == href &&
                 event.uid == expectedUid &&
-                (previousEtag == null || event.etag != null && event.etag != previousEtag) &&
                 event.title == expected.title &&
                 event.allDay == expected.allDay &&
                 event.location.orEmpty() == expected.location &&
@@ -1443,6 +1453,14 @@ internal fun calendarEventDraftIsDirty(
     initialCalendarHref: String?,
     currentCalendarHref: String?,
 ): Boolean = initial != current || initialCalendarHref != currentCalendarHref
+
+internal fun calendarEventDraftHasDavChanges(
+    initial: EventDraft,
+    current: EventDraft,
+    initialCalendarHref: String?,
+    currentCalendarHref: String?,
+): Boolean = initial.normalizedForDav() != current.normalizedForDav() ||
+    initialCalendarHref != currentCalendarHref
 
 private enum class EventRecurrencePreset(
     val label: String,
@@ -1539,6 +1557,8 @@ private fun EventEditorDialog(
     calendars: List<GroupwareCalendar>,
     onDismiss: () -> Unit,
     error: String?,
+    recoveryAvailable: Boolean = false,
+    onOpenRecovery: () -> Unit = {},
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationDiscardConfirmed: (NextcloudPendingNavigationRequest) -> Unit = onNavigationConfirmed,
@@ -1615,6 +1635,12 @@ private fun EventEditorDialog(
         current = currentDraft,
         initialCalendarHref = initialCalendarHref,
         currentCalendarHref = calendar?.href,
+    )
+    val hasDavChanges = calendarEventDraftHasDavChanges(
+        initialDraft,
+        currentDraft,
+        initialCalendarHref,
+        calendar?.href,
     )
     var confirmNavigationDiscard by remember(event) { mutableStateOf(false) }
     LaunchedEffect(navigationRequest?.identity, dirty, mutationInProgress) {
@@ -1744,7 +1770,7 @@ private fun EventEditorDialog(
         },
         confirmButton = {
             Button(
-                enabled = valid && calendar != null && !mutationInProgress,
+                enabled = valid && calendar != null && hasDavChanges && !mutationInProgress,
                 onClick = {
                     onSave(
                         currentDraft,
@@ -1754,7 +1780,11 @@ private fun EventEditorDialog(
             ) { Text("Save") }
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
+            if (recoveryAvailable) {
+                OutlinedButton(onClick = onOpenRecovery) { Text("Recovery options") }
+            } else {
+                OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
+            }
         },
     )
 

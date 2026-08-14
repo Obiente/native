@@ -456,6 +456,11 @@ fun NativeGroupwareContactsScreen(
             error = mutationError,
             onDismiss = { creating = false; mutationError = null },
             mutationInProgress = mutationInProgress,
+            recoveryAvailable = mutationRecoveryState != null,
+            onOpenRecovery = {
+                creating = false
+                showRecoveryOptions = true
+            },
             navigationRequest = navigationRequest,
             onNavigationConfirmed = onNavigationConfirmed,
             onNavigationDiscardConfirmed = { request ->
@@ -528,6 +533,11 @@ fun NativeGroupwareContactsScreen(
                 error = mutationError,
                 onDismiss = { editing = false; mutationError = null },
                 mutationInProgress = mutationInProgress,
+                recoveryAvailable = mutationRecoveryState != null,
+                onOpenRecovery = {
+                    editing = false
+                    showRecoveryOptions = true
+                },
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationDiscardConfirmed = { request ->
@@ -818,7 +828,6 @@ internal sealed interface ContactMutationPostcondition {
             ) ?: return false
             return contact.href == href &&
                 contact.uid == expectedUid &&
-                (previousEtag == null || contact.etag != null && contact.etag != previousEtag) &&
                 contact.displayName == expected.name &&
                 contact.emails.firstOrNull().orEmpty() == expectedPrimaryEmail &&
                 contact.phones.firstOrNull().orEmpty() == expectedPrimaryPhone &&
@@ -889,6 +898,14 @@ internal fun contactDraftIsDirty(
     currentAddressBookHref: String?,
 ): Boolean = initial != current || initialAddressBookHref != currentAddressBookHref
 
+internal fun contactDraftHasDavChanges(
+    initial: ContactDraft,
+    current: ContactDraft,
+    initialAddressBookHref: String?,
+    currentAddressBookHref: String?,
+): Boolean = initial.normalizedForDav() != current.normalizedForDav() ||
+    initialAddressBookHref != currentAddressBookHref
+
 @Composable
 private fun ContactEditorDialog(
     contact: GroupwareContact?,
@@ -896,6 +913,8 @@ private fun ContactEditorDialog(
     error: String?,
     onDismiss: () -> Unit,
     mutationInProgress: Boolean,
+    recoveryAvailable: Boolean = false,
+    onOpenRecovery: () -> Unit = {},
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationDiscardConfirmed: (NextcloudPendingNavigationRequest) -> Unit = onNavigationConfirmed,
@@ -928,6 +947,12 @@ private fun ContactEditorDialog(
     val currentDraft = ContactDraft(name, email, phone, organization, address, notes)
     val emailIsSingleValue = groupwareContactEmailIsSingleValue(email)
     val dirty = contactDraftIsDirty(
+        initialDraft,
+        currentDraft,
+        initialAddressBookHref,
+        addressBook?.href,
+    )
+    val hasDavChanges = contactDraftHasDavChanges(
         initialDraft,
         currentDraft,
         initialAddressBookHref,
@@ -997,6 +1022,7 @@ private fun ContactEditorDialog(
                 enabled = name.isNotBlank() &&
                     emailIsSingleValue &&
                     addressBook != null &&
+                    hasDavChanges &&
                     !mutationInProgress,
                 onClick = {
                     onSave(
@@ -1007,7 +1033,11 @@ private fun ContactEditorDialog(
             ) { Text("Save") }
         },
         dismissButton = {
-            OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
+            if (recoveryAvailable) {
+                OutlinedButton(onClick = onOpenRecovery) { Text("Recovery options") }
+            } else {
+                OutlinedButton(onClick = onDismiss, enabled = !mutationInProgress) { Text("Cancel") }
+            }
         },
     )
 

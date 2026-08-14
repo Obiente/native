@@ -196,6 +196,23 @@ class CalendarWorkspacePresentationTest {
             assertTrue(calendarEventDraftIsDirty(initial, changed, "personal", "personal"))
         }
         assertTrue(calendarEventDraftIsDirty(initial, initial, "personal", "team"))
+        assertFalse(
+            calendarEventDraftHasDavChanges(
+                initial,
+                initial.copy(recurrenceRule = "  FREQ=WEEKLY  "),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(
+            calendarEventDraftHasDavChanges(
+                initial,
+                initial.copy(title = "Roadmap planning"),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(calendarEventDraftHasDavChanges(initial, initial, "personal", "team"))
     }
 
     @Test
@@ -259,6 +276,7 @@ class CalendarWorkspacePresentationTest {
         assertFalse(upsert.isSatisfiedBy(stale))
         assertFalse(upsert.isSatisfiedBy(staleEnd))
         assertTrue(upsert.isSatisfiedBy(updated))
+        assertTrue(upsert.isSatisfiedBy(updated.copy(etag = "\"old\"")))
         val overrideBeforeMasterLines = listOf(
             "BEGIN:VCALENDAR",
             "BEGIN:VEVENT",

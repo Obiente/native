@@ -48,6 +48,26 @@ class GroupwareDavTest {
             assertTrue(contactDraftIsDirty(initial, changed, "personal", "personal"))
         }
         assertTrue(contactDraftIsDirty(initial, initial, "personal", "team"))
+        assertFalse(
+            contactDraftHasDavChanges(
+                initial,
+                initial.copy(
+                    phone = "  ${initial.phone}  ",
+                    notes = "Planning contact\r\n",
+                ),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(
+            contactDraftHasDavChanges(
+                initial,
+                initial.copy(name = "Alexandra Example"),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(contactDraftHasDavChanges(initial, initial, "personal", "team"))
 
         val href = "/remote.php/dav/addressbooks/users/person/contacts/alex.vcf"
         val stale = NextcloudApiResponse(
@@ -87,6 +107,7 @@ class GroupwareDavTest {
         val deletion = ContactMutationPostcondition.Delete(href)
         assertFalse(upsert.isSatisfiedBy(stale))
         assertTrue(upsert.isSatisfiedBy(updated))
+        assertTrue(upsert.isSatisfiedBy(updated.copy(etag = "\"old\"")))
         assertFalse(deletion.isSatisfiedBy(updated))
         assertTrue(deletion.isSatisfiedBy(missing))
 
