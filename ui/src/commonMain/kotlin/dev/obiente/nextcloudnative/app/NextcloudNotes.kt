@@ -127,8 +127,11 @@ internal fun NextcloudNotesScreen(
     var refreshing by remember(session) { mutableStateOf(false) }
     var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
     var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
+    var listMutationInProgress by remember(session) { mutableStateOf(false) }
+    var createdNoteToOpen by remember(session) { mutableStateOf<NextcloudNote?>(null) }
     val scope = rememberCoroutineScope()
-    val mutationInProgress = !deletionRecoveryLoaded || deletionRecoveryState != null
+    val recoveryMutationInProgress = !deletionRecoveryLoaded || deletionRecoveryState != null
+    val mutationInProgress = recoveryMutationInProgress || listMutationInProgress
 
     LaunchedEffect(accountScope, services, loadAttempt) {
         deletionRecoveryLoaded = false
@@ -153,9 +156,17 @@ internal fun NextcloudNotesScreen(
         }
     }
 
-    LaunchedEffect(mutationInProgress) {
+    LaunchedEffect(mutationInProgress, createdNoteToOpen) {
         onMutationInProgressChanged(mutationInProgress)
-        if (mutationInProgress) {
+        if (!mutationInProgress) {
+            createdNoteToOpen?.let { created ->
+                createdNoteToOpen = null
+                onOpenNote(created)
+            }
+        }
+    }
+    LaunchedEffect(recoveryMutationInProgress) {
+        if (recoveryMutationInProgress) {
             createNoteInPath = null
             renameFolder = null
             deleteFolder = null
@@ -362,7 +373,7 @@ internal fun NextcloudNotesScreen(
             }
         }
     }
-    createNoteInPath?.takeIf { !mutationInProgress }?.let { category ->
+    createNoteInPath?.takeIf { !recoveryMutationInProgress }?.let { category ->
         CreateNoteDialog(
             category = category,
             services = services,
@@ -373,11 +384,15 @@ internal fun NextcloudNotesScreen(
                 sharedNextcloudNotesCache.storeList(session, notes.orEmpty())
                 sharedNextcloudNotesCache.storeDetail(session, created)
                 createNoteInPath = null
-                onOpenNote(created)
+                createdNoteToOpen = created
+            },
+            onSubmittingChanged = { inProgress ->
+                listMutationInProgress = inProgress
+                if (inProgress) onMutationInProgressChanged(true)
             },
         )
     }
-    renameFolder?.takeIf { !mutationInProgress }?.let { folder ->
+    renameFolder?.takeIf { !recoveryMutationInProgress }?.let { folder ->
         RenameNoteFolderDialog(
             folder = folder,
             services = services,
@@ -401,9 +416,13 @@ internal fun NextcloudNotesScreen(
                 currentPath = destination
                 renameFolder = null
             },
+            onSubmittingChanged = { inProgress ->
+                listMutationInProgress = inProgress
+                if (inProgress) onMutationInProgressChanged(true)
+            },
         )
     }
-    deleteFolder?.takeIf { !mutationInProgress }?.let { folder ->
+    deleteFolder?.takeIf { !recoveryMutationInProgress }?.let { folder ->
         DeleteNoteFolderDialog(
             folder = folder,
             services = services,
@@ -423,6 +442,10 @@ internal fun NextcloudNotesScreen(
                     currentPath = noteFolderParent(folder.path)
                 }
                 deleteFolder = null
+            },
+            onSubmittingChanged = { inProgress ->
+                listMutationInProgress = inProgress
+                if (inProgress) onMutationInProgressChanged(true)
             },
         )
     }
@@ -554,12 +577,16 @@ private fun CreateNoteDialog(
     session: NextcloudSession,
     onDismiss: () -> Unit,
     onCreated: (NextcloudNote) -> Unit,
+    onSubmittingChanged: (Boolean) -> Unit,
 ) {
     var title by remember(category) { mutableStateOf("") }
     var content by remember(category) { mutableStateOf("") }
     var submitting by remember(category) { mutableStateOf(false) }
     var error by remember(category) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    DisposableEffect(category) {
+        onDispose { onSubmittingChanged(false) }
+    }
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text("New note") },
@@ -594,14 +621,19 @@ private fun CreateNoteDialog(
                 enabled = title.isNotBlank() && !submitting,
                 onClick = {
                     submitting = true
+                    onSubmittingChanged(true)
                     error = null
                     scope.launch {
-                        runCatching { services.createNote(session, title, content, category) }
-                            .onSuccess(onCreated)
-                            .onFailure { failure ->
-                                error = failure.message ?: "Could not create the note."
-                                submitting = false
-                            }
+                        try {
+                            onCreated(services.createNote(session, title, content, category))
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (failure: Exception) {
+                            error = failure.message ?: "Could not create the note."
+                        } finally {
+                            submitting = false
+                            onSubmittingChanged(false)
+                        }
                     }
                 },
             ) {
@@ -624,11 +656,15 @@ private fun RenameNoteFolderDialog(
     onDismiss: () -> Unit,
     onReconciled: (List<NextcloudNote>) -> Unit,
     onRenamed: (String) -> Unit,
+    onSubmittingChanged: (Boolean) -> Unit,
 ) {
     var name by remember(folder.path) { mutableStateOf(folder.name) }
     var submitting by remember(folder.path) { mutableStateOf(false) }
     var error by remember(folder.path) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    DisposableEffect(folder.path) {
+        onDispose { onSubmittingChanged(false) }
+    }
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text("Rename folder") },
@@ -652,16 +688,22 @@ private fun RenameNoteFolderDialog(
                         .onFailure { error = it.message }
                         .getOrNull() ?: return@Button
                     submitting = true
+                    onSubmittingChanged(true)
                     scope.launch {
-                        runCatching { services.renameNoteCategory(session, folder.path, destination) }
-                            .onSuccess { onRenamed(destination) }
-                            .onFailure { failure ->
-                                (failure as? PartialNoteFolderMutationException)
-                                    ?.refreshedSummaries
-                                    ?.let(onReconciled)
-                                error = failure.message ?: "Could not rename the folder."
-                                submitting = false
-                            }
+                        try {
+                            services.renameNoteCategory(session, folder.path, destination)
+                            onRenamed(destination)
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (failure: Exception) {
+                            (failure as? PartialNoteFolderMutationException)
+                                ?.refreshedSummaries
+                                ?.let(onReconciled)
+                            error = failure.message ?: "Could not rename the folder."
+                        } finally {
+                            submitting = false
+                            onSubmittingChanged(false)
+                        }
                     }
                 },
             ) { Text(if (submitting) "Renaming..." else "Rename") }
@@ -678,10 +720,14 @@ private fun DeleteNoteFolderDialog(
     onDismiss: () -> Unit,
     onReconciled: (List<NextcloudNote>) -> Unit,
     onDeleted: () -> Unit,
+    onSubmittingChanged: (Boolean) -> Unit,
 ) {
     var submitting by remember(folder.path) { mutableStateOf(false) }
     var error by remember(folder.path) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    DisposableEffect(folder.path) {
+        onDispose { onSubmittingChanged(false) }
+    }
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text("Delete ${folder.name}?") },
@@ -699,16 +745,22 @@ private fun DeleteNoteFolderDialog(
                 enabled = !submitting,
                 onClick = {
                     submitting = true
+                    onSubmittingChanged(true)
                     scope.launch {
-                        runCatching { services.deleteNoteCategory(session, folder.path) }
-                            .onSuccess { onDeleted() }
-                            .onFailure { failure ->
-                                (failure as? PartialNoteFolderMutationException)
-                                    ?.refreshedSummaries
-                                    ?.let(onReconciled)
-                                error = failure.message ?: "Could not delete the folder."
-                                submitting = false
-                            }
+                        try {
+                            services.deleteNoteCategory(session, folder.path)
+                            onDeleted()
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (failure: Exception) {
+                            (failure as? PartialNoteFolderMutationException)
+                                ?.refreshedSummaries
+                                ?.let(onReconciled)
+                            error = failure.message ?: "Could not delete the folder."
+                        } finally {
+                            submitting = false
+                            onSubmittingChanged(false)
+                        }
                     }
                 },
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
