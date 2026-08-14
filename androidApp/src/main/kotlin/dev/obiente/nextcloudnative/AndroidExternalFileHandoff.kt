@@ -28,6 +28,7 @@ import java.io.RandomAccessFile
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 internal class AndroidExternalFileHandoff(private val context: Context) {
@@ -48,18 +49,51 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "This file does not provide the size and version needed for seekable streaming.",
             )
         }
+        return registerAndLaunchRemote(session, userId, file, action)
+    }
+
+    private suspend fun registerAndLaunchRemote(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        action: ExternalFileHandoffAction,
+        staged: StagedExternalFile.Ready? = null,
+    ): ExternalFileHandoffResult {
         val record = try {
             withContext(Dispatchers.IO) {
                 AndroidExternalFileHandoffRegistry.register(session, userId, file)
             }
         } catch (_: AndroidExternalFileHandoffStoreException) {
+            staged?.file?.parentFile?.deleteRecursively()
             return ExternalFileHandoffResult.Unsupported(
                 "Android could not persist this temporary file handoff. Check available storage and try again.",
             )
         } catch (_: IllegalStateException) {
+            staged?.file?.parentFile?.deleteRecursively()
             return ExternalFileHandoffResult.Unsupported(
                 "Too many files are currently open in other apps. Close one and try again.",
             )
+        }
+        if (staged != null) {
+            try {
+                withContext(Dispatchers.IO) {
+                    publishLargeExternalHandoffContent(staged.file, record.documentId)
+                }
+            } catch (cancelled: CancellationException) {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { AndroidExternalFileHandoffRegistry.revoke(record.documentId) }
+                    staged.file.parentFile?.deleteRecursively()
+                }
+                throw cancelled
+            } catch (_: Exception) {
+                withContext(Dispatchers.IO) {
+                    runCatching { AndroidExternalFileHandoffRegistry.revoke(record.documentId) }
+                    staged.file.parentFile?.deleteRecursively()
+                }
+                return ExternalFileHandoffResult.Unsupported(
+                    "Android could not publish the temporary file handoff. Check available storage and try again.",
+                )
+            }
         }
         val authority = nextcloudDocumentsAuthority(context.packageName)
         val uri = try {
@@ -121,6 +155,8 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
     }
 
     suspend fun launchLargeStagedRemote(
+        session: NextcloudSession,
+        userId: String,
         file: NextcloudFile,
         action: ExternalFileHandoffAction,
         capability: ExternalFileHandoffCapability,
@@ -141,7 +177,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 "The file could not be cached for another app. Check the connection and available storage, then try again.",
             )
         }
-        return launchStaged(staged, action)
+        return registerAndLaunchRemote(session, userId, file, action, staged)
     }
 
     suspend fun launchDetached(
@@ -420,6 +456,52 @@ internal fun pruneExternalShareCache(root: File, requiredBytes: Long, nowMillis:
     }
     check(saturatingAdd(storedBytes, requiredBytes) <= MAX_EXTERNAL_SHARE_CACHE_BYTES) {
         "There is not enough room in the bounded external-share cache."
+    }
+}
+
+internal fun androidExternalLargeShareCacheRoot(cacheDirectory: File): File =
+    File(cacheDirectory, EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY)
+
+internal fun androidExternalHandoffContentDirectory(root: File, documentId: String): File {
+    require(AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
+        "The external handoff document ID is invalid."
+    }
+    val directoryName = documentId.substringAfter(':')
+    val canonicalRoot = root.canonicalFile
+    return File(canonicalRoot, directoryName).canonicalFile.also { directory ->
+        require(directory.parentFile == canonicalRoot) { "Unsafe external handoff content directory." }
+    }
+}
+
+internal fun publishLargeExternalHandoffContent(source: File, documentId: String): File {
+    require(source.isFile) { "The staged external handoff content is unavailable." }
+    val operationDirectory = requireNotNull(source.parentFile).canonicalFile
+    val root = requireNotNull(operationDirectory.parentFile).canonicalFile
+    require(root.name == EXTERNAL_LARGE_SHARE_CACHE_DIRECTORY) { "Unsafe external handoff cache root." }
+    val destinationDirectory = androidExternalHandoffContentDirectory(root, documentId)
+    check(!destinationDirectory.exists()) { "The external handoff content already exists." }
+    check(operationDirectory.renameTo(destinationDirectory)) {
+        "Could not publish the managed external handoff content."
+    }
+    return File(destinationDirectory, source.name).also { published ->
+        check(published.isFile && published.canonicalFile.parentFile == destinationDirectory) {
+            "The managed external handoff content is unavailable."
+        }
+    }
+}
+
+internal fun resolveLargeExternalHandoffContent(
+    cacheDirectory: File,
+    record: AndroidExternalFileHandoffRecord,
+): File? {
+    val root = androidExternalLargeShareCacheRoot(cacheDirectory)
+    if (!root.isDirectory) return null
+    val directory = androidExternalHandoffContentDirectory(root, record.documentId)
+    if (!directory.isDirectory) return null
+    val content = File(directory, sanitizeExternalFileName(record.file.name)).canonicalFile
+    val expectedSize = record.file.size ?: return null
+    return content.takeIf { candidate ->
+        candidate.parentFile == directory && candidate.isFile && candidate.length() == expectedSize
     }
 }
 

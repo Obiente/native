@@ -229,6 +229,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -405,12 +406,16 @@ internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
     check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
 }
 
-private class CoroutineDocumentRequestCancellation(
+@OptIn(InternalCoroutinesApi::class)
+internal class CoroutineDocumentRequestCancellation(
     private val job: Job,
 ) : DocumentRequestCancellation, AutoCloseable {
     private val cancelAction = AtomicReference<(() -> Unit)?>(null)
-    private val completion = job.invokeOnCompletion {
-        cancelAction.getAndSet(null)?.invoke()
+    private val completion = job.invokeOnCompletion(
+        onCancelling = true,
+        invokeImmediately = true,
+    ) { failure ->
+        if (failure != null) cancelAction.getAndSet(null)?.invoke()
     }
 
     override fun throwIfCancelled() {
@@ -968,6 +973,9 @@ internal class AndroidNextcloudServices(
                 )
             }
             .getOrThrow()
+        withContext(Dispatchers.IO) {
+            AndroidExternalFileHandoffRegistry.clear()
+        }
         val scheduler = AndroidFileSyncScheduler(appContext)
         ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
             replacementAccountId = NextcloudDocumentIds.accountKey(session),
@@ -986,7 +994,6 @@ internal class AndroidNextcloudServices(
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
-        AndroidExternalFileHandoffRegistry.clear()
         notifyDocumentsRootsChanged()
     }
 
@@ -1014,6 +1021,9 @@ internal class AndroidNextcloudServices(
     override suspend fun clearSession() {
         try {
             val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
+            withContext(Dispatchers.IO) {
+                AndroidExternalFileHandoffRegistry.clear()
+            }
             val scheduler = AndroidFileSyncScheduler(appContext)
             ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
                 persist = {
@@ -1029,7 +1039,6 @@ internal class AndroidNextcloudServices(
                 },
             )
             accountId?.let(nativeMediaPreviewCache::clearAccount)
-            AndroidExternalFileHandoffRegistry.clear()
             notifyDocumentsRootsChanged()
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
@@ -1080,6 +1089,8 @@ internal class AndroidNextcloudServices(
             }
             if (fileSize != null && fileSize > capability.maximumFileBytes) {
                 return externalFileHandoff.launchLargeStagedRemote(
+                    session = session,
+                    userId = userId,
                     file = file,
                     action = action,
                     capability = capability,

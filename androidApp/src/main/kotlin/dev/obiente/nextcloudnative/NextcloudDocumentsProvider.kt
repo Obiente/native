@@ -311,6 +311,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             lease.release()
             throw OperationCanceledException()
         }
+        resolveLargeExternalHandoffContent(requireNotNull(context).cacheDir, record)?.let { staged ->
+            return openExternalLocalContent(staged, lease, signal = signal)
+        }
         offline.availableContent(session, file.path)
             ?.takeIf { cached -> cached.file.etag == etag && cached.content.length() == size }
             ?.let { cached ->

@@ -21,9 +21,11 @@ internal class AndroidExternalFileHandoffStoreException(message: String, cause: 
 /** Durable, app-private metadata for temporary handoff capabilities. No session secret is stored. */
 internal class AndroidExternalFileHandoffStore(
     internal val stateFile: File,
+    internal val managedContentRoot: File? = null,
 ) {
     constructor(context: Context) : this(
         File(context.applicationContext.noBackupFilesDir, STATE_DIRECTORY).resolve(STATE_FILE_NAME),
+        androidExternalLargeShareCacheRoot(context.applicationContext.cacheDir),
     )
 
     @Synchronized
@@ -89,6 +91,14 @@ internal class AndroidExternalFileHandoffStore(
             temporary.delete()
             if (failure is AndroidExternalFileHandoffStoreException) throw failure
             throw AndroidExternalFileHandoffStoreException("Could not persist external handoff state.", failure)
+        }
+    }
+
+    fun deleteManagedContent(documentId: String) {
+        val root = managedContentRoot ?: return
+        val directory = androidExternalHandoffContentDirectory(root, documentId)
+        if (directory.exists() && (!directory.deleteRecursively() || directory.exists())) {
+            throw AndroidExternalFileHandoffStoreException("Could not clear managed external handoff content.")
         }
     }
 

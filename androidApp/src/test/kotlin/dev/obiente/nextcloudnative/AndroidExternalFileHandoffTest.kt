@@ -11,7 +11,14 @@ import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 class AndroidExternalFileHandoffTest {
     @Test
@@ -135,6 +142,40 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
+    fun `managed staged handoff resolves exact content and is removed by durable clear`() {
+        val cacheDirectory = Files.createTempDirectory("nextcloud-managed-handoff-cache-test-").toFile()
+        val stateDirectory = Files.createTempDirectory("nextcloud-managed-handoff-state-test-").toFile()
+        val root = androidExternalLargeShareCacheRoot(cacheDirectory).apply { mkdir() }
+        val store = AndroidExternalFileHandoffStore(stateDirectory.resolve("records.bin"), root)
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        val file = handoffFile(size = 12L)
+        AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+        try {
+            AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
+            val record = AndroidExternalFileHandoffRegistry.register(
+                session,
+                "person-id",
+                file,
+                nowEpochMillis = 10L,
+            )
+            val operation = root.resolve("operation").apply { mkdir() }
+            val staged = operation.resolve(file.name).apply { writeText("cached bytes") }
+            val published = publishLargeExternalHandoffContent(staged, record.documentId)
+
+            assertEquals(published, resolveLargeExternalHandoffContent(cacheDirectory, record))
+            assertEquals("cached bytes", published.readText())
+
+            AndroidExternalFileHandoffRegistry.clear()
+            assertFalse(published.exists())
+            assertFalse(store.stateFile.exists())
+        } finally {
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+            cacheDirectory.deleteRecursively()
+            stateDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `remote handoff records are account scoped bounded and revocable`() {
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test",
@@ -196,6 +237,69 @@ class AndroidExternalFileHandoffTest {
         } finally {
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         }
+    }
+
+    @Test
+    fun `durable clear failure preserves live handoff authority and reports failure`() {
+        val root = Files.createTempDirectory("nextcloud-handoff-clear-test-").toFile()
+        val store = AndroidExternalFileHandoffStore(root.resolve("records.bin"))
+        val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+        try {
+            AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
+            val record = AndroidExternalFileHandoffRegistry.register(
+                session,
+                "person-id",
+                handoffFile(size = 4L),
+                nowEpochMillis = 10L,
+            )
+            assertTrue(store.stateFile.delete())
+            assertTrue(store.stateFile.mkdir())
+            store.stateFile.resolve("blocker").writeText("keep directory non-empty")
+
+            assertFailsWith<AndroidExternalFileHandoffStoreException> {
+                AndroidExternalFileHandoffRegistry.clear()
+            }
+            assertEquals(
+                record,
+                AndroidExternalFileHandoffRegistry.peek(record.documentId, session, nowEpochMillis = 11L),
+            )
+        } finally {
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `request cancellation interrupts transport before the coroutine completes`() = runBlocking {
+        val parent = Job()
+        val started = CompletableDeferred<Unit>()
+        val cancelling = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val child = CoroutineScope(parent).launch {
+            started.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable) {
+                    cancelling.complete(Unit)
+                    release.await()
+                }
+            }
+        }
+        started.await()
+        var cancellations = 0
+        val adapter = CoroutineDocumentRequestCancellation(parent)
+        adapter.setOnCancelAction { cancellations += 1 }
+
+        parent.cancel()
+        cancelling.await()
+        assertFalse(parent.isCompleted)
+        assertEquals(1, cancellations)
+
+        release.complete(Unit)
+        child.join()
+        adapter.close()
     }
 
     @Test

@@ -212,23 +212,31 @@ internal object AndroidExternalFileHandoffRegistry {
     }
 
     fun revoke(documentId: String) {
-        val readers = synchronized(lock) {
+        val removed = synchronized(lock) {
             val removed = entries.remove(documentId) ?: return@synchronized emptyList()
-            persistBestEffortLocked()
-            removed.readers.toList()
+            try {
+                persistLocked()
+            } catch (failure: Throwable) {
+                entries[documentId] = removed
+                throw failure
+            }
+            listOf(removed)
         }
-        readers.forEach(AndroidExternalFileHandoffLease::revoke)
+        removed.flatMap(Entry::readers).forEach(AndroidExternalFileHandoffLease::revoke)
+        removed.forEach { entry -> deleteManagedContentBestEffort(entry.record) }
     }
 
     fun clear() {
-        val readers = synchronized(lock) {
-            entries.values.flatMap { entry -> entry.readers }.also {
-                entries.clear()
-                runCatching(::persistLocked)
-                    .onFailure { failure -> Log.w(LOG_TAG, "Could not clear external handoff state", failure) }
+        val removed = synchronized(lock) {
+            if (entries.isEmpty()) {
+                persistLocked()
+                return@synchronized emptyList()
             }
+            boundStore?.save(emptyList())
+            entries.values.toList().also { entries.clear() }
         }
-        readers.forEach(AndroidExternalFileHandoffLease::revoke)
+        removed.flatMap(Entry::readers).forEach(AndroidExternalFileHandoffLease::revoke)
+        removed.forEach { entry -> deleteManagedContentBestEffort(entry.record) }
     }
 
     internal fun resetProcessStateForTests() {
@@ -259,6 +267,11 @@ internal object AndroidExternalFileHandoffRegistry {
     private fun persistBestEffortLocked() {
         runCatching(::persistLocked)
             .onFailure { failure -> Log.w(LOG_TAG, "Could not update external handoff state", failure) }
+    }
+
+    private fun deleteManagedContentBestEffort(record: AndroidExternalFileHandoffRecord) {
+        runCatching { boundStore?.deleteManagedContent(record.documentId) }
+            .onFailure { failure -> Log.w(LOG_TAG, "Could not clear managed external handoff content", failure) }
     }
 
     internal const val MAX_READERS_PER_RECORD = 4
