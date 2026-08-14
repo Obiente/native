@@ -636,6 +636,7 @@ internal data class DynamicFormRelationContinuation(
 private data class DynamicFormRelationLoadResult(
     val records: List<NativeRecord>,
     val pagination: DynamicPaginationSpec?,
+    val partialFailureMessage: String? = null,
 )
 
 internal data class DynamicFormRelationCacheState(
@@ -788,17 +789,20 @@ private suspend fun loadInitialDynamicFormRelationRecords(
     val action = descriptor.actions.singleOrNull { action -> action.id == request.plan.actionId }
         ?: error("This relation has no declared load action.")
     val boundValues = dynamicFormRelationRuntimeValues(request, values)
+    val outcome = loadDynamicRecordsWithOutcome(
+        services = services,
+        session = session,
+        descriptor = descriptor,
+        actionId = action.id,
+        values = boundValues,
+        runtimeContext = boundValues,
+        cachePolicy = cachePolicy,
+    )
     return DynamicFormRelationLoadResult(
-        records = loadDynamicRecords(
-            services = services,
-            session = session,
-            descriptor = descriptor,
-            actionId = action.id,
-            values = boundValues,
-            runtimeContext = boundValues,
-            cachePolicy = cachePolicy,
-        ),
-        pagination = descriptor.resolvedDynamicPaginationSpec(action.id),
+        records = outcome.records,
+        pagination = descriptor.resolvedDynamicPaginationSpec(action.id, boundValues)
+            .takeIf { outcome.partialFailureMessage == null },
+        partialFailureMessage = outcome.partialFailureMessage,
     )
 }
 
@@ -3793,6 +3797,11 @@ private fun DynamicDiscoveredAppScreen(
                             pagination = result.pagination,
                         )
                     }
+                    formRelationPageErrors = if (result?.partialFailureMessage == null) {
+                        formRelationPageErrors - request.cacheKey
+                    } else {
+                        formRelationPageErrors.putBounded(request.cacheKey, result.partialFailureMessage)
+                    }
                 }
                 formRelationCache = updatedRelationCache
             }
@@ -3857,7 +3866,11 @@ private fun DynamicDiscoveredAppScreen(
             recordsByResourceId = freshSnapshot.relatedRecords
             viewState = NativeScreenState.Ready(freshSnapshot.records)
             paginationState = freshSnapshot.pagination?.let { checkpoint ->
-                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId)
+                descriptor.resolvedDynamicPaginationSpec(
+                    actionId = view.sourceActionId,
+                    boundValues = selectedRecord?.toDynamicRuntimeValues().orEmpty() +
+                        selectedPathParameterValues,
+                )
                     ?.let { spec ->
                         DynamicPaginationState(
                             viewId = view.id,
@@ -3885,7 +3898,7 @@ private fun DynamicDiscoveredAppScreen(
                         composite.rowResourceId to composite.rowSourceActionId,
                     ).map { (resourceId, actionId) ->
                         async {
-                            resourceId to loadDynamicRecords(
+                            resourceId to loadDynamicRecordsWithOutcome(
                                 services = services,
                                 session = session,
                                 descriptor = descriptor,
@@ -3900,15 +3913,22 @@ private fun DynamicDiscoveredAppScreen(
                 currentCoroutineContext().ensureActive()
                 loaded
             }.onSuccess { loaded ->
-                val updatedRecords = recordsByResourceId + loaded.toMap()
-                val rows = loaded.first { (resourceId, _) -> resourceId == composite.rowResourceId }.second
+                val loadedRecords = loaded.associate { (resourceId, outcome) -> resourceId to outcome.records }
+                val partialFailure = loaded.firstNotNullOfOrNull { (_, outcome) ->
+                    outcome.partialFailureMessage
+                }
+                val updatedRecords = recordsByResourceId + loadedRecords
+                val rows = loadedRecords.getValue(composite.rowResourceId)
                 recordsByResourceId = updatedRecords
                 viewState = NativeScreenState.Ready(rows)
+                dynamicRefreshError = partialFailure
                 mutationReconciliationGeneration += 1
-                sharedDynamicNativeMemoryCache.storeScreen(
-                    cacheKey,
-                    DynamicScreenSnapshot(rows, updatedRecords),
-                )
+                if (partialFailure == null) {
+                    sharedDynamicNativeMemoryCache.storeScreen(
+                        cacheKey,
+                        DynamicScreenSnapshot(rows, updatedRecords),
+                    )
+                }
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
                 if (staleSnapshot != null) {
@@ -3951,7 +3971,7 @@ private fun DynamicDiscoveredAppScreen(
             val records = outcome.records
             val updatedRecords = recordsByResourceId + (view.resourceId to records)
             val nextPagination = if (outcome.partialFailureMessage == null) {
-                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId)
+                descriptor.resolvedDynamicPaginationSpec(view.sourceActionId, values)
                     ?.toDynamicPaginationState(view.id, records)
             } else {
                 null
@@ -4188,7 +4208,14 @@ private fun DynamicDiscoveredAppScreen(
                                         records = result.records,
                                         pagination = result.pagination,
                                     )
-                                    formRelationPageErrors -= request.cacheKey
+                                    formRelationPageErrors = if (result.partialFailureMessage == null) {
+                                        formRelationPageErrors - request.cacheKey
+                                    } else {
+                                        formRelationPageErrors.putBounded(
+                                            request.cacheKey,
+                                            result.partialFailureMessage,
+                                        )
+                                    }
                                 }.onFailure { failure ->
                                     if (failure is CancellationException) throw failure
                                     formRelationPageErrors = formRelationPageErrors.putBounded(
@@ -4428,7 +4455,13 @@ private fun DynamicDiscoveredAppScreen(
                                         )
                                         .relatedRecords(listOf(relationRequest))[relatedResourceId]
                                         .orEmpty()
-                                    Triple(relatedResourceId, boundedRecords, null)
+                                    Triple(
+                                        relatedResourceId,
+                                        boundedRecords,
+                                        result.partialFailureMessage?.take(
+                                            MAX_DYNAMIC_BATCH_RELATION_ERROR_LENGTH,
+                                        ),
+                                    )
                                 },
                                 onFailure = { failure ->
                                     if (failure is CancellationException) throw failure
@@ -5626,6 +5659,7 @@ private fun DynamicDiscoveredAppScreen(
                 bindingValues = datasetBindingValues + retainedChoresTeamActionValues,
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
+                mailCollectionSummaryResourceIds = trackedMailCollectionSummaryResourceIds,
                 fieldChoices = nativeChoresMemberFieldChoices(schema, retainedChoresTeamRecord),
             )
             val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->

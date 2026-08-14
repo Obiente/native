@@ -833,9 +833,9 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
-    fun `verified Mail cursor adapter requires its declared response field`() {
-        fun cursorAction(responseFieldIds: List<String>) = readAction().copy(
-            responseFieldIds = responseFieldIds,
+    fun `verified cursor pagination requires an explicit response field binding`() {
+        fun cursorAction(cursorFieldId: String?) = readAction().copy(
+            recordCursorFieldId = cursorFieldId,
             binding = readAction().binding.copy(
                 queryParameters = listOf(
                     HttpParameter(
@@ -850,14 +850,9 @@ class DynamicNativeRuntimeTest {
                 Provenance(ProvenanceKind.verifiedAppPackage, "mail package", "Signed Mail contract"),
             ),
         )
-        fun mailDescriptor(action: DynamicAction) = descriptor(action).copy(
-            app = AppIdentity("mail", "Mail", "5.10.9"),
-        )
-
-        assertNull(mailDescriptor(cursorAction(listOf("databaseId"))).resolvedDynamicPaginationSpec("items.list"))
+        assertNull(descriptor(cursorAction(null)).resolvedDynamicPaginationSpec("items.list"))
         val pagination = requireNotNull(
-            mailDescriptor(cursorAction(listOf("databaseId", "dateInt")))
-                .resolvedDynamicPaginationSpec("items.list"),
+            descriptor(cursorAction("dateInt")).resolvedDynamicPaginationSpec("items.list"),
         )
         assertEquals(DynamicPaginationMode.RecordCursor, pagination.mode)
         assertEquals(
@@ -2479,6 +2474,7 @@ class DynamicNativeRuntimeTest {
                 ),
             ),
             fallbackOnly = true,
+            recordCursorFieldId = "dateInt",
             responseFieldIds = listOf("databaseId", "dateInt", "subject"),
             provenance = listOf(
                 Provenance(ProvenanceKind.verifiedAppPackage, "mail package", "Signed Mail contract"),
@@ -2614,6 +2610,12 @@ class DynamicNativeRuntimeTest {
 
         assertEquals(listOf(preferred.id), attempts)
         assertEquals("filtered", records.single().id)
+        assertNull(
+            descriptor.resolvedDynamicPaginationSpec(
+                actionId = preferred.id,
+                boundValues = mapOf("id" to "9", "filter" to "unread"),
+            ),
+        )
     }
 
     @Test

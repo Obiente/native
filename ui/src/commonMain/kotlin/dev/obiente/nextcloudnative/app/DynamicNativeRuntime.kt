@@ -879,7 +879,7 @@ internal suspend fun executeDynamicReadWithFallbackOutcome(
         "Only declared preferred GET actions can load a dynamic view."
     }
     val linkedFallbacks = preferred.fallbackActionIds.mapNotNull(actionsById::get)
-    val resolvedPagination = descriptor.resolvedDynamicPaginationSpec(preferred.id)
+    val resolvedPagination = descriptor.resolvedDynamicPaginationSpec(preferred.id, boundValues)
     val pagedFallbacks = if (
         descriptor.dynamicPaginationSpec(preferred) == null &&
         resolvedPagination != null
@@ -1510,28 +1510,31 @@ internal fun DynamicAction.dynamicPaginationSpec(): DynamicPaginationSpec? {
  * parameters omitted by a sparse documented operation. Conflicting fallback declarations remain
  * unpaged rather than guessing a protocol.
  */
-internal fun DynamicAppDescriptor.resolvedDynamicPaginationSpec(actionId: String): DynamicPaginationSpec? {
+internal fun DynamicAppDescriptor.resolvedDynamicPaginationSpec(
+    actionId: String,
+    boundValues: Map<String, String> = emptyMap(),
+): DynamicPaginationSpec? {
     val action = actions.singleOrNull { candidate -> candidate.id == actionId } ?: return null
     dynamicPaginationSpec(action)?.let { return it }
     return action.fallbackActionIds
         .mapNotNull { fallbackId -> actions.singleOrNull { candidate -> candidate.id == fallbackId } }
         .filter(DynamicAction::fallbackOnly)
+        .filter { candidate -> candidatePreservesBoundReadParameters(action, candidate, boundValues) }
         .mapNotNull(::dynamicPaginationSpec)
         .distinct()
         .singleOrNull()
 }
 
 private fun DynamicAppDescriptor.dynamicPaginationSpec(action: DynamicAction): DynamicPaginationSpec? =
-    action.dynamicPaginationSpec() ?: action.verifiedRecordCursorPaginationSpec(app.id)
+    action.dynamicPaginationSpec() ?: action.verifiedRecordCursorPaginationSpec()
 
 /**
  * Cursor continuation needs an explicit response-field binding; a parameter name alone cannot
- * establish that relationship. A narrow app adapter may bind a field only when the signed package
- * also declares that field, until the descriptor format can carry the relationship directly.
+ * establish that relationship. Contract acquisition may add this binding only for a verified,
+ * versioned route whose response field semantics are known.
  */
-private fun DynamicAction.verifiedRecordCursorPaginationSpec(appId: String): DynamicPaginationSpec? {
+private fun DynamicAction.verifiedRecordCursorPaginationSpec(): DynamicPaginationSpec? {
     if (
-        appId != "mail" ||
         binding.method != HttpMethod.GET ||
         intent != dev.obiente.nextcloudnative.nativeui.model.ActionIntent.list ||
         provenance.none { evidence -> evidence.kind == ProvenanceKind.verifiedAppPackage }
@@ -1543,9 +1546,7 @@ private fun DynamicAction.verifiedRecordCursorPaginationSpec(appId: String): Dyn
             parameter.isIntegerNumberParameter() &&
             parameter.name.normalizedDynamicParameterName() == "cursor"
     } ?: return null
-    val cursorField = responseFieldIds.singleOrNull { fieldId ->
-        fieldId.normalizedDynamicParameterName() == "dateint"
-    } ?: return null
+    val cursorField = recordCursorFieldId?.takeIf(String::isNotBlank) ?: return null
     val pageSize = binding.queryParameters.firstOrNull { parameter ->
         parameter.name.normalizedDynamicParameterName() in INITIAL_PAGE_SIZE_PARAMETER_NAMES
     }?.automaticCollectionPageSize()

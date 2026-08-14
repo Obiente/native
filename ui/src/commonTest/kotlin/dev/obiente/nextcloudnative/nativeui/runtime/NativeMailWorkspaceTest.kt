@@ -164,6 +164,37 @@ class NativeMailWorkspaceTest {
     }
 
     @Test
+    fun `loader identity exposes a generically named mailbox summary resource`() {
+        val mailboxInfo = ResourceSpec(
+            id = "mailboxInfo",
+            name = "Mailbox info",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("messageCount", "Message count", FieldKind.integer, required = false, readOnly = true),
+                FieldSpec("unseen", "Unseen", FieldKind.integer, required = false, readOnly = true),
+            ),
+        )
+        val relatedRecords = mapOf(
+            mailboxInfo.id to listOf(
+                NativeRecord("info", values = mapOf("messageCount" to "84", "unseen" to "7")),
+            ),
+        )
+        assertNull(
+            NativeDatasetContext(relatedRecords = relatedRecords)
+                .nativeMailCollectionSummary(schema(mailboxInfo)),
+        )
+        val context = NativeDatasetContext(
+            relatedRecords = relatedRecords,
+            mailCollectionSummaryResourceIds = setOf(mailboxInfo.id),
+        )
+
+        assertEquals(
+            NativeMailCollectionSummary(total = 84, unread = 7),
+            context.nativeMailCollectionSummary(schema(mailboxInfo)),
+        )
+    }
+
+    @Test
     fun `message body keeps its proven mailbox selected and enriched`() {
         val mailboxes = ResourceSpec(
             id = "mailboxes",

@@ -153,7 +153,7 @@ internal fun nativeMailWorkspacePlan(
     }
     val seen = mutableSetOf<String>()
     val rawItems = datasets.flatMap { (resource, records) ->
-        if (resource.isNativeMailCollectionSummaryResource()) return@flatMap emptyList()
+        if (context.isNativeMailCollectionSummaryResource(resource)) return@flatMap emptyList()
         records.mapNotNull { record ->
             if (currentIsMessageFacet && resource.id == currentResource.id) return@mapNotNull null
             val presentation = nativeMailboxPresentation(resource, record)
@@ -312,7 +312,7 @@ internal fun NativeDatasetContext.nativeMailCollectionSummary(
 ): NativeMailCollectionSummary? {
     val summaries = relatedRecords.mapNotNull { (resourceId, records) ->
         val resource = schema.resource(resourceId) ?: return@mapNotNull null
-        if (!resource.isNativeMailCollectionSummaryResource()) return@mapNotNull null
+        if (!isNativeMailCollectionSummaryResource(resource)) return@mapNotNull null
         records.singleOrNull()?.nativeMailCollectionSummary()
     }
     val total = summaries.mapNotNull(NativeMailCollectionSummary::total).distinct().singleOrNull()
@@ -321,10 +321,11 @@ internal fun NativeDatasetContext.nativeMailCollectionSummary(
         .takeIf { summary -> summary.total != null || summary.unread != null }
 }
 
-private fun ResourceSpec.isNativeMailCollectionSummaryResource(): Boolean =
-    listOf(id, name).flatMap(String::mailSemanticWords).any { word ->
-        word in setOf("stat", "stats", "status", "summary", "statistics")
-    }
+private fun NativeDatasetContext.isNativeMailCollectionSummaryResource(resource: ResourceSpec): Boolean =
+    resource.id in mailCollectionSummaryResourceIds ||
+        listOf(resource.id, resource.name).flatMap(String::mailSemanticWords).any { word ->
+            word in setOf("stat", "stats", "status", "summary", "statistics")
+        }
 
 private fun NativeRecord.nativeMailCollectionSummary(): NativeMailCollectionSummary? {
     val values = (values + displayValues).entries.associate { (key, value) ->
