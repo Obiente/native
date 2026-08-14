@@ -101,6 +101,7 @@ internal class DesktopFileSyncLocalTree(
                             revision = revision(metadata.value, contentDigest),
                             size = attrs.size().takeIf { kind == SyncEntryKind.File },
                             contentHash = contentDigest?.let { "sha256:$it" },
+                            modifiedEpochMillis = attrs.nonNegativeModifiedEpochMillis(),
                         ),
                         path,
                     )
@@ -134,10 +135,14 @@ internal class DesktopFileSyncLocalTree(
                 revision(metadata.value, contentDigest),
                 attrs.size().takeIf { kind == SyncEntryKind.File },
                 contentDigest?.let { "sha256:$it" },
+                attrs.nonNegativeModifiedEpochMillis(),
             ),
             path,
         )
     }
+
+    private fun BasicFileAttributes.nonNegativeModifiedEpochMillis(): Long? =
+        lastModifiedTime().toMillis().takeIf { it >= 0L }
 
     fun fileStore(relativePath: String): FileStore {
         val destination = safePath(relativePath)

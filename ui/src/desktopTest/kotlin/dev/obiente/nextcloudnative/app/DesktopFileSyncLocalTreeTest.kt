@@ -163,6 +163,22 @@ class DesktopFileSyncLocalTreeTest {
     }
 
     @Test
+    fun `pre epoch timestamps are omitted from local observations`() {
+        val root = Files.createTempDirectory("desktop-sync-historical-time-")
+        try {
+            val file = root.resolve("archive.txt")
+            file.writeText("historical")
+            Files.setLastModifiedTime(file, FileTime.fromMillis(-1_000L))
+            val tree = DesktopFileSyncLocalTree(root.toFile())
+
+            assertEquals(null, tree.scan().single().entry.modifiedEpochMillis)
+            assertEquals(null, requireNotNull(tree.resolve("archive.txt")).entry.modifiedEpochMillis)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `unchanged files reuse the persisted digest when change metadata is stable`() {
         val root = Files.createTempDirectory("desktop-sync-digest-cache-")
         try {

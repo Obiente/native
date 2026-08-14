@@ -59,6 +59,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import kotlin.time.Instant
 
 internal enum class FileSyncListFilter(val title: String) {
     All("All"),
@@ -835,6 +836,13 @@ private fun FileSyncConflictBlock(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
+            FileSyncConflictSideRow("This device", conflict.local)
+            FileSyncConflictSideRow("Nextcloud", conflict.remote)
+            Text(
+                "The selected source can use its latest version only while the other side stays unchanged.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                 conflict.choices.sortedBy(FileSyncDecisionChoice::ordinal).chunked(2).forEach { choices ->
                     Row(
@@ -853,6 +861,31 @@ private fun FileSyncConflictBlock(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FileSyncConflictSideRow(
+    label: String,
+    side: FileSyncConflictSideSummary?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            label,
+            modifier = Modifier.width(88.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            side?.syncConflictSideDescription() ?: "Missing",
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -2040,6 +2073,16 @@ private fun FileSyncDecisionChoice.syncDecisionTitle(): String = when (this) {
     FileSyncDecisionChoice.RestoreMissing -> "Restore missing copy"
     FileSyncDecisionChoice.Skip -> "Skip this version"
 }
+
+private fun FileSyncConflictSideSummary.syncConflictSideDescription(): String = buildString {
+    append(if (kind == SyncEntryKind.File) "File" else "Folder")
+    sizeBytes?.let { append(" | ").append(it.fileSyncBytes()) }
+    modifiedEpochMillis?.let { append(" | Modified ").append(it.fileSyncModifiedTime()) }
+}
+
+private fun Long.fileSyncModifiedTime(): String = runCatching {
+    Instant.fromEpochMilliseconds(this).toString().replace('T', ' ').take(16) + " UTC"
+}.getOrDefault("Unknown time")
 
 private fun Long.fileSyncBytes(): String = when {
     this >= 1024L * 1024L * 1024L -> "${this / (1024L * 1024L * 1024L)} GB"

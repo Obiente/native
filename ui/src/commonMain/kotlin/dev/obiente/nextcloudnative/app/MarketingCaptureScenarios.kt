@@ -1593,6 +1593,16 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                                         FileSyncDecisionChoice.KeepBoth,
                                         FileSyncDecisionChoice.Skip,
                                     ),
+                                    local = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_486_272L,
+                                        modifiedEpochMillis = 1_786_640_400_000L,
+                                    ),
+                                    remote = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_513_920L,
+                                        modifiedEpochMillis = 1_786_640_100_000L,
+                                    ),
                                 ),
                             ),
                             failedCount = 0,
@@ -1934,6 +1944,16 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                                         FileSyncDecisionChoice.UseRemote,
                                         FileSyncDecisionChoice.KeepBoth,
                                         FileSyncDecisionChoice.Skip,
+                                    ),
+                                    local = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_486_272L,
+                                        modifiedEpochMillis = 1_786_640_400_000L,
+                                    ),
+                                    remote = FileSyncConflictSideSummary(
+                                        kind = SyncEntryKind.File,
+                                        sizeBytes = 2_513_920L,
+                                        modifiedEpochMillis = 1_786_640_100_000L,
                                     ),
                                 ),
                             ),

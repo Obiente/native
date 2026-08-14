@@ -60,11 +60,13 @@ data class LocalSyncEntry(
     val revision: String,
     val size: Long? = null,
     val contentHash: String? = null,
+    val modifiedEpochMillis: Long? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
         require(revision.isNotBlank())
         require(size == null || size >= 0L)
+        require(modifiedEpochMillis == null || modifiedEpochMillis >= 0L)
         require(contentHash == null || kind == SyncEntryKind.File) {
             "Only files can expose a sync content hash."
         }
@@ -80,11 +82,13 @@ data class RemoteSyncEntry(
     val etag: String,
     val size: Long? = null,
     val contentHash: String? = null,
+    val modifiedEpochMillis: Long? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
         require(etag.isNotBlank())
         require(size == null || size >= 0L)
+        require(modifiedEpochMillis == null || modifiedEpochMillis >= 0L)
         require(contentHash == null || kind == SyncEntryKind.File) {
             "Only files can expose a sync content hash."
         }
