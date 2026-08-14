@@ -11,14 +11,12 @@ internal fun nextAndroidIncomingLinkState(
     previousSequence: Long,
     action: String?,
     dataUrl: String?,
-    sharedText: String?,
 ): AndroidIncomingLinkState {
     require(previousSequence >= 0L) { "The incoming link sequence is invalid." }
-    val candidate = when (action) {
-        ANDROID_ACTION_VIEW -> dataUrl
-        ANDROID_ACTION_SEND -> sharedText
-        else -> null
-    }?.trim()?.takeIf(String::isSupportedAndroidIncomingLink)
+    val candidate = dataUrl
+        ?.takeIf { action == ANDROID_ACTION_VIEW }
+        ?.trim()
+        ?.takeIf(String::isSupportedAndroidIncomingLink)
         ?: return AndroidIncomingLinkState(previousSequence, null)
     val sequence = previousSequence + 1L
     check(sequence > previousSequence) { "The incoming link sequence is exhausted." }
@@ -45,5 +43,4 @@ private fun String.isSupportedAndroidIncomingLink(): Boolean {
 }
 
 internal const val ANDROID_ACTION_VIEW = "android.intent.action.VIEW"
-internal const val ANDROID_ACTION_SEND = "android.intent.action.SEND"
 private const val MAX_ANDROID_INCOMING_LINK_LENGTH = 8_192

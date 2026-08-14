@@ -9,6 +9,17 @@ import kotlin.test.assertTrue
 
 class GroupwareDavTest {
     @Test
+    fun `only authoritative client errors release mutation recovery`() {
+        assertFalse(groupwareMutationResponseProvesRejection(204))
+        assertTrue(groupwareMutationResponseProvesRejection(409))
+        assertTrue(groupwareMutationResponseProvesRejection(412))
+        assertFalse(groupwareMutationResponseProvesRejection(408))
+        assertFalse(groupwareMutationResponseProvesRejection(499))
+        assertFalse(groupwareMutationResponseProvesRejection(500))
+        assertFalse(groupwareMutationResponseProvesRejection(504))
+    }
+
+    @Test
     fun `contact navigation detects every editable draft field`() {
         val initial = ContactDraft(
             name = "Alex Example",
@@ -79,10 +90,54 @@ class GroupwareDavTest {
             appPassword = "secret",
         )
         val accountScope = groupwareMutationAccountScope(session, "person-id")
+        assertEquals(64, accountScope.length)
+        assertTrue(accountScope.all { it in '0'..'9' || it in 'a'..'f' })
+        assertFalse(accountScope.contains("cloud.example.test"))
+        assertFalse(accountScope.contains("person"))
+        assertFailsWith<IllegalArgumentException> {
+            ContactMutationRecoveryState("https://cloud.example.test|person|person-id", upsert)
+        }
         val encoded = ContactMutationRecoveryState(accountScope, upsert).encodeForSavedState()
         assertEquals(upsert, decodeContactMutationRecoveryState(encoded, accountScope))
         assertNull(decodeContactMutationRecoveryState(encoded, "$accountScope-other"))
         assertNull(decodeContactMutationRecoveryState("not-json", accountScope))
+    }
+
+    @Test
+    fun `contact mutation reconciliation uses the values normalized by the vCard writer`() {
+        val href = "/remote.php/dav/addressbooks/users/person/contacts/alex.vcf"
+        val draft = ContactDraft(
+            name = "Alex Example",
+            email = "  alex@example.test  ",
+            phone = "  +31 6 123  ",
+            organization = "  Example  ",
+            address = "  Main Street 1  ",
+            notes = "  Planning contact  ",
+        )
+        val response = NextcloudApiResponse(
+            status = 200,
+            contentType = "text/vcard",
+            etag = "\"new\"",
+            body = createGroupwareContactContent(
+                uid = "alex",
+                displayName = draft.name,
+                email = draft.email,
+                phone = draft.phone,
+                organization = draft.organization,
+                address = draft.address,
+                notes = draft.notes,
+            ).encodeToByteArray(),
+        )
+
+        assertTrue(
+            ContactMutationPostcondition.Upsert(
+                href = href,
+                addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/",
+                expectedUid = "alex",
+                previousEtag = "\"old\"",
+                draft = draft,
+            ).isSatisfiedBy(response),
+        )
     }
 
     @Test

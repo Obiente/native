@@ -174,6 +174,9 @@ fun NativeGroupwareCalendarScreen(
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
 
     fun retainMutationRecovery(postcondition: CalendarMutationPostcondition) {
+        check(mutationRecoveryState == null && !mutationOperationInProgress) {
+            "Another calendar change is still awaiting server verification."
+        }
         mutationRecoveryState = CalendarMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
         mutationOperationInProgress = true
     }
@@ -263,7 +266,11 @@ fun NativeGroupwareCalendarScreen(
                             activeEventInstanceId = null
                             eventEditorActive = false
                         }
-                        is CalendarMutationPostcondition.Delete -> selectedEventId = null
+                        is CalendarMutationPostcondition.Delete -> {
+                            deleting = null
+                            deletingInProgress = false
+                            selectedEventId = null
+                        }
                     }
                     mutationRecoveryState = null
                     mutationOperationInProgress = false
@@ -299,7 +306,7 @@ fun NativeGroupwareCalendarScreen(
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
+                        IconButton(onClick = onBack, enabled = !mutationInProgress) {
                             Icon(NextcloudIcons.Back, contentDescription = "Back")
                         }
                     },
@@ -308,8 +315,9 @@ fun NativeGroupwareCalendarScreen(
                             Icon(NextcloudIcons.Refresh, contentDescription = "Refresh calendars")
                         }
                         IconButton(
-                            onClick = { creating = true },
-                            enabled = (state as? CalendarLoadState.Ready)?.calendars?.any { it.writable } == true,
+                            onClick = { if (!mutationInProgress) creating = true },
+                            enabled = !mutationInProgress &&
+                                (state as? CalendarLoadState.Ready)?.calendars?.any { it.writable } == true,
                         ) {
                             Icon(NextcloudIcons.Add, contentDescription = "Create event")
                         }
@@ -348,6 +356,7 @@ fun NativeGroupwareCalendarScreen(
                     query = query,
                     selectedEvent = selectedEvent,
                     loading = initialLoading,
+                    mutationsEnabled = !mutationInProgress,
                     onPrevious = { navigateCalendar(-1) },
                     onNext = { navigateCalendar(1) },
                     onToday = ::selectToday,
@@ -363,15 +372,19 @@ fun NativeGroupwareCalendarScreen(
                     },
                     onSelectDate = { date -> selectedDate = date; selectedEventId = null },
                     onSelectEvent = { event -> selectedEventId = event?.instanceId },
-                    onCreateEvent = { creating = true },
+                    onCreateEvent = { if (!mutationInProgress) creating = true },
                     onRefresh = { loadAttempt += 1 },
                     onEditEvent = { event ->
-                        activeEventInstanceId = event.instanceId
-                        eventEditorActive = true
+                        if (!mutationInProgress) {
+                            activeEventInstanceId = event.instanceId
+                            eventEditorActive = true
+                        }
                     },
                     onDeleteEvent = { event ->
-                        mutationError = null
-                        deleting = event
+                        if (!mutationInProgress) {
+                            mutationError = null
+                            deleting = event
+                        }
                     },
                 )
             } else {
@@ -458,6 +471,21 @@ fun NativeGroupwareCalendarScreen(
                 mutationError = null
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                 val objectHref = "${calendar.href}$uid.ics"
+                val request = GroupwareDavMutationSpec(
+                    kind = GroupwareDavKind.Event,
+                    mutation = GroupwareDavMutation.Create,
+                    objectHref = objectHref,
+                    content = createGroupwareCalendarEventContent(
+                        uid = uid,
+                        title = draft.title,
+                        start = draft.startValue(),
+                        end = draft.endValue(),
+                        allDay = draft.allDay,
+                        location = draft.location,
+                        description = draft.description,
+                        recurrenceRule = draft.recurrenceRule,
+                    ),
+                ).toGroupwareDavRequest()
                 retainMutationRecovery(
                     CalendarMutationPostcondition.Upsert(
                         href = objectHref,
@@ -468,31 +496,25 @@ fun NativeGroupwareCalendarScreen(
                     ),
                 )
                 scope.launch {
-                    runCatching {
-                        val request = GroupwareDavMutationSpec(
-                            kind = GroupwareDavKind.Event,
-                            mutation = GroupwareDavMutation.Create,
-                            objectHref = objectHref,
-                            content = createGroupwareCalendarEventContent(
-                                uid = uid,
-                                title = draft.title,
-                                start = draft.startValue(),
-                                end = draft.endValue(),
-                                allDay = draft.allDay,
-                                location = draft.location,
-                                description = draft.description,
-                                recurrenceRule = draft.recurrenceRule,
-                            ),
-                        ).toGroupwareDavRequest()
+                    try {
                         val response = services.executeGroupwareDav(session, request)
-                        check(response.status in 200..299) { "Creating the event failed (HTTP ${response.status})." }
-                    }.onSuccess {
+                        if (response.status !in 200..299) {
+                            if (groupwareMutationResponseProvesRejection(response.status)) {
+                                clearMutationRecovery()
+                                mutationError = "Creating the event failed (HTTP ${response.status})."
+                            } else {
+                                mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                loadAttempt += 1
+                            }
+                            return@launch
+                        }
                         creating = false
                         loadAttempt += 1
-                    }.onFailure { failure ->
-                        if (failure is CancellationException) throw failure
-                        clearMutationRecovery()
-                        mutationError = failure.message ?: "Could not create the event."
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (_: Exception) {
+                        mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
+                        loadAttempt += 1
                     }
                 }
             },
@@ -517,6 +539,23 @@ fun NativeGroupwareCalendarScreen(
                 mutationInProgress = mutationInProgress,
                 onSave = { draft, _ ->
                     mutationError = null
+                    val updated = updateGroupwareCalendarEventContent(
+                        event = event,
+                        title = draft.title,
+                        start = draft.startValue(),
+                        end = draft.endValue(),
+                        allDay = draft.allDay,
+                        location = draft.location,
+                        description = draft.description,
+                        recurrenceRule = draft.recurrenceRule,
+                    )
+                    val request = GroupwareDavMutationSpec(
+                        kind = GroupwareDavKind.Event,
+                        mutation = GroupwareDavMutation.Update,
+                        objectHref = event.href,
+                        etag = event.etag,
+                        content = updated,
+                    ).toGroupwareDavRequest()
                     retainMutationRecovery(
                         CalendarMutationPostcondition.Upsert(
                             href = event.href,
@@ -527,36 +566,26 @@ fun NativeGroupwareCalendarScreen(
                         ),
                     )
                     scope.launch {
-                        runCatching {
-                            val updated = updateGroupwareCalendarEventContent(
-                                event = event,
-                                title = draft.title,
-                                start = draft.startValue(),
-                                end = draft.endValue(),
-                                allDay = draft.allDay,
-                                location = draft.location,
-                                description = draft.description,
-                                recurrenceRule = draft.recurrenceRule,
-                            )
-                            val request = GroupwareDavMutationSpec(
-                                kind = GroupwareDavKind.Event,
-                                mutation = GroupwareDavMutation.Update,
-                                objectHref = event.href,
-                                etag = event.etag,
-                                content = updated,
-                            ).toGroupwareDavRequest()
+                        try {
                             val response = services.executeGroupwareDav(session, request)
-                            check(response.status in 200..299) {
-                                "Saving the event failed (HTTP ${response.status})."
+                            if (response.status !in 200..299) {
+                                if (groupwareMutationResponseProvesRejection(response.status)) {
+                                    clearMutationRecovery()
+                                    mutationError = "Saving the event failed (HTTP ${response.status})."
+                                } else {
+                                    mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                    loadAttempt += 1
+                                }
+                                return@launch
                             }
-                        }.onSuccess {
                             activeEventInstanceId = null
                             eventEditorActive = false
                             loadAttempt += 1
-                        }.onFailure { failure ->
-                            if (failure is CancellationException) throw failure
-                            clearMutationRecovery()
-                            mutationError = failure.message ?: "Could not save the event."
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (_: Exception) {
+                            mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
+                            loadAttempt += 1
                         }
                     }
                 },
@@ -564,20 +593,25 @@ fun NativeGroupwareCalendarScreen(
         } else {
             EventDetailDialog(
                 event = event,
-                canEdit = calendar?.writable == true && event.etag != null && !event.isGeneratedOccurrence,
+                canEdit = !mutationInProgress && calendar?.writable == true &&
+                    event.etag != null && !event.isGeneratedOccurrence,
                 onDismiss = {
                     activeEventInstanceId = null
                     eventEditorActive = false
                 },
                 onEdit = {
-                    creating = false
-                    eventEditorActive = true
+                    if (!mutationInProgress) {
+                        creating = false
+                        eventEditorActive = true
+                    }
                 },
                 onDelete = {
-                    activeEventInstanceId = null
-                    eventEditorActive = false
-                    mutationError = null
-                    deleting = event
+                    if (!mutationInProgress) {
+                        activeEventInstanceId = null
+                        eventEditorActive = false
+                        mutationError = null
+                        deleting = event
+                    }
                 },
                 error = mutationError,
             )
@@ -586,7 +620,7 @@ fun NativeGroupwareCalendarScreen(
 
     deleting?.let { event ->
         AlertDialog(
-            onDismissRequest = { if (!deletingInProgress) deleting = null },
+            onDismissRequest = { if (!deletingInProgress && !mutationInProgress) deleting = null },
             title = { Text("Delete ${event.title}?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -602,39 +636,47 @@ fun NativeGroupwareCalendarScreen(
             },
             dismissButton = {
                 TextButton(
-                    enabled = !deletingInProgress,
+                    enabled = !deletingInProgress && !mutationInProgress,
                     onClick = { deleting = null; mutationError = null },
                 ) { Text("Cancel") }
             },
             confirmButton = {
                 Button(
-                    enabled = !deletingInProgress,
+                    enabled = !deletingInProgress && !mutationInProgress,
                     onClick = {
                         deletingInProgress = true
                         mutationError = null
+                        val request = GroupwareDavMutationSpec(
+                            kind = GroupwareDavKind.Event,
+                            mutation = GroupwareDavMutation.Delete,
+                            objectHref = event.href,
+                            etag = event.etag,
+                        ).toGroupwareDavRequest()
                         retainMutationRecovery(CalendarMutationPostcondition.Delete(event.href))
                         scope.launch {
-                            runCatching {
-                                val request = GroupwareDavMutationSpec(
-                                    kind = GroupwareDavKind.Event,
-                                    mutation = GroupwareDavMutation.Delete,
-                                    objectHref = event.href,
-                                    etag = event.etag,
-                                ).toGroupwareDavRequest()
+                            try {
                                 val response = services.executeGroupwareDav(session, request)
-                                check(response.status in 200..299) {
-                                    "Deleting the event failed (HTTP ${response.status})."
+                                if (response.status !in 200..299) {
+                                    if (groupwareMutationResponseProvesRejection(response.status)) {
+                                        clearMutationRecovery()
+                                        mutationError = "Deleting the event failed (HTTP ${response.status})."
+                                    } else {
+                                        mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                        loadAttempt += 1
+                                    }
+                                    return@launch
                                 }
-                            }.onSuccess {
                                 deleting = null
                                 selectedEventId = null
                                 loadAttempt += 1
-                            }.onFailure { failure ->
-                                if (failure is CancellationException) throw failure
-                                clearMutationRecovery()
-                                mutationError = failure.message ?: "Could not delete the event."
+                            } catch (failure: CancellationException) {
+                                throw failure
+                            } catch (_: Exception) {
+                                mutationError = CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                loadAttempt += 1
+                            } finally {
+                                deletingInProgress = false
                             }
-                            deletingInProgress = false
                         }
                     },
                 ) {
@@ -1183,7 +1225,7 @@ internal data class CalendarMutationRecoveryState(
     val postcondition: CalendarMutationPostcondition,
 ) {
     init {
-        require(accountScope.isNotBlank() && accountScope.none(Char::isISOControl))
+        require(accountScope.isCanonicalGroupwareMutationAccountScope())
     }
 }
 
@@ -1193,8 +1235,14 @@ private val calendarMutationRecoveryJson = Json {
 }
 
 internal fun groupwareMutationAccountScope(session: NextcloudSession, userId: String): String =
-    listOf(session.serverUrl.trimEnd('/'), session.loginName, userId)
-        .joinToString("|") { value -> "${value.length}:$value" }
+    publicContentSha256(
+        listOf(session.serverUrl.trimEnd('/'), session.loginName, userId)
+            .joinToString("|") { value -> "${value.length}:$value" }
+            .encodeToByteArray(),
+    )
+
+internal fun String.isCanonicalGroupwareMutationAccountScope(): Boolean =
+    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
 
 internal fun CalendarMutationRecoveryState.encodeForSavedState(): String =
     calendarMutationRecoveryJson.encodeToString(this)
@@ -1648,3 +1696,6 @@ private val MONTH_NAMES = listOf(
 )
 private val WEEK_DAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 private const val MAXIMUM_RETAINED_CALENDAR_MONTHS = 24
+private const val CALENDAR_MUTATION_RESULT_UNKNOWN_MESSAGE =
+    "The server response was interrupted, so the calendar result is unknown. " +
+        "Refresh to verify it before trying another change."

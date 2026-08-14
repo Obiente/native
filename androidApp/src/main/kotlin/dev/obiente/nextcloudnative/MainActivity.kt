@@ -172,7 +172,6 @@ class MainActivity : ComponentActivity() {
             previousSequence = incomingLinkSequence,
             action = intent?.action,
             dataUrl = intent?.dataString,
-            sharedText = intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString(),
         )
         incomingLinkSequence = state.sequence
         if (state.request != null) {

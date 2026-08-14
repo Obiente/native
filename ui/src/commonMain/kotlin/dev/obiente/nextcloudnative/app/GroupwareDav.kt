@@ -236,6 +236,14 @@ enum class GroupwareDavMutation {
     Delete,
 }
 
+/**
+ * A client-error response normally proves that the server refused the mutation. Timeouts and
+ * non-standard client-closed responses remain ambiguous because an intermediary can emit them
+ * after forwarding the request. Redirects and server errors are ambiguous for the same reason.
+ */
+internal fun groupwareMutationResponseProvesRejection(status: Int): Boolean =
+    status in 400..499 && status != 408 && status != 499
+
 data class GroupwareDavMutationSpec(
     val kind: GroupwareDavKind,
     val mutation: GroupwareDavMutation,

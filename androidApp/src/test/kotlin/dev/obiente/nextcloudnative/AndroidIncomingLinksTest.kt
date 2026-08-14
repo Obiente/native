@@ -11,13 +11,11 @@ class AndroidIncomingLinksTest {
             previousSequence = 0L,
             action = ANDROID_ACTION_VIEW,
             dataUrl = "https://cloud.example.test/f/42",
-            sharedText = null,
         )
         val second = nextAndroidIncomingLinkState(
             previousSequence = first.sequence,
             action = ANDROID_ACTION_VIEW,
             dataUrl = "nextcloudnative://open?url=https%3A%2F%2Fcloud.example.test%2Ff%2F43",
-            sharedText = null,
         )
 
         assertEquals(1L, first.sequence)
@@ -30,30 +28,25 @@ class AndroidIncomingLinksTest {
     }
 
     @Test
-    fun exactSharedUrlsCanEnterThroughTheAndroidShareSheet() {
+    fun genericTextSharesAreNotAcceptedAsIncomingLinks() {
         val state = nextAndroidIncomingLinkState(
             previousSequence = 7L,
-            action = ANDROID_ACTION_SEND,
-            dataUrl = null,
-            sharedText = "  https://cloud.example.test/index.php/apps/files/?dir=%2FPhotos  ",
+            action = "android.intent.action.SEND",
+            dataUrl = "https://cloud.example.test/index.php/apps/files/?dir=%2FPhotos",
         )
 
-        assertEquals(8L, state.sequence)
-        assertEquals(
-            "https://cloud.example.test/index.php/apps/files/?dir=%2FPhotos",
-            state.request?.url,
-        )
+        assertEquals(7L, state.sequence)
+        assertNull(state.request)
     }
 
     @Test
     fun unrelatedActionsAndUnsafePayloadsAreIgnoredWithoutAdvancing() {
         listOf(
-            Triple("android.intent.action.MAIN", "https://cloud.example.test/f/42", null),
-            Triple(ANDROID_ACTION_VIEW, "javascript:alert(1)", null),
-            Triple(ANDROID_ACTION_VIEW, "https://person@cloud.example.test/f/42", null),
-            Triple(ANDROID_ACTION_SEND, null, "See https://cloud.example.test/f/42"),
-        ).forEach { (action, data, text) ->
-            val state = nextAndroidIncomingLinkState(9L, action, data, text)
+            "android.intent.action.MAIN" to "https://cloud.example.test/f/42",
+            ANDROID_ACTION_VIEW to "javascript:alert(1)",
+            ANDROID_ACTION_VIEW to "https://person@cloud.example.test/f/42",
+        ).forEach { (action, data) ->
+            val state = nextAndroidIncomingLinkState(9L, action, data)
             assertEquals(9L, state.sequence)
             assertNull(state.request)
         }

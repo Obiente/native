@@ -117,6 +117,9 @@ fun NativeGroupwareContactsScreen(
     val scope = rememberCoroutineScope()
 
     fun retainMutationRecovery(postcondition: ContactMutationPostcondition) {
+        check(mutationRecoveryState == null && !mutationOperationInProgress) {
+            "Another contact change is still awaiting server verification."
+        }
         mutationRecoveryState = ContactMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
         mutationOperationInProgress = true
     }
@@ -245,15 +248,18 @@ fun NativeGroupwareContactsScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(NextcloudIcons.Back, contentDescription = "Back") }
+                    IconButton(onClick = onBack, enabled = !mutationInProgress) {
+                        Icon(NextcloudIcons.Back, contentDescription = "Back")
+                    }
                 },
                 actions = {
                     IconButton(onClick = { loadAttempt += 1 }) {
                         Icon(NextcloudIcons.Refresh, contentDescription = "Refresh contacts")
                     }
                     IconButton(
-                        onClick = { creating = true },
-                        enabled = ready?.addressBooks?.any(GroupwareAddressBook::writable) == true,
+                        onClick = { if (!mutationInProgress) creating = true },
+                        enabled = !mutationInProgress &&
+                            ready?.addressBooks?.any(GroupwareAddressBook::writable) == true,
                     ) {
                         Icon(NextcloudIcons.Add, contentDescription = "Create contact")
                     }
@@ -323,6 +329,15 @@ fun NativeGroupwareContactsScreen(
             onSave = { draft, addressBook ->
                 val uid = "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
                 val objectHref = "${addressBook.href}$uid.vcf"
+                val request = GroupwareDavMutationSpec(
+                    kind = GroupwareDavKind.Contact,
+                    mutation = GroupwareDavMutation.Create,
+                    objectHref = objectHref,
+                    content = createGroupwareContactContent(
+                        uid, draft.name, draft.email, draft.phone,
+                        draft.organization, draft.address, draft.notes,
+                    ),
+                ).toGroupwareDavRequest()
                 retainMutationRecovery(
                     ContactMutationPostcondition.Upsert(
                         href = objectHref,
@@ -334,27 +349,25 @@ fun NativeGroupwareContactsScreen(
                 )
                 scope.launch {
                     mutationError = null
-                    runCatching {
-                        val request = GroupwareDavMutationSpec(
-                            kind = GroupwareDavKind.Contact,
-                            mutation = GroupwareDavMutation.Create,
-                            objectHref = objectHref,
-                            content = createGroupwareContactContent(
-                                uid, draft.name, draft.email, draft.phone,
-                                draft.organization, draft.address, draft.notes,
-                            ),
-                        ).toGroupwareDavRequest()
+                    try {
                         val response = services.executeGroupwareDav(session, request)
-                        check(response.status in 200..299) {
-                            "Creating the contact failed (HTTP ${response.status})."
+                        if (response.status !in 200..299) {
+                            if (groupwareMutationResponseProvesRejection(response.status)) {
+                                clearMutationRecovery()
+                                mutationError = "Creating the contact failed (HTTP ${response.status})."
+                            } else {
+                                mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                loadAttempt += 1
+                            }
+                            return@launch
                         }
-                    }.onSuccess {
                         creating = false
                         loadAttempt += 1
-                    }.onFailure { failure ->
-                        if (failure is CancellationException) throw failure
-                        clearMutationRecovery()
-                        mutationError = failure.message ?: "Could not create the contact."
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (_: Exception) {
+                        mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
+                        loadAttempt += 1
                     }
                 }
             },
@@ -374,6 +387,16 @@ fun NativeGroupwareContactsScreen(
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationCancelled = onNavigationCancelled,
                 onSave = { draft, _ ->
+                    val request = GroupwareDavMutationSpec(
+                        kind = GroupwareDavKind.Contact,
+                        mutation = GroupwareDavMutation.Update,
+                        objectHref = contact.href,
+                        etag = contact.etag,
+                        content = updateGroupwareContactContent(
+                            contact, draft.name, draft.email, draft.phone,
+                            draft.organization, draft.address, draft.notes,
+                        ),
+                    ).toGroupwareDavRequest()
                     retainMutationRecovery(
                         ContactMutationPostcondition.Upsert(
                             href = contact.href,
@@ -385,29 +408,26 @@ fun NativeGroupwareContactsScreen(
                     )
                     scope.launch {
                         mutationError = null
-                        runCatching {
-                            val request = GroupwareDavMutationSpec(
-                                kind = GroupwareDavKind.Contact,
-                                mutation = GroupwareDavMutation.Update,
-                                objectHref = contact.href,
-                                etag = contact.etag,
-                                content = updateGroupwareContactContent(
-                                    contact, draft.name, draft.email, draft.phone,
-                                    draft.organization, draft.address, draft.notes,
-                                ),
-                            ).toGroupwareDavRequest()
+                        try {
                             val response = services.executeGroupwareDav(session, request)
-                            check(response.status in 200..299) {
-                                "Saving the contact failed (HTTP ${response.status})."
+                            if (response.status !in 200..299) {
+                                if (groupwareMutationResponseProvesRejection(response.status)) {
+                                    clearMutationRecovery()
+                                    mutationError = "Saving the contact failed (HTTP ${response.status})."
+                                } else {
+                                    mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                    loadAttempt += 1
+                                }
+                                return@launch
                             }
-                        }.onSuccess {
                             editing = false
                             selectedContactHref = null
                             loadAttempt += 1
-                        }.onFailure { failure ->
-                            if (failure is CancellationException) throw failure
-                            clearMutationRecovery()
-                            mutationError = failure.message ?: "Could not save the contact."
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (_: Exception) {
+                            mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
+                            loadAttempt += 1
                         }
                     }
                 },
@@ -415,54 +435,72 @@ fun NativeGroupwareContactsScreen(
         } else if (!confirmDelete) {
             ContactDetailDialog(
                 contact = contact,
-                canEdit = addressBook?.writable == true && contact.etag != null,
+                canEdit = !mutationInProgress && addressBook?.writable == true && contact.etag != null,
                 error = mutationError,
                 onDismiss = { selectedContactHref = null; mutationError = null },
-                onEdit = { editing = true },
-                onDelete = { confirmDelete = true },
+                onEdit = { if (!mutationInProgress) editing = true },
+                onDelete = { if (!mutationInProgress) confirmDelete = true },
             )
         }
         if (confirmDelete) {
             AlertDialog(
-                onDismissRequest = { confirmDelete = false },
+                onDismissRequest = { if (!mutationInProgress) confirmDelete = false },
                 title = { Text("Delete ${contact.displayName}?") },
                 text = { Text("This removes the contact from Nextcloud. This cannot be undone.") },
                 confirmButton = {
-                    TextButton(onClick = {
-                        confirmDelete = false
-                        retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))
-                        scope.launch {
-                            runCatching {
-                                val request = GroupwareDavMutationSpec(
-                                    kind = GroupwareDavKind.Contact,
-                                    mutation = GroupwareDavMutation.Delete,
-                                    objectHref = contact.href,
-                                    etag = contact.etag,
-                                ).toGroupwareDavRequest()
-                                val response = services.executeGroupwareDav(session, request)
-                                check(response.status in 200..299) {
-                                    "Deleting the contact failed (HTTP ${response.status})."
+                    TextButton(
+                        enabled = !mutationInProgress,
+                        onClick = {
+                            confirmDelete = false
+                            val request = GroupwareDavMutationSpec(
+                                kind = GroupwareDavKind.Contact,
+                                mutation = GroupwareDavMutation.Delete,
+                                objectHref = contact.href,
+                                etag = contact.etag,
+                            ).toGroupwareDavRequest()
+                            retainMutationRecovery(ContactMutationPostcondition.Delete(contact.href))
+                            scope.launch {
+                                try {
+                                    val response = services.executeGroupwareDav(session, request)
+                                    if (response.status !in 200..299) {
+                                        if (groupwareMutationResponseProvesRejection(response.status)) {
+                                            clearMutationRecovery()
+                                            mutationError = "Deleting the contact failed (HTTP ${response.status})."
+                                        } else {
+                                            mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                            loadAttempt += 1
+                                        }
+                                        return@launch
+                                    }
+                                    selectedContactHref = null
+                                    loadAttempt += 1
+                                } catch (failure: CancellationException) {
+                                    throw failure
+                                } catch (_: Exception) {
+                                    mutationError = CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE
+                                    loadAttempt += 1
                                 }
-                            }.onSuccess {
-                                selectedContactHref = null
-                                loadAttempt += 1
-                            }.onFailure { failure ->
-                                if (failure is CancellationException) throw failure
-                                clearMutationRecovery()
-                                mutationError = failure.message ?: "Could not delete the contact."
                             }
-                        }
-                    }) {
+                        },
+                    ) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
                     }
                 },
-                dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+                dismissButton = {
+                    TextButton(
+                        enabled = !mutationInProgress,
+                        onClick = { confirmDelete = false },
+                    ) { Text("Cancel") }
+                },
             )
         }
     }
 }
 
 private const val MAXIMUM_RETAINED_CONTACT_ACCOUNTS = 4
+private const val CONTACT_MUTATION_RESULT_UNKNOWN_MESSAGE =
+    "The server response was interrupted, so the contact result is unknown. " +
+        "Refresh to verify it before trying another change."
 
 @Composable
 private fun ContactList(contacts: List<GroupwareContact>, onSelect: (GroupwareContact) -> Unit) {
@@ -574,7 +612,15 @@ internal data class ContactDraft(
     val organization: String,
     val address: String,
     val notes: String,
-)
+) {
+    fun normalizedForDav(): ContactDraft = copy(
+        email = email.trim(),
+        phone = phone.trim(),
+        organization = organization.trim(),
+        address = address.trim(),
+        notes = notes.trim(),
+    )
+}
 
 @Serializable
 internal sealed interface ContactMutationPostcondition {
@@ -591,6 +637,7 @@ internal sealed interface ContactMutationPostcondition {
     ) : ContactMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
+            val expected = draft.normalizedForDav()
             val contact = parseGroupwareContact(
                 addressBookHref = addressBookHref,
                 href = href,
@@ -600,12 +647,12 @@ internal sealed interface ContactMutationPostcondition {
             return contact.href == href &&
                 contact.uid == expectedUid &&
                 (previousEtag == null || contact.etag != null && contact.etag != previousEtag) &&
-                contact.displayName == draft.name &&
-                contact.emails.firstOrNull().orEmpty() == draft.email &&
-                contact.phones.firstOrNull().orEmpty() == draft.phone &&
-                contact.organization.orEmpty() == draft.organization &&
-                contact.address.orEmpty() == draft.address &&
-                contact.notes.orEmpty() == draft.notes
+                contact.displayName == expected.name &&
+                contact.emails.firstOrNull().orEmpty() == expected.email &&
+                contact.phones.firstOrNull().orEmpty() == expected.phone &&
+                contact.organization.orEmpty() == expected.organization &&
+                contact.address.orEmpty() == expected.address &&
+                contact.notes.orEmpty() == expected.notes
         }
     }
 
@@ -622,7 +669,7 @@ internal data class ContactMutationRecoveryState(
     val postcondition: ContactMutationPostcondition,
 ) {
     init {
-        require(accountScope.isNotBlank() && accountScope.none(Char::isISOControl))
+        require(accountScope.isCanonicalGroupwareMutationAccountScope())
     }
 }
 
