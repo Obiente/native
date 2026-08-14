@@ -301,7 +301,7 @@ fun GenericNativeAppScreen(
         nativeMailWorkspaceEligible = mailWorkspaceEligible,
     )
     val collectionSearchContextKey = remember(datasetContext) {
-        buildString {
+        datasetContext.collectionSearchScopeKey ?: buildString {
             append(datasetContext.parentResourceId.orEmpty())
             append('\u0000')
             append(datasetContext.parentRecord?.id.orEmpty())
@@ -315,8 +315,8 @@ fun GenericNativeAppScreen(
     }
     var collectionQuery by rememberSaveable(
         schema.app.id,
-        view.id,
         collectionSearchContextKey,
+        view.id.takeIf { datasetContext.collectionSearchScopeKey == null },
     ) { mutableStateOf("") }
     val visiblePresentedRecords = remember(
         presentedResource,

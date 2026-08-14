@@ -281,6 +281,13 @@ class DynamicNavigationParameterInheritanceTest {
             sourceActionId = "message.read",
             confidence = Confidence.verified,
         )
+        val newerDetailSnapshot = DynamicNavigationSnapshot(
+            viewId = detail.id,
+            resourceId = detail.resourceId,
+            record = NativeRecord("message-1", mapOf("mailboxId" to "9")),
+            recordResourceId = "messages",
+            pathParameterValues = mapOf("id" to "message-1"),
+        )
 
         assertEquals(
             mailboxSnapshot,
@@ -289,7 +296,7 @@ class DynamicNavigationParameterInheritanceTest {
                 paginationViewId = "messages.collection",
                 selectedView = detail,
                 selectedRecordResourceId = "messages",
-                navigationHistory = listOf(mailboxSnapshot),
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
             ),
         )
         assertNull(
@@ -298,7 +305,7 @@ class DynamicNavigationParameterInheritanceTest {
                 paginationViewId = "messages.collection",
                 selectedView = detail,
                 selectedRecordResourceId = "messages",
-                navigationHistory = listOf(mailboxSnapshot),
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
             ),
         )
         assertNull(
@@ -307,7 +314,60 @@ class DynamicNavigationParameterInheritanceTest {
                 paginationViewId = "other.collection",
                 selectedView = detail,
                 selectedRecordResourceId = "messages",
-                navigationHistory = listOf(mailboxSnapshot),
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
+            ),
+        )
+        val collection = ViewSpec(
+            id = mailboxSnapshot.viewId,
+            title = "Messages",
+            resourceId = mailboxSnapshot.resourceId,
+            component = NativeComponent.collectionList,
+            sourceActionId = "messages.list",
+            confidence = Confidence.verified,
+        )
+        assertEquals(
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = collection,
+                selectedRecordResourceId = mailboxSnapshot.recordResourceId,
+                selectedRecord = mailboxSnapshot.record,
+                selectedPathParameterValues = mailboxSnapshot.pathParameterValues,
+                navigationHistory = emptyList(),
+            ),
+            nativeMailCollectionScopeKey(
+                hasMailWorkspaceSemantics = true,
+                selectedView = detail,
+                selectedRecordResourceId = "messages",
+                selectedRecord = newerDetailSnapshot.record,
+                selectedPathParameterValues = newerDetailSnapshot.pathParameterValues,
+                navigationHistory = listOf(mailboxSnapshot, newerDetailSnapshot),
+            ),
+        )
+    }
+
+    @Test
+    fun `partial refresh keeps a complete stale collection`() {
+        val cached = listOf(
+            NativeRecord("message-3", emptyMap()),
+            NativeRecord("message-2", emptyMap()),
+            NativeRecord("message-1", emptyMap()),
+        )
+        val sparse = listOf(NativeRecord("message-3", emptyMap()))
+
+        assertEquals(
+            cached,
+            preferredDynamicPartialRefreshRecords(sparse, cached, "Could not load every message."),
+        )
+        assertEquals(
+            sparse,
+            preferredDynamicPartialRefreshRecords(sparse, cached, partialFailureMessage = null),
+        )
+        assertEquals(
+            sparse,
+            preferredDynamicPartialRefreshRecords(
+                freshRecords = sparse,
+                staleRecords = null,
+                partialFailureMessage = "Partial",
             ),
         )
     }

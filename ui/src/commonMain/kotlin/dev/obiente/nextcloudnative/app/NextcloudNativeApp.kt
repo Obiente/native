@@ -3988,28 +3988,35 @@ private fun DynamicDiscoveredAppScreen(
             outcome
         }.onSuccess { outcome ->
             val records = outcome.records
-            val updatedRecords = recordsByResourceId + (view.resourceId to records)
+            val presentedRecords = preferredDynamicPartialRefreshRecords(
+                freshRecords = records,
+                staleRecords = staleSnapshot?.records,
+                partialFailureMessage = outcome.partialFailureMessage,
+            )
+            val updatedRecords = recordsByResourceId + (view.resourceId to presentedRecords)
             val nextPagination = if (outcome.partialFailureMessage == null) {
                 descriptor.resolvedDynamicPaginationSpec(view.sourceActionId, values)
-                    ?.toDynamicPaginationState(view.id, records)
+                    ?.toDynamicPaginationState(view.id, presentedRecords)
             } else {
                 null
             }
             recordsByResourceId = updatedRecords
-            viewState = NativeScreenState.Ready(records)
+            viewState = NativeScreenState.Ready(presentedRecords)
             dynamicRefreshError = outcome.partialFailureMessage
             mutationReconciliationGeneration += 1
-            records.firstOrNull()?.let { authoritative ->
-                if (
-                    view.component == NativeComponent.detail &&
-                    selectedRecord?.id == authoritative.id
-                ) {
-                    // Promote the freshly loaded server record over the sparse list stub. This
-                    // gives contextual actions a declared identity and prefills edit forms with
-                    // the complete current recipe.
-                    selectedRecord = authoritative
+            records.firstOrNull()
+                ?.takeIf { outcome.partialFailureMessage == null }
+                ?.let { authoritative ->
+                    if (
+                        view.component == NativeComponent.detail &&
+                        selectedRecord?.id == authoritative.id
+                    ) {
+                        // Promote the freshly loaded server record over the sparse list stub. This
+                        // gives contextual actions a declared identity and prefills edit forms with
+                        // the complete current recipe.
+                        selectedRecord = authoritative
+                    }
                 }
-            }
             if (retainedMailPagination == null) {
                 paginationState = nextPagination
             }
@@ -4596,6 +4603,15 @@ private fun DynamicDiscoveredAppScreen(
         loadAttempt,
     ) {
         mailCollectionSummaryError = null
+        val retainedMailboxCollection = retainedMailCollectionSnapshot(
+            hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+            selectedView = selectedView,
+            selectedRecordResourceId = selectedRecordResourceId,
+            navigationHistory = navigationHistory,
+        )
+        if (mailCollectionSummaryDestinations.isEmpty() && retainedMailboxCollection != null) {
+            return@LaunchedEffect
+        }
         val summaryResourceIds = mailCollectionSummaryDestinations
             .mapTo(linkedSetOf(), DynamicNavigationDestination::resourceId)
         val preparation = prepareDynamicMailboxCollectionSummaries(
@@ -5719,6 +5735,14 @@ private fun DynamicDiscoveredAppScreen(
                 relatedRecords = datasetRelatedRecords,
                 relatedRecordPaging = relatedRecordPaging,
                 mailCollectionSummaryResourceIds = trackedMailCollectionSummaryResourceIds,
+                collectionSearchScopeKey = nativeMailCollectionScopeKey(
+                    hasMailWorkspaceSemantics = descriptor.hasNativeMailWorkspaceSemantics(),
+                    selectedView = selectedView,
+                    selectedRecordResourceId = selectedRecordResourceId,
+                    selectedRecord = selectedRecord,
+                    selectedPathParameterValues = selectedPathParameterValues,
+                    navigationHistory = navigationHistory,
+                ),
                 fieldChoices = nativeChoresMemberFieldChoices(schema, retainedChoresTeamRecord),
             )
             val mailWorkspaceSupportsSelection = schema.resource(selectedView.resourceId)?.let { resource ->
@@ -6634,18 +6658,82 @@ internal fun retainedMailPaginationSnapshot(
     selectedRecordResourceId: String?,
     navigationHistory: List<DynamicNavigationSnapshot>,
 ): DynamicNavigationSnapshot? {
+    if (paginationViewId == null) return null
+    return retainedMailCollectionSnapshot(
+        hasMailWorkspaceSemantics = hasMailWorkspaceSemantics,
+        selectedView = selectedView,
+        selectedRecordResourceId = selectedRecordResourceId,
+        navigationHistory = navigationHistory,
+    )?.takeIf { snapshot -> snapshot.viewId == paginationViewId }
+}
+
+internal fun retainedMailCollectionSnapshot(
+    hasMailWorkspaceSemantics: Boolean,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): DynamicNavigationSnapshot? {
     if (
         !hasMailWorkspaceSemantics ||
-        paginationViewId == null ||
         selectedView.component != NativeComponent.detail ||
         !selectedRecordResourceId.isDynamicMessageResource()
     ) {
         return null
     }
-    return navigationHistory.lastOrNull()?.takeIf { snapshot ->
-        snapshot.viewId == paginationViewId && snapshot.resourceId.isDynamicMessageResource()
+    return navigationHistory.findLast(DynamicNavigationSnapshot::isNativeMailboxCollectionSnapshot)
+}
+
+internal fun nativeMailCollectionScopeKey(
+    hasMailWorkspaceSemantics: Boolean,
+    selectedView: ViewSpec,
+    selectedRecordResourceId: String?,
+    selectedRecord: NativeRecord?,
+    selectedPathParameterValues: Map<String, String>,
+    navigationHistory: List<DynamicNavigationSnapshot>,
+): String? {
+    if (!hasMailWorkspaceSemantics) return null
+    val retained = retainedMailCollectionSnapshot(
+        hasMailWorkspaceSemantics = true,
+        selectedView = selectedView,
+        selectedRecordResourceId = selectedRecordResourceId,
+        navigationHistory = navigationHistory,
+    )
+    val scope = retained ?: DynamicNavigationSnapshot(
+        viewId = selectedView.id,
+        resourceId = selectedView.resourceId,
+        record = selectedRecord,
+        recordResourceId = selectedRecordResourceId,
+        pathParameterValues = selectedPathParameterValues,
+    ).takeIf(DynamicNavigationSnapshot::isNativeMailboxCollectionSnapshot)
+        ?: return null
+    return buildString {
+        append(scope.viewId)
+        append('\u0000')
+        append(scope.recordResourceId)
+        append('\u0000')
+        append(scope.record?.id)
+        scope.pathParameterValues.toSortedMap().forEach { (name, value) ->
+            append('\u0000')
+            append(name)
+            append('=')
+            append(value)
+        }
     }
 }
+
+private fun DynamicNavigationSnapshot.isNativeMailboxCollectionSnapshot(): Boolean =
+    resourceId.isDynamicMessageResource() &&
+        record != null &&
+        recordResourceId != null &&
+        !recordResourceId.isDynamicMessageResource()
+
+internal fun preferredDynamicPartialRefreshRecords(
+    freshRecords: List<NativeRecord>,
+    staleRecords: List<NativeRecord>?,
+    partialFailureMessage: String?,
+): List<NativeRecord> = staleRecords
+    ?.takeIf { records -> partialFailureMessage != null && records.isNotEmpty() }
+    ?: freshRecords
 
 private fun DynamicPaginationState.toCheckpoint(): DynamicPaginationCheckpoint = DynamicPaginationCheckpoint(
     nextPageNumber = nextPageNumber,

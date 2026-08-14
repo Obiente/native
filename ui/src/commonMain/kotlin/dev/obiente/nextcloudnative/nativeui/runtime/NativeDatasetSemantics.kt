@@ -204,6 +204,8 @@ data class NativeDatasetContext(
     val relatedRecordPaging: Map<String, NativeRelatedRecordPaging> = emptyMap(),
     /** Resources proven by navigation semantics to contain mailbox collection counts. */
     val mailCollectionSummaryResourceIds: Set<String> = emptySet(),
+    /** Stable adaptive collection identity shared by a collection and its adjacent detail pane. */
+    val collectionSearchScopeKey: String? = null,
     /** Exact typed choices projected from an already-verified active record or embedded relation. */
     val fieldChoices: Map<String, List<NativeFieldChoice>> = emptyMap(),
 )
