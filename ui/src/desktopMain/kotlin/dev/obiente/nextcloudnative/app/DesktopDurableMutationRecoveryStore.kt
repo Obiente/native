@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.channels.FileChannel
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
@@ -14,6 +15,7 @@ import java.nio.file.attribute.AclFileAttributeView
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.ConcurrentHashMap
 
 internal class DesktopDurableMutationRecoveryStore(
     private val root: File,
@@ -22,6 +24,13 @@ internal class DesktopDurableMutationRecoveryStore(
         val target = target(accountScope, kind)
         if (!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
         val privacy = requirePrivateDirectory(root)
+        return withExclusiveStoreLock(root, privacy) {
+            loadTarget(target, privacy)
+        }
+    }
+
+    private fun loadTarget(target: File, privacy: DesktopRecoveryPrivacy): String? {
+        if (!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
         check(Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             "Mutation recovery state is not a regular file."
         }
@@ -42,44 +51,83 @@ internal class DesktopDurableMutationRecoveryStore(
         val target = target(accountScope, kind)
         return runCatching {
             val privacy = createOrRepairPrivateDirectory(root)
-            val temporary = File(root, ".${target.name}.part")
-            if (Files.deleteIfExists(temporary.toPath())) syncDirectory(root, privacy)
-            createPrivateFile(temporary, privacy)
-            FileOutputStream(temporary).use { output ->
-                output.write(bytes)
-                output.fd.sync()
+            withExclusiveStoreLock(root, privacy) {
+                if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) return@withExclusiveStoreLock false
+                val temporary = File(root, ".${target.name}.part")
+                if (Files.deleteIfExists(temporary.toPath())) syncDirectory(root, privacy)
+                createPrivateFile(temporary, privacy)
+                try {
+                    FileOutputStream(temporary).use { output ->
+                        output.write(bytes)
+                        output.fd.sync()
+                    }
+                    requirePrivatePath(temporary, privacy, directory = false)
+                    Files.move(
+                        temporary.toPath(),
+                        target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                    )
+                    check(Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                        "Could not publish mutation recovery state."
+                    }
+                    requirePrivatePath(target, privacy, directory = false)
+                    syncDirectory(root, privacy)
+                    true
+                } finally {
+                    if (Files.deleteIfExists(temporary.toPath())) syncDirectory(root, privacy)
+                }
             }
-            requirePrivatePath(temporary, privacy, directory = false)
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-            check(Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                "Could not publish mutation recovery state."
-            }
-            requirePrivatePath(target, privacy, directory = false)
-            syncDirectory(root, privacy)
-        }.isSuccess
+        }.getOrDefault(false)
     }
 
-    fun clear(accountScope: String, kind: DurableMutationRecoveryKind): Boolean {
+    fun clear(accountScope: String, kind: DurableMutationRecoveryKind, expectedEncoded: String): Boolean {
+        val expectedBytes = expectedEncoded.encodeToByteArray()
+        if (expectedBytes.isEmpty() || expectedBytes.size > MAX_DURABLE_MUTATION_RECOVERY_BYTES) return false
         val target = target(accountScope, kind)
         if (!Files.exists(root.toPath(), LinkOption.NOFOLLOW_LINKS)) return true
         return runCatching {
             val privacy = requirePrivateDirectory(root)
-            val temporary = File(root, ".${target.name}.part")
-            val changed = Files.deleteIfExists(temporary.toPath()) or Files.deleteIfExists(target.toPath())
-            if (changed) syncDirectory(root, privacy)
-            check(!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS))
-            check(!Files.exists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS))
-        }.isSuccess
+            withExclusiveStoreLock(root, privacy) {
+                val actual = loadTarget(target, privacy) ?: return@withExclusiveStoreLock true
+                if (actual != expectedEncoded) return@withExclusiveStoreLock false
+                check(Files.deleteIfExists(target.toPath()))
+                syncDirectory(root, privacy)
+                check(!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS))
+                true
+            }
+        }.getOrDefault(false)
     }
 
     private fun target(accountScope: String, kind: DurableMutationRecoveryKind): File {
         require(accountScope.isCanonicalGroupwareMutationAccountScope()) { "The mutation account scope is invalid." }
         return File(root, "${kind.storageKey}-$accountScope.json")
+    }
+}
+
+private val desktopRecoveryProcessLocks = ConcurrentHashMap<String, Any>()
+
+private fun <T> withExclusiveStoreLock(
+    root: File,
+    privacy: DesktopRecoveryPrivacy,
+    operation: () -> T,
+): T {
+    val processLock = desktopRecoveryProcessLocks.computeIfAbsent(
+        root.toPath().toAbsolutePath().normalize().toString(),
+    ) { Any() }
+    return synchronized(processLock) {
+        val lockFile = File(root, ".mutation-recovery.lock")
+        if (!Files.exists(lockFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                createPrivateFile(lockFile, privacy)
+                syncDirectory(root, privacy)
+            } catch (_: FileAlreadyExistsException) {
+                // A separate process created the shared lock between the existence check and create.
+            }
+        }
+        requirePrivatePath(lockFile, privacy, directory = false)
+        FileChannel.open(lockFile.toPath(), StandardOpenOption.WRITE).use { channel ->
+            channel.lock().use { operation() }
+        }
     }
 }
 

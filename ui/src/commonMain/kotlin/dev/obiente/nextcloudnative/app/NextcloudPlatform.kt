@@ -594,6 +594,7 @@ interface NextcloudPlatformServices {
     suspend fun clearDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
     ): Boolean = false
 
     /** Loads an account-scoped verified app contract without any cached user records. */

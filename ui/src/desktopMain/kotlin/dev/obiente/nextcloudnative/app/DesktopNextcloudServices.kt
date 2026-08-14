@@ -3543,7 +3543,10 @@ class DesktopNextcloudServices(
     override suspend fun clearDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
-    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.clear(accountScope, kind) }
+        expectedEncoded: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        durableMutationRecovery.clear(accountScope, kind, expectedEncoded)
+    }
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,

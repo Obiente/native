@@ -190,17 +190,20 @@ internal fun NextcloudNotesScreen(
                 NextcloudConditionalRead.NotModified -> Unit
             }
             deletionRecovery?.let { recovery ->
+                val expectedEncoded = deletionRecoveryState ?: return@let
                 when (val presence = services.inspectNotePresence(session, recovery.noteId)) {
                     NextcloudNotePresence.Absent -> {
                         if (services.clearDurableMutationRecovery(
                                 accountScope,
                                 DurableMutationRecoveryKind.NoteDeletion,
+                                expectedEncoded,
                             )
                         ) {
                             deletionRecoveryState = null
                             sharedNextcloudNotesCache.remove(session, recovery.noteId)
                         } else {
-                            error = "The verified note-deletion recovery record could not be cleared. Free local storage and retry."
+                            error = "The verified note-deletion recovery record could not be cleared safely. Refreshing the current pending change."
+                            loadAttempt += 1
                         }
                     }
                     is NextcloudNotePresence.Present -> {
@@ -458,14 +461,16 @@ internal fun NextcloudNotesScreen(
                 showRecoveryOptions = false
                 loadAttempt += 1
             },
-            onReset = {
+            onReset = reset@{
                 if (!recoveryResetInProgress) {
+                    val expectedEncoded = deletionRecoveryState ?: return@reset
                     recoveryResetInProgress = true
                     scope.launch {
                         val cleared = try {
                             services.clearDurableMutationRecovery(
                                 accountScope,
                                 DurableMutationRecoveryKind.NoteDeletion,
+                                expectedEncoded,
                             )
                         } catch (failure: CancellationException) {
                             throw failure
@@ -477,7 +482,8 @@ internal fun NextcloudNotesScreen(
                             error = null
                             showRecoveryOptions = false
                         } else {
-                            error = "The note recovery record could not be reset. Free local storage and retry."
+                            error = "The note recovery record could not be reset safely. Refreshing the current pending change."
+                            loadAttempt += 1
                         }
                         recoveryResetInProgress = false
                     }
@@ -927,11 +933,13 @@ internal fun NextcloudNoteEditor(
         showDeleteConfirmation = true
         deleting = true
         try {
+            val expectedEncoded = deletionRecoveryState ?: return@LaunchedEffect
             when (val presence = services.inspectNotePresence(session, recovery.noteId)) {
                 NextcloudNotePresence.Absent -> {
                     if (services.clearDurableMutationRecovery(
                             accountScope,
                             DurableMutationRecoveryKind.NoteDeletion,
+                            expectedEncoded,
                         )
                     ) {
                         deletionRecoveryState = null
@@ -942,7 +950,8 @@ internal fun NextcloudNoteEditor(
                             onBack = onBack,
                         )
                     } else {
-                        deleteError = "The verified note-deletion recovery record could not be cleared. Free local storage and retry."
+                        deleteError = "The verified note-deletion recovery record could not be cleared safely. Refreshing the current pending change."
+                        loadAttempt += 1
                     }
                 }
                 is NextcloudNotePresence.Present -> {
@@ -1345,7 +1354,21 @@ internal fun NextcloudNoteEditor(
                                     false
                                 }
                                 if (!saved) {
-                                    deleteError = "The note deletion could not be safely recorded. Check local storage and try again."
+                                    deletionRecoveryState = try {
+                                        services.loadDurableMutationRecovery(
+                                            accountScope,
+                                            DurableMutationRecoveryKind.NoteDeletion,
+                                        )
+                                    } catch (failure: CancellationException) {
+                                        throw failure
+                                    } catch (_: Exception) {
+                                        null
+                                    }
+                                    deleteError = if (deletionRecoveryState != null) {
+                                        "Another note deletion is still awaiting server verification."
+                                    } else {
+                                        "The note deletion could not be safely recorded. Check local storage and try again."
+                                    }
                                     deleting = false
                                     return@launch
                                 }
@@ -1375,12 +1398,19 @@ internal fun NextcloudNoteEditor(
                             try {
                                 when (val presence = services.inspectNotePresence(session, loaded.id)) {
                                     NextcloudNotePresence.Absent -> {
+                                        val expectedEncoded = deletionRecoveryState
+                                        if (expectedEncoded == null) {
+                                            deleteError = "The deletion recovery record is unavailable. Refresh and try again."
+                                            return@launch
+                                        }
                                         if (!services.clearDurableMutationRecovery(
                                                 accountScope,
                                                 DurableMutationRecoveryKind.NoteDeletion,
+                                                expectedEncoded,
                                             )
                                         ) {
-                                            deleteError = "The deletion was verified, but its recovery record could not be cleared. Free local storage and retry."
+                                            deleteError = "The deletion was verified, but its recovery record could not be cleared safely. Refreshing the current pending change."
+                                            loadAttempt += 1
                                             return@launch
                                         }
                                         deletionRecoveryState = null
@@ -1440,14 +1470,16 @@ internal fun NextcloudNoteEditor(
                 showRecoveryOptions = false
                 loadAttempt += 1
             },
-            onReset = {
+            onReset = reset@{
                 if (!recoveryResetInProgress) {
+                    val expectedEncoded = deletionRecoveryState ?: return@reset
                     recoveryResetInProgress = true
                     scope.launch {
                         val cleared = try {
                             services.clearDurableMutationRecovery(
                                 accountScope,
                                 DurableMutationRecoveryKind.NoteDeletion,
+                                expectedEncoded,
                             )
                         } catch (failure: CancellationException) {
                             throw failure
@@ -1460,7 +1492,8 @@ internal fun NextcloudNoteEditor(
                             showDeleteConfirmation = false
                             showRecoveryOptions = false
                         } else {
-                            deleteError = "The note recovery record could not be reset. Free local storage and retry."
+                            deleteError = "The note recovery record could not be reset safely. Refreshing the current pending change."
+                            loadAttempt += 1
                         }
                         recoveryResetInProgress = false
                     }

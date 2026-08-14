@@ -12,19 +12,21 @@ import kotlin.test.assertTrue
 
 class DesktopDurableMutationRecoveryStoreTest {
     @Test
-    fun `recovery state is atomically replaced and durably cleared`() {
+    fun `recovery state is exclusively published and compare cleared across instances`() {
         val root = Files.createTempDirectory("mutation-recovery-test").toFile()
         try {
-            val store = DesktopDurableMutationRecoveryStore(root)
+            val firstStore = DesktopDurableMutationRecoveryStore(root)
+            val secondStore = DesktopDurableMutationRecoveryStore(root)
             val scope = "a".repeat(64)
 
-            assertNull(store.load(scope, DurableMutationRecoveryKind.Calendar))
-            assertTrue(store.save(scope, DurableMutationRecoveryKind.Calendar, "first"))
-            assertEquals("first", store.load(scope, DurableMutationRecoveryKind.Calendar))
-            assertTrue(store.save(scope, DurableMutationRecoveryKind.Calendar, "second"))
-            assertEquals("second", store.load(scope, DurableMutationRecoveryKind.Calendar))
-            assertTrue(store.clear(scope, DurableMutationRecoveryKind.Calendar))
-            assertNull(store.load(scope, DurableMutationRecoveryKind.Calendar))
+            assertNull(firstStore.load(scope, DurableMutationRecoveryKind.Calendar))
+            assertTrue(firstStore.save(scope, DurableMutationRecoveryKind.Calendar, "first"))
+            assertFalse(secondStore.save(scope, DurableMutationRecoveryKind.Calendar, "second"))
+            assertEquals("first", secondStore.load(scope, DurableMutationRecoveryKind.Calendar))
+            assertFalse(secondStore.clear(scope, DurableMutationRecoveryKind.Calendar, "second"))
+            assertEquals("first", firstStore.load(scope, DurableMutationRecoveryKind.Calendar))
+            assertTrue(firstStore.clear(scope, DurableMutationRecoveryKind.Calendar, "first"))
+            assertNull(secondStore.load(scope, DurableMutationRecoveryKind.Calendar))
         } finally {
             root.deleteRecursively()
         }

@@ -137,7 +137,18 @@ fun NativeGroupwareContactsScreen(
             false
         }
         if (!saved) {
-            mutationError = "The contact change could not be safely recorded. Check local storage and try again."
+            mutationRecoveryState = try {
+                services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                null
+            }
+            mutationError = if (mutationRecoveryState != null) {
+                "Another contact change is still awaiting server verification."
+            } else {
+                "The contact change could not be safely recorded. Check local storage and try again."
+            }
             mutationOperationInProgress = false
             onMutationInProgressChanged(mutationRecoveryState != null || !mutationRecoveryLoaded)
             return false
@@ -147,15 +158,28 @@ fun NativeGroupwareContactsScreen(
     }
 
     suspend fun clearMutationRecovery(): Boolean {
+        val expectedEncoded = mutationRecoveryState ?: return false
         val cleared = try {
-            services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)
+            services.clearDurableMutationRecovery(
+                accountScope,
+                DurableMutationRecoveryKind.Contacts,
+                expectedEncoded,
+            )
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
             false
         }
         if (!cleared) {
-            mutationError = "The verified contact recovery record could not be cleared. Free local storage and refresh."
+            val current = try {
+                services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                null
+            }
+            if (current != null) mutationRecoveryState = current
+            mutationError = "The verified contact recovery record could not be cleared safely. Refresh to inspect the current pending change."
             return false
         }
         mutationRecoveryState = null

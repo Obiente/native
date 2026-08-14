@@ -740,24 +740,36 @@ internal class AndroidNextcloudServices(
         if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) {
             return@withContext false
         }
-        preferences.edit()
-            .putString(durableMutationRecoveryKey(accountScope, kind), encoded)
-            .commit()
+        synchronized(durableMutationRecoveryLock) {
+            val key = durableMutationRecoveryKey(accountScope, kind)
+            if (preferences.contains(key)) return@synchronized false
+            preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
+        }
     }
 
     override suspend fun clearDurableMutationRecovery(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
+        if (expectedEncoded.isEmpty() ||
+            expectedEncoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES
+        ) return@withContext false
         val key = durableMutationRecoveryKey(accountScope, kind)
-        preferences.edit().remove(key).commit() && !preferences.contains(key)
+        synchronized(durableMutationRecoveryLock) {
+            val actual = preferences.getString(key, null) ?: return@synchronized true
+            if (actual != expectedEncoded) return@synchronized false
+            preferences.edit().remove(key).commit() && !preferences.contains(key)
+        }
     }
 
     private fun durableMutationRecoveryKey(
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): String = "durable-mutation-${kind.storageKey}-$accountScope"
+
+    private val durableMutationRecoveryLock = Any()
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,

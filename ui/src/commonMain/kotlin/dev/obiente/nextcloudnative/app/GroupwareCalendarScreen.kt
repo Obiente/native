@@ -194,7 +194,18 @@ fun NativeGroupwareCalendarScreen(
             false
         }
         if (!saved) {
-            mutationError = "The calendar change could not be safely recorded. Check local storage and try again."
+            mutationRecoveryState = try {
+                services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                null
+            }
+            mutationError = if (mutationRecoveryState != null) {
+                "Another calendar change is still awaiting server verification."
+            } else {
+                "The calendar change could not be safely recorded. Check local storage and try again."
+            }
             mutationOperationInProgress = false
             onMutationInProgressChanged(mutationRecoveryState != null || !mutationRecoveryLoaded)
             return false
@@ -204,15 +215,28 @@ fun NativeGroupwareCalendarScreen(
     }
 
     suspend fun clearMutationRecovery(): Boolean {
+        val expectedEncoded = mutationRecoveryState ?: return false
         val cleared = try {
-            services.clearDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)
+            services.clearDurableMutationRecovery(
+                accountScope,
+                DurableMutationRecoveryKind.Calendar,
+                expectedEncoded,
+            )
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
             false
         }
         if (!cleared) {
-            mutationError = "The verified calendar recovery record could not be cleared. Free local storage and refresh."
+            val current = try {
+                services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                null
+            }
+            if (current != null) mutationRecoveryState = current
+            mutationError = "The verified calendar recovery record could not be cleared safely. Refresh to inspect the current pending change."
             return false
         }
         mutationRecoveryState = null
