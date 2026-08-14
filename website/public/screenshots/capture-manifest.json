@@ -335,7 +335,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarkdownEditing.kt": "74ed912eef556a53b7eb0008946aa5b4425cb69456bea75368d309a39052a331",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingBudgetCaptureScenario.kt": "e28c89ee88d466abab6a8412d87d0ae2c0c5812a2b7b4104851f8d0ae0f640fc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCalendarWorkspaceScenario.kt": "1c903f197dabca8b18f35366543e67e4cc0989c5b2c5aed41f67bebb9fc7d482",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "44d698022b6d23951e7c15459534ea0f32d634905894b8c2b98e1757e5b50388",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingCaptureScenarios.kt": "89c6b4d82e4ffb2a9b2ed69af78624da29f5480278177a1dae32a47cd91c9be2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDemoFixture.kt": "75ab130cd489712673b9402a8e2da7b9edab84b4bb3f3f5c8dacb8a03bd86390",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingDynamicUiCaptureScenario.kt": "5c98c07c65751c9648d43cdd61b0f788e0b72eba2b9f3a442750bccdcad5f4cc",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/MarketingLivePhotoCaptureScenarios.kt": "20a74e6b425a56b0ba6d32f28b89c5722f2f9569f1dceeaa621f2f226bec9101",
@@ -1130,7 +1130,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "e82d5b35c1c4b350d98fd019ca977abf3d6819ca664484b7c16edeffb55b5263"
+            "sha256": "3f0710b6455c8cf8725f0fa53d65929669af5b09437eb2c192ed6265bf2d3d1d"
         },
         {
             "scenario": "file-sync-status-mobile-light",
@@ -1146,7 +1146,7 @@
             "purpose": "state-coverage",
             "platform": "mobile",
             "viewport": "phone-portrait",
-            "sha256": "7ade7c535a3a27472f088f766546c8bc959a2fbd660a54978bb1e7e063d6ab35"
+            "sha256": "234a60c47751f03fe870430fff8ecf37a56ec66284d2a6f8850aa3f0cf0d9e9f"
         },
         {
             "scenario": "file-sync-status-desktop",
@@ -3564,7 +3564,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "e82d5b35c1c4b350d98fd019ca977abf3d6819ca664484b7c16edeffb55b5263"
+            "sha256": "3f0710b6455c8cf8725f0fa53d65929669af5b09437eb2c192ed6265bf2d3d1d"
         },
         {
             "scenario": "guide-android-folder-sync-status-light",
@@ -3580,7 +3580,7 @@
             "purpose": "showcase",
             "platform": "android",
             "viewport": "phone-portrait",
-            "sha256": "7ade7c535a3a27472f088f766546c8bc959a2fbd660a54978bb1e7e063d6ab35"
+            "sha256": "234a60c47751f03fe870430fff8ecf37a56ec66284d2a6f8850aa3f0cf0d9e9f"
         },
         {
             "scenario": "guide-linux-folder-sync-workspace",
