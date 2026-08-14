@@ -544,6 +544,12 @@ class JvmSupportIntake(
     }
 
     private fun finishCompletedDeletion(completed: CompletedSubmission): SupportDiagnosticsDeletionResult {
+        if (!deleteCompletedDescriptorSafely(completedDescriptor(completed.recordId))) {
+            return failCompletedDeletion(
+                completed,
+                "The report was deleted from support, but its private receipt could not be removed from this device. Try again.",
+            )
+        }
         val next = synchronized(lock) {
             completedSubmissions = completedSubmissions.filterNot { submission ->
                 submission.recordId == completed.recordId
@@ -553,7 +559,6 @@ class JvmSupportIntake(
                 ?.let { submittedStateFor(it.originAccountIdentity) }
                 ?: SupportDiagnosticsSubmissionState.Idle
         }
-        deleteCompletedDescriptorOrRetry(completedDescriptor(completed.recordId))
         publishState(next, completed.originAccountIdentity)
         return SupportDiagnosticsDeletionResult.Deleted
     }
@@ -562,7 +567,12 @@ class JvmSupportIntake(
         completed: CompletedSubmission,
         message: String,
     ): SupportDiagnosticsDeletionResult.Failed {
-        publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
+        val next = synchronized(lock) {
+            latestCompletedFor(completed.originAccountIdentity)
+                ?.let { submittedStateFor(it.originAccountIdentity) }
+                ?: SupportDiagnosticsSubmissionState.Idle
+        }
+        publishState(next, completed.originAccountIdentity)
         return SupportDiagnosticsDeletionResult.Failed(message)
     }
 
@@ -640,6 +650,7 @@ class JvmSupportIntake(
             retainForRetry(submission, READ_ONLY_SUPPORT_MESSAGE, ambiguous = false)
             return
         }
+        submission.latestUploadAttemptAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
         submission.outcomeAmbiguous = true
         if (!persistPendingSafely(submission)) {
             finishRejected(submission, "The private support submission could not be retained safely on this device.")
@@ -1227,6 +1238,7 @@ class JvmSupportIntake(
                     context = submission.context,
                     cancellationPending = submission.cancellationPending,
                     outcomeAmbiguous = submission.outcomeAmbiguous,
+                    latestUploadAttemptAtEpochMillis = submission.latestUploadAttemptAtEpochMillis,
                     retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis,
                     receipt = submission.receipt,
                 ),
@@ -1335,6 +1347,7 @@ class JvmSupportIntake(
         require(persisted.idempotencyKey.matches(SUPPORT_IDEMPOTENCY_PATTERN))
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         require(persisted.createdAtEpochMillis >= 0L)
+        require(persisted.latestUploadAttemptAtEpochMillis == null || persisted.latestUploadAttemptAtEpochMillis >= 0L)
         val nowEpochMillis = System.currentTimeMillis()
         val retryNotBeforeEpochMillis = persisted.retryNotBeforeEpochMillis?.takeIf { deadline ->
             deadline <= nowEpochMillis.saturatingAdd(MAX_SUPPORT_RETRY_AFTER_MILLIS)
@@ -1345,7 +1358,12 @@ class JvmSupportIntake(
         }
         val recoveryDeadlineEpochMillis = persisted.receipt
             ?.let { receipt -> Instant.parse(receipt.retentionUntil).toEpochMilli() }
-            ?: persisted.createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+            ?: if (persisted.outcomeAmbiguous) {
+                (persisted.latestUploadAttemptAtEpochMillis ?: persisted.createdAtEpochMillis)
+                    .saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+            } else {
+                persisted.createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+            }
         require(nowEpochMillis <= recoveryDeadlineEpochMillis)
         val archiveAgeMillis = (nowEpochMillis - persisted.createdAtEpochMillis).coerceAtLeast(0L)
         val archiveIsRetained = archiveAgeMillis <= SUPPORT_TEMPORARY_MAX_AGE_MILLIS
@@ -1379,6 +1397,7 @@ class JvmSupportIntake(
             context = persisted.context,
             cancellationPending = persisted.cancellationPending,
             outcomeAmbiguous = persisted.outcomeAmbiguous,
+            latestUploadAttemptAtEpochMillis = persisted.latestUploadAttemptAtEpochMillis,
             retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
         )
@@ -1565,6 +1584,7 @@ class JvmSupportIntake(
         val context: PreparedSupportSubmissionContext,
         var cancellationPending: Boolean = false,
         var outcomeAmbiguous: Boolean = false,
+        var latestUploadAttemptAtEpochMillis: Long? = null,
         var retryNotBeforeEpochMillis: Long? = null,
         var receipt: SupportIntakeReceipt? = null,
     ) {
@@ -1573,7 +1593,12 @@ class JvmSupportIntake(
         fun recoveryExpired(nowEpochMillis: Long): Boolean {
             val deadline = receipt
                 ?.let { value -> runCatching { Instant.parse(value.retentionUntil).toEpochMilli() }.getOrNull() }
-                ?: createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+                ?: if (outcomeAmbiguous) {
+                    (latestUploadAttemptAtEpochMillis ?: createdAtEpochMillis)
+                        .saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+                } else {
+                    createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
+                }
             return nowEpochMillis > deadline
         }
     }
@@ -1599,6 +1624,7 @@ class JvmSupportIntake(
         val context: PreparedSupportSubmissionContext,
         val cancellationPending: Boolean = false,
         val outcomeAmbiguous: Boolean = true,
+        val latestUploadAttemptAtEpochMillis: Long? = null,
         val retryNotBeforeEpochMillis: Long? = null,
         val receipt: SupportIntakeReceipt? = null,
     )

@@ -107,6 +107,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.SupportDiagnosticsDeletionResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
@@ -634,6 +635,10 @@ internal class AndroidNextcloudServices(
     override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
 
     override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+
+    override suspend fun deleteSubmittedSupportDiagnosticsReport(
+        deletionUrl: String,
+    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
 
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(

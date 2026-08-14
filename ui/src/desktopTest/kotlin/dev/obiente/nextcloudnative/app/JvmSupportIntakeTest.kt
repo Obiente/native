@@ -276,6 +276,52 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun reportsCompletedDeletionOnlyAfterLocalReceiptRemovalIsDurable() = runBlocking {
+        var failDirectorySync = false
+        testFixture(
+            directorySync = {
+                if (failDirectorySync) throw IOException("Synthetic completed receipt deletion sync failure.")
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            failDirectorySync = true
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+
+            val firstResult = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+
+            assertIs<SupportDiagnosticsDeletionResult.Failed>(firstResult)
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            failDirectorySync = false
+            fixture.server.enqueue(MockResponse.Builder().code(404).body("{}").build())
+
+            val retryResult = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+
+            assertIs<SupportDiagnosticsDeletionResult.Deleted>(retryResult)
+            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+        }
+        Unit
+    }
+
+    @Test
+    fun deletionFailureFallsBackToIdleWhenTheReceiptExpiresInFlight() = runBlocking {
+        testFixture().use { fixture ->
+            val retentionUntil = Instant.now().plusSeconds(3)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionUntil = retentionUntil))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            fixture.server.enqueue(
+                MockResponse.Builder().code(503).body("{}").headersDelay(4, TimeUnit.SECONDS).build(),
+            )
+
+            val result = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+
+            assertIs<SupportDiagnosticsDeletionResult.Failed>(result)
+            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+        }
+        Unit
+    }
+
+    @Test
     fun requiresAnAccountBeforeSupportSubmission() = runBlocking {
         testFixture().use { fixture ->
             fixture.intake.setActiveAccountIdentity(null)
@@ -1451,6 +1497,47 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
             val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertEquals(firstUpload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
+        }
+    }
+
+    @Test
+    fun agesAmbiguousRecoveryFromTheLatestUploadAttempt() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(429).build())
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            fixture.intake.close()
+
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            val preparedTwentyNineDaysAgo = Instant.now().minus(29, ChronoUnit.DAYS).toEpochMilli()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    Regex("\"createdAtEpochMillis\":\\d+"),
+                    "\"createdAtEpochMillis\":$preparedTwentyNineDaysAgo",
+                ),
+            )
+            val lateRetry = fixture.newIntake()
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(lateRetry.states().value)
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            lateRetry.retry()
+
+            val ambiguous = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(lateRetry.states().value)
+            assertTrue(ambiguous.outcomeAmbiguous)
+            assertTrue(descriptor.readText().contains("\"latestUploadAttemptAtEpochMillis\":"))
+            lateRetry.close()
+
+            val preparedThirtyOneDaysAgo = Instant.now().minus(31, ChronoUnit.DAYS).toEpochMilli()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    Regex("\"createdAtEpochMillis\":\\d+"),
+                    "\"createdAtEpochMillis\":$preparedThirtyOneDaysAgo",
+                ),
+            )
+            fixture.newIntake().use { restored ->
+                assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+                assertTrue(descriptor.isFile)
+            }
         }
     }
 

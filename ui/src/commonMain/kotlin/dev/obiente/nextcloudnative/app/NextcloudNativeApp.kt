@@ -12582,7 +12582,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         "The sanitized report, the description you reviewed, and app release details will be sent to Obiente Support.",
                     )
                     Text(
-                        "It does not include account credentials, server URLs, filenames, file contents, or a stable device identifier. Private report data is retained for 30 days unless you delete it first.",
+                        "It does not include account credentials, raw account identifiers, server URLs, filenames, or file contents. Reports can include a stable pseudonymous account scope, allowing Obiente Support to correlate reports from the same account on this installation. Private report data is retained for 30 days unless you delete it first.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
