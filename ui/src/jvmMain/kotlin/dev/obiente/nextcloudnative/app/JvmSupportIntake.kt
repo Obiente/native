@@ -184,7 +184,7 @@ class JvmSupportIntake(
                     originAccountIdentity,
                 )
             } catch (cancellation: CancellationException) {
-                publishState(SupportDiagnosticsSubmissionState.Cancelled)
+                publishState(SupportDiagnosticsSubmissionState.Cancelled, originAccountIdentity)
                 throw cancellation
             } catch (failure: Throwable) {
                 if (cancellationRequested.get()) {
@@ -194,7 +194,7 @@ class JvmSupportIntake(
                 publishState(SupportDiagnosticsSubmissionState.Rejected(
                     failure.message?.take(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
                         ?: "The private diagnostic report could not be prepared.",
-                ))
+                ), originAccountIdentity)
                 return@withContext
             }
             if (cancellationRequested.get()) {
@@ -329,6 +329,7 @@ class JvmSupportIntake(
                 )
             }
             operationActive.set(false)
+            refreshVisibleStateLocked()
         }
     }
 
@@ -1438,6 +1439,8 @@ class JvmSupportIntake(
                 SupportDiagnosticsSubmissionState.BlockedByAnotherAccount(
                     "A pending private report belongs to another signed-in account. Switch back to finish or discard it.",
                 )
+            } else if (operationActive.get()) {
+                blockedByAnotherAccountOperation()
             } else {
                 SupportDiagnosticsSubmissionState.Idle
             }
@@ -1454,12 +1457,20 @@ class JvmSupportIntake(
                 requireNotNull(storageUnavailableMessage),
             )
             pendingSubmission != null -> publishStateLocked(actualState, pendingSubmission.originAccountIdentity)
+            operationActive.get() && actualStateAccountIdentity != activeAccountIdentity -> {
+                state.value = blockedByAnotherAccountOperation()
+            }
             actualStateAccountIdentity == activeAccountIdentity -> state.value = actualState
             else -> state.value = latestCompletedFor(activeAccountIdentity)
                 ?.let { submittedStateFor(it.originAccountIdentity) }
                 ?: SupportDiagnosticsSubmissionState.Idle
         }
     }
+
+    private fun blockedByAnotherAccountOperation() =
+        SupportDiagnosticsSubmissionState.BlockedByAnotherAccount(
+            "A private support report is being prepared for another signed-in account. Wait for it to finish or switch back.",
+        )
 
     private fun latestCompletedFor(accountIdentity: String?): CompletedSubmission? =
         completedSubmissions.filter {

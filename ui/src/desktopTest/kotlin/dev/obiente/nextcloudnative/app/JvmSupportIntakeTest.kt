@@ -461,6 +461,36 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun preservesPreparationBlockAcrossAccountSwitchesUntilTheOperationEnds() = runBlocking {
+        val preparationEntered = CountDownLatch(1)
+        val allowPreparationFailure = CountDownLatch(1)
+        testFixture(
+            beforeSubmissionPreparation = {
+                preparationEntered.countDown()
+                check(allowPreparationFailure.await(5, TimeUnit.SECONDS))
+                throw IOException("Synthetic preparation failure.")
+            },
+        ).use { fixture ->
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            assertTrue(preparationEntered.await(5, TimeUnit.SECONDS))
+            fixture.intake.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+
+            val blocked = assertIs<SupportDiagnosticsSubmissionState.BlockedByAnotherAccount>(
+                fixture.intake.states().value,
+            )
+            assertTrue(blocked.message.contains("another signed-in account"))
+
+            allowPreparationFailure.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+        }
+    }
+
+    @Test
     fun cancellationStopsTheActiveCallWhenIntentPersistenceFails() = runBlocking {
         var directorySyncs = 0
         testFixture(
