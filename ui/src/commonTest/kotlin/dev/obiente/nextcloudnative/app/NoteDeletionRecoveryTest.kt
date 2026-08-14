@@ -3,9 +3,38 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class NoteDeletionRecoveryTest {
+    @Test
+    fun `retryable deletion requires a usable original etag`() {
+        val scope = "a".repeat(64)
+
+        assertTrue("\"etag\"".isUsableNoteDeletionEtag())
+        assertFalse(null.isUsableNoteDeletionEtag())
+        assertFalse("".isUsableNoteDeletionEtag())
+        assertFalse("   ".isUsableNoteDeletionEtag())
+        assertFalse("etag\nvalue".isUsableNoteDeletionEtag())
+        assertFailsWith<IllegalArgumentException> {
+            NoteDeletionRecoveryState(
+                accountScope = scope,
+                noteId = 42L,
+                originalEtag = null,
+                originalPreconditionRecorded = true,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NoteDeletionRecoveryState(
+                accountScope = scope,
+                noteId = 42L,
+                originalEtag = "",
+                originalPreconditionRecorded = true,
+            )
+        }
+    }
+
     @Test
     fun `verified deletion releases guards before navigating away`() {
         val events = mutableListOf<String>()

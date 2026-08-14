@@ -64,6 +64,9 @@ import kotlinx.serialization.json.Json
 
 private enum class NoteViewMode { Edit, Preview }
 
+internal fun String?.isUsableNoteDeletionEtag(): Boolean =
+    !isNullOrBlank() && length <= 4_096 && none(Char::isISOControl)
+
 @Serializable
 internal data class NoteDeletionRecoveryState(
     val accountScope: String,
@@ -74,8 +77,9 @@ internal data class NoteDeletionRecoveryState(
     init {
         require(accountScope.isCanonicalGroupwareMutationAccountScope())
         require(noteId >= 0L)
-        require(originalEtag == null || originalEtag.length <= 4_096 && originalEtag.none(Char::isISOControl))
+        require(originalEtag == null || originalEtag.isUsableNoteDeletionEtag())
         require(originalPreconditionRecorded || originalEtag == null)
+        require(!originalPreconditionRecorded || originalEtag.isUsableNoteDeletionEtag())
     }
 }
 
@@ -944,6 +948,13 @@ internal fun NextcloudNoteEditor(
     )
     val readOnly = loaded.readOnly
     val mutationInProgress = !deletionRecoveryLoaded || saving || deleting || deletionRecoveryState != null
+    val deletionPreconditionAvailable = if (deletionRecoveryState == null) {
+        loaded.etag.isUsableNoteDeletionEtag()
+    } else {
+        deletionRecovery?.let { recovery ->
+            recovery.originalPreconditionRecorded && recovery.originalEtag.isUsableNoteDeletionEtag()
+        } == true
+    }
     LaunchedEffect(mutationInProgress) {
         onMutationInProgressChanged(mutationInProgress)
     }
@@ -1032,7 +1043,14 @@ internal fun NextcloudNoteEditor(
                         )
                     }
                     TextButton(
-                        onClick = { showDeleteConfirmation = true },
+                        onClick = {
+                            deleteError = if (loaded.etag.isUsableNoteDeletionEtag()) {
+                                null
+                            } else {
+                                "Refresh this note before deleting it so the server version can be verified."
+                            }
+                            showDeleteConfirmation = true
+                        },
                         enabled = !readOnly && !mutationInProgress,
                     ) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
@@ -1236,17 +1254,22 @@ internal fun NextcloudNoteEditor(
             },
             confirmButton = {
                 Button(
-                    enabled = deletionRecoveryLoaded && !deleting,
+                    enabled = deletionRecoveryLoaded && !deleting && deletionPreconditionAvailable,
                     onClick = delete@{
                         deleting = true
                         deleteError = null
                         scope.launch {
-                            var deletionEtag = loaded.etag
+                            var deletionEtag = loaded.etag?.takeIf { it.isUsableNoteDeletionEtag() }
                             if (deletionRecoveryState == null) {
+                                if (deletionEtag == null) {
+                                    deleteError = "Refresh this note before deleting it so the server version can be verified."
+                                    deleting = false
+                                    return@launch
+                                }
                                 val encoded = NoteDeletionRecoveryState(
                                     accountScope = accountScope,
                                     noteId = loaded.id,
-                                    originalEtag = loaded.etag,
+                                    originalEtag = deletionEtag,
                                     originalPreconditionRecorded = true,
                                 )
                                     .encodeForDurableStorage()
@@ -1269,7 +1292,11 @@ internal fun NextcloudNoteEditor(
                                 deletionRecoveryState = encoded
                             } else {
                                 val recovery = deletionRecovery
-                                if (recovery == null || !recovery.originalPreconditionRecorded) {
+                                if (
+                                    recovery == null ||
+                                    !recovery.originalPreconditionRecorded ||
+                                    !recovery.originalEtag.isUsableNoteDeletionEtag()
+                                ) {
                                     deleteError = "This recovery record predates safe delete retries. Check the server, then use Recovery options."
                                     showRecoveryOptions = true
                                     deleting = false
