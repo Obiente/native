@@ -281,6 +281,19 @@ class NativeChoresWorkspaceTest {
             ),
             nativeChoresMemberFieldChoices(schema, team),
         )
+        val duplicateNames = team.copy(
+            structuredValues = mapOf(
+                "members" to NativeStructuredValue.ListValue(
+                    listOf(member("sam", "Alex"), member("alex", "Alex")),
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("Alex (sam)", "Alex (alex)"),
+            nativeChoresMemberFieldChoices(schema, duplicateNames)
+                .getValue("assignee")
+                .map(NativeFieldChoice::label),
+        )
         assertTrue(
             nativeChoresMemberFieldChoices(
                 schema.copy(app = schema.app.copy(version = "0.1.1")),

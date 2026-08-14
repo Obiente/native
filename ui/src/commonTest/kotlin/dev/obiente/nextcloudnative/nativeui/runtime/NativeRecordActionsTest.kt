@@ -2136,6 +2136,98 @@ class NativeRecordActionsTest {
     }
 
     @Test
+    fun `verified Chores owner can remove a known non-owner team member`() {
+        val team = resource(
+            id = "team",
+            fields = listOf(
+                field("owner", "Owner", FieldKind.userReference, readOnly = true),
+                field("members", "Members", FieldKind.objectValue, readOnly = true),
+            ),
+        )
+        val removeMember = ActionSpec(
+            id = "route-api-removemember",
+            label = "Remove member",
+            resourceId = team.id,
+            binding = ApiBinding(
+                method = HttpMethod.DELETE,
+                path = "/apps/chores/api/v1.0/team/{teamId}/members/{userIdToRemove}",
+                operationId = "route-api-removemember",
+                pathParameterNames = listOf("teamId", "userIdToRemove"),
+                requiredPathParameterNames = listOf("teamId", "userIdToRemove"),
+            ),
+            intent = ActionIntent.delete,
+            risk = ActionRisk.destructive,
+            requiresConfirmation = true,
+            confidence = Confidence.verified,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores 0.1.0 package")),
+        )
+        val nativeSchema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(team),
+            actions = listOf(removeMember),
+        )
+        fun member(userId: String, displayName: String) = NativeStructuredValue.ObjectValue(
+            entries = listOf(
+                NativeStructuredEntry(
+                    "member",
+                    "Member",
+                    NativeStructuredValue.Scalar(userId, NativeStructuredScalarKind.string),
+                ),
+                NativeStructuredEntry(
+                    "displayName",
+                    "Display name",
+                    NativeStructuredValue.Scalar(displayName, NativeStructuredScalarKind.string),
+                ),
+            ),
+        )
+        val teamRecord = NativeRecord(
+            id = "4",
+            values = mapOf("id" to "4", "owner" to "alex"),
+            structuredValues = mapOf(
+                "members" to NativeStructuredValue.ListValue(
+                    listOf(member("alex", "Alex"), member("sam", "Sam")),
+                ),
+            ),
+        )
+        val roster = requireNotNull(nativeRosterPresentation(teamRecord))
+        val authority = requireNotNull(
+            NativeDatasetContext(
+                parentResourceId = team.id,
+                parentRecord = teamRecord,
+                currentUserId = "alex",
+            ).nativeRecordAuthorityContext(nativeSchema),
+        )
+        val sam = roster.people.single { person -> person.userId == "sam" }
+        val plan = requireNotNull(
+            nativeChoresRosterMemberRemovalPlan(nativeSchema, teamRecord, sam, authority),
+        )
+
+        assertEquals(
+            mapOf("teamId" to "4", "userIdToRemove" to "sam"),
+            plan.request(confirmed = true).values,
+        )
+        assertFailsWith<IllegalArgumentException> { plan.request(confirmed = false) }
+        assertNull(
+            nativeChoresRosterMemberRemovalPlan(
+                nativeSchema,
+                teamRecord,
+                roster.people.single { person -> person.userId == "alex" },
+                authority,
+            ),
+        )
+        assertNull(
+            nativeChoresRosterMemberRemovalPlan(
+                nativeSchema,
+                teamRecord,
+                sam,
+                authority.copy(actorUserId = "sam", auditedActionIds = emptySet()),
+            ),
+        )
+    }
+
+    @Test
     fun `verified Chores completion derives protocol fields and requires confirmation`() = runBlocking {
         val workSpec = RepeatableObjectInputSpec(
             minimumItems = 1,

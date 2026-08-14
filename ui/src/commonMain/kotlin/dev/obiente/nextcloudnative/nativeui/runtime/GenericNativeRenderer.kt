@@ -253,6 +253,10 @@ fun GenericNativeAppScreen(
     workspaceNavigationItems: List<NativeWorkspaceNavigationItem> = emptyList(),
     onWorkspaceNavigate: ((String) -> Unit)? = null,
 ) {
+    var pendingCategoryReorderActionId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCategoryReorderResourceId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCategoryReorderIds by rememberSaveable(schema.app.id) { mutableStateOf<List<String>?>(null) }
+    var pendingCategoryReorderRecoveryRequested by rememberSaveable(schema.app.id) { mutableStateOf(false) }
     val resource = schema.resource(view.resourceId)
     val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
         NativeBoardMoveReconciliation()
@@ -787,6 +791,32 @@ fun GenericNativeAppScreen(
                 createLabel = collectionCreatePlan?.action?.label,
                 onCreate = openCollectionCreate,
                 roster = rosterPresentation,
+                rosterMemberActions = { person ->
+                    val teamRecord = datasetContext.parentRecord
+                    val plan = teamRecord?.let { record ->
+                        nativeChoresRosterMemberRemovalPlan(
+                            schema = schema,
+                            teamRecord = record,
+                            person = person,
+                            authorityContext = datasetContext.nativeRecordAuthorityContext(schema),
+                        )
+                    }
+                    listOfNotNull(
+                        plan?.let { removal ->
+                            NextcloudCardAction(
+                                label = "Remove member",
+                                semanticId = removal.action.id,
+                                destructive = true,
+                                onClick = {
+                                    pendingRecordDeleteAction = PendingNativeRecordDeleteAction(
+                                        plan = removal,
+                                        itemLabel = person.displayName,
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
             )
             mailWorkspacePlan != null && state is NativeScreenState.Loading ->
                 NativeMailWorkspace(
@@ -897,6 +927,32 @@ fun GenericNativeAppScreen(
                     reorder = collectionActionCapabilities.reorder.takeIf {
                         collectionQuery.isBlank()
                     },
+                    pendingCategoryReorderOrder = collectionActionCapabilities.reorder
+                        ?.takeIf { plan ->
+                            pendingCategoryReorderActionId == plan.action.id &&
+                                pendingCategoryReorderResourceId == presentedResource.id
+                        }
+                        ?.let { pendingCategoryReorderIds },
+                    pendingCategoryReorderRecoveryRequested = pendingCategoryReorderRecoveryRequested,
+                    onPendingCategoryReorderChanged = { plan, orderedRecordIds, recoveryRequested ->
+                        if (orderedRecordIds == null) {
+                            if (
+                                pendingCategoryReorderActionId == plan.action.id &&
+                                pendingCategoryReorderResourceId == presentedResource.id
+                            ) {
+                                pendingCategoryReorderActionId = null
+                                pendingCategoryReorderResourceId = null
+                                pendingCategoryReorderIds = null
+                                pendingCategoryReorderRecoveryRequested = false
+                            }
+                        } else {
+                            pendingCategoryReorderActionId = plan.action.id
+                            pendingCategoryReorderResourceId = presentedResource.id
+                            pendingCategoryReorderIds = orderedRecordIds.toCollection(ArrayList())
+                            pendingCategoryReorderRecoveryRequested = recoveryRequested
+                        }
+                    },
+                    pendingMutationStore = pendingMutationStore,
                     authoritativeRecordsKey = NativeAuthoritativeRecordsKey(presentedRecords),
                     onLoadMore = onLoadMore,
                     loadingMore = loadingMore,
@@ -3635,6 +3691,10 @@ private fun GenericRecordCollection(
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
     reorder: NativeCollectionReorderActionPlan?,
+    pendingCategoryReorderOrder: List<String>?,
+    pendingCategoryReorderRecoveryRequested: Boolean,
+    onPendingCategoryReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingMutationStore: NativePendingMutationStore?,
     authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
@@ -3698,6 +3758,10 @@ private fun GenericRecordCollection(
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
             reorder = reorder,
+            pendingReorderOrder = pendingCategoryReorderOrder,
+            pendingReorderRecoveryRequested = pendingCategoryReorderRecoveryRequested,
+            onPendingReorderChanged = onPendingCategoryReorderChanged,
+            pendingMutationStore = pendingMutationStore,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -4037,6 +4101,10 @@ private fun GenericCategoryCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     reorder: NativeCollectionReorderActionPlan?,
+    pendingReorderOrder: List<String>?,
+    pendingReorderRecoveryRequested: Boolean,
+    onPendingReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingMutationStore: NativePendingMutationStore?,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
@@ -4051,7 +4119,7 @@ private fun GenericCategoryCollection(
     // hierarchical category projections are intentionally excluded because their visible order is
     // only a subset or a tree traversal, not the server's declared flat collection order.
     val activeReorder = reorder.takeIf {
-        parentIds.isEmpty() && filter == NativeCategoryFilter.All
+        parentIds.isEmpty() && filter == NativeCategoryFilter.All && pendingMutationStore != null
     }
     val authoritativeOrder = remember(authoritativeRecordsKey) { rows.map { (record, _) -> record.id } }
     val rowsById = remember(rows) { rows.associateBy { (record, _) -> record.id } }
@@ -4065,34 +4133,101 @@ private fun GenericCategoryCollection(
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
+    var reorderRequestInFlight by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
+    var durableRestoreChecked by remember(reorder?.action?.id, resource.id) {
+        mutableStateOf(activeReorder == null)
+    }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
     var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
     val listState = rememberLazyListState()
     val displayedRows = remember(rows, rowsById, orderedRecordIds, activeReorder) {
         if (activeReorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
     }
+    LaunchedEffect(activeReorder?.action?.id, resource.id, pendingMutationStore) {
+        val plan = activeReorder
+        val store = pendingMutationStore
+        if (plan == null || store == null) {
+            durableRestoreChecked = true
+            return@LaunchedEffect
+        }
+        durableRestoreChecked = false
+        reorderExecuting = true
+        val pending = runCatching {
+            store.load(nativePendingCollectionReorderKey(plan, resource.id))
+        }.getOrElse { failure ->
+            reorderError = failure.message ?: "The saved order recovery marker could not be read."
+            durableRestoreChecked = true
+            return@LaunchedEffect
+        }
+        if (pending == null) {
+            onPendingReorderChanged(plan, null, false)
+            reorderExecuting = false
+        } else {
+            val restored = decodeNativePendingCollectionReorder(pending)
+            if (restored == null) {
+                reorderError = "The saved order recovery marker is invalid."
+            } else {
+                onPendingReorderChanged(
+                    plan,
+                    restored.orderedRecordIds,
+                    restored.recoveryRequested,
+                )
+            }
+        }
+        durableRestoreChecked = true
+    }
     fun submitReorder(submittedOrder: List<String> = orderedRecordIds) {
         val plan = activeReorder ?: return
+        val store = pendingMutationStore ?: return
         if (submittedOrder == authoritativeOrder) return
         val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
             reorderError = failure.message ?: "The new order could not be submitted."
             orderedRecordIds = authoritativeOrder
             return
         }
+        val stagedValues = encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = false)
+        if (stagedValues == null) {
+            reorderError = "The new order is too large to stage safely."
+            orderedRecordIds = authoritativeOrder
+            return
+        }
+        val pendingKey = nativePendingCollectionReorderKey(plan, resource.id)
+        onPendingReorderChanged(plan, submittedOrder, false)
+        reorderRequestInFlight = true
         reorderExecuting = true
         reorderError = null
         scope.launch {
+            runCatching { store.save(pendingKey, stagedValues) }.onFailure { failure ->
+                reorderError = failure.message ?: "The new order could not be staged safely."
+                onPendingReorderChanged(plan, null, false)
+                orderedRecordIds = authoritativeOrder
+                reorderExecuting = false
+                reorderRequestInFlight = false
+                return@launch
+            }
             when (val result = actionExecutor.execute(request)) {
-                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
+                is NativeActionExecutionResult.Success -> {
+                    encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
+                        ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                    onPendingReorderChanged(plan, submittedOrder, true)
+                    onActionSucceeded?.invoke(plan.action)
+                }
                 is NativeActionExecutionResult.Failure -> {
                     reorderError = result.message
-                    orderedRecordIds = authoritativeOrder
                     if (result.outcome.requiresMutationReconciliation()) {
+                        encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
+                            ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                        onPendingReorderChanged(plan, submittedOrder, true)
                         onActionSucceeded?.invoke(plan.action)
+                    } else {
+                        runCatching { store.clear(pendingKey) }
+                        onPendingReorderChanged(plan, null, false)
+                        orderedRecordIds = authoritativeOrder
+                        reorderExecuting = false
                     }
                 }
             }
-            reorderExecuting = false
+            reorderRequestInFlight = false
         }
     }
     fun moveRecordBy(recordId: String, offset: Int) {
@@ -4108,8 +4243,67 @@ private fun GenericCategoryCollection(
         orderedRecordIds = nextOrder
         submitReorder(nextOrder)
     }
-    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
-        if (draggingRecordId == null && !reorderExecuting) {
+    LaunchedEffect(
+        authoritativeRecordsKey,
+        authoritativeOrder,
+        reorder?.action?.id,
+        pendingReorderOrder,
+        pendingReorderRecoveryRequested,
+        reorderRequestInFlight,
+        durableRestoreChecked,
+    ) {
+        if (!durableRestoreChecked) return@LaunchedEffect
+        val pendingOrder = pendingReorderOrder
+        val validPendingOrder = validPendingNativeCollectionOrder(authoritativeOrder, pendingOrder)
+        if (pendingOrder != null && validPendingOrder == null) {
+            activeReorder?.let { plan ->
+                pendingMutationStore?.let { store ->
+                    runCatching { store.clear(nativePendingCollectionReorderKey(plan, resource.id)) }
+                        .onFailure { failure ->
+                            reorderError = failure.message ?: "The obsolete order marker could not be cleared."
+                            reorderExecuting = true
+                            return@LaunchedEffect
+                        }
+                }
+                onPendingReorderChanged(plan, null, false)
+            }
+            orderedRecordIds = authoritativeOrder
+            reorderExecuting = false
+            reorderError = "The saved order no longer matches the authoritative collection."
+        } else if (validPendingOrder != null && authoritativeOrder == validPendingOrder) {
+            orderedRecordIds = authoritativeOrder
+            activeReorder?.let { plan ->
+                pendingMutationStore?.let { store ->
+                    runCatching { store.clear(nativePendingCollectionReorderKey(plan, resource.id)) }
+                        .onFailure { failure ->
+                            reorderError = failure.message ?: "The confirmed order marker could not be cleared."
+                            reorderExecuting = true
+                            return@LaunchedEffect
+                        }
+                }
+                onPendingReorderChanged(plan, null, false)
+            }
+            reorderExecuting = false
+            reorderError = null
+        } else if (
+            validPendingOrder != null && !reorderRequestInFlight && !pendingReorderRecoveryRequested
+        ) {
+            orderedRecordIds = validPendingOrder
+            reorderExecuting = true
+            activeReorder?.let { plan ->
+                val pendingKey = nativePendingCollectionReorderKey(plan, resource.id)
+                encodeNativePendingCollectionReorder(validPendingOrder, recoveryRequested = true)
+                    ?.let { values -> pendingMutationStore?.let { store -> runCatching { store.save(pendingKey, values) } } }
+                onPendingReorderChanged(plan, validPendingOrder, true)
+                onActionSucceeded?.invoke(plan.action)
+            }
+        } else if (
+            validPendingOrder != null && pendingReorderRecoveryRequested && !reorderRequestInFlight
+        ) {
+            orderedRecordIds = validPendingOrder
+            reorderExecuting = true
+            reorderError = "The submitted order is awaiting authoritative server confirmation."
+        } else if (draggingRecordId == null && !reorderExecuting) {
             orderedRecordIds = authoritativeOrder
             reorderError = null
         }

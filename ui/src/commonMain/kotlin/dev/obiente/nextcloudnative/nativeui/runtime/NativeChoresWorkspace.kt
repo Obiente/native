@@ -139,11 +139,17 @@ internal fun nativeChoresMemberFieldChoices(
         ?: return emptyMap()
     val roster = nativeRosterPresentation(authoritativeTeam) ?: return emptyMap()
     if (roster.omittedPeople != 0) return emptyMap()
+    val duplicateDisplayNames = roster.people
+        .groupingBy { person -> person.displayName.trim().lowercase() }
+        .eachCount()
+        .filterValues { count -> count > 1 }
+        .keys
     return mapOf(
         assignee.id to roster.people.map { person ->
+            val duplicateLabel = person.displayName.trim().lowercase() in duplicateDisplayNames
             NativeFieldChoice(
                 value = person.userId,
-                label = person.displayName,
+                label = if (duplicateLabel) "${person.displayName} (${person.userId})" else person.displayName,
                 supportingText = "Member of ${roster.name}",
             )
         },

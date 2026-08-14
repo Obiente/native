@@ -744,11 +744,15 @@ internal class AndroidNextcloudServices(
     ): Map<String, String>? = withContext(Dispatchers.IO) {
         val target = pendingDynamicMutationFile(session, appId, actionId, targetRecordId)
             ?: return@withContext null
-        if (!target.isFile || target.length() !in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong()) {
-            return@withContext null
+        if (!target.exists()) return@withContext null
+        check(target.isFile && target.length() in 1..MAX_PERSISTED_DYNAMIC_MUTATION_BYTES.toLong()) {
+            "The pending mutation marker is unreadable."
         }
-        runCatching { target.readText() }.getOrNull()?.let { encoded ->
-            decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)
+        val encoded = runCatching { target.readText() }.getOrElse { failure ->
+            throw IllegalStateException("The pending mutation marker could not be read.", failure)
+        }
+        requireNotNull(decodePersistedDynamicMutation(encoded, appId, actionId, targetRecordId)) {
+            "The pending mutation marker is invalid."
         }
     }
 

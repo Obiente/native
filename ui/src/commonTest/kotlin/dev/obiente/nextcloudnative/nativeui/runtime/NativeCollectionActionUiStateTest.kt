@@ -122,6 +122,59 @@ class NativeCollectionActionUiStateTest {
     }
 
     @Test
+    fun `pending reorder recovery accepts only a complete permutation`() {
+        val authoritative = listOf("first", "second", "third")
+
+        assertEquals(
+            listOf("third", "first", "second"),
+            validPendingNativeCollectionOrder(
+                authoritativeRecordIds = authoritative,
+                pendingRecordIds = listOf("third", "first", "second"),
+            ),
+        )
+        assertEquals(
+            null,
+            validPendingNativeCollectionOrder(
+                authoritativeRecordIds = authoritative,
+                pendingRecordIds = listOf("third", "first"),
+            ),
+        )
+        assertEquals(
+            null,
+            validPendingNativeCollectionOrder(
+                authoritativeRecordIds = authoritative,
+                pendingRecordIds = listOf("third", "third", "first"),
+            ),
+        )
+    }
+
+    @Test
+    fun `pending reorder recovery round trips durable identity and phase`() {
+        val encoded = requireNotNull(
+            encodeNativePendingCollectionReorder(
+                orderedRecordIds = listOf("third", "first", "second"),
+                recoveryRequested = true,
+            ),
+        )
+
+        assertEquals(
+            NativePendingCollectionReorder(
+                orderedRecordIds = listOf("third", "first", "second"),
+                recoveryRequested = true,
+            ),
+            decodeNativePendingCollectionReorder(encoded),
+        )
+        assertEquals(
+            null,
+            decodeNativePendingCollectionReorder(encoded + ("unexpected" to "value")),
+        )
+        assertEquals(
+            null,
+            decodeNativePendingCollectionReorder(encoded + ("orderedRecordIds" to "[\"first\",\"first\"]")),
+        )
+    }
+
+    @Test
     fun `live drag crosses only the adjacent row midpoint`() {
         val bounds = mapOf(
             "first" to Rect(0f, 0f, 100f, 100f),

@@ -4305,12 +4305,50 @@ private fun DynamicDiscoveredAppScreen(
             return@LaunchedEffect
         }
         val records = (viewState as? NativeScreenState.Ready)?.records ?: return@LaunchedEffect
-        records.singleOrNull()
+        retainedChoresTeamRecord = records.singleOrNull()
             ?.takeIf { record -> record.actionSafeIdentity && record.actionBindingProvenanceValid }
-            ?.let { record -> retainedChoresTeamRecord = record }
         if (records.size == 1 && selectedRecord == null && !openedDefaultChores) {
             openedDefaultChores = true
             selectDynamicRecord(records.single())
+        }
+    }
+
+    LaunchedEffect(
+        descriptor,
+        selectedView.id,
+        retainedChoresTeamRecord,
+        loadAttempt,
+    ) {
+        val kind = nativeChoresWorkspaceKind(schema, selectedView)
+        if (
+            retainedChoresTeamRecord != null ||
+            kind !in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History)
+        ) {
+            return@LaunchedEffect
+        }
+        val teamView = schema.views.singleOrNull { candidate ->
+            nativeChoresWorkspaceKind(schema, candidate) == NativeChoresWorkspaceKind.Team &&
+                candidate.sourceActionId.isNotBlank()
+        } ?: return@LaunchedEffect
+        runCatching {
+            loadDynamicRecords(
+                services = services,
+                session = session,
+                descriptor = descriptor,
+                actionId = teamView.sourceActionId,
+                values = emptyMap(),
+                runtimeContext = emptyMap(),
+                cachePolicy = NextcloudApiCachePolicy.ForceNetwork,
+            )
+        }.onSuccess { records ->
+            currentCoroutineContext().ensureActive()
+            val team = records.singleOrNull()?.takeIf { record ->
+                record.actionSafeIdentity && record.actionBindingProvenanceValid
+            }
+            retainedChoresTeamRecord = team
+            recordsByResourceId = recordsByResourceId + (teamView.resourceId to records)
+        }.onFailure { failure ->
+            if (failure is CancellationException) throw failure
         }
     }
 

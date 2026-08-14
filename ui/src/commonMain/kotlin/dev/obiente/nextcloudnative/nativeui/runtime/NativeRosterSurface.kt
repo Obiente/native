@@ -18,20 +18,28 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.app.design.nextcloudCardInteractions
 
 @Composable
 internal fun NativeRosterSurface(
     roster: NativeRosterPresentation,
     createLabel: String? = null,
     onCreate: (() -> Unit)? = null,
+    memberActions: (NativeRosterPerson) -> List<NextcloudCardAction> = { emptyList() },
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -78,6 +86,8 @@ internal fun NativeRosterSurface(
         item { Text("Members", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         items(roster.people, key = { person -> "member:${person.userId}" }) { person ->
             NativeRosterPersonRow(
+                stateKey = "member:${person.userId}",
+                itemLabel = person.displayName,
                 title = person.displayName,
                 subtitle = buildString {
                     person.score?.let { append("$it points") }
@@ -86,6 +96,7 @@ internal fun NativeRosterSurface(
                         append("Owner")
                     }
                 },
+                actions = memberActions(person),
             )
         }
         item {
@@ -95,15 +106,35 @@ internal fun NativeRosterSurface(
             item { Text("No pending invitations", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         } else {
             items(roster.invitations, key = { invitation -> "invitation:${invitation.userId}" }) { invitation ->
-                NativeRosterPersonRow(invitation.userId, "Waiting to join")
+                NativeRosterPersonRow(
+                    stateKey = "invitation:${invitation.userId}",
+                    itemLabel = invitation.userId,
+                    title = invitation.userId,
+                    subtitle = "Waiting to join",
+                )
             }
         }
     }
 }
 
 @Composable
-private fun NativeRosterPersonRow(title: String, subtitle: String) {
-    Surface(color = NextcloudTheme.colors.appTile, shape = RoundedCornerShape(NextcloudRadii.Card)) {
+private fun NativeRosterPersonRow(
+    stateKey: String,
+    itemLabel: String,
+    title: String,
+    subtitle: String,
+    actions: List<NextcloudCardAction> = emptyList(),
+) {
+    var actionsExpanded by rememberSaveable(stateKey) { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.nextcloudCardInteractions(
+            onOpen = null,
+            onShowActions = actions.takeIf { it.isNotEmpty() }?.let { { actionsExpanded = true } },
+            actionsLabel = "Actions for $itemLabel",
+        ),
+        color = NextcloudTheme.colors.appTile,
+        shape = RoundedCornerShape(NextcloudRadii.Card),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
@@ -123,6 +154,12 @@ private fun NativeRosterPersonRow(title: String, subtitle: String) {
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            NextcloudCardOverflow(
+                itemLabel = itemLabel,
+                actions = actions,
+                expanded = actionsExpanded,
+                onExpandedChange = { actionsExpanded = it },
+            )
         }
     }
 }

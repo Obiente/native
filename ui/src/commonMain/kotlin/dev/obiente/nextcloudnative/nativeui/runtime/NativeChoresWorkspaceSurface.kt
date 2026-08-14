@@ -60,6 +60,7 @@ internal fun NativeChoresWorkspaceSurface(
     createLabel: String?,
     onCreate: (() -> Unit)?,
     roster: NativeRosterPresentation? = null,
+    rosterMemberActions: (NativeRosterPerson) -> List<NextcloudCardAction> = { emptyList() },
 ) {
     val destinationStateHolder = rememberSaveableStateHolder()
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -76,6 +77,7 @@ internal fun NativeChoresWorkspaceSurface(
                     createLabel = createLabel,
                     onCreate = onCreate,
                     roster = roster,
+                    rosterMemberActions = rosterMemberActions,
                     destinationStateHolder = destinationStateHolder,
                 )
             }
@@ -93,6 +95,7 @@ internal fun NativeChoresWorkspaceSurface(
                     createLabel = createLabel,
                     onCreate = onCreate,
                     roster = roster,
+                    rosterMemberActions = rosterMemberActions,
                     destinationStateHolder = destinationStateHolder,
                 )
             }
@@ -198,6 +201,7 @@ private fun ChoresContent(
     createLabel: String?,
     onCreate: (() -> Unit)?,
     roster: NativeRosterPresentation?,
+    rosterMemberActions: (NativeRosterPerson) -> List<NextcloudCardAction>,
     destinationStateHolder: SaveableStateHolder,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -250,11 +254,14 @@ private fun ChoresContent(
             is NativeChoresContent.Ready -> if (
                 presentation.kind == NativeChoresWorkspaceKind.Team && roster != null
             ) {
-                NativeRosterSurface(
-                    roster = roster,
-                    createLabel = createLabel,
-                    onCreate = onCreate,
-                )
+                destinationStateHolder.SaveableStateProvider(presentation.kind.name) {
+                    NativeRosterSurface(
+                        roster = roster,
+                        createLabel = createLabel,
+                        onCreate = onCreate,
+                        memberActions = rosterMemberActions,
+                    )
+                }
             } else {
                 destinationStateHolder.SaveableStateProvider(presentation.kind.name) {
                     ChoresList(content.items, onSelectRecord, recordActions)

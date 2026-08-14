@@ -570,6 +570,40 @@ internal fun nativePreferredCreatePlan(
     return contextBound.singleOrNull()
 }
 
+internal fun nativeChoresRosterMemberRemovalPlan(
+    schema: NativeAppSchema,
+    teamRecord: NativeRecord,
+    person: NativeRosterPerson,
+    authorityContext: NativeRecordAuthorityContext?,
+): NativeRecordDeleteActionPlan? {
+    if (
+        schema.app.id != "chores" || schema.app.version != "0.1.0" ||
+        !teamRecord.actionSafeIdentity || !teamRecord.actionBindingProvenanceValid ||
+        person.owner || !person.userId.isSafeRecordPathValue()
+    ) {
+        return null
+    }
+    val authority = authorityContext?.takeIf { context ->
+        context.parentRecord.id == teamRecord.id &&
+            context.parentResource.id.sameDynamicResourceAs("team")
+    } ?: return null
+    val action = schema.actions.singleOrNull { candidate ->
+        candidate.id in authority.auditedActionIds &&
+            candidate.resourceId.sameDynamicResourceAs(authority.parentResource.id) &&
+            candidate.binding.method == HttpMethod.DELETE &&
+            candidate.binding.path.substringBefore('?').trimEnd('/') == CHORES_MEMBER_REMOVAL_PATH &&
+            candidate.binding.pathParameterNames.toSet() == setOf("teamId", "userIdToRemove") &&
+            candidate.intent == ActionIntent.delete &&
+            candidate.risk == ActionRisk.destructive &&
+            candidate.requiresConfirmation &&
+            candidate.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+    } ?: return null
+    return NativeRecordDeleteActionPlan(
+        action = action,
+        bindingValues = mapOf("teamId" to teamRecord.id, "userIdToRemove" to person.userId),
+    )
+}
+
 private fun ActionSpec.recordFormPlan(
     kind: NativeRecordFormActionKind,
     resource: ResourceSpec,
@@ -1816,14 +1850,26 @@ private fun NativeAppSchema.auditedParentAuthorityActionIds(
         }.mapTo(linkedSetOf(), ActionSpec::id)
 
     app.id == "chores" && app.version == "0.1.0" &&
-        parentResource.id.sameDynamicResourceAs("team") &&
-        actorUserId != null && parentRecord.hasChoresTeamMember(actorUserId) ->
-        actions.filter { action ->
-            action.binding.method == HttpMethod.POST &&
-                action.binding.path.substringBefore('?').trimEnd('/') == CHORES_COMPLETION_PATH &&
-                action.risk == ActionRisk.mutating &&
-                action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
-        }.mapTo(linkedSetOf(), ActionSpec::id)
+        parentResource.id.sameDynamicResourceAs("team") && actorUserId != null -> buildSet {
+        val roster = nativeRosterPresentation(parentRecord)
+        if (parentRecord.hasChoresTeamMember(actorUserId)) {
+            actions.filter { action ->
+                action.binding.method == HttpMethod.POST &&
+                    action.binding.path.substringBefore('?').trimEnd('/') == CHORES_COMPLETION_PATH &&
+                    action.risk == ActionRisk.mutating &&
+                    action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+            }.mapTo(this, ActionSpec::id)
+        }
+        if (roster?.ownerUserId == actorUserId && roster.omittedPeople == 0) {
+            actions.filter { action ->
+                action.binding.method == HttpMethod.DELETE &&
+                    action.binding.path.substringBefore('?').trimEnd('/') == CHORES_MEMBER_REMOVAL_PATH &&
+                    action.intent == ActionIntent.delete &&
+                    action.risk == ActionRisk.destructive && action.requiresConfirmation &&
+                    action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+            }.mapTo(this, ActionSpec::id)
+        }
+    }
 
     else -> emptySet()
 }
@@ -1844,6 +1890,9 @@ private fun NativeRecord.hasChoresTeamMember(actorUserId: String): Boolean {
             (identities.single().value as? NativeStructuredValue.Scalar)?.value == actorUserId
     }
 }
+
+private const val CHORES_MEMBER_REMOVAL_PATH =
+    "/apps/chores/api/v1.0/team/{teamId}/members/{userIdToRemove}"
 
 private fun ActionSpec.authorityCapabilityIds(resource: ResourceSpec): Set<String> {
     val verbs = when {
