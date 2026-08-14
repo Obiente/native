@@ -866,7 +866,10 @@ internal fun NextcloudNoteEditor(
         val recovery = deletionRecovery ?: return@LaunchedEffect
         if (deleting) return@LaunchedEffect
         if (recovery.noteId != note.id) {
-            onBack()
+            navigateAfterReleasingMutationGuard(
+                onMutationInProgressChanged = onMutationInProgressChanged,
+                onNavigate = onBack,
+            )
             return@LaunchedEffect
         }
         showDeleteConfirmation = true
@@ -1422,8 +1425,15 @@ internal fun completeVerifiedNoteDeletion(
     onBack: () -> Unit,
 ) {
     onDeletingChanged(false)
+    navigateAfterReleasingMutationGuard(onMutationInProgressChanged, onBack)
+}
+
+internal fun navigateAfterReleasingMutationGuard(
+    onMutationInProgressChanged: (Boolean) -> Unit,
+    onNavigate: () -> Unit,
+) {
     onMutationInProgressChanged(false)
-    onBack()
+    onNavigate()
 }
 
 @Composable

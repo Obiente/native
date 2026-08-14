@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private val incomingLinkRequests = mutableStateListOf<NextcloudNativeLinkRequest>()
     private var incomingLinkQueueOverflowEvent by mutableLongStateOf(0L)
     private var lastIncomingLinkDeliveryId: String? = null
+    private var lastIncomingLinkPayloadIdentity: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,6 +52,8 @@ class MainActivity : ComponentActivity() {
             ?.getLong(KEY_INCOMING_LINK_QUEUE_OVERFLOW_EVENT)
             ?: 0L
         lastIncomingLinkDeliveryId = savedInstanceState?.getString(KEY_INCOMING_LINK_DELIVERY_ID)
+        lastIncomingLinkPayloadIdentity = savedInstanceState
+            ?.getString(KEY_INCOMING_LINK_PAYLOAD_IDENTITY)
         incomingLinkRequests.addAll(
             restoreAndroidIncomingLinkQueue(
                 restoredSequence = incomingLinkSequence,
@@ -59,7 +62,10 @@ class MainActivity : ComponentActivity() {
                 legacyUrl = savedInstanceState?.getString(KEY_PENDING_INCOMING_LINK),
             ),
         )
-        receiveIncomingLinkIntent(intent)
+        receiveIncomingLinkIntent(
+            intent = intent,
+            restoringLaunchIntent = savedInstanceState != null,
+        )
         SessionTestBootstrap.importIfPresent(applicationContext)
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         AndroidAppUpdateWork.schedule(
@@ -152,7 +158,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         receiveNotificationIntent(intent)
-        receiveIncomingLinkIntent(intent)
+        receiveIncomingLinkIntent(intent, restoringLaunchIntent = false)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -175,6 +181,9 @@ class MainActivity : ComponentActivity() {
         lastIncomingLinkDeliveryId?.let { deliveryId ->
             outState.putString(KEY_INCOMING_LINK_DELIVERY_ID, deliveryId)
         }
+        lastIncomingLinkPayloadIdentity?.let { payloadIdentity ->
+            outState.putString(KEY_INCOMING_LINK_PAYLOAD_IDENTITY, payloadIdentity)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -187,9 +196,20 @@ class MainActivity : ComponentActivity() {
         ))
     }
 
-    private fun receiveIncomingLinkIntent(intent: Intent?) {
+    private fun receiveIncomingLinkIntent(
+        intent: Intent?,
+        restoringLaunchIntent: Boolean,
+    ) {
         val existingDeliveryId = intent.incomingLinkDeliveryId()
-        if (!isNewAndroidIncomingLinkDelivery(lastIncomingLinkDeliveryId, existingDeliveryId)) return
+        val payloadIdentity = androidIncomingLinkPayloadIdentity(intent?.action, intent?.dataString)
+        if (!isNewAndroidIncomingLinkDelivery(
+                lastDeliveryId = lastIncomingLinkDeliveryId,
+                currentDeliveryId = existingDeliveryId,
+                lastPayloadIdentity = lastIncomingLinkPayloadIdentity,
+                currentPayloadIdentity = payloadIdentity,
+                restoringLaunchIntent = restoringLaunchIntent,
+            )
+        ) return
         val state = nextAndroidIncomingLinkState(
             previousSequence = incomingLinkSequence,
             action = intent?.action,
@@ -202,6 +222,7 @@ class MainActivity : ComponentActivity() {
                 if (intent === this.intent) setIntent(intent)
             }
             lastIncomingLinkDeliveryId = deliveryId
+            lastIncomingLinkPayloadIdentity = payloadIdentity
             if (canEnqueueAndroidIncomingLink(incomingLinkRequests, state.request)) {
                 incomingLinkRequests.add(state.request)
             } else {
@@ -227,6 +248,7 @@ class MainActivity : ComponentActivity() {
         const val KEY_PENDING_INCOMING_LINK_SEQUENCES = "pending-incoming-link-sequences"
         const val KEY_PENDING_INCOMING_LINK_URLS = "pending-incoming-link-urls"
         const val KEY_INCOMING_LINK_DELIVERY_ID = "incoming-link-delivery-id"
+        const val KEY_INCOMING_LINK_PAYLOAD_IDENTITY = "incoming-link-payload-identity"
         val DarkWindowBackground = Color(0xFF0D0F13)
         val LightWindowBackground = Color(0xFFF7F6FA)
     }

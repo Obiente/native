@@ -49,6 +49,18 @@ class NoteDeletionRecoveryTest {
     }
 
     @Test
+    fun `mismatched recovery releases the guard before leaving the stale editor`() {
+        val events = mutableListOf<String>()
+
+        navigateAfterReleasingMutationGuard(
+            onMutationInProgressChanged = { events += "mutation:$it" },
+            onNavigate = { events += "navigate" },
+        )
+
+        assertEquals(listOf("mutation:false", "navigate"), events)
+    }
+
+    @Test
     fun `note deletion recovery is account scoped and rejects malformed state`() {
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test",

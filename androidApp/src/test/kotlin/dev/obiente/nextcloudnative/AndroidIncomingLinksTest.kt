@@ -56,16 +56,69 @@ class AndroidIncomingLinksTest {
     @Test
     fun restoredIntentDeliveriesAreSkippedButNewLaunchesAreProcessed() {
         val restoredId = "44ab77da-4d31-4b81-8d60-78f983683d45"
+        val restoredPayload = requireNotNull(
+            androidIncomingLinkPayloadIdentity(
+                ANDROID_ACTION_VIEW,
+                "https://cloud.example.test/f/42",
+            ),
+        )
+        val otherPayload = requireNotNull(
+            androidIncomingLinkPayloadIdentity(
+                ANDROID_ACTION_VIEW,
+                "https://cloud.example.test/f/43",
+            ),
+        )
 
-        assertEquals(false, isNewAndroidIncomingLinkDelivery(restoredId, restoredId))
+        assertEquals(
+            false,
+            isNewAndroidIncomingLinkDelivery(
+                lastDeliveryId = restoredId,
+                currentDeliveryId = restoredId,
+                lastPayloadIdentity = restoredPayload,
+                currentPayloadIdentity = restoredPayload,
+                restoringLaunchIntent = false,
+            ),
+        )
         assertEquals(
             true,
             isNewAndroidIncomingLinkDelivery(
-                restoredId,
-                "57444e66-73ff-4123-9cb7-d2690d46112a",
+                lastDeliveryId = restoredId,
+                currentDeliveryId = "57444e66-73ff-4123-9cb7-d2690d46112a",
+                lastPayloadIdentity = restoredPayload,
+                currentPayloadIdentity = restoredPayload,
+                restoringLaunchIntent = false,
             ),
         )
-        assertEquals(true, isNewAndroidIncomingLinkDelivery(restoredId, null))
+        assertEquals(
+            false,
+            isNewAndroidIncomingLinkDelivery(
+                lastDeliveryId = restoredId,
+                currentDeliveryId = null,
+                lastPayloadIdentity = restoredPayload,
+                currentPayloadIdentity = restoredPayload,
+                restoringLaunchIntent = true,
+            ),
+        )
+        assertEquals(
+            true,
+            isNewAndroidIncomingLinkDelivery(
+                lastDeliveryId = restoredId,
+                currentDeliveryId = null,
+                lastPayloadIdentity = restoredPayload,
+                currentPayloadIdentity = restoredPayload,
+                restoringLaunchIntent = false,
+            ),
+        )
+        assertEquals(
+            true,
+            isNewAndroidIncomingLinkDelivery(
+                lastDeliveryId = restoredId,
+                currentDeliveryId = null,
+                lastPayloadIdentity = restoredPayload,
+                currentPayloadIdentity = otherPayload,
+                restoringLaunchIntent = true,
+            ),
+        )
     }
 
     @Test

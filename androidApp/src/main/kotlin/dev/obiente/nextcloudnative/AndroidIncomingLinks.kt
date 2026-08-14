@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudNativeLinkRequest
+import java.security.MessageDigest
 
 internal data class AndroidIncomingLinkState(
     val sequence: Long,
@@ -13,10 +14,7 @@ internal fun nextAndroidIncomingLinkState(
     dataUrl: String?,
 ): AndroidIncomingLinkState {
     require(previousSequence >= 0L) { "The incoming link sequence is invalid." }
-    val candidate = dataUrl
-        ?.takeIf { action == ANDROID_ACTION_VIEW }
-        ?.trim()
-        ?.takeIf(String::isSupportedAndroidIncomingLink)
+    val candidate = normalizedAndroidIncomingLink(action, dataUrl)
         ?: return AndroidIncomingLinkState(previousSequence, null)
     val sequence = previousSequence + 1L
     check(sequence > previousSequence) { "The incoming link sequence is exhausted." }
@@ -29,7 +27,31 @@ internal fun nextAndroidIncomingLinkState(
 internal fun isNewAndroidIncomingLinkDelivery(
     lastDeliveryId: String?,
     currentDeliveryId: String?,
-): Boolean = currentDeliveryId == null || currentDeliveryId != lastDeliveryId
+    lastPayloadIdentity: String?,
+    currentPayloadIdentity: String?,
+    restoringLaunchIntent: Boolean,
+): Boolean = when {
+    currentDeliveryId != null -> currentDeliveryId != lastDeliveryId
+    restoringLaunchIntent && currentPayloadIdentity != null -> currentPayloadIdentity != lastPayloadIdentity
+    else -> true
+}
+
+internal fun androidIncomingLinkPayloadIdentity(
+    action: String?,
+    dataUrl: String?,
+): String? {
+    val candidate = normalizedAndroidIncomingLink(action, dataUrl) ?: return null
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest("$action\u0000$candidate".encodeToByteArray())
+    val hex = "0123456789abcdef"
+    return buildString(digest.size * 2) {
+        digest.forEach { byte ->
+            val value = byte.toInt() and 0xff
+            append(hex[value ushr 4])
+            append(hex[value and 0x0f])
+        }
+    }
+}
 
 internal fun restoreAndroidIncomingLinkQueue(
     restoredSequence: Long,
@@ -71,6 +93,12 @@ internal fun canEnqueueAndroidIncomingLink(
     val queuedBytes = queued.sumOf { pending -> pending.url.encodeToByteArray().size }
     return queuedBytes + request.url.encodeToByteArray().size <= MAX_ANDROID_INCOMING_LINK_QUEUE_BYTES
 }
+
+private fun normalizedAndroidIncomingLink(action: String?, dataUrl: String?): String? =
+    dataUrl
+        ?.takeIf { action == ANDROID_ACTION_VIEW }
+        ?.trim()
+        ?.takeIf(String::isSupportedAndroidIncomingLink)
 
 private fun String.isSupportedAndroidIncomingLink(): Boolean {
     if (length !in 1..MAX_ANDROID_INCOMING_LINK_LENGTH) return false
