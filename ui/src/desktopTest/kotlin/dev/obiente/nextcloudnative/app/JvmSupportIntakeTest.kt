@@ -17,6 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -468,6 +469,28 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun rejectsReceiptWithAnUnusableDeletionCapability() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(
+                    fixture.statusUrl,
+                    deletionUrl = "https://support.invalid/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678",
+                ),
+            )
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(
+                fixture.intake.states().value,
+            )
+            assertTrue(retryable.outcomeAmbiguous)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            assertTrue(fixture.completedDescriptors().isEmpty())
+        }
+    }
+
+    @Test
     fun rejectsSupportUploadWhenThePlatformMutationGateIsClosed() = runBlocking {
         var mutationsAllowed = false
         testFixture(supportMutationsAllowed = { mutationsAllowed }).use { fixture ->
@@ -698,6 +721,28 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
             assertEquals(0, fixture.server.requestCount)
+        }
+    }
+
+    @Test
+    fun deletesAnArchivePromotedBeforePackagingCancellationIsObserved() = runBlocking {
+        testFixture(
+            afterBundlePackaging = {
+                throw CancellationException("Synthetic cancellation after archive promotion.")
+            },
+        ).use { fixture ->
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+
+            submission.join()
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(
+                fixture.intake.states().value,
+            )
+            assertFalse(retryable.outcomeAmbiguous)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            assertFalse(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
         }
     }
 
@@ -1633,6 +1678,7 @@ class JvmSupportIntakeTest {
         beforeCallRegistration: () -> Unit = {},
         beforeSubmissionPreparation: () -> Unit = {},
         beforeBundlePackaging: () -> Unit = {},
+        afterBundlePackaging: () -> Unit = {},
         privateFileDelete: (File) -> Boolean = File::delete,
         pendingDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
         completedDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
@@ -1698,6 +1744,7 @@ class JvmSupportIntakeTest {
             beforeCallRegistration = beforeCallRegistration,
             beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
+            afterBundlePackaging = afterBundlePackaging,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,
@@ -1712,6 +1759,7 @@ class JvmSupportIntakeTest {
         retentionDays: Long = 30,
         createdAtOffsetDays: Long = 0,
         retentionUntil: Instant? = null,
+        deletionUrl: String = statusUrl,
     ): MockResponse {
         val createdAt = Instant.now().plus(createdAtOffsetDays, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS)
         val resolvedRetentionUntil = retentionUntil ?: createdAt.plus(retentionDays, ChronoUnit.DAYS)
@@ -1722,7 +1770,7 @@ class JvmSupportIntakeTest {
                   "supportCode": "$supportCode",
                   "status": "new",
                   "statusUrl": "$statusUrl",
-                  "deletionUrl": "$statusUrl",
+                  "deletionUrl": "$deletionUrl",
                   "createdAt": "$createdAt",
                   "retentionUntil": "$resolvedRetentionUntil"
                 }
@@ -1742,6 +1790,7 @@ class JvmSupportIntakeTest {
         val beforeCallRegistration: () -> Unit,
         val beforeSubmissionPreparation: () -> Unit,
         val beforeBundlePackaging: () -> Unit,
+        val afterBundlePackaging: () -> Unit,
         val privateFileDelete: (File) -> Boolean,
         val pendingDescriptorRead: (File) -> String,
         val completedDescriptorRead: (File) -> String,
@@ -1766,6 +1815,7 @@ class JvmSupportIntakeTest {
             beforeCallRegistration = beforeCallRegistration,
             beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
+            afterBundlePackaging = afterBundlePackaging,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,

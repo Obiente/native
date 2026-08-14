@@ -65,6 +65,7 @@ class JvmSupportIntake(
     private val beforeCallRegistration: () -> Unit = {},
     private val beforeSubmissionPreparation: () -> Unit = {},
     private val beforeBundlePackaging: () -> Unit = {},
+    private val afterBundlePackaging: () -> Unit = {},
     private val privateFileDelete: (File) -> Boolean = File::delete,
     private val pendingDescriptorRead: (File) -> String = { descriptor ->
         descriptor.readText(Charsets.UTF_8)
@@ -592,8 +593,11 @@ class JvmSupportIntake(
         val destination = File(temporaryRoot, "support-${UUID.randomUUID()}.zip")
         val prepared = try {
             beforeBundlePackaging()
-            diagnostics.writeBundleForSubmission(destination, submission.context)
+            diagnostics.writeBundleForSubmission(destination, submission.context).also {
+                afterBundlePackaging()
+            }
         } catch (cancellation: CancellationException) {
+            deletePrivateFileOrRetry(destination)
             if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
                 finishCancelled(submission)
             } else {
@@ -605,6 +609,7 @@ class JvmSupportIntake(
             }
             throw cancellation
         } catch (_: Throwable) {
+            deletePrivateFileOrRetry(destination)
             if (cancellationRequested.get() || synchronized(lock) { pending !== submission }) {
                 finishCancelled(submission)
             } else {
@@ -1052,6 +1057,15 @@ class JvmSupportIntake(
                 statusUrl.encodedPath.matches(SUPPORT_STATUS_PATH_PATTERN) &&
                 statusUrl.encodedQuery == null &&
                 statusUrl.fragment == null,
+        )
+        val deletionUrl = receipt.deletionUrl.toHttpUrl()
+        require(
+            deletionUrl.scheme == statusUrl.scheme &&
+                deletionUrl.host == statusUrl.host &&
+                deletionUrl.port == statusUrl.port &&
+                deletionUrl.encodedPath == statusUrl.encodedPath &&
+                deletionUrl.encodedQuery == null &&
+                deletionUrl.fragment == null,
         )
         return statusUrl
     }
