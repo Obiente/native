@@ -115,6 +115,9 @@ class NextcloudLinkRoutingTest {
         listOf(
             "/index.php/apps/files/search-result",
             "/index.php/apps/files/files/42/unsupported",
+            "/index.php/apps/files/?view=trashbin",
+            "/index.php/apps/files/?view=sharingout",
+            "/index.php/apps/files/#server-defined-view",
         ).forEach { link ->
             val destination = assertIs<NextcloudLinkDestination.Browser>(
                 nextcloudLinkDestination(session, link),
@@ -190,7 +193,7 @@ class NextcloudLinkRoutingTest {
             "/index.php/apps/files/#view?openfile=42",
         )
 
-        assertEquals("", assertIs<NextcloudLinkDestination.FilesPath>(destination).value)
+        assertEquals(true, assertIs<NextcloudLinkDestination.Browser>(destination).sameAccount)
     }
 
     @Test
@@ -200,6 +203,6 @@ class NextcloudLinkRoutingTest {
             "/index.php/apps/files/?OpenFile=42&DIR=%2FPrivate",
         )
 
-        assertEquals("", assertIs<NextcloudLinkDestination.FilesPath>(destination).value)
+        assertEquals(true, assertIs<NextcloudLinkDestination.Browser>(destination).sameAccount)
     }
 }

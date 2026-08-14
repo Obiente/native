@@ -72,6 +72,17 @@ class GroupwareDavTest {
         assertTrue(upsert.isSatisfiedBy(updated))
         assertFalse(deletion.isSatisfiedBy(updated))
         assertTrue(deletion.isSatisfiedBy(missing))
+
+        val session = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "person",
+            appPassword = "secret",
+        )
+        val accountScope = groupwareMutationAccountScope(session, "person-id")
+        val encoded = ContactMutationRecoveryState(accountScope, upsert).encodeForSavedState()
+        assertEquals(upsert, decodeContactMutationRecoveryState(encoded, accountScope))
+        assertNull(decodeContactMutationRecoveryState(encoded, "$accountScope-other"))
+        assertNull(decodeContactMutationRecoveryState("not-json", accountScope))
     }
 
     @Test

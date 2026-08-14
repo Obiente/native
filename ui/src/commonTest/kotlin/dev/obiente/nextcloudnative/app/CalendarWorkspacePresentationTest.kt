@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CalendarWorkspacePresentationTest {
@@ -235,6 +236,17 @@ class CalendarWorkspacePresentationTest {
             ).encodeToByteArray(),
         )
         val missing = updated.copy(status = 404, body = byteArrayOf())
+        val staleEnd = updated.copy(
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = draft.title,
+                start = draft.startValue(),
+                end = "20260814T110000Z",
+                allDay = draft.allDay,
+                location = draft.location,
+                description = draft.description,
+            ).encodeToByteArray(),
+        )
         val upsert = CalendarMutationPostcondition.Upsert(
             href,
             "/remote.php/dav/calendars/synthetic/team/",
@@ -245,9 +257,21 @@ class CalendarWorkspacePresentationTest {
         val deletion = CalendarMutationPostcondition.Delete(href)
 
         assertFalse(upsert.isSatisfiedBy(stale))
+        assertFalse(upsert.isSatisfiedBy(staleEnd))
         assertTrue(upsert.isSatisfiedBy(updated))
         assertFalse(deletion.isSatisfiedBy(updated))
         assertTrue(deletion.isSatisfiedBy(missing))
+
+        val session = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "person",
+            appPassword = "secret",
+        )
+        val accountScope = groupwareMutationAccountScope(session, "person-id")
+        val encoded = CalendarMutationRecoveryState(accountScope, upsert).encodeForSavedState()
+        assertEquals(upsert, decodeCalendarMutationRecoveryState(encoded, accountScope))
+        assertNull(decodeCalendarMutationRecoveryState(encoded, "$accountScope-other"))
+        assertNull(decodeCalendarMutationRecoveryState("not-json", accountScope))
     }
 
     private fun calendar(id: String, name: String) = GroupwareCalendar(

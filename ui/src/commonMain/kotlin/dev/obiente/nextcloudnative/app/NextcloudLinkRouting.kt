@@ -85,6 +85,12 @@ internal fun nextcloudLinkDestination(
         if (parsed.queryParameters.hasInvalidFileIdentity()) {
             return NextcloudLinkDestination.Rejected("This Files link has an invalid file ID.")
         }
+        if (
+            parsed.hasFragment ||
+            parsed.queryParameters.keys.any { parameter -> parameter !in NATIVE_FILES_QUERY_PARAMETERS }
+        ) {
+            return NextcloudLinkDestination.Browser(resolved.browserUrl, sameAccount = true)
+        }
         val appRouteSegments = segments.drop(appsIndex + 2)
         val routeFileIdValue = appRouteSegments.getOrNull(1)
             ?.takeIf { appRouteSegments.firstOrNull() == "files" && appRouteSegments.size == 2 }
@@ -341,6 +347,7 @@ private fun String.isSafeNextcloudAppId(): Boolean =
         all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
 
 private const val MAX_NEXTCLOUD_LINK_LENGTH = 8_192
+private val NATIVE_FILES_QUERY_PARAMETERS = setOf("dir", "fileid", "openfile")
 private const val MAX_NEXTCLOUD_QUERY_NAME_LENGTH = 128
 private const val MAX_NEXTCLOUD_QUERY_VALUE_LENGTH = 4_096
 private const val MAX_NEXTCLOUD_FILES_PATH_LENGTH = 4_096

@@ -1683,10 +1683,10 @@ private fun AuthenticatedApp(
     val pendingEditorNavigationRequests = remember(session) {
         mutableStateListOf<NextcloudPendingNavigationRequest>()
     }
-    var pendingEditorLinkNavigationInProgress by remember(session) { mutableStateOf(false) }
+    var pendingEditorLinkNavigationSequence by remember(session) { mutableStateOf<Long?>(null) }
     val pendingEditorNavigationRequest = pendingEditorNavigationRequests
         .firstOrNull()
-        ?.takeUnless { pendingEditorLinkNavigationInProgress }
+        ?.takeUnless { pendingEditorLinkNavigationSequence != null }
 
     fun queueEditorNavigationRequest(request: NextcloudPendingNavigationRequest) {
         if (pendingEditorNavigationRequests.none { queued -> queued.identity == request.identity }) {
@@ -1696,6 +1696,12 @@ private fun AuthenticatedApp(
 
     fun removeEditorNavigationRequest(request: NextcloudPendingNavigationRequest) {
         pendingEditorNavigationRequests.removeAll { queued -> queued.identity == request.identity }
+    }
+
+    fun releasePendingEditorLinkNavigation(sequence: Long) {
+        if (pendingEditorLinkNavigationSequence == sequence) {
+            pendingEditorLinkNavigationSequence = null
+        }
     }
 
     fun leaveAppWorkspace() {
@@ -2033,6 +2039,7 @@ private fun AuthenticatedApp(
         source: NextcloudLinkSource,
         incomingRequestSequence: Long? = null,
         onFinished: () -> Unit = {},
+        onCancelled: () -> Unit = {},
     ) {
         val originScreen = screen
         val originDestination = destination
@@ -2049,6 +2056,9 @@ private fun AuthenticatedApp(
                         destination == originDestination
                 }
                 if (result != NextcloudLinkNavigationResult.NeedsUserDecision) onFinished()
+            } catch (cancelled: CancellationException) {
+                onCancelled()
+                throw cancelled
             } finally {
                 if (linkNavigationGeneration == generation) linkNavigationJob = null
             }
@@ -2060,15 +2070,16 @@ private fun AuthenticatedApp(
             is NextcloudPendingNavigationRequest.Native -> applyNavigationRequest(request.request)
             is NextcloudPendingNavigationRequest.IncomingLink -> {
                 removeEditorNavigationRequest(request)
-                pendingEditorLinkNavigationInProgress = true
+                pendingEditorLinkNavigationSequence = request.request.sequence
                 launchNextcloudLinkNavigation(
                     rawLink = request.request.url,
                     source = NextcloudLinkSource.OperatingSystem,
                     incomingRequestSequence = request.request.sequence,
                     onFinished = {
                         onLinkRequestHandled(request.request.sequence)
-                        pendingEditorLinkNavigationInProgress = false
+                        releasePendingEditorLinkNavigation(request.request.sequence)
                     },
+                    onCancelled = { releasePendingEditorLinkNavigation(request.request.sequence) },
                 )
             }
         }
@@ -2105,7 +2116,18 @@ private fun AuthenticatedApp(
         if (needsServerInfo && serverInfo == null && discoveryError == null) {
             return@LaunchedEffect
         }
-        if (
+        if (pendingEditorLinkNavigationSequence == request.sequence) {
+            launchNextcloudLinkNavigation(
+                rawLink = request.url,
+                source = NextcloudLinkSource.OperatingSystem,
+                incomingRequestSequence = request.sequence,
+                onFinished = {
+                    onLinkRequestHandled(request.sequence)
+                    releasePendingEditorLinkNavigation(request.sequence)
+                },
+                onCancelled = { releasePendingEditorLinkNavigation(request.sequence) },
+            )
+        } else if (
             screen is Screen.NoteEditor ||
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
@@ -2193,7 +2215,7 @@ private fun AuthenticatedApp(
     linkNavigationFailure?.let { failure ->
         fun acknowledgeFailedIncomingLink() {
             failure.incomingRequestSequence?.let(onLinkRequestHandled)
-            pendingEditorLinkNavigationInProgress = false
+            failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
         }
 
         AlertDialog(
@@ -2221,7 +2243,10 @@ private fun AuthenticatedApp(
                                     incomingRequestSequence = failure.incomingRequestSequence,
                                     onFinished = {
                                         failure.incomingRequestSequence?.let(onLinkRequestHandled)
-                                        pendingEditorLinkNavigationInProgress = false
+                                        failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
+                                    },
+                                    onCancelled = {
+                                        failure.incomingRequestSequence?.let(::releasePendingEditorLinkNavigation)
                                     },
                                 )
                             }
