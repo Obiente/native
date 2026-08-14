@@ -746,9 +746,8 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
         FileSyncDecisionChoice.RestoreMissing -> when (currentDecision.reason) {
             FileSyncDecisionReason.LocalDeletion -> remote
                 ?.takeIf {
-                    planned is FileSyncOperation.Download &&
-                        planned.expectedLocalRevision == null &&
-                    local == null &&
+                    planned.restoresMissingLocal(it.kind) &&
+                        local == null &&
                         observedLocal == null &&
                         observedRemote != null &&
                         !it.hasSameGenerationAs(observedRemote) &&
@@ -762,9 +761,8 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
                 }
             FileSyncDecisionReason.RemoteDeletion -> local
                 ?.takeIf {
-                    planned is FileSyncOperation.Upload &&
-                        planned.expectedRemoteEtag == null &&
-                    remote == null &&
+                    planned.restoresMissingRemote(it.kind) &&
+                        remote == null &&
                         observedRemote == null &&
                         observedLocal != null &&
                         !it.hasSameGenerationAs(observedLocal) &&
@@ -784,6 +782,18 @@ private fun FileSyncWorkItem.rebindResolvedSourceGeneration(
         -> null
     }
 }
+
+private fun FileSyncOperation.restoresMissingLocal(sourceKind: SyncEntryKind): Boolean =
+    (this is FileSyncOperation.Download && expectedLocalRevision == null) ||
+        (this is FileSyncOperation.NeedsDecision &&
+            sourceKind == SyncEntryKind.Directory &&
+            reason == FileSyncDecisionReason.LocalDeletion)
+
+private fun FileSyncOperation.restoresMissingRemote(sourceKind: SyncEntryKind): Boolean =
+    (this is FileSyncOperation.Upload && expectedRemoteEtag == null) ||
+        (this is FileSyncOperation.NeedsDecision &&
+            sourceKind == SyncEntryKind.Directory &&
+            reason == FileSyncDecisionReason.RemoteDeletion)
 
 // Modification time is presentation metadata. Revision, ETag, size, and content identity remain
 // the durable generation guards while timestamps can be added or refreshed without resetting work.

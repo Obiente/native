@@ -256,6 +256,60 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `restore local follows the latest surviving remote directory`() {
+        val baseline = FileSyncBaseline("Archive", SyncEntryKind.Directory, "local-dir", "remote-dir-1")
+        var state = scanFileSyncPair(
+            state(baselines = listOf(baseline)),
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(RemoteSyncEntry("Archive", SyncEntryKind.Directory, "remote-dir-1")),
+            nowEpochMillis = 10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.RestoreMissing)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(RemoteSyncEntry("Archive", SyncEntryKind.Directory, "remote-dir-2")),
+            nowEpochMillis = 20,
+        )
+
+        val rebound = state.pair().workItems.single()
+        assertEquals(workId, rebound.id)
+        assertEquals("remote-dir-2", rebound.observedRemote?.etag)
+        assertNull(assertIs<FileSyncOperation.Download>(rebound.operation).expectedLocalRevision)
+    }
+
+    @Test
+    fun `restore remote follows the latest surviving local directory`() {
+        val baseline = FileSyncBaseline("Archive", SyncEntryKind.Directory, "local-dir-1", "remote-dir")
+        var state = scanFileSyncPair(
+            state(baselines = listOf(baseline)),
+            PAIR_ID,
+            localEntries = listOf(LocalSyncEntry("Archive", SyncEntryKind.Directory, "local-dir-1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10,
+        )
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.RestoreMissing)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            localEntries = listOf(LocalSyncEntry("Archive", SyncEntryKind.Directory, "local-dir-2")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 20,
+        )
+
+        val rebound = state.pair().workItems.single()
+        assertEquals(workId, rebound.id)
+        assertEquals("local-dir-2", rebound.observedLocal?.revision)
+        assertNull(assertIs<FileSyncOperation.Upload>(rebound.operation).expectedRemoteEtag)
+    }
+
+    @Test
     fun `keep both requires renewed review when either source changes`() {
         var state = scanFileSyncPair(
             state(),
