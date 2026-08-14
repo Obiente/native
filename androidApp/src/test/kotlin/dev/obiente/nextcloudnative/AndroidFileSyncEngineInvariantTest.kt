@@ -387,6 +387,7 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "restore-old-authority"
                     "account-old"
                 },
+                publishAccount = { _, accountId -> events += "publish-${accountId ?: "none"}" },
             )
         }
         loadThread.start()
@@ -396,6 +397,7 @@ class AndroidFileSyncEngineInvariantTest {
             guard.clearSession(
                 persist = { events += "clear-session" },
                 cancelAll = { events += "cancel-all" },
+                clearPublishedAccount = { events += "publish-none" },
             )
         }
         clearThread.start()
@@ -410,7 +412,9 @@ class AndroidFileSyncEngineInvariantTest {
             listOf(
                 "read-old-session",
                 "restore-old-authority",
+                "publish-account-old",
                 "clear-session",
+                "publish-none",
                 "cancel-all",
             ),
             events,
@@ -437,6 +441,7 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "restore-old-authority"
                     "account-old"
                 },
+                publishAccount = { _, accountId -> events += "publish-$accountId" },
             )
         }
         loadThread.start()
@@ -447,6 +452,7 @@ class AndroidFileSyncEngineInvariantTest {
                 replacementAccountId = "account-new",
                 persist = { events += "save-new-session" },
                 cancelAll = { events += "cancel-old-work" },
+                publishAccount = { accountId -> events += "publish-$accountId" },
             )
         }
         replacementThread.start()
@@ -461,7 +467,9 @@ class AndroidFileSyncEngineInvariantTest {
             listOf(
                 "read-old-session",
                 "restore-old-authority",
+                "publish-account-old",
                 "save-new-session",
+                "publish-account-new",
                 "cancel-old-work",
             ),
             events,

@@ -32,6 +32,7 @@ import {
   validateCaptureManifest,
   websiteCapturePath,
 } from "./marketing-captures.mjs";
+import { resolveGithubRepositoryData } from "./github-repository-data.mjs";
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(websiteRoot, "..");
@@ -40,6 +41,7 @@ const publicDirectory = path.join(websiteRoot, "public");
 const newsDirectory = path.join(websiteRoot, "content", "news");
 const guideDirectory = path.join(websiteRoot, "content", "guides");
 const roadmapSnapshotFile = path.join(websiteRoot, "data", "roadmap-snapshot.json");
+const repositorySnapshotFile = path.join(websiteRoot, "data", "github-repository.json");
 const changelogFile = path.join(repositoryRoot, "CHANGELOG.md");
 const changelogRoute = "/changelog/";
 await mkdir(generatedDirectory, { recursive: true });
@@ -480,7 +482,7 @@ async function githubJson(url) {
     signal: AbortSignal.timeout(8_000),
   });
   if (!response.ok) {
-    throw new Error(`GitHub roadmap request failed with HTTP ${response.status}.`);
+    throw new Error(`GitHub API request failed with HTTP ${response.status}.`);
   }
   return response.json();
 }
@@ -526,6 +528,20 @@ async function allProjectItems() {
 }
 
 const fallbackRoadmap = repositoryRoadmapFallback(projectUrl);
+
+const githubRepositoryResult = await resolveGithubRepositoryData({
+  loadLive: () => githubJson("https://api.github.com/repos/Obiente/nc-native"),
+  loadSnapshot: async () => JSON.parse(await readFile(repositorySnapshotFile, "utf8")),
+});
+if (githubRepositoryResult.warning) {
+  console.warn(
+    `Using bundled GitHub repository snapshot: ${githubRepositoryResult.warning}`,
+  );
+}
+await writeFile(
+  path.join(generatedDirectory, "github-repository.js"),
+  `// Generated from public GitHub repository metadata with a bundled fallback. Do not edit.\nexport const githubRepository = Object.freeze(${JSON.stringify(githubRepositoryResult.repository, null, 2)});\n`,
+);
 
 let roadmap = fallbackRoadmap;
 try {
