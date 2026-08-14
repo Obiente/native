@@ -75,15 +75,18 @@ internal fun createDesktopSupportDiagnostics(
     root: File = desktopSupportDiagnosticsDirectory(),
 ): AsyncJvmSupportDiagnostics = AsyncJvmSupportDiagnostics(
     root = root,
-    environment = SupportDiagnosticsEnvironment(
+    environment = desktopSupportDiagnosticsEnvironment(),
+    workerName = "nextcloud-support-diagnostics",
+)
+
+internal fun desktopSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =
+    SupportDiagnosticsEnvironment(
         appVersion = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
         packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
         platform = desktopSupportPlatformName(),
         operatingSystemVersion = System.getProperty("os.version", "Unknown"),
         architecture = System.getProperty("os.arch", "Unknown"),
-    ),
-    workerName = "nextcloud-support-diagnostics",
-)
+    )
 
 internal fun installDesktopUncaughtDiagnosticHandler(diagnostics: AsyncJvmSupportDiagnostics) {
     DESKTOP_CRASH_DIAGNOSTICS.set(diagnostics)

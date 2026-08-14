@@ -216,22 +216,69 @@ class JvmSupportDiagnostics(
         destination: File,
         reproductionSteps: String,
         featureState: List<SupportDiagnosticFieldDraft>,
-    ): File = synchronized(lock) {
+    ): File = writeBundleForSubmission(
+        destination,
+        prepareSubmissionContext(reproductionSteps, featureState),
+    ).archive
+
+    internal fun prepareSubmissionContext(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+    ): PreparedSupportSubmissionContext = synchronized(lock) {
+        prepareSubmissionContextLocked(reproductionSteps, featureState, activeAccountScope)
+    }
+
+    internal fun prepareSubmissionContextForAccountIdentity(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountIdentity: String,
+    ): PreparedSupportSubmissionContext = synchronized(lock) {
+        prepareSubmissionContextLocked(reproductionSteps, featureState, accountScope(accountIdentity))
+    }
+
+    private fun prepareSubmissionContextLocked(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountScope: String?,
+    ): PreparedSupportSubmissionContext {
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
-        val createdAt = nowEpochMillis().coerceAtLeast(0L)
-        discardedHistoryBytes += pruneEvents(createdAt)
+        val confirmedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L)
+        discardedHistoryBytes += pruneEvents(confirmedAtEpochMillis)
         if (discardedHistoryBytes > 0L) persistHistory()
-        val snapshot = visibleEvents()
+        return PreparedSupportSubmissionContext(
+            sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
+            featureState = sanitizer.sanitizeFields(featureState),
+            confirmedAtEpochMillis = confirmedAtEpochMillis,
+            events = visibleEvents(accountScope),
+        )
+    }
+
+    internal fun writeBundleForSubmission(
+        destination: File,
+        context: PreparedSupportSubmissionContext,
+    ): PreparedSupportDiagnosticsBundle = synchronized(lock) {
+        require(context.featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
+        require(context.sanitizedReproductionSteps.orEmpty().length <= MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
+        require(context.confirmedAtEpochMillis >= 0L)
+        require(context.events.size <= MAX_SUPPORT_DIAGNOSTIC_EVENTS)
+        require(context.featureState.all { field ->
+            SUPPORT_DIAGNOSTIC_FIELD_NAME.matches(field.name) &&
+                field.value.length <= MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH &&
+                field.value.none(Char::isISOControl)
+        })
+        require(context.events.sumOf(::encodedEventBytes) <= MAX_SUPPORT_DIAGNOSTIC_STORED_BYTES)
+        val createdAt = context.confirmedAtEpochMillis
+        val snapshot = context.events
         val report = SupportBundleReport(
             createdAtEpochMillis = createdAt,
             environment = environment.safeForReport(),
-            reproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
+            reproductionSteps = context.sanitizedReproductionSteps,
             eventCount = snapshot.size,
             warningCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Warning },
             errorCount = snapshot.count { it.severity == SupportDiagnosticSeverity.Error },
             components = snapshot.map { it.component }.distinct().sortedBy(Enum<*>::name),
-            featureState = sanitizer.sanitizeFields(featureState),
+            featureState = context.featureState,
         )
         val reportBytes = SUPPORT_JSON.encodeToString(report).encodeToByteArray()
         val eventBytes = snapshot.joinToString(separator = "\n", postfix = if (snapshot.isEmpty()) "" else "\n") {
@@ -260,7 +307,7 @@ class JvmSupportDiagnostics(
             "The bounded diagnostic report is unexpectedly large."
         }
         writeZipAtomically(destination, completeContent, createdAt)
-        destination
+        PreparedSupportDiagnosticsBundle(destination, context.sanitizedReproductionSteps)
     }
 
     private fun loadHistory() {
@@ -349,9 +396,8 @@ class JvmSupportDiagnostics(
         require(historyFile.length() <= MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES)
     }
 
-    private fun visibleEvents(): List<SupportDiagnosticEvent> = events.filter { event ->
-        event.accountScope == null || event.accountScope == activeAccountScope
-    }
+    private fun visibleEvents(accountScope: String? = activeAccountScope): List<SupportDiagnosticEvent> =
+        events.filter { event -> event.accountScope == null || event.accountScope == accountScope }
 
     private fun accountScope(identity: String): String =
         "<account:${keyedAlias("account\u0000$identity").take(SUPPORT_DIAGNOSTIC_ALIAS_LENGTH)}>"
@@ -396,6 +442,19 @@ class JvmSupportDiagnostics(
     }
 }
 
+internal data class PreparedSupportDiagnosticsBundle(
+    val archive: File,
+    val sanitizedReproductionSteps: String?,
+)
+
+@Serializable
+internal data class PreparedSupportSubmissionContext(
+    val sanitizedReproductionSteps: String?,
+    val featureState: List<SupportDiagnosticField>,
+    val confirmedAtEpochMillis: Long,
+    val events: List<SupportDiagnosticEvent>,
+)
+
 fun Throwable.toSupportDiagnosticExceptionDraft(
     depth: Int = 0,
 ): SupportDiagnosticExceptionDraft = SupportDiagnosticExceptionDraft(
@@ -414,7 +473,7 @@ fun Throwable.toSupportDiagnosticExceptionDraft(
         ?.toSupportDiagnosticExceptionDraft(depth + 1),
 )
 
-private fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
+internal fun SupportDiagnosticsEnvironment.safeForReport(): SupportDiagnosticsEnvironment =
     SupportDiagnosticsEnvironment(
         appVersion = appVersion.safeEnvironmentValue(),
         packageVersion = packageVersion.safeEnvironmentValue(),

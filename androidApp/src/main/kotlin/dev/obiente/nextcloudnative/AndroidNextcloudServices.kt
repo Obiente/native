@@ -107,6 +107,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.SupportDiagnosticsDeletionResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
@@ -416,6 +417,11 @@ internal class AndroidNextcloudServices(
         activity = activity,
         diagnostics = supportDiagnostics,
     )
+    private val supportIntake = AndroidSupportIntakeCoordinator.get(
+        context = appContext,
+        diagnostics = supportDiagnostics,
+        client = httpClient,
+    )
 
     init {
         supportDiagnostics.registerPrivateValue(System.getProperty("user.home"))
@@ -615,14 +621,33 @@ internal class AndroidNextcloudServices(
         reproductionSteps: String,
     ): SupportDiagnosticsExportResult = supportBundleExporter.export(
         reproductionSteps = reproductionSteps,
-        featureState = listOf(
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override fun supportDiagnosticsSubmissionStates() = supportIntake.states()
+
+    override suspend fun submitSupportDiagnostics(reproductionSteps: String) = supportIntake.submit(
+        reproductionSteps = reproductionSteps,
+        channel = appUpdateSupport().channel.name.lowercase(),
+        featureState = supportDiagnosticFeatureState(),
+    )
+
+    override suspend fun retrySupportDiagnosticsSubmission() = supportIntake.retry()
+
+    override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
+
+    override suspend fun deleteSubmittedSupportDiagnosticsReport(
+        deletionUrl: String,
+    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
+
+    private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
+        listOf(
             SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),
             SupportDiagnosticFieldDraft("direct_updates", appUpdateSupport().canCheckDirectUpdates.toString()),
             SupportDiagnosticFieldDraft("virtual_files_supported", supportsVirtualFileStorage.toString()),
             SupportDiagnosticFieldDraft("bidirectional_sync", supportsBidirectionalFileSync.toString()),
             SupportDiagnosticFieldDraft("network_metered", isAndroidActiveNetworkMetered(appContext).toString()),
-        ),
-    )
+        )
 
     override suspend fun clearSupportDiagnostics(): Boolean = supportDiagnostics.clear()
 
@@ -724,10 +749,12 @@ internal class AndroidNextcloudServices(
                 }.getOrNull()
             },
             accountIdOf = NextcloudDocumentIds::accountKey,
-        )?.also { session ->
-            registerSessionPrivateValues(session)
-            supportDiagnostics.setActiveAccountIdentity(NextcloudDocumentIds.accountKey(session))
-        }
+            publishAccount = { session, accountIdentity ->
+                session?.let(::registerSessionPrivateValues)
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            },
+        )
     }
 
     override suspend fun saveSession(session: NextcloudSession) {
@@ -762,11 +789,14 @@ internal class AndroidNextcloudServices(
                     .apply()
             },
             cancelAll = scheduler::cancelAll,
+            publishAccount = { accountIdentity ->
+                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+                supportIntake.setActiveAccountIdentity(accountIdentity)
+            },
         )
         if (previousAccountId != null && previousAccountId != replacementAccountId) {
             nativeMediaPreviewCache.clearAccount(previousAccountId)
         }
-        supportDiagnostics.setActiveAccountIdentity(NextcloudDocumentIds.accountKey(session))
         notifyDocumentsRootsChanged()
     }
 
@@ -803,10 +833,13 @@ internal class AndroidNextcloudServices(
                         .apply()
                 },
                 cancelAll = scheduler::cancelAll,
+                clearPublishedAccount = {
+                    supportDiagnostics.setActiveAccountIdentity(null)
+                    supportIntake.setActiveAccountIdentity(null)
+                },
             )
             accountId?.let(nativeMediaPreviewCache::clearAccount)
             notifyDocumentsRootsChanged()
-            supportDiagnostics.setActiveAccountIdentity(null)
         } catch (failure: Throwable) {
             recordSupportDiagnostic(
                 SupportDiagnosticEventDraft(

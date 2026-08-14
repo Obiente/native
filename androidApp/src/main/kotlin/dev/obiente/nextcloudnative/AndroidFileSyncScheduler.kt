@@ -30,17 +30,20 @@ internal class AndroidFileSyncSessionSchedulingGuard {
     fun <Session> restorePersistedSession(
         load: () -> Session?,
         accountIdOf: (Session) -> String,
+        publishAccount: (Session?, String?) -> Unit = { _, _ -> },
     ): Session? = synchronized(monitor) {
         val restored = load()
         if (restored == null) {
             if (accountId != null) generation += 1
             accountId = null
+            publishAccount(null, null)
         } else {
             val restoredAccountId = accountIdOf(restored)
             if (accountId != null && accountId != restoredAccountId) {
                 generation += 1
             }
             accountId = restoredAccountId
+            publishAccount(restored, restoredAccountId)
         }
         restored
     }
@@ -49,6 +52,7 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         replacementAccountId: String,
         persist: () -> Unit,
         cancelAll: () -> Unit,
+        publishAccount: (String) -> Unit = {},
     ) {
         synchronized(monitor) {
             val accountChanged = accountId != replacementAccountId
@@ -57,6 +61,7 @@ internal class AndroidFileSyncSessionSchedulingGuard {
             try {
                 persist()
                 accountId = replacementAccountId
+                publishAccount(replacementAccountId)
             } finally {
                 if (accountChanged) cancelAll()
             }
@@ -66,12 +71,14 @@ internal class AndroidFileSyncSessionSchedulingGuard {
     fun clearSession(
         persist: () -> Unit,
         cancelAll: () -> Unit,
+        clearPublishedAccount: () -> Unit = {},
     ) {
         synchronized(monitor) {
             generation += 1
             accountId = null
             try {
                 persist()
+                clearPublishedAccount()
             } finally {
                 cancelAll()
             }

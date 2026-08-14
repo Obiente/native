@@ -124,6 +124,7 @@ fun main(arguments: Array<String>) {
                 }
             },
             providedSupportDiagnostics = supportDiagnostics,
+            supportIntakeRoot = supportDiagnosticsRoot.resolve("support-submissions"),
         ).also {
             themePreference.value = it.loadThemePreference()
             keepRunningInBackground.value = it.loadKeepRunningInBackgroundPreference()

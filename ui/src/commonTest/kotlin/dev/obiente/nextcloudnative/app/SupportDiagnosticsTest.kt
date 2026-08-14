@@ -11,6 +11,18 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun retainedSupportReportsAreExposedInBoundedPages() {
+        val reports = (1..12).toList()
+
+        assertEquals(listOf(1, 2, 3, 4, 5), supportReportPage(reports, requestedPageIndex = -1).items)
+        assertEquals(listOf(6, 7, 8, 9, 10), supportReportPage(reports, requestedPageIndex = 1).items)
+        val lastPage = supportReportPage(reports, requestedPageIndex = 99)
+        assertEquals(listOf(11, 12), lastPage.items)
+        assertEquals(2, lastPage.pageIndex)
+        assertEquals(3, lastPage.pageCount)
+    }
+
+    @Test
     fun sanitizesSecretsUrlsAccountsAndPathsBeforeCreatingEvent() {
         val server = "https://cloud.example.test/nextcloud"
         val login = "person@example.test"

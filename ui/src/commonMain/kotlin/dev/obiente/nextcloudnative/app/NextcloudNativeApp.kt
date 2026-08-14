@@ -12508,11 +12508,36 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     LaunchedEffect(services, diagnosticsRevision, refresh) {
         summary = services.loadSupportDiagnosticsSummary()
     }
-    var reproductionSteps by remember { mutableStateOf("") }
+    var reproductionSteps by rememberSaveable { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var confirmSend by rememberSaveable { mutableStateOf(false) }
+    var confirmDiscard by rememberSaveable { mutableStateOf(false) }
     var showPreview by rememberSaveable { mutableStateOf(false) }
+    var reportPageIndex by rememberSaveable { mutableStateOf(0) }
+    var reportDeletionTarget by remember { mutableStateOf<SupportDiagnosticsSubmissionState.SubmittedReport?>(null) }
+    val submissionState by remember(services) {
+        services.supportDiagnosticsSubmissionStates()
+    }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
+    val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Initializing ||
+        submissionState is SupportDiagnosticsSubmissionState.Packaging ||
+        submissionState is SupportDiagnosticsSubmissionState.Cancelling ||
+        submissionState is SupportDiagnosticsSubmissionState.DeletingSubmittedReport ||
+        submissionState is SupportDiagnosticsSubmissionState.Uploading
+    val submissionCancellable = submissionState is SupportDiagnosticsSubmissionState.Packaging ||
+        submissionState is SupportDiagnosticsSubmissionState.Uploading
+    val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
+        submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
+    val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported ||
+        submissionState is SupportDiagnosticsSubmissionState.AccountRequired
+
+    LaunchedEffect(submissionBusy, submissionPending, submissionUnavailable) {
+        if (submissionBusy || submissionPending || submissionUnavailable) {
+            confirmClear = false
+            confirmSend = false
+        }
+    }
 
     if (confirmClear) {
         AlertDialog(
@@ -12526,6 +12551,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             confirmButton = {
                 TextButton(
+                    enabled = !submissionBusy && !submissionPending,
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     onClick = {
                         confirmClear = false
@@ -12542,6 +12568,96 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             dismissButton = {
                 TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (confirmSend) {
+        AlertDialog(
+            onDismissRequest = { if (!submissionBusy) confirmSend = false },
+            title = { Text("Send this private report?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    Text(
+                        "The sanitized report, the description you reviewed, and app release details will be sent to Obiente Support.",
+                    )
+                    Text(
+                        "It does not include account credentials, raw account identifiers, server URLs, filenames, or file contents. Reports can include a stable pseudonymous account scope, allowing Obiente Support to correlate reports from the same account on this installation. Private report data is retained for 30 days unless you delete it first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !submissionBusy && !submissionUnavailable,
+                    onClick = {
+                        confirmSend = false
+                        scope.launch { services.submitSupportDiagnostics(reproductionSteps) }
+                    },
+                ) { Text("Send privately") }
+            },
+            dismissButton = {
+                TextButton(enabled = !submissionBusy, onClick = { confirmSend = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard this pending report?") },
+            text = {
+                Text(
+                    "This permanently removes the report prepared on this device. If its upload result is uncertain, the app will first reconcile it and request deletion from Obiente Support.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        confirmDiscard = false
+                        scope.launch { services.cancelSupportDiagnosticsSubmission() }
+                    },
+                ) { Text("Discard report") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Keep report") }
+            },
+        )
+    }
+
+    reportDeletionTarget?.let { report ->
+        AlertDialog(
+            onDismissRequest = { if (!submissionBusy) reportDeletionTarget = null },
+            title = { Text("Delete this submitted report?") },
+            text = {
+                Text(
+                    "This permanently deletes report ${report.supportCode} from Obiente Support and removes its private receipt from this device.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !submissionBusy,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        reportDeletionTarget = null
+                        scope.launch {
+                            status = when (
+                                val result = services.deleteSubmittedSupportDiagnosticsReport(report.deletionUrl)
+                            ) {
+                                SupportDiagnosticsDeletionResult.Deleted -> "Submitted support report deleted."
+                                is SupportDiagnosticsDeletionResult.Failed -> result.message
+                                is SupportDiagnosticsDeletionResult.Unsupported -> result.reason
+                            }
+                        }
+                    },
+                ) { Text("Delete report") }
+            },
+            dismissButton = {
+                TextButton(enabled = !submissionBusy, onClick = { reportDeletionTarget = null }) {
+                    Text("Keep report")
+                }
             },
         )
     }
@@ -12603,7 +12719,7 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 value = reproductionSteps,
                 onValueChange = { reproductionSteps = it.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH) },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = summary.available && !exporting,
+                enabled = summary.available && !exporting && !submissionBusy && !submissionPending,
                 label = { Text("What happened? (optional)") },
                 placeholder = { Text("Describe what you did, what you expected, and what happened.") },
                 supportingText = {
@@ -12672,7 +12788,14 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {
                 Button(
-                    enabled = summary.available && !exporting,
+                    enabled = summary.available && !exporting && !submissionBusy && !submissionPending &&
+                        !submissionUnavailable,
+                    onClick = { confirmSend = true },
+                ) {
+                    Text("Send to support")
+                }
+                OutlinedButton(
+                    enabled = summary.available && !exporting && !submissionBusy,
                     onClick = {
                         exporting = true
                         status = null
@@ -12701,13 +12824,174 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (exporting) "Preparing..." else "Export report")
+                    Text(if (exporting) "Preparing..." else "Save a copy")
+                }
+                if (submissionCancellable) {
+                    OutlinedButton(onClick = {
+                        scope.launch { services.cancelSupportDiagnosticsSubmission() }
+                    }) {
+                        Text("Cancel sending")
+                    }
                 }
                 if (summary.eventCount > 0) {
                     OutlinedButton(
-                        enabled = !exporting,
+                        enabled = !exporting && !submissionBusy && !submissionPending,
                         onClick = { confirmClear = true },
                     ) { Text("Clear history") }
+                }
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth().semantics {
+                    liveRegion = LiveRegionMode.Polite
+                },
+            ) {
+                when (val current = submissionState) {
+                    SupportDiagnosticsSubmissionState.Initializing -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Restoring any pending private report...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    SupportDiagnosticsSubmissionState.AccountRequired -> Text(
+                        "Sign in before sending a private support report.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SupportDiagnosticsSubmissionState.Idle -> Unit
+                    is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    SupportDiagnosticsSubmissionState.Packaging -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    SupportDiagnosticsSubmissionState.Cancelling -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Finishing private report cancellation...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    SupportDiagnosticsSubmissionState.DeletingSubmittedReport -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Deleting the submitted support report...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    is SupportDiagnosticsSubmissionState.Uploading -> {
+                        if (current.progress == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { current.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Text("Sending the private report to Obiente Support...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    is SupportDiagnosticsSubmissionState.RetryableFailure -> {
+                        Text(
+                            current.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                        ) {
+                            OutlinedButton(onClick = { scope.launch { services.retrySupportDiagnosticsSubmission() } }) {
+                                Text("Retry safely")
+                            }
+                            TextButton(onClick = { confirmDiscard = true }) {
+                                Text("Discard pending report")
+                            }
+                        }
+                    }
+                    is SupportDiagnosticsSubmissionState.Rejected -> Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    SupportDiagnosticsSubmissionState.Cancelled -> Text(
+                        "Private report submission cancelled.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    is SupportDiagnosticsSubmissionState.Submitted -> {
+                        val reportPage = supportReportPage(current.reports, reportPageIndex)
+                        LaunchedEffect(reportPageIndex, reportPage.pageIndex, current.reports.size) {
+                            if (reportPageIndex != reportPage.pageIndex) {
+                                reportPageIndex = reportPage.pageIndex
+                            }
+                        }
+                        Text(
+                            if (current.reports.size == 1) {
+                                "Sent privately. Your report remains available until its retention period ends."
+                            } else {
+                                "${current.reports.size} private reports remain available until their retention periods end."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        reportPage.items.forEach { report ->
+                            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                Text(
+                                    "Support code: ${report.supportCode}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            status = if (
+                                                services.copyTextToClipboard(
+                                                    "Obiente support code",
+                                                    report.supportCode,
+                                                )
+                                            ) {
+                                                "Support code copied."
+                                            } else {
+                                                "The support code could not be copied."
+                                            }
+                                        },
+                                    ) { Text("Copy support code") }
+                                    TextButton(onClick = { services.openExternalUrl(report.statusUrl) }) {
+                                        Text("Open private status")
+                                    }
+                                    TextButton(
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error,
+                                        ),
+                                        onClick = { reportDeletionTarget = report },
+                                    ) {
+                                        Text("Delete report")
+                                    }
+                                }
+                            }
+                        }
+                        if (reportPage.pageCount > 1) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            ) {
+                                OutlinedButton(
+                                    enabled = reportPage.pageIndex > 0,
+                                    onClick = { reportPageIndex = reportPage.pageIndex - 1 },
+                                ) { Text("Previous reports") }
+                                Text(
+                                    "Page ${reportPage.pageIndex + 1} of ${reportPage.pageCount}",
+                                    modifier = Modifier.padding(vertical = 12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                OutlinedButton(
+                                    enabled = reportPage.pageIndex + 1 < reportPage.pageCount,
+                                    onClick = { reportPageIndex = reportPage.pageIndex + 1 },
+                                ) { Text("Next reports") }
+                            }
+                        }
+                    }
+                    is SupportDiagnosticsSubmissionState.Unsupported -> Text(
+                        current.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             status?.let { message ->
@@ -12724,6 +13008,30 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
         }
     }
 }
+
+internal data class SupportReportPage<T>(
+    val items: List<T>,
+    val pageIndex: Int,
+    val pageCount: Int,
+)
+
+internal fun <T> supportReportPage(
+    reports: List<T>,
+    requestedPageIndex: Int,
+    pageSize: Int = SUPPORT_REPORT_PAGE_SIZE,
+): SupportReportPage<T> {
+    require(pageSize > 0)
+    val pageCount = if (reports.isEmpty()) 1 else ((reports.size - 1) / pageSize) + 1
+    val pageIndex = requestedPageIndex.coerceIn(0, pageCount - 1)
+    val firstIndex = pageIndex * pageSize
+    return SupportReportPage(
+        items = reports.subList(firstIndex, minOf(firstIndex + pageSize, reports.size)),
+        pageIndex = pageIndex,
+        pageCount = pageCount,
+    )
+}
+
+private const val SUPPORT_REPORT_PAGE_SIZE = 5
 
 @Composable
 internal fun DesktopStartOnLoginSettingsCard(
