@@ -74,6 +74,9 @@ internal fun nextcloudLinkDestination(
     if (segments.size == 2 && segments[0] == "f") {
         val fileId = segments[1].toPositiveFileId()
             ?: return NextcloudLinkDestination.Rejected("This Files link has an invalid file ID.")
+        if (parsed.queryParameters.isNotEmpty() || parsed.hasFragment) {
+            return NextcloudLinkDestination.Browser(resolved.browserUrl, sameAccount = true)
+        }
         return NextcloudLinkDestination.FileId(fileId, resolved.browserUrl)
     }
 

@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -102,6 +105,13 @@ class GroupwareDavTest {
         }
         val encoded = ContactMutationRecoveryState(accountScope, upsert).encodeForSavedState()
         assertEquals(upsert, decodeContactMutationRecoveryState(encoded, accountScope))
+        val encodedObject = Json.parseToJsonElement(encoded).jsonObject
+        val legacyPostcondition = JsonObject(
+            encodedObject.getValue("postcondition").jsonObject -
+                setOf("expectedPrimaryEmail", "expectedPrimaryPhone"),
+        )
+        val legacyEncoded = JsonObject(encodedObject + ("postcondition" to legacyPostcondition)).toString()
+        assertEquals(upsert, decodeContactMutationRecoveryState(legacyEncoded, accountScope))
         assertNull(decodeContactMutationRecoveryState(encoded, "$accountScope-other"))
         assertNull(decodeContactMutationRecoveryState("not-json", accountScope))
     }
@@ -286,6 +296,8 @@ END:VCARD</card:address-data>
                     N:Example;Alex;;;
                     EMAIL;TYPE=work:old@example.test
                     EMAIL;TYPE=home:private@example.test
+                    TEL;TYPE=work:+31 6 100
+                    TEL;TYPE=home:+31 6 200
                     PHOTO:data:image/png;base64,opaque
                     END:VCARD
                 """.trimIndent(),
@@ -315,6 +327,64 @@ END:VCARD</card:address-data>
             content = updated,
         ).toGroupwareDavRequest()
         assertEquals("\"etag\"", request.headers["If-Match"])
+    }
+
+    @Test
+    fun `contact recovery expects preserved secondary values after clearing the primary fields`() {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/"
+        val href = "${addressBookHref}alex.vcf"
+        val original = requireNotNull(
+            parseGroupwareContact(
+                addressBookHref = addressBookHref,
+                href = href,
+                etag = "\"old\"",
+                content = """
+                    BEGIN:VCARD
+                    VERSION:4.0
+                    UID:alex
+                    FN:Alex Example
+                    N:Example;Alex;;;
+                    EMAIL;TYPE=work:old@example.test
+                    EMAIL;TYPE=home:private@example.test
+                    TEL;TYPE=work:+31 6 100
+                    TEL;TYPE=home:+31 6 200
+                    END:VCARD
+                """.trimIndent(),
+            ),
+        )
+        val draft = ContactDraft(
+            name = original.displayName,
+            email = "",
+            phone = "",
+            organization = "",
+            address = "",
+            notes = "",
+        )
+        val updated = updateGroupwareContactContent(
+            contact = original,
+            displayName = draft.name,
+            email = draft.email,
+            phone = draft.phone,
+            organization = draft.organization,
+            address = draft.address,
+            notes = draft.notes,
+        )
+        val postcondition = requireNotNull(contactUpdatePostcondition(original, draft, updated))
+
+        assertFalse("EMAIL;TYPE=work:old@example.test" in updated)
+        assertTrue("EMAIL;TYPE=home:private@example.test" in updated)
+        assertFalse("TEL;TYPE=work:+31 6 100" in updated)
+        assertTrue("TEL;TYPE=home:+31 6 200" in updated)
+        assertTrue(
+            postcondition.isSatisfiedBy(
+                NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/vcard",
+                    etag = "\"new\"",
+                    body = updated.encodeToByteArray(),
+                ),
+            ),
+        )
     }
 
     @Test

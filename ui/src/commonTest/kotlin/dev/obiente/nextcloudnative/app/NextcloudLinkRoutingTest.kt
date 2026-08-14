@@ -21,6 +21,20 @@ class NextcloudLinkRoutingTest {
     }
 
     @Test
+    fun shortFileLinksWithServerDefinedSuffixesRetainBrowserFallbacks() {
+        listOf(
+            "/f/904?download=1",
+            "/f/904#server-defined-view",
+        ).forEach { link ->
+            val destination = assertIs<NextcloudLinkDestination.Browser>(
+                nextcloudLinkDestination(session, link),
+                link,
+            )
+            assertEquals(true, destination.sameAccount, link)
+        }
+    }
+
+    @Test
     fun modernFilesRoutesResolveIdsAndDecodedFolders() {
         val file = nextcloudLinkDestination(
             session,

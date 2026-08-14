@@ -485,27 +485,24 @@ fun NativeGroupwareContactsScreen(
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationCancelled = onNavigationCancelled,
                 onSave = save@{ draft, _ ->
+                    val updatedContent = updateGroupwareContactContent(
+                        contact, draft.name, draft.email, draft.phone,
+                        draft.organization, draft.address, draft.notes,
+                    )
+                    val postcondition = contactUpdatePostcondition(contact, draft, updatedContent)
+                    if (postcondition == null) {
+                        mutationError = "The updated contact could not be verified locally. Check its fields and try again."
+                        return@save
+                    }
                     val request = GroupwareDavMutationSpec(
                         kind = GroupwareDavKind.Contact,
                         mutation = GroupwareDavMutation.Update,
                         objectHref = contact.href,
                         etag = contact.etag,
-                        content = updateGroupwareContactContent(
-                            contact, draft.name, draft.email, draft.phone,
-                            draft.organization, draft.address, draft.notes,
-                        ),
+                        content = updatedContent,
                     ).toGroupwareDavRequest()
                     scope.launch {
-                        if (!retainMutationRecovery(
-                                ContactMutationPostcondition.Upsert(
-                                    href = contact.href,
-                                    addressBookHref = contact.addressBookHref,
-                                    expectedUid = contact.uid,
-                                    previousEtag = contact.etag,
-                                    draft = draft,
-                                ),
-                            )
-                        ) return@launch
+                        if (!retainMutationRecovery(postcondition)) return@launch
                         mutationError = null
                         try {
                             val response = services.executeGroupwareDav(session, request)
@@ -742,6 +739,8 @@ internal sealed interface ContactMutationPostcondition {
         val expectedUid: String,
         val previousEtag: String?,
         val draft: ContactDraft,
+        val expectedPrimaryEmail: String = draft.email.trim(),
+        val expectedPrimaryPhone: String = draft.phone.trim(),
     ) : ContactMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
@@ -756,8 +755,8 @@ internal sealed interface ContactMutationPostcondition {
                 contact.uid == expectedUid &&
                 (previousEtag == null || contact.etag != null && contact.etag != previousEtag) &&
                 contact.displayName == expected.name &&
-                contact.emails.firstOrNull().orEmpty() == expected.email &&
-                contact.phones.firstOrNull().orEmpty() == expected.phone &&
+                contact.emails.firstOrNull().orEmpty() == expectedPrimaryEmail &&
+                contact.phones.firstOrNull().orEmpty() == expectedPrimaryPhone &&
                 contact.organization.orEmpty() == expected.organization &&
                 contact.address.orEmpty() == expected.address &&
                 contact.notes.orEmpty() == expected.notes
@@ -788,6 +787,28 @@ private val contactMutationRecoveryJson = Json {
 
 internal fun ContactMutationRecoveryState.encodeForSavedState(): String =
     contactMutationRecoveryJson.encodeToString(this)
+
+internal fun contactUpdatePostcondition(
+    contact: GroupwareContact,
+    draft: ContactDraft,
+    updatedContent: String,
+): ContactMutationPostcondition.Upsert? {
+    val expected = parseGroupwareContact(
+        addressBookHref = contact.addressBookHref,
+        href = contact.href,
+        etag = contact.etag,
+        content = updatedContent,
+    ) ?: return null
+    return ContactMutationPostcondition.Upsert(
+        href = contact.href,
+        addressBookHref = contact.addressBookHref,
+        expectedUid = contact.uid,
+        previousEtag = contact.etag,
+        draft = draft,
+        expectedPrimaryEmail = expected.emails.firstOrNull().orEmpty(),
+        expectedPrimaryPhone = expected.phones.firstOrNull().orEmpty(),
+    )
+}
 
 internal fun decodeContactMutationRecoveryState(
     encoded: String,
