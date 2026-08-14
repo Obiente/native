@@ -59,6 +59,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
     query: String,
     selectedEvent: GroupwareCalendarEvent?,
     loading: Boolean = false,
+    mutationsEnabled: Boolean = true,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit,
@@ -97,7 +98,7 @@ internal fun DesktopGroupwareCalendarWorkspace(
             IconButton(onClick = onRefresh, enabled = !loading) {
                 Icon(NextcloudIcons.Refresh, contentDescription = "Refresh calendars")
             }
-            Button(onClick = onCreateEvent, enabled = writableCalendarAvailable) {
+            Button(onClick = onCreateEvent, enabled = mutationsEnabled && writableCalendarAvailable) {
                 Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text("New event", modifier = Modifier.padding(start = 7.dp))
             }
@@ -192,7 +193,8 @@ internal fun DesktopGroupwareCalendarWorkspace(
                 event = selectedEvent,
                 calendar = selectedEvent?.let { calendarByHref[it.calendarHref] },
                 selectedDateEvents = presentation.selectedDateEvents,
-                createEnabled = writableCalendarAvailable,
+                createEnabled = mutationsEnabled && writableCalendarAvailable,
+                mutationsEnabled = mutationsEnabled,
                 onSelectEvent = onSelectEvent,
                 onCreateEvent = onCreateEvent,
                 onEditEvent = onEditEvent,
@@ -498,6 +500,7 @@ private fun CalendarInspectorPane(
     calendar: GroupwareCalendar?,
     selectedDateEvents: List<GroupwareCalendarEvent>,
     createEnabled: Boolean,
+    mutationsEnabled: Boolean,
     onSelectEvent: (GroupwareCalendarEvent) -> Unit,
     onCreateEvent: () -> Unit,
     onEditEvent: (GroupwareCalendarEvent) -> Unit,
@@ -554,7 +557,8 @@ private fun CalendarInspectorPane(
                     Text(description, style = MaterialTheme.typography.bodyMedium)
                 }
                 Spacer(Modifier.weight(1f))
-                val editable = calendar?.writable == true && event.etag != null && !event.isGeneratedOccurrence
+                val editable = mutationsEnabled && calendar?.writable == true &&
+                    event.etag != null && !event.isGeneratedOccurrence
                 if (event.isGeneratedOccurrence) {
                     Text(
                         "This generated occurrence is read-only. Open the series to change it.",

@@ -22,6 +22,7 @@ import dev.obiente.nextcloudnative.app.DeckCardDraftKey
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
+import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
@@ -92,6 +93,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileMutation
 import dev.obiente.nextcloudnative.app.NextcloudFileMutationResult
 import dev.obiente.nextcloudnative.app.NativeMediaCollectionTransportRequest
 import dev.obiente.nextcloudnative.app.NextcloudNote
+import dev.obiente.nextcloudnative.app.NextcloudNotePresence
 import dev.obiente.nextcloudnative.app.createNoteRequest
 import dev.obiente.nextcloudnative.app.deleteNoteRequest
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
@@ -717,6 +719,55 @@ internal class AndroidNextcloudServices(
     override fun saveLastOpenedAppId(appId: String) {
         preferences.edit().putString(KEY_LAST_OPENED_APP, appId).apply()
     }
+
+    override suspend fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = withContext(Dispatchers.IO) {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext null
+        preferences.getString(durableMutationRecoveryKey(accountScope, kind), null)
+            ?.takeIf { encoded ->
+                encoded.isNotEmpty() && encoded.encodeToByteArray().size <= MAX_ANDROID_MUTATION_RECOVERY_BYTES
+            }
+    }
+
+    override suspend fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
+        if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) {
+            return@withContext false
+        }
+        synchronized(androidDurableMutationRecoveryLock) {
+            val key = durableMutationRecoveryKey(accountScope, kind)
+            if (preferences.contains(key)) return@synchronized false
+            preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
+        }
+    }
+
+    override suspend fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
+        if (expectedEncoded.isEmpty() ||
+            expectedEncoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES
+        ) return@withContext false
+        val key = durableMutationRecoveryKey(accountScope, kind)
+        synchronized(androidDurableMutationRecoveryLock) {
+            val actual = preferences.getString(key, null) ?: return@synchronized true
+            if (actual != expectedEncoded) return@synchronized false
+            preferences.edit().remove(key).commit() && !preferences.contains(key)
+        }
+    }
+
+    private fun durableMutationRecoveryKey(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String = "durable-mutation-${kind.storageKey}-$accountScope"
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
@@ -2895,17 +2946,30 @@ internal class AndroidNextcloudServices(
             }.sortedWith(compareByDescending<NextcloudNote> { it.favorite }.thenByDescending { it.modified })
         }
 
-    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        withContext(Dispatchers.IO) {
+    override suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
             require(noteId >= 0L) { "The note ID is invalid." }
             val response = request(
                 method = "GET",
                 url = session.serverUrl + "/index.php/apps/notes/api/v1/notes/$noteId",
                 session = session,
             )
-            check(response.status != 404) { "The note no longer exists." }
+            if (response.status == 404 || response.status == 410) {
+                return@withContext NextcloudNotePresence.Absent
+            }
             check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
-            requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) { "The note response is invalid." }
+            val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
+                "The note response is invalid."
+            }
+            NextcloudNotePresence.Present(note)
+        }
+
+    override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
+        when (val presence = inspectNotePresence(session, noteId)) {
+            NextcloudNotePresence.Absent -> error("The note no longer exists.")
+            is NextcloudNotePresence.Present -> presence.note
         }
 
     override suspend fun updateNote(
@@ -3695,6 +3759,11 @@ private fun NextcloudFile.isNativeTiffPreviewFormat(): Boolean {
     return extension in setOf("tif", "tiff") || mime in setOf("image/tif", "image/tiff")
 }
 
+private const val MAX_ANDROID_MUTATION_RECOVERY_BYTES = 1024 * 1024
+
+private fun String.isCanonicalAndroidMutationAccountScope(): Boolean =
+    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
+
 internal sealed interface NativeTiffRangeReadPlan {
     val fileId: Long
     val sourceSize: Long
@@ -3976,6 +4045,7 @@ private fun org.w3c.dom.Node.systemTagFirstText(namespace: String, localName: St
 private const val SYSTEM_TAG_DAV_NAMESPACE = "DAV:"
 private const val SYSTEM_TAG_OC_NAMESPACE = "http://owncloud.org/ns"
 private const val SYSTEM_TAG_NC_NAMESPACE = "http://nextcloud.org/ns"
+private val androidDurableMutationRecoveryLock = Any()
 private const val MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 64
 private const val MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 4_096
         private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v4"

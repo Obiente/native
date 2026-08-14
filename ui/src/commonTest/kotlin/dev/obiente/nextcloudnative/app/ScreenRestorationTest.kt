@@ -11,6 +11,61 @@ import kotlin.test.assertTrue
 
 class ScreenRestorationTest {
     @Test
+    fun `pending navigation waits for mutation recovery on top-level notes`() {
+        assertTrue(Screen.Notes.requiresPendingNavigationGuard(groupwareMutationInProgress = true))
+        assertFalse(Screen.Notes.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
+        assertTrue(Screen.Calendar.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
+        assertFalse(Screen.Root.requiresPendingNavigationGuard(groupwareMutationInProgress = false))
+    }
+
+    @Test
+    fun `notes drafts guard pending navigation before submission`() {
+        assertTrue(
+            notesListRequiresPendingNavigationGuard(
+                mutationInProgress = false,
+                createDraftOpen = true,
+                renameDraftOpen = false,
+            ),
+        )
+        assertTrue(
+            notesListRequiresPendingNavigationGuard(
+                mutationInProgress = false,
+                createDraftOpen = false,
+                renameDraftOpen = true,
+            ),
+        )
+        assertFalse(
+            notesListRequiresPendingNavigationGuard(
+                mutationInProgress = false,
+                createDraftOpen = false,
+                renameDraftOpen = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `link commit blocks editing without becoming a durable mutation`() {
+        assertTrue(
+            mutationOrLinkCommitBlocksInteraction(
+                mutationInProgress = false,
+                navigationCommitInProgress = true,
+            ),
+        )
+        assertTrue(
+            mutationOrLinkCommitBlocksInteraction(
+                mutationInProgress = true,
+                navigationCommitInProgress = false,
+            ),
+        )
+        assertFalse(
+            mutationOrLinkCommitBlocksInteraction(
+                mutationInProgress = false,
+                navigationCommitInProgress = false,
+            ),
+        )
+    }
+
+    @Test
     fun `top-level app workspaces keep navigation while focused screens stay immersive`() {
         assertTrue(Screen.Calendar.usesPersistentAppNavigation())
         assertTrue(Screen.Files("/").usesPersistentAppNavigation())

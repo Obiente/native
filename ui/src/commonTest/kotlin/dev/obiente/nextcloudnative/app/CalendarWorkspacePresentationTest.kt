@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CalendarWorkspacePresentationTest {
@@ -166,6 +167,194 @@ class CalendarWorkspacePresentationTest {
             CalendarWorkspaceView.Month,
             MarketingCaptureScenario.CalendarMonthMobile.marketingCalendarView(),
         )
+    }
+
+    @Test
+    fun `calendar navigation detects every user editable draft field`() {
+        val initial = EventDraft(
+            title = "Planning",
+            date = "2026-08-14",
+            startTime = "09:00",
+            endTime = "10:00",
+            allDay = false,
+            location = "Team room",
+            description = "Weekly planning",
+            recurrenceRule = "FREQ=WEEKLY",
+        )
+
+        assertFalse(calendarEventDraftIsDirty(initial, initial.copy(), "personal", "personal"))
+        listOf(
+            initial.copy(title = "Roadmap planning"),
+            initial.copy(date = "2026-08-15"),
+            initial.copy(startTime = "09:30"),
+            initial.copy(endTime = "10:30"),
+            initial.copy(allDay = true),
+            initial.copy(location = "Talk"),
+            initial.copy(description = "Updated agenda"),
+            initial.copy(recurrenceRule = "FREQ=MONTHLY"),
+        ).forEach { changed ->
+            assertTrue(calendarEventDraftIsDirty(initial, changed, "personal", "personal"))
+        }
+        assertTrue(calendarEventDraftIsDirty(initial, initial, "personal", "team"))
+        assertFalse(
+            calendarEventDraftHasDavChanges(
+                initial,
+                initial.copy(recurrenceRule = "  FREQ=WEEKLY  "),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(
+            calendarEventDraftHasDavChanges(
+                initial,
+                initial.copy(title = "Roadmap planning"),
+                "personal",
+                "personal",
+            ),
+        )
+        assertTrue(calendarEventDraftHasDavChanges(initial, initial, "personal", "team"))
+    }
+
+    @Test
+    fun `calendar mutation postconditions reject stale reads`() {
+        val draft = EventDraft(
+            title = "Planning",
+            date = "2026-08-14",
+            startTime = "09:00",
+            endTime = "10:00",
+            allDay = false,
+            location = "Team room",
+            description = "Weekly planning",
+            recurrenceRule = null,
+        )
+        val href = "/remote.php/dav/calendars/synthetic/team/planning.ics"
+        val stale = NextcloudApiResponse(
+            status = 200,
+            contentType = "text/calendar",
+            etag = "\"old\"",
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = "Old planning",
+                start = draft.startValue(),
+                end = draft.endValue(),
+                allDay = draft.allDay,
+            ).encodeToByteArray(),
+        )
+        val updated = stale.copy(
+            etag = "\"new\"",
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = draft.title,
+                start = draft.startValue(),
+                end = draft.endValue(),
+                allDay = draft.allDay,
+                location = draft.location,
+                description = draft.description,
+            ).encodeToByteArray(),
+        )
+        val missing = updated.copy(status = 404, body = byteArrayOf())
+        val staleEnd = updated.copy(
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = draft.title,
+                start = draft.startValue(),
+                end = "20260814T110000Z",
+                allDay = draft.allDay,
+                location = draft.location,
+                description = draft.description,
+            ).encodeToByteArray(),
+        )
+        val upsert = CalendarMutationPostcondition.Upsert(
+            href,
+            "/remote.php/dav/calendars/synthetic/team/",
+            "planning",
+            "\"old\"",
+            draft,
+        )
+        val deletion = CalendarMutationPostcondition.Delete(href)
+
+        assertFalse(upsert.isSatisfiedBy(stale))
+        assertFalse(upsert.isSatisfiedBy(staleEnd))
+        assertTrue(upsert.isSatisfiedBy(updated))
+        assertTrue(upsert.isSatisfiedBy(updated.copy(etag = "\"old\"")))
+        val overrideBeforeMasterLines = listOf(
+            "BEGIN:VCALENDAR",
+            "BEGIN:VEVENT",
+            "UID:planning",
+            "RECURRENCE-ID:20260814T090000Z",
+            "DTSTART:20260814T120000Z",
+            "DTEND:20260814T130000Z",
+            "SUMMARY:${draft.title}",
+            "END:VEVENT",
+        ) + updated.body.decodeToString().trim().lines().drop(1).dropLast(1) + "END:VCALENDAR"
+        val overrideBeforeUpdatedMaster = updated.copy(
+            body = overrideBeforeMasterLines.joinToString("\r\n", postfix = "\r\n").encodeToByteArray(),
+        )
+        assertTrue(upsert.isSatisfiedBy(overrideBeforeUpdatedMaster))
+        val normalizedLineEndingDraft = draft.copy(
+            title = "Planning\rseries",
+            location = "Team\r\nroom",
+            description = "Line one\r\nLine two\rLine three",
+        )
+        val normalizedLineEndingResponse = updated.copy(
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = normalizedLineEndingDraft.title,
+                start = normalizedLineEndingDraft.startValue(),
+                end = normalizedLineEndingDraft.endValue(),
+                allDay = normalizedLineEndingDraft.allDay,
+                location = normalizedLineEndingDraft.location,
+                description = normalizedLineEndingDraft.description,
+            ).encodeToByteArray(),
+        )
+        assertTrue(
+            CalendarMutationPostcondition.Upsert(
+                href,
+                "/remote.php/dav/calendars/synthetic/team/",
+                "planning",
+                "\"old\"",
+                normalizedLineEndingDraft,
+            ).isSatisfiedBy(normalizedLineEndingResponse),
+        )
+        val blankOptionalDraft = draft.copy(location = "   ", description = "\t")
+        val blankOptionalResponse = updated.copy(
+            body = createGroupwareCalendarEventContent(
+                uid = "planning",
+                title = blankOptionalDraft.title,
+                start = blankOptionalDraft.startValue(),
+                end = blankOptionalDraft.endValue(),
+                allDay = blankOptionalDraft.allDay,
+                location = blankOptionalDraft.location,
+                description = blankOptionalDraft.description,
+            ).encodeToByteArray(),
+        )
+        assertTrue(
+            CalendarMutationPostcondition.Upsert(
+                href,
+                "/remote.php/dav/calendars/synthetic/team/",
+                "planning",
+                "\"old\"",
+                blankOptionalDraft,
+            ).isSatisfiedBy(blankOptionalResponse),
+        )
+        assertFalse(deletion.isSatisfiedBy(updated))
+        assertTrue(deletion.isSatisfiedBy(missing))
+        assertTrue(deletion.isSatisfiedBy(missing.copy(status = 410)))
+
+        val session = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "person",
+            appPassword = "secret",
+        )
+        val accountScope = durableMutationAccountScope(session)
+        assertEquals(64, accountScope.length)
+        assertTrue(accountScope.all { it in '0'..'9' || it in 'a'..'f' })
+        assertFalse(accountScope.contains("cloud.example.test"))
+        assertFalse(accountScope.contains("person"))
+        val encoded = CalendarMutationRecoveryState(accountScope, upsert).encodeForSavedState()
+        assertEquals(upsert, decodeCalendarMutationRecoveryState(encoded, accountScope))
+        assertNull(decodeCalendarMutationRecoveryState(encoded, "$accountScope-other"))
+        assertNull(decodeCalendarMutationRecoveryState("not-json", accountScope))
     }
 
     private fun calendar(id: String, name: String) = GroupwareCalendar(

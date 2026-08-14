@@ -1036,6 +1036,7 @@ class DesktopNextcloudServices(
     private val onDesktopUpdateInstallerOpened: (String) -> Unit = {},
     supportDiagnosticsRoot: File? = null,
     providedSupportDiagnostics: AsyncJvmSupportDiagnostics? = null,
+    mutationRecoveryRoot: File = defaultDesktopDurableMutationRecoveryRoot(),
     supportIntakeRoot: File? = null,
 ) : NextcloudPlatformServices, AutoCloseable {
     private val preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative")
@@ -1049,6 +1050,7 @@ class DesktopNextcloudServices(
         requireNotNull(resolvedSupportDiagnosticsRoot),
     )
     private val supportBundleExporter = DesktopSupportBundleExporter(supportDiagnostics)
+    private val durableMutationRecovery = DesktopDurableMutationRecoveryStore(mutationRecoveryRoot)
     private val ownsTemporarySupportIntakeRoot = supportIntakeRoot == null && resolvedSupportDiagnosticsRoot == null
     private val resolvedSupportIntakeRoot = supportIntakeRoot
         ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
@@ -3527,6 +3529,25 @@ class DesktopNextcloudServices(
         preferences.put(KEY_LAST_OPENED_APP, appId)
     }
 
+    override suspend fun loadDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+    ): String? = withContext(Dispatchers.IO) { durableMutationRecovery.load(accountScope, kind) }
+
+    override suspend fun saveDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        encoded: String,
+    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.save(accountScope, kind, encoded) }
+
+    override suspend fun clearDurableMutationRecovery(
+        accountScope: String,
+        kind: DurableMutationRecoveryKind,
+        expectedEncoded: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        durableMutationRecovery.clear(accountScope, kind, expectedEncoded)
+    }
+
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
         appId: String,
@@ -5321,10 +5342,30 @@ class DesktopNextcloudServices(
         }
 
     override suspend fun loadNote(session: NextcloudSession, noteId: Long): NextcloudNote =
-        when (val result = loadNoteConditionally(session, noteId, expectedEtag = null)) {
-            is NextcloudConditionalRead.Modified -> result.value
-            NextcloudConditionalRead.NotModified -> error("An unconditional note read returned not modified.")
+        when (val presence = inspectNotePresence(session, noteId)) {
+            NextcloudNotePresence.Absent -> error("The note no longer exists.")
+            is NextcloudNotePresence.Present -> presence.note
         }
+
+    override suspend fun inspectNotePresence(
+        session: NextcloudSession,
+        noteId: Long,
+    ): NextcloudNotePresence = withContext(Dispatchers.IO) {
+        require(noteId >= 0L) { "The note ID is invalid." }
+        val response = request(
+            "GET",
+            session.serverUrl + notesDetailRelativePath(noteId),
+            session,
+        )
+        if (response.status == 404 || response.status == 410) {
+            return@withContext NextcloudNotePresence.Absent
+        }
+        check(response.status in 200..299) { "Loading the note failed (HTTP ${response.status})." }
+        val note = requireNotNull(JSONObject(response.text).toNextcloudNote(response.etag)) {
+            "The note response is invalid."
+        }
+        NextcloudNotePresence.Present(note)
+    }
 
     override suspend fun loadNoteConditionally(
         session: NextcloudSession,

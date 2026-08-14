@@ -1,0 +1,7 @@
+category: feature
+issue: 183
+pull: 370
+platforms: android, desktop
+user-facing: yes
+
+Dashboard, activity, and search links for the current Nextcloud account now open native files, folders, and app surfaces, while Android can receive explicit Nextcloud Native deep links from other apps.

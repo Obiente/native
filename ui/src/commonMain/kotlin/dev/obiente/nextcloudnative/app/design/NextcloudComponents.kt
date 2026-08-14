@@ -60,6 +60,7 @@ val DesktopNextcloudNavigationItems = listOf(
 fun NextcloudBottomNavigation(
     selected: NextcloudDestination,
     onSelected: (NextcloudDestination) -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     items: List<NextcloudNavigationItem> = DefaultNextcloudNavigationItems,
 ) {
@@ -77,6 +78,7 @@ fun NextcloudBottomNavigation(
                 val icon = NextcloudIcons.destination(item.destination)
                 NavigationBarItem(
                     selected = selected == item.destination,
+                    enabled = enabled,
                     onClick = { onSelected(item.destination) },
                     icon = {
                         Icon(
@@ -109,6 +111,7 @@ fun NextcloudBottomNavigation(
 fun NextcloudNavigationRail(
     selected: NextcloudDestination,
     onSelected: (NextcloudDestination) -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     items: List<NextcloudNavigationItem> = DefaultNextcloudNavigationItems,
 ) {
@@ -125,6 +128,7 @@ fun NextcloudNavigationRail(
                 val icon = NextcloudIcons.destination(item.destination)
                 NavigationRailItem(
                     selected = selected == item.destination,
+                    enabled = enabled,
                     onClick = { onSelected(item.destination) },
                     icon = {
                         Icon(
