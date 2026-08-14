@@ -91,6 +91,7 @@ fun NativeGroupwareContactsScreen(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName) {
@@ -118,8 +119,20 @@ fun NativeGroupwareContactsScreen(
     val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
         mutationRecoveryState?.let { decodeContactMutationRecoveryState(it, accountScope) }
     }
-    val mutationInProgress = !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
+    val durableMutationInProgress =
+        !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
+    val mutationInProgress = mutationOrLinkCommitBlocksInteraction(
+        durableMutationInProgress,
+        navigationCommitInProgress,
+    )
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(navigationCommitInProgress) {
+        if (navigationCommitInProgress) {
+            creating = false
+            editing = false
+        }
+    }
 
     suspend fun retainMutationRecovery(postcondition: ContactMutationPostcondition): Boolean {
         if (!mutationRecoveryLoaded || mutationRecoveryState != null || mutationOperationInProgress) {
@@ -215,8 +228,8 @@ fun NativeGroupwareContactsScreen(
         }
     }
 
-    LaunchedEffect(mutationInProgress) {
-        onMutationInProgressChanged(mutationInProgress)
+    LaunchedEffect(durableMutationInProgress) {
+        onMutationInProgressChanged(durableMutationInProgress)
     }
     DisposableEffect(Unit) {
         onDispose { onMutationInProgressChanged(false) }

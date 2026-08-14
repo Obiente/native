@@ -98,12 +98,24 @@ internal fun decodeNoteDeletionRecoveryState(
     noteDeletionRecoveryJson.decodeFromString<NoteDeletionRecoveryState>(encoded)
 }.getOrNull()?.takeIf { recovery -> recovery.accountScope == expectedAccountScope }
 
+internal fun notesListRequiresPendingNavigationGuard(
+    mutationInProgress: Boolean,
+    createDraftOpen: Boolean,
+    renameDraftOpen: Boolean,
+): Boolean = mutationInProgress || createDraftOpen || renameDraftOpen
+
+internal fun removeVerifiedDeletedNote(
+    notes: List<NextcloudNote>?,
+    noteId: Long,
+): List<NextcloudNote>? = notes?.filterNot { note -> note.id == noteId }
+
 @Composable
 internal fun NextcloudNotesScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     onBack: () -> Unit,
     onOpenNote: (NextcloudNote) -> Unit,
+    navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName) {
@@ -132,6 +144,15 @@ internal fun NextcloudNotesScreen(
     val scope = rememberCoroutineScope()
     val recoveryMutationInProgress = !deletionRecoveryLoaded || deletionRecoveryState != null
     val mutationInProgress = recoveryMutationInProgress || listMutationInProgress
+    val pendingNavigationGuardActive = notesListRequiresPendingNavigationGuard(
+        mutationInProgress = mutationInProgress,
+        createDraftOpen = createNoteInPath != null,
+        renameDraftOpen = renameFolder != null,
+    )
+    val interactionBlocked = mutationOrLinkCommitBlocksInteraction(
+        mutationInProgress,
+        navigationCommitInProgress,
+    )
 
     LaunchedEffect(accountScope, services, loadAttempt) {
         deletionRecoveryLoaded = false
@@ -156,9 +177,9 @@ internal fun NextcloudNotesScreen(
         }
     }
 
-    LaunchedEffect(mutationInProgress, createdNoteToOpen) {
-        onMutationInProgressChanged(mutationInProgress)
-        if (!mutationInProgress) {
+    LaunchedEffect(pendingNavigationGuardActive, createdNoteToOpen) {
+        onMutationInProgressChanged(pendingNavigationGuardActive)
+        if (!pendingNavigationGuardActive) {
             createdNoteToOpen?.let { created ->
                 createdNoteToOpen = null
                 onOpenNote(created)
@@ -199,8 +220,9 @@ internal fun NextcloudNotesScreen(
                                 expectedEncoded,
                             )
                         ) {
-                            deletionRecoveryState = null
+                            notes = removeVerifiedDeletedNote(notes, recovery.noteId)
                             sharedNextcloudNotesCache.remove(session, recovery.noteId)
+                            deletionRecoveryState = null
                         } else {
                             error = "The verified note-deletion recovery record could not be cleared safely. Refreshing the current pending change."
                             loadAttempt += 1
@@ -239,7 +261,7 @@ internal fun NextcloudNotesScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = { createNoteInPath = currentPath },
-                        enabled = !mutationInProgress,
+                        enabled = !interactionBlocked,
                     ) {
                         Icon(NextcloudIcons.Add, contentDescription = "Create note")
                     }
@@ -330,7 +352,7 @@ internal fun NextcloudNotesScreen(
                             items(location.folders, key = NativeNoteFolder::path) { folder ->
                                 NoteFolderCard(
                                     folder = folder,
-                                    mutationEnabled = !mutationInProgress,
+                                    mutationEnabled = !interactionBlocked,
                                     onOpen = { currentPath = folder.path },
                                     onRename = { renameFolder = folder },
                                     onDelete = { deleteFolder = folder },
@@ -339,7 +361,7 @@ internal fun NextcloudNotesScreen(
                             items(visibleNotes, key = NextcloudNote::id) { note ->
                                 NoteCard(
                                     note = note,
-                                    enabled = !mutationInProgress,
+                                    enabled = !interactionBlocked,
                                     onClick = { onOpenNote(note) },
                                 )
                             }
@@ -366,7 +388,7 @@ internal fun NextcloudNotesScreen(
                         items(visibleNotes, key = NextcloudNote::id) { note ->
                             NoteCard(
                                 note = note,
-                                enabled = !mutationInProgress,
+                                enabled = !interactionBlocked,
                                 onClick = { onOpenNote(note) },
                             )
                         }
@@ -845,6 +867,7 @@ internal fun NextcloudNoteEditor(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountKey = remember(session.serverUrl, session.loginName) {
@@ -1016,7 +1039,12 @@ internal fun NextcloudNoteEditor(
         originalFavorite = originalFavorite,
     )
     val readOnly = loaded.readOnly
-    val mutationInProgress = !deletionRecoveryLoaded || saving || deleting || deletionRecoveryState != null
+    val durableMutationInProgress =
+        !deletionRecoveryLoaded || saving || deleting || deletionRecoveryState != null
+    val mutationInProgress = mutationOrLinkCommitBlocksInteraction(
+        durableMutationInProgress,
+        navigationCommitInProgress,
+    )
     val deletionPreconditionAvailable = if (deletionRecoveryState == null) {
         loaded.etag.isUsableNoteDeletionEtag()
     } else {
@@ -1024,8 +1052,8 @@ internal fun NextcloudNoteEditor(
             recovery.originalPreconditionRecorded && recovery.originalEtag.isUsableNoteDeletionEtag()
         } == true
     }
-    LaunchedEffect(mutationInProgress) {
-        onMutationInProgressChanged(mutationInProgress)
+    LaunchedEffect(durableMutationInProgress) {
+        onMutationInProgressChanged(durableMutationInProgress)
     }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose { onMutationInProgressChanged(false) }

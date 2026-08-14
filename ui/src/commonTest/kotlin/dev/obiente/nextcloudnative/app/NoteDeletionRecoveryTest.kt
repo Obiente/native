@@ -9,6 +9,24 @@ import kotlin.test.assertTrue
 
 class NoteDeletionRecoveryTest {
     @Test
+    fun `verified deletion is removed from an already loaded note list`() {
+        val retained = NextcloudNote(
+            id = 1L,
+            title = "Retained",
+            modified = 0L,
+            category = "",
+            favorite = false,
+            readOnly = false,
+            content = null,
+            etag = null,
+        )
+        val deleted = retained.copy(id = 2L, title = "Deleted")
+
+        assertEquals(listOf(retained), removeVerifiedDeletedNote(listOf(retained, deleted), deleted.id))
+        assertNull(removeVerifiedDeletedNote(null, deleted.id))
+    }
+
+    @Test
     fun `retryable deletion requires a usable original etag`() {
         val scope = "a".repeat(64)
 

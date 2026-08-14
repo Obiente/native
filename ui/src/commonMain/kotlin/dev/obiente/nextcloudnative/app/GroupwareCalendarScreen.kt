@@ -135,6 +135,7 @@ fun NativeGroupwareCalendarScreen(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
     val accountScope = remember(session.serverUrl, session.loginName) {
@@ -170,13 +171,25 @@ fun NativeGroupwareCalendarScreen(
     val mutationPostcondition = remember(accountScope, mutationRecoveryState) {
         mutationRecoveryState?.let { decodeCalendarMutationRecoveryState(it, accountScope) }
     }
-    val mutationInProgress = !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
+    val durableMutationInProgress =
+        !mutationRecoveryLoaded || mutationOperationInProgress || mutationRecoveryState != null
+    val mutationInProgress = mutationOrLinkCommitBlocksInteraction(
+        durableMutationInProgress,
+        navigationCommitInProgress,
+    )
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var mutationError by remember { mutableStateOf<String?>(null) }
     var showRecoveryOptions by remember(accountScope) { mutableStateOf(false) }
     var recoveryResetInProgress by remember(accountScope) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val desktop = LocalNextcloudWorkspaceCapabilities.current.isDesktop
+
+    LaunchedEffect(navigationCommitInProgress) {
+        if (navigationCommitInProgress) {
+            creating = false
+            eventEditorActive = false
+        }
+    }
 
     suspend fun retainMutationRecovery(postcondition: CalendarMutationPostcondition): Boolean {
         if (!mutationRecoveryLoaded || mutationRecoveryState != null || mutationOperationInProgress) {
@@ -272,8 +285,8 @@ fun NativeGroupwareCalendarScreen(
         }
     }
 
-    LaunchedEffect(mutationInProgress) {
-        onMutationInProgressChanged(mutationInProgress)
+    LaunchedEffect(durableMutationInProgress) {
+        onMutationInProgressChanged(durableMutationInProgress)
     }
     DisposableEffect(Unit) {
         onDispose { onMutationInProgressChanged(false) }
@@ -1351,12 +1364,14 @@ internal sealed interface CalendarMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
             val expected = draft.normalizedForDav()
-            val event = parseGroupwareCalendarEvent(
+            val event = parseGroupwareCalendarEventsFromContent(
                 calendarHref = calendarHref,
                 href = href,
                 etag = response.etag,
                 content = response.body.decodeToString(),
-            ) ?: return false
+            ).firstOrNull { candidate ->
+                candidate.uid == expectedUid && candidate.recurrenceId == null
+            } ?: return false
             return event.href == href &&
                 event.uid == expectedUid &&
                 (previousEtag == null || event.etag != null && event.etag != previousEtag) &&

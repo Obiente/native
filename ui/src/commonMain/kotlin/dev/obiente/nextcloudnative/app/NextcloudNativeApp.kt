@@ -221,6 +221,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -336,6 +337,11 @@ internal fun Screen.requiresPendingNavigationGuard(groupwareMutationInProgress: 
         this is Screen.MediaViewer ||
         this is Screen.Calendar ||
         this is Screen.Contacts
+
+internal fun mutationOrLinkCommitBlocksInteraction(
+    mutationInProgress: Boolean,
+    navigationCommitInProgress: Boolean,
+): Boolean = mutationInProgress || navigationCommitInProgress
 
 internal enum class RootDestinationContent {
     HomeWorkspace,
@@ -2057,11 +2063,16 @@ private fun AuthenticatedApp(
                 }
             }
             is NextcloudLinkDestination.App -> {
+                if (serverInfo == null && discoveryError == null) {
+                    snapshotFlow { serverInfo to discoveryError }
+                        .first { (info, error) -> info != null || error != null }
+                    if (!isCurrent()) return NextcloudLinkNavigationResult.Superseded
+                }
                 val app = serverInfo?.apps?.firstOrNull { installed -> installed.id == target.appId }
                 if (app != null) {
                     openApp(app, destination, restoreRememberedState = false)
                     return NextcloudLinkNavigationResult.Completed
-                } else if (serverInfo == null && source == NextcloudLinkSource.OperatingSystem) {
+                } else if (serverInfo == null) {
                     showLinkFailure(
                         message = "Your installed Nextcloud apps could not be loaded. Check your connection and try again.",
                         retryLink = rawLink,
@@ -2584,6 +2595,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Contacts -> NativeGroupwareContactsScreen(
@@ -2594,6 +2606,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Deck -> NativeDeckScreen(
@@ -2660,6 +2673,7 @@ private fun AuthenticatedApp(
             session = session,
             onBack = ::navigateBack,
             onOpenNote = { screen = Screen.NoteEditor(it) },
+            navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         is Screen.NoteEditor -> NextcloudNoteEditor(
@@ -2670,6 +2684,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         is Screen.Chat -> ChatScreen(
@@ -2808,6 +2823,7 @@ private fun AuthenticatedApp(
             navigationRequest = pendingEditorNavigationRequest,
             onNavigationConfirmed = ::applyPendingNavigationRequest,
             onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
         )
         }
     }
@@ -11553,6 +11569,7 @@ private fun TextEditorScreen(
     navigationRequest: NextcloudPendingNavigationRequest? = null,
     onNavigationConfirmed: (NextcloudPendingNavigationRequest) -> Unit = {},
     onNavigationCancelled: (NextcloudPendingNavigationRequest) -> Unit = {},
+    navigationCommitInProgress: Boolean = false,
 ) {
     val descriptor = remember(file) { describeDocument(file) }
     val isMarkdown = descriptor.kind == DocumentKind.Markdown
@@ -11606,12 +11623,12 @@ private fun TextEditorScreen(
     }
 
     fun requestBack() {
-        if (saving) return
+        if (saving || navigationCommitInProgress) return
         if (dirty) confirmDiscard = true else onBack()
     }
-    LaunchedEffect(navigationRequest?.identity, saving) {
+    LaunchedEffect(navigationRequest?.identity, saving, navigationCommitInProgress) {
         navigationRequest?.let { request ->
-            if (!saving) {
+            if (!saving && !navigationCommitInProgress) {
                 if (dirty) confirmDiscard = true else onNavigationConfirmed(request)
             }
         }
@@ -11643,7 +11660,7 @@ private fun TextEditorScreen(
                         },
                     )
                     Button(
-                        enabled = dirty && !saving && !etag.isNullOrBlank(),
+                        enabled = dirty && !saving && !navigationCommitInProgress && !etag.isNullOrBlank(),
                         onClick = { confirmSave = true },
                     ) {
                         Icon(NextcloudIcons.Save, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -11748,7 +11765,7 @@ private fun TextEditorScreen(
                             bottom = NextcloudSpacing.Large,
                         ),
                         textStyle = MaterialTheme.typography.bodyMedium,
-                        enabled = !saving,
+                        enabled = !saving && !navigationCommitInProgress,
                     )
                 }
             }

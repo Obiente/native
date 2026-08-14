@@ -592,6 +592,56 @@ END:VCALENDAR</c:calendar-data>
     }
 
     @Test
+    fun `calendar serializer selects the recurring master when an override appears first`() {
+        val content = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VEVENT
+            UID:event-recurring
+            RECURRENCE-ID:20260810T090000Z
+            DTSTART:20260810T110000Z
+            SUMMARY:Moved occurrence
+            END:VEVENT
+            BEGIN:VEVENT
+            UID:event-recurring
+            DTSTART:20260803T090000Z
+            DTEND:20260803T100000Z
+            SUMMARY:Planning
+            RRULE:FREQ=WEEKLY;COUNT=4
+            END:VEVENT
+            END:VCALENDAR
+        """.trimIndent()
+        val event = requireNotNull(
+            parseGroupwareCalendarEvent(
+                calendarHref = "/remote.php/dav/calendars/person/work/",
+                href = "/remote.php/dav/calendars/person/work/event-recurring.ics",
+                etag = "event-etag",
+                content = content,
+            ),
+        )
+
+        assertNull(event.recurrenceId)
+        val updated = updateGroupwareCalendarEventContent(
+            event = event,
+            title = "Updated series",
+            start = event.start,
+            end = event.end,
+            allDay = event.allDay,
+            location = event.location,
+            description = event.description,
+        )
+        val components = parseGroupwareCalendarEventsFromContent(
+            event.calendarHref,
+            event.href,
+            event.etag,
+            updated,
+        )
+
+        assertEquals("Moved occurrence", components.single { it.recurrenceId != null }.title)
+        assertEquals("Updated series", components.single { it.recurrenceId == null }.title)
+    }
+
+    @Test
     fun `calendar writes reject recurrence rules the local expander cannot reproduce`() {
         listOf(
             "FREQ=YEARLY",

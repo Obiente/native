@@ -564,7 +564,7 @@ fun parseGroupwareCalendarEvents(
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
             ?: return@flatMap emptyList()
         val calendar = block.xmlText("calendar-data")?.decodeXmlEntities() ?: return@flatMap emptyList()
-        parseGroupwareCalendarEventComponents(
+        parseGroupwareCalendarEventsFromContent(
             calendarHref = calendarHref,
             href = href,
             etag = block.xmlText("getetag")?.decodeXmlEntities()?.trim(),
@@ -579,12 +579,11 @@ fun parseGroupwareCalendarEvent(
     etag: String?,
     content: String,
 ): GroupwareCalendarEvent? {
-    val lines = content.unfoldCalendarLines()
-    val component = lines.calendarEventComponents().firstOrNull() ?: return null
-    return parseGroupwareCalendarEventComponent(calendarHref, href, etag, content, component)
+    val components = parseGroupwareCalendarEventsFromContent(calendarHref, href, etag, content)
+    return components.firstOrNull { event -> event.recurrenceId == null } ?: components.firstOrNull()
 }
 
-private fun parseGroupwareCalendarEventComponents(
+internal fun parseGroupwareCalendarEventsFromContent(
     calendarHref: String,
     href: String,
     etag: String?,
@@ -965,13 +964,15 @@ fun updateGroupwareCalendarEventContent(
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
-    val eventStart = original.indexOfFirst { it.equals("BEGIN:VEVENT", ignoreCase = true) }
-    val eventEnd = original.indexOfFirst { it.equals("END:VEVENT", ignoreCase = true) }
-    if (eventStart < 0 || eventEnd <= eventStart) {
-        return createGroupwareCalendarEventContent(
-            event.uid, title, start, end, allDay, location, description, recurrenceRule,
-        )
+    val eventRange = original.calendarEventComponentRanges().firstOrNull { range ->
+        val component = original.subList(range.first + 1, range.last)
+        val uid = component.calendarPropertyValue("UID")
+            ?: event.href.substringAfterLast('/').substringBeforeLast('.')
+        uid == event.uid && component.calendarPropertyValue("RECURRENCE-ID") == event.recurrenceId
     }
+    requireNotNull(eventRange) { "The selected calendar event component could not be found." }
+    val eventStart = eventRange.first
+    var eventEnd = eventRange.last
     val replacements = linkedMapOf(
         "DTSTART" to "DTSTART${if (allDay) ";VALUE=DATE" else ""}:$start",
         "DTEND" to end?.let { "DTEND${if (allDay) ";VALUE=DATE" else ""}:$it" },
@@ -986,13 +987,41 @@ fun updateGroupwareCalendarEventContent(
         }
         when {
             index != null && replacement != null -> original[index] = replacement
-            index != null -> original.removeAt(index)
-            replacement != null -> original.add(original.indexOfFirst {
-                it.equals("END:VEVENT", ignoreCase = true)
-            }, replacement)
+            index != null -> {
+                original.removeAt(index)
+                eventEnd -= 1
+            }
+            replacement != null -> {
+                original.add(eventEnd, replacement)
+                eventEnd += 1
+            }
         }
     }
     return original.joinToString("\r\n", postfix = "\r\n")
+}
+
+private fun List<String>.calendarEventComponentRanges(): List<IntRange> {
+    val result = mutableListOf<IntRange>()
+    var start = -1
+    forEachIndexed { index, line ->
+        when {
+            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index
+            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
+                result += start..index
+                start = -1
+            }
+        }
+    }
+    return result
+}
+
+private fun List<String>.calendarPropertyValue(name: String): String? = firstNotNullOfOrNull { line ->
+    val separator = line.indexOf(':')
+    if (separator <= 0 || !line.substring(0, separator).substringBefore(';').equals(name, ignoreCase = true)) {
+        null
+    } else {
+        line.substring(separator + 1).trim().takeIf(String::isNotBlank)
+    }
 }
 
 private fun requireValidCalendarRecurrenceRule(value: String) {

@@ -259,6 +259,20 @@ class CalendarWorkspacePresentationTest {
         assertFalse(upsert.isSatisfiedBy(stale))
         assertFalse(upsert.isSatisfiedBy(staleEnd))
         assertTrue(upsert.isSatisfiedBy(updated))
+        val overrideBeforeMasterLines = listOf(
+            "BEGIN:VCALENDAR",
+            "BEGIN:VEVENT",
+            "UID:planning",
+            "RECURRENCE-ID:20260814T090000Z",
+            "DTSTART:20260814T120000Z",
+            "DTEND:20260814T130000Z",
+            "SUMMARY:${draft.title}",
+            "END:VEVENT",
+        ) + updated.body.decodeToString().trim().lines().drop(1).dropLast(1) + "END:VCALENDAR"
+        val overrideBeforeUpdatedMaster = updated.copy(
+            body = overrideBeforeMasterLines.joinToString("\r\n", postfix = "\r\n").encodeToByteArray(),
+        )
+        assertTrue(upsert.isSatisfiedBy(overrideBeforeUpdatedMaster))
         val blankOptionalDraft = draft.copy(location = "   ", description = "\t")
         val blankOptionalResponse = updated.copy(
             body = createGroupwareCalendarEventContent(
