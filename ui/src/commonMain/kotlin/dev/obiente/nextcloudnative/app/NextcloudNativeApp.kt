@@ -2844,6 +2844,7 @@ private fun DynamicDiscoveredAppScreen(
     var renderedScreenCacheKey by remember(descriptor) { mutableStateOf<DynamicScreenCacheKey?>(null) }
     var refreshingDynamicContent by remember(descriptor) { mutableStateOf(false) }
     var dynamicRefreshError by remember(descriptor) { mutableStateOf<String?>(null) }
+    var mailCollectionSummaryError by remember(descriptor) { mutableStateOf<String?>(null) }
     var recordsByResourceId by remember(descriptor) {
         mutableStateOf<Map<String, List<NativeRecord>>>(emptyMap())
     }
@@ -3946,6 +3947,7 @@ private fun DynamicDiscoveredAppScreen(
         mailCollectionSummaryDestinations,
         loadAttempt,
     ) {
+        mailCollectionSummaryError = null
         if (mailCollectionSummaryDestinations.isEmpty()) return@LaunchedEffect
         val summaryResourceIds = mailCollectionSummaryDestinations
             .mapTo(linkedSetOf(), DynamicNavigationDestination::resourceId)
@@ -3957,7 +3959,7 @@ private fun DynamicDiscoveredAppScreen(
         val loaded = coroutineScope {
             mailCollectionSummaryDestinations.map { destination ->
                 async {
-                    destination.resourceId to runCatching {
+                    runCatching {
                         loadDynamicRecords(
                             services = services,
                             session = session,
@@ -3967,20 +3969,26 @@ private fun DynamicDiscoveredAppScreen(
                             runtimeContext = destination.pathParameterValues,
                             cachePolicy = dynamicReadCachePolicy,
                         )
-                    }.getOrElse { failure ->
-                        if (failure is CancellationException) throw failure
-                        emptyList()
-                    }
+                    }.fold(
+                        onSuccess = { records ->
+                            DynamicMailboxCollectionSummaryResult(destination.resourceId, records)
+                        },
+                        onFailure = { failure ->
+                            if (failure is CancellationException) throw failure
+                            DynamicMailboxCollectionSummaryResult(destination.resourceId, failed = true)
+                        },
+                    )
                 }
             }.awaitAll()
         }
         currentCoroutineContext().ensureActive()
-        val summaries = loaded.filter { (_, records) -> records.isNotEmpty() }.toMap()
-        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+        val outcome = reconcileDynamicMailboxCollectionSummaries(
             recordsByResourceId = recordsByResourceId,
             summaryResourceIds = summaryResourceIds,
-            loadedSummaries = summaries,
+            results = loaded,
         )
+        recordsByResourceId = outcome.recordsByResourceId
+        mailCollectionSummaryError = outcome.errorMessage
     }
     val contextDetailResolution = remember(descriptor, schema, recordContext) {
         val context = recordContext ?: return@remember null
@@ -5147,7 +5155,7 @@ private fun DynamicDiscoveredAppScreen(
                         modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
                     )
                 }
-                dynamicRefreshError?.let { message ->
+                (dynamicRefreshError ?: mailCollectionSummaryError)?.let { message ->
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -6048,6 +6056,38 @@ internal fun replaceDynamicMailboxCollectionSummaries(
 ): Map<String, List<NativeRecord>> =
     (recordsByResourceId - summaryResourceIds) + loadedSummaries.filterKeys(summaryResourceIds::contains)
 
+internal data class DynamicMailboxCollectionSummaryResult(
+    val resourceId: String,
+    val records: List<NativeRecord> = emptyList(),
+    val failed: Boolean = false,
+)
+
+internal data class DynamicMailboxCollectionSummaryOutcome(
+    val recordsByResourceId: Map<String, List<NativeRecord>>,
+    val errorMessage: String?,
+)
+
+internal fun reconcileDynamicMailboxCollectionSummaries(
+    recordsByResourceId: Map<String, List<NativeRecord>>,
+    summaryResourceIds: Set<String>,
+    results: List<DynamicMailboxCollectionSummaryResult>,
+): DynamicMailboxCollectionSummaryOutcome {
+    val loadedSummaries = results
+        .filterNot(DynamicMailboxCollectionSummaryResult::failed)
+        .filter { result -> result.records.isNotEmpty() }
+        .associate { result -> result.resourceId to result.records }
+    return DynamicMailboxCollectionSummaryOutcome(
+        recordsByResourceId = replaceDynamicMailboxCollectionSummaries(
+            recordsByResourceId = recordsByResourceId,
+            summaryResourceIds = summaryResourceIds,
+            loadedSummaries = loadedSummaries,
+        ),
+        errorMessage = DYNAMIC_MAILBOX_SUMMARY_LOAD_ERROR.takeIf {
+            results.any(DynamicMailboxCollectionSummaryResult::failed)
+        },
+    )
+}
+
 private fun String.normalizedMailboxSummaryFieldName(): String =
     lowercase().filter(Char::isLetterOrDigit)
 
@@ -6061,6 +6101,9 @@ private val DYNAMIC_MAILBOX_SUMMARY_FIELD_NAMES = setOf(
     "unreadcount",
     "unseenmessages",
 )
+
+private const val DYNAMIC_MAILBOX_SUMMARY_LOAD_ERROR =
+    "Could not load mailbox counts. The mailbox is still available."
 
 private fun String.isMailNavigationAncestor(): Boolean = dynamicResourceWords().any { word ->
     word in setOf(

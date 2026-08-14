@@ -290,6 +290,19 @@ class DynamicNavigationParameterInheritanceTest {
         assertEquals(listOf(message), cleared["messages"])
         assertEquals(listOf(nextSummary), reloaded["mailboxStats"])
         assertFalse("unrelated" in reloaded)
+
+        val failed = reconcileDynamicMailboxCollectionSummaries(
+            recordsByResourceId = mapOf("mailboxStats" to listOf(previousSummary)),
+            summaryResourceIds = setOf("mailboxStats"),
+            results = listOf(
+                DynamicMailboxCollectionSummaryResult("mailboxStats", failed = true),
+            ),
+        )
+        assertFalse("mailboxStats" in failed.recordsByResourceId)
+        assertEquals(
+            "Could not load mailbox counts. The mailbox is still available.",
+            failed.errorMessage,
+        )
     }
 
     @Test

@@ -1444,9 +1444,9 @@ private fun HttpParameter.automaticCollectionPageSize(): Int? {
 
     fun declaredNumber(name: String): Double? {
         val element = objectSchema[name] ?: return null
-        // OpenAPI generators commonly serialize an optional nullable numeric default as JSON
-        // null. That is the absence of a default, not a malformed numeric constraint.
-        if (element == JsonNull) return null
+        // A null bound is malformed because it changes whether an invented page size is safe.
+        // Nullable default null is handled below as the absence of an explicit default.
+        if (element == JsonNull) return Double.NaN
         val primitive = element as? JsonPrimitive ?: return Double.NaN
         return primitive
             .takeUnless { it.isString }

@@ -648,6 +648,16 @@ class DynamicNativeRuntimeTest {
                 expected = "20",
             ),
             Case(
+                name = "limit",
+                schema = """{"type":"integer","minimum":null}""",
+                expected = null,
+            ),
+            Case(
+                name = "limit",
+                schema = """{"type":"integer","maximum":null}""",
+                expected = null,
+            ),
+            Case(
                 name = "perPage",
                 schema = """{"type":"number","minimum":75,"maximum":100}""",
                 expected = "75",

@@ -334,9 +334,9 @@ private fun NativeRecord.nativeMailCollectionSummary(): NativeMailCollectionSumm
 }
 
 /**
- * Resolves a selected message body from the active response before falling back to the selected
- * message record. A body endpoint commonly returns a separate record that must be merged with
- * the selected envelope to render the desktop detail pane.
+ * Resolves a selected message body only from the active response. A body endpoint commonly
+ * returns a separate record that must be merged with the selected envelope to render the desktop
+ * detail pane. The retained envelope remains navigation context, never body authority.
  */
 internal fun nativeMailWorkspaceDetailTarget(
     schema: NativeAppSchema,
@@ -361,12 +361,15 @@ internal fun nativeMailWorkspaceDetailTarget(
         if (!parentMatchesSelection && !recordMatchesSelection) return@firstNotNullOfOrNull null
         nativeMailMessageRenderTarget(schema, currentResource, record, context)
     }
-    return currentTarget ?: nativeMailMessageRenderTarget(
-        schema = schema,
-        resource = selectedMessage.resource,
-        record = selectedMessage.record,
-        context = context,
-    )
+    if (currentTarget != null) return currentTarget
+    if (currentResource.id != selectedMessage.resource.id) return null
+    val currentEnvelope = currentRecords.firstOrNull { record ->
+        val presentation = nativeMailboxPresentation(currentResource, record)
+        presentation.kind == NativeMailboxItemKind.Message &&
+            nativeMailWorkspaceRecordKey(currentResource, record, presentation) ==
+            selectedMessage.nativeMailWorkspaceRecordKey()
+    } ?: return null
+    return nativeMailMessageRenderTarget(schema, currentResource, currentEnvelope, context)
 }
 
 internal fun isNativeMailWorkspaceContext(
@@ -716,28 +719,12 @@ private fun NativeMailSearchableMessageList(
     val visibleItems = remember(items, searchQuery) {
         nativeMailVisibleMessages(items, searchQuery)
     }
-    LaunchedEffect(
-        searchQuery,
-        visibleItems.size,
-        items.size,
-        onLoadMore,
-        loadingMore,
-        loadMoreError,
-    ) {
-        if (
-            searchQuery.isNotBlank() &&
-            visibleItems.isEmpty() &&
-            onLoadMore != null &&
-            !loadingMore &&
-            loadMoreError == null
-        ) {
-            onLoadMore()
-        }
-    }
+    val searchAllowsPaging = nativeMailSearchAllowsAutoPaging(searchQuery)
+    val activeLoadMore = onLoadMore.takeIf { searchAllowsPaging }
     Column(modifier = modifier) {
         onSearchQueryChanged?.let { onQueryChanged ->
             GenericCollectionSearchField(
-                resourceName = "Messages",
+                resourceName = "Loaded messages",
                 query = searchQuery,
                 onQueryChanged = onQueryChanged,
                 modifier = Modifier
@@ -760,19 +747,21 @@ private fun NativeMailSearchableMessageList(
                 {
                     NativeMailSearchEmpty(
                         query = searchQuery,
-                        loading = loadingMore,
-                        error = loadMoreError,
-                        onRetry = onLoadMore,
+                        loading = false,
+                        error = null,
+                        onRetry = null,
                         onClear = { onSearchQueryChanged?.invoke("") },
                     )
                 }
             },
-            onLoadMore = onLoadMore,
-            loadingMore = loadingMore,
-            loadMoreError = loadMoreError,
+            onLoadMore = activeLoadMore,
+            loadingMore = loadingMore && searchAllowsPaging,
+            loadMoreError = loadMoreError.takeIf { searchAllowsPaging },
         )
     }
 }
+
+internal fun nativeMailSearchAllowsAutoPaging(query: String): Boolean = query.isBlank()
 
 @Composable
 private fun NativeMailSearchEmpty(

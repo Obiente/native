@@ -50,6 +50,8 @@ class NativeMailWorkspaceTest {
         )
         assertEquals(messages, nativeMailVisibleMessages(messages, ""))
         assertTrue(nativeMailVisibleMessages(messages, "budget").isEmpty())
+        assertTrue(nativeMailSearchAllowsAutoPaging(""))
+        assertFalse(nativeMailSearchAllowsAutoPaging("Ada"))
     }
 
     @Test
@@ -591,6 +593,45 @@ class NativeMailWorkspaceTest {
         assertEquals(listOf("42"), plan.messages.map { item -> item.record.id })
         assertEquals("42", plan.selectedMessage?.record?.id)
         assertEquals("The build is ready.", detail?.presentation?.body)
+    }
+
+    @Test
+    fun `restored envelope snippet is not rendered as a loaded message body`() {
+        val messages = resource("messages", "Messages")
+        val body = resource("messageBody", "Message body")
+        val schema = schema(messages, body)
+        val envelope = NativeRecord(
+            id = "42",
+            values = mapOf(
+                "subject" to "Release checklist",
+                "from" to "Ada <ada@example.test>",
+                "text" to "Only the mailbox preview, not the loaded body.",
+            ),
+        )
+        val context = NativeDatasetContext(
+            parentResourceId = messages.id,
+            parentRecord = envelope,
+            relatedRecords = emptyMap(),
+        )
+        val plan = nativeMailWorkspacePlan(
+            schema = schema,
+            currentResource = body,
+            currentRecords = emptyList(),
+            context = context,
+            selectedRecordId = envelope.id,
+            selectedRecordResourceId = messages.id,
+        )
+
+        assertEquals("42", plan.selectedMessage?.record?.id)
+        assertNull(
+            nativeMailWorkspaceDetailTarget(
+                schema = schema,
+                currentResource = body,
+                currentRecords = emptyList(),
+                context = context,
+                selectedMessage = plan.selectedMessage,
+            ),
+        )
     }
 
     @Test
