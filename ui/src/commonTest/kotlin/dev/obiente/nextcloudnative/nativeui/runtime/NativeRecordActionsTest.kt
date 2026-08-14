@@ -2228,6 +2228,115 @@ class NativeRecordActionsTest {
     }
 
     @Test
+    fun `verified Chores team member can edit a chore from the exact pinned contract`() {
+        val team = resource(
+            id = "team",
+            fields = listOf(field("members", "Members", FieldKind.objectValue, readOnly = true)),
+        )
+        val chores = resource(
+            id = "chores",
+            fields = listOf(
+                field("id", "ID", FieldKind.integer, readOnly = true),
+                field("name", "Name", FieldKind.string),
+                field("points", "Points", FieldKind.integer),
+            ),
+        )
+        val edit = ActionSpec(
+            id = "route-api-patchchore",
+            label = "Edit chore",
+            resourceId = chores.id,
+            binding = ApiBinding(
+                method = HttpMethod.PATCH,
+                path = "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}",
+                operationId = "route-api-patchchore",
+                pathParameterNames = listOf("teamId", "choreId"),
+                requiredPathParameterNames = listOf("teamId", "choreId"),
+                bodyFieldNames = listOf("name", "points"),
+                requiredBodyFieldNames = listOf("name"),
+                bodyContentType = "application/json",
+            ),
+            intent = ActionIntent.update,
+            risk = ActionRisk.mutating,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+            effect = ActionEffect.update,
+            evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed Chores 0.1.0 package")),
+        )
+        val nativeSchema = NativeAppSchema(
+            schemaVersion = "1",
+            app = AppIdentity("chores", "Chores", "0.1.0"),
+            confidence = Confidence.verified,
+            resources = listOf(chores, team),
+            actions = listOf(edit),
+        )
+        fun teamRecord(memberUserId: String) = NativeRecord(
+            id = "4",
+            values = mapOf("id" to "4"),
+            structuredValues = mapOf(
+                "members" to NativeStructuredValue.ListValue(
+                    listOf(
+                        NativeStructuredValue.ObjectValue(
+                            listOf(
+                                NativeStructuredEntry(
+                                    "member",
+                                    "Member",
+                                    NativeStructuredValue.Scalar(
+                                        memberUserId,
+                                        NativeStructuredScalarKind.string,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        fun authority(schema: NativeAppSchema, memberUserId: String) = NativeDatasetContext(
+            parentResourceId = team.id,
+            parentRecord = teamRecord(memberUserId),
+            currentUserId = "alex",
+        ).nativeRecordAuthorityContext(schema)
+        val chore = NativeRecord(
+            id = "23",
+            values = mapOf("id" to "23", "name" to "Kitchen", "points" to "3"),
+        )
+
+        val plan = requireNotNull(
+            nativeRecordActions(
+                schema = nativeSchema,
+                resource = chores,
+                record = chore,
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority(nativeSchema, "alex"),
+            ).edit,
+        )
+        assertEquals(
+            mapOf("teamId" to "4", "choreId" to "23", "name" to "Bathroom", "points" to "5"),
+            plan.request(mapOf("name" to "Bathroom", "points" to "5")).values,
+        )
+
+        assertNull(
+            nativeRecordActions(
+                schema = nativeSchema,
+                resource = chores,
+                record = chore,
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority(nativeSchema, "sam"),
+            ).edit,
+        )
+        val unpinnedSchema = nativeSchema.copy(app = nativeSchema.app.copy(version = "0.1.1"))
+        assertNull(
+            nativeRecordActions(
+                schema = unpinnedSchema,
+                resource = chores,
+                record = chore,
+                navigationContext = mapOf("teamId" to "4"),
+                authorityContext = authority(unpinnedSchema, "alex"),
+            ).edit,
+        )
+    }
+
+    @Test
     fun `verified Chores completion derives protocol fields and requires confirmation`() = runBlocking {
         val workSpec = RepeatableObjectInputSpec(
             minimumItems = 1,

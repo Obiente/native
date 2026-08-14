@@ -287,16 +287,25 @@ internal suspend fun executeNativeCreateMutation(
                 "The saved create recovery marker is invalid.",
                 NativeActionFailureOutcome.Unknown,
             )
+        val matchesCurrentRequest = pending.requestValues == request.values &&
+            pending.confirmed == request.confirmed
         if (runCatching { pendingMutationStore.postconditionSatisfied(key, existing) }.getOrDefault(false)) {
-            return clearConfirmedCreateMarker(pendingMutationStore, key)
-        }
-        if (pending.phase == NativeCreateMutationPhase.TransportMayHaveObserved) {
+            runCatching { pendingMutationStore.clear(key) }.getOrElse { failure ->
+                return NativeActionExecutionResult.Failure(
+                    failure.message ?: "The confirmed create recovery marker could not be cleared.",
+                    NativeActionFailureOutcome.Unknown,
+                )
+            }
+            if (matchesCurrentRequest) {
+                return NativeActionExecutionResult.Success("The create request is confirmed by the server.")
+            }
+            stagedMarker = null
+        } else if (pending.phase == NativeCreateMutationPhase.TransportMayHaveObserved) {
             return NativeActionExecutionResult.Failure(
                 "The earlier create request is still awaiting authoritative server confirmation.",
                 NativeActionFailureOutcome.Unknown,
             )
-        }
-        if (pending.requestValues != request.values || pending.confirmed != request.confirmed) {
+        } else if (!matchesCurrentRequest) {
             runCatching { pendingMutationStore.clear(key) }.getOrElse { failure ->
                 return NativeActionExecutionResult.Failure(
                     failure.message ?: "The superseded staged create could not be cleared.",

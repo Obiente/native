@@ -1854,10 +1854,16 @@ private fun NativeAppSchema.auditedParentAuthorityActionIds(
         val roster = nativeRosterPresentation(parentRecord)
         if (parentRecord.hasChoresTeamMember(actorUserId)) {
             actions.filter { action ->
-                action.binding.method == HttpMethod.POST &&
-                    action.binding.path.substringBefore('?').trimEnd('/') == CHORES_COMPLETION_PATH &&
-                    action.risk == ActionRisk.mutating &&
-                    action.evidence.any { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
+                val path = action.binding.path.substringBefore('?').trimEnd('/')
+                val completion = action.binding.method == HttpMethod.POST &&
+                    path == CHORES_COMPLETION_PATH && action.intent == ActionIntent.execute
+                val edit = action.binding.method == HttpMethod.PATCH &&
+                    path == CHORES_EDIT_PATH && action.intent == ActionIntent.update &&
+                    action.effect == ActionEffect.update
+                (completion || edit) && action.risk == ActionRisk.mutating &&
+                    action.evidence.any { evidence ->
+                        evidence.source == EvidenceSource.verifiedAppPackage
+                    }
             }.mapTo(this, ActionSpec::id)
         }
         if (roster?.ownerUserId == actorUserId && roster.omittedPeople == 0) {
@@ -2137,6 +2143,7 @@ private val PANTRY_0_23_0_OWNER_REORDER_PATHS = mapOf(
 )
 private val CHORES_COMPLETION_FIELD_IDS = setOf("id", "work_time", "chore_id", "member")
 private const val CHORES_COMPLETION_PATH = "/apps/chores/api/v1.0/team/{teamId}/work"
+private const val CHORES_EDIT_PATH = "/apps/chores/api/v1.0/team/{teamId}/chores/{choreId}"
 private const val MAX_RECORD_IDENTITY_VALUE_LENGTH = 256
 private const val MAX_RECORD_QUERY_VALUE_LENGTH = 2_048
 private const val MAX_RECORD_BODY_VALUE_LENGTH = 65_536

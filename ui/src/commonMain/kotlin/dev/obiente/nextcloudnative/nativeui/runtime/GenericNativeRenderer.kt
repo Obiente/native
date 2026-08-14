@@ -253,10 +253,11 @@ fun GenericNativeAppScreen(
     workspaceNavigationItems: List<NativeWorkspaceNavigationItem> = emptyList(),
     onWorkspaceNavigate: ((String) -> Unit)? = null,
 ) {
-    var pendingCategoryReorderActionId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
-    var pendingCategoryReorderResourceId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
-    var pendingCategoryReorderIds by rememberSaveable(schema.app.id) { mutableStateOf<List<String>?>(null) }
-    var pendingCategoryReorderRecoveryRequested by rememberSaveable(schema.app.id) { mutableStateOf(false) }
+    var pendingCollectionReorderActionId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCollectionReorderResourceId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCollectionReorderScopeId by rememberSaveable(schema.app.id) { mutableStateOf<String?>(null) }
+    var pendingCollectionReorderIds by rememberSaveable(schema.app.id) { mutableStateOf<List<String>?>(null) }
+    var pendingCollectionReorderRecoveryRequested by rememberSaveable(schema.app.id) { mutableStateOf(false) }
     val resource = schema.resource(view.resourceId)
     val boardMoveReconciliation = remember(schema.app.id, view.id, resource?.id) {
         NativeBoardMoveReconciliation()
@@ -960,29 +961,38 @@ fun GenericNativeAppScreen(
                     reorder = collectionActionCapabilities.reorder.takeIf {
                         collectionQuery.isBlank()
                     },
-                    pendingCategoryReorderOrder = collectionActionCapabilities.reorder
+                    pendingCollectionReorderOrder = collectionActionCapabilities.reorder
                         ?.takeIf { plan ->
-                            pendingCategoryReorderActionId == plan.action.id &&
-                                pendingCategoryReorderResourceId == presentedResource.id
+                            val key = nativePendingCollectionReorderKey(plan, presentedResource.id)
+                            pendingCollectionReorderActionId == plan.action.id &&
+                                pendingCollectionReorderResourceId == presentedResource.id &&
+                                pendingCollectionReorderScopeId == key.targetRecordId
                         }
-                        ?.let { pendingCategoryReorderIds },
-                    pendingCategoryReorderRecoveryRequested = pendingCategoryReorderRecoveryRequested,
-                    onPendingCategoryReorderChanged = { plan, orderedRecordIds, recoveryRequested ->
+                        ?.let { pendingCollectionReorderIds },
+                    pendingCollectionReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+                    onPendingCollectionReorderChanged = { plan, orderedRecordIds, recoveryRequested ->
+                        val scopeId = nativePendingCollectionReorderKey(
+                            plan,
+                            presentedResource.id,
+                        ).targetRecordId
                         if (orderedRecordIds == null) {
                             if (
-                                pendingCategoryReorderActionId == plan.action.id &&
-                                pendingCategoryReorderResourceId == presentedResource.id
+                                pendingCollectionReorderActionId == plan.action.id &&
+                                pendingCollectionReorderResourceId == presentedResource.id &&
+                                pendingCollectionReorderScopeId == scopeId
                             ) {
-                                pendingCategoryReorderActionId = null
-                                pendingCategoryReorderResourceId = null
-                                pendingCategoryReorderIds = null
-                                pendingCategoryReorderRecoveryRequested = false
+                                pendingCollectionReorderActionId = null
+                                pendingCollectionReorderResourceId = null
+                                pendingCollectionReorderScopeId = null
+                                pendingCollectionReorderIds = null
+                                pendingCollectionReorderRecoveryRequested = false
                             }
                         } else {
-                            pendingCategoryReorderActionId = plan.action.id
-                            pendingCategoryReorderResourceId = presentedResource.id
-                            pendingCategoryReorderIds = orderedRecordIds.toCollection(ArrayList())
-                            pendingCategoryReorderRecoveryRequested = recoveryRequested
+                            pendingCollectionReorderActionId = plan.action.id
+                            pendingCollectionReorderResourceId = presentedResource.id
+                            pendingCollectionReorderScopeId = scopeId
+                            pendingCollectionReorderIds = orderedRecordIds.toCollection(ArrayList())
+                            pendingCollectionReorderRecoveryRequested = recoveryRequested
                         }
                     },
                     pendingMutationStore = pendingMutationStore,
@@ -3371,60 +3381,47 @@ private fun GenericRecordList(
     reorder: NativeCollectionReorderActionPlan? = null,
     actionExecutor: NativeActionExecutor? = null,
     onActionSucceeded: ((ActionSpec) -> Unit)? = null,
+    authoritativeRecordsKey: NativeAuthoritativeRecordsKey = NativeAuthoritativeRecordsKey(records),
+    pendingReorderOrder: List<String>? = null,
+    pendingReorderRecoveryRequested: Boolean = false,
+    onPendingReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit =
+        { _, _, _ -> },
+    pendingMutationStore: NativePendingMutationStore? = null,
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
     loadMoreError: String? = null,
 ) {
     val authoritativeOrder = remember(records) { records.map(NativeRecord::id) }
-    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
-        mutableStateOf(authoritativeOrder)
-    }
+    val activeReorder = reorder.takeIf { actionExecutor != null && pendingMutationStore != null }
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
     var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
-    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
-    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
     var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
-    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val recordsById = remember(records) { records.associateBy(NativeRecord::id) }
-    val displayedRecords = remember(recordsById, orderedRecordIds, reorder) {
-        if (reorder == null) records else orderedRecordIds.mapNotNull(recordsById::get)
-    }
-    val submitReorder: () -> Unit = submit@{
-        val plan = reorder ?: return@submit
-        val executor = actionExecutor ?: return@submit
-        val submittedOrder = orderedRecordIds
-        if (submittedOrder == authoritativeOrder) return@submit
-        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
-            reorderError = failure.message ?: "The new order could not be submitted."
-            orderedRecordIds = authoritativeOrder
-            return@submit
-        }
-        reorderExecuting = true
-        reorderError = null
-        scope.launch {
-            when (val result = executor.execute(request)) {
-                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
-                is NativeActionExecutionResult.Failure -> {
-                    reorderError = result.message
-                    orderedRecordIds = authoritativeOrder
-                    if (result.outcome.requiresMutationReconciliation()) {
-                        onActionSucceeded?.invoke(plan.action)
-                    }
-                }
-            }
-            reorderExecuting = false
-        }
-    }
-    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
-        if (draggingRecordId == null && !reorderExecuting) {
-            orderedRecordIds = authoritativeOrder
-            reorderError = null
-        }
+    val reorderState = rememberNativeDurableCollectionReorderState(
+        plan = activeReorder,
+        resourceId = resource.id,
+        authoritativeOrder = authoritativeOrder,
+        authoritativeRecordsKey = authoritativeRecordsKey,
+        draggingRecordId = draggingRecordId,
+        pendingOrder = pendingReorderOrder,
+        pendingRecoveryRequested = pendingReorderRecoveryRequested,
+        actionExecutor = actionExecutor ?: NativeActionExecutor {
+            NativeActionExecutionResult.Failure(
+                "Order changes are unavailable.",
+                NativeActionFailureOutcome.Rejected,
+            )
+        },
+        pendingMutationStore = pendingMutationStore,
+        onPendingChanged = onPendingReorderChanged,
+        onActionSucceeded = onActionSucceeded,
+    )
+    val displayedRecords = remember(recordsById, reorderState.orderedRecordIds, activeReorder) {
+        if (activeReorder == null) records else reorderState.orderedRecordIds.mapNotNull(recordsById::get)
     }
     fun moveDraggedRecord(position: Offset) {
         val recordId = draggingRecordId ?: return
@@ -3432,17 +3429,19 @@ private fun GenericRecordList(
             .mapNotNull { item -> item.key as? String }
             .toSet()
         val targetId = nativeVisibleReorderTargetId(
-            orderedRecordIds = orderedRecordIds,
+            orderedRecordIds = reorderState.orderedRecordIds,
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
         )
-        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+        val targetIndex = targetId?.let(reorderState.orderedRecordIds::indexOf) ?: -1
         if (targetIndex >= 0 && targetId != recordId) {
-            orderedRecordIds = moveNativeCollectionRecordToIndex(
-                orderedRecordIds = orderedRecordIds,
-                recordId = recordId,
-                targetIndex = targetIndex,
+            reorderState.updateOrder(
+                moveNativeCollectionRecordToIndex(
+                    orderedRecordIds = reorderState.orderedRecordIds,
+                    recordId = recordId,
+                    targetIndex = targetIndex,
+                ),
             )
         }
     }
@@ -3476,13 +3475,14 @@ private fun GenericRecordList(
             else NextcloudSpacing.Small,
         ),
     ) {
-        reorderError?.let { message ->
+        reorderState.error?.let { message ->
             item(key = "collection-reorder-error") {
-                Text(
-                    message,
+                NativeCollectionReorderRecoveryMessage(
+                    message = message,
+                    recoveryAvailable = reorderState.recoveryAvailable,
+                    retryRecovery = reorderState.retryRecovery,
+                    discardRecovery = reorderState.discardRecovery,
                     modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
@@ -3501,7 +3501,7 @@ private fun GenericRecordList(
                         rowBounds[record.id] = coordinates.boundsInWindow()
                     }
                     .graphicsLayer { alpha = if (dragging) 0.56f else 1f },
-                leadingContent = reorder?.takeUnless { reorderExecuting }?.let {
+                leadingContent = activeReorder?.takeUnless { reorderState.executing }?.let {
                     {
                         NextcloudBoardDragHandle(
                             itemLabel = nativeRecordPresentation(resource, record).title,
@@ -3510,17 +3510,18 @@ private fun GenericRecordList(
                                 draggingRecordId = record.id
                                 dragOrigin = position
                                 dragPosition = position
-                                reorderError = null
                             },
                             onDrag = { delta ->
                                 val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                 dragPosition = position
-                                orderedRecordIds = moveNativeCollectionRecordAcrossAdjacentMidpoint(
-                                    orderedRecordIds = orderedRecordIds,
-                                    recordId = record.id,
-                                    pointerY = position.y,
-                                    movementY = delta.y,
-                                    rowBounds = rowBounds,
+                                reorderState.updateOrder(
+                                    moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                        orderedRecordIds = reorderState.orderedRecordIds,
+                                        recordId = record.id,
+                                        pointerY = position.y,
+                                        movementY = delta.y,
+                                        rowBounds = rowBounds,
+                                    ),
                                 )
                             },
                             onDragEnd = {
@@ -3528,18 +3529,18 @@ private fun GenericRecordList(
                                 draggingRecordId = null
                                 dragOrigin = null
                                 dragPosition = null
-                                submitReorder()
+                                reorderState.submit(reorderState.orderedRecordIds)
                             },
                             onDragCancel = {
                                 draggingRecordId = null
                                 dragOrigin = null
                                 dragPosition = null
-                                orderedRecordIds = authoritativeOrder
+                                reorderState.updateOrder(authoritativeOrder)
                             },
                         )
                     }
                 },
-                busy = reorderExecuting,
+                busy = reorderState.executing,
             )
         }
         NativeCollectionPagingFooter(
@@ -3747,9 +3748,9 @@ private fun GenericRecordCollection(
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     imageLoader: NativeImageLoader?,
     reorder: NativeCollectionReorderActionPlan?,
-    pendingCategoryReorderOrder: List<String>?,
-    pendingCategoryReorderRecoveryRequested: Boolean,
-    onPendingCategoryReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingCollectionReorderOrder: List<String>?,
+    pendingCollectionReorderRecoveryRequested: Boolean,
+    onPendingCollectionReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
     pendingMutationStore: NativePendingMutationStore?,
     authoritativeRecordsKey: NativeAuthoritativeRecordsKey,
     onLoadMore: (() -> Unit)?,
@@ -3782,6 +3783,10 @@ private fun GenericRecordCollection(
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
             reorder = reorder,
+            pendingReorderOrder = pendingCollectionReorderOrder,
+            pendingReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+            onPendingReorderChanged = onPendingCollectionReorderChanged,
+            pendingMutationStore = pendingMutationStore,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
             loadMoreError = loadMoreError,
@@ -3814,9 +3819,9 @@ private fun GenericRecordCollection(
             onCommandRecord = onCommandRecord,
             onCommandFormRecord = onCommandFormRecord,
             reorder = reorder,
-            pendingReorderOrder = pendingCategoryReorderOrder,
-            pendingReorderRecoveryRequested = pendingCategoryReorderRecoveryRequested,
-            onPendingReorderChanged = onPendingCategoryReorderChanged,
+            pendingReorderOrder = pendingCollectionReorderOrder,
+            pendingReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+            onPendingReorderChanged = onPendingCollectionReorderChanged,
             pendingMutationStore = pendingMutationStore,
             onLoadMore = onLoadMore,
             loadingMore = loadingMore,
@@ -3899,6 +3904,11 @@ private fun GenericRecordCollection(
                 reorder = reorder,
                 actionExecutor = actionExecutor,
                 onActionSucceeded = onInlineActionSucceeded,
+                authoritativeRecordsKey = authoritativeRecordsKey,
+                pendingReorderOrder = pendingCollectionReorderOrder,
+                pendingReorderRecoveryRequested = pendingCollectionReorderRecoveryRequested,
+                onPendingReorderChanged = onPendingCollectionReorderChanged,
+                pendingMutationStore = pendingMutationStore,
                 onLoadMore = onLoadMore,
                 loadingMore = loadingMore,
                 loadMoreError = loadMoreError,
@@ -4762,6 +4772,32 @@ private fun GenericCategoryCollection(
 }
 
 @Composable
+private fun NativeCollectionReorderRecoveryMessage(
+    message: String,
+    recoveryAvailable: Boolean,
+    retryRecovery: () -> Unit,
+    discardRecovery: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+    ) {
+        Text(
+            message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (recoveryAvailable) {
+            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                TextButton(onClick = retryRecovery) { Text("Check again") }
+                TextButton(onClick = discardRecovery) { Text("Use server order") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun GenericFinancialAccountCollection(
     schema: NativeAppSchema,
     resource: ResourceSpec,
@@ -5559,6 +5595,10 @@ private fun GenericTaskCollection(
     onCommandRecord: (NativeRecord, NativeRecordCommandActionPlan) -> Unit,
     onCommandFormRecord: (NativeRecord, NativeRecordCommandFormActionPlan) -> Unit,
     reorder: NativeCollectionReorderActionPlan?,
+    pendingReorderOrder: List<String>?,
+    pendingReorderRecoveryRequested: Boolean,
+    onPendingReorderChanged: (NativeCollectionReorderActionPlan, List<String>?, Boolean) -> Unit,
+    pendingMutationStore: NativePendingMutationStore?,
     onLoadMore: (() -> Unit)?,
     loadingMore: Boolean,
     loadMoreError: String?,
@@ -5568,45 +5608,29 @@ private fun GenericTaskCollection(
     val listState = rememberLazyListState()
     val authoritativeOrder = remember(rows) { rows.map { (record, _) -> record.id } }
     val rowsById = remember(rows) { rows.associateBy { (record, _) -> record.id } }
-    var orderedRecordIds by remember(reorder?.action?.id, resource.id) {
-        mutableStateOf(authoritativeOrder)
-    }
+    val activeReorder = reorder.takeIf { pendingMutationStore != null }
     var draggingRecordId by remember(reorder?.action?.id, resource.id) {
         mutableStateOf<String?>(null)
     }
     var dragOrigin by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
-    var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
-    var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
     val rowBounds = remember(reorder?.action?.id, resource.id) { mutableStateMapOf<String, Rect>() }
     var listBounds by remember(reorder?.action?.id, resource.id) { mutableStateOf<Rect?>(null) }
-    val displayedRows = remember(rowsById, orderedRecordIds, reorder) {
-        if (reorder == null) rows else orderedRecordIds.mapNotNull(rowsById::get)
-    }
-    val submitReorder: () -> Unit = submit@{
-        val plan = reorder ?: return@submit
-        val submittedOrder = orderedRecordIds
-        if (submittedOrder == authoritativeOrder) return@submit
-        val request = runCatching { plan.requestInOrder(submittedOrder) }.getOrElse { failure ->
-            reorderError = failure.message ?: "The new order could not be submitted."
-            orderedRecordIds = authoritativeOrder
-            return@submit
-        }
-        reorderExecuting = true
-        reorderError = null
-        scope.launch {
-            when (val result = actionExecutor.execute(request)) {
-                is NativeActionExecutionResult.Success -> onActionSucceeded?.invoke(plan.action)
-                is NativeActionExecutionResult.Failure -> {
-                    reorderError = result.message
-                    orderedRecordIds = authoritativeOrder
-                    if (result.outcome.requiresMutationReconciliation()) {
-                        onActionSucceeded?.invoke(plan.action)
-                    }
-                }
-            }
-            reorderExecuting = false
-        }
+    val reorderState = rememberNativeDurableCollectionReorderState(
+        plan = activeReorder,
+        resourceId = resource.id,
+        authoritativeOrder = authoritativeOrder,
+        authoritativeRecordsKey = authoritativeRecordsKey,
+        draggingRecordId = draggingRecordId,
+        pendingOrder = pendingReorderOrder,
+        pendingRecoveryRequested = pendingReorderRecoveryRequested,
+        actionExecutor = actionExecutor,
+        pendingMutationStore = pendingMutationStore,
+        onPendingChanged = onPendingReorderChanged,
+        onActionSucceeded = onActionSucceeded,
+    )
+    val displayedRows = remember(rowsById, reorderState.orderedRecordIds, activeReorder) {
+        if (activeReorder == null) rows else reorderState.orderedRecordIds.mapNotNull(rowsById::get)
     }
     val currentAuthoritativeRecordsKey by rememberUpdatedState(authoritativeRecordsKey)
     val completionOverrides = remember(schema, resource.id) {
@@ -5623,29 +5647,25 @@ private fun GenericTaskCollection(
             .reconcileNativeCompletionFailures(authoritativeRecordsKey)
             .forEach(completionErrors::remove)
     }
-    LaunchedEffect(authoritativeOrder, reorder?.action?.id) {
-        if (draggingRecordId == null && !reorderExecuting) {
-            orderedRecordIds = authoritativeOrder
-            reorderError = null
-        }
-    }
     fun moveDraggedRecord(position: Offset) {
         val recordId = draggingRecordId ?: return
         val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
             .mapNotNull { item -> item.key as? String }
             .toSet()
         val targetId = nativeVisibleReorderTargetId(
-            orderedRecordIds = orderedRecordIds,
+            orderedRecordIds = reorderState.orderedRecordIds,
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
         )
-        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
+        val targetIndex = targetId?.let(reorderState.orderedRecordIds::indexOf) ?: -1
         if (targetIndex >= 0 && targetId != recordId) {
-            orderedRecordIds = moveNativeCollectionRecordToIndex(
-                orderedRecordIds = orderedRecordIds,
-                recordId = recordId,
-                targetIndex = targetIndex,
+            reorderState.updateOrder(
+                moveNativeCollectionRecordToIndex(
+                    orderedRecordIds = reorderState.orderedRecordIds,
+                    recordId = recordId,
+                    targetIndex = targetIndex,
+                ),
             )
         }
     }
@@ -5676,13 +5696,14 @@ private fun GenericTaskCollection(
         ),
         verticalArrangement = Arrangement.spacedBy(if (dense) 1.dp else NextcloudSpacing.Small),
     ) {
-        reorderError?.let { message ->
+        reorderState.error?.let { message ->
             item(key = "task-reorder-error") {
-                Text(
-                    message,
+                NativeCollectionReorderRecoveryMessage(
+                    message = message,
+                    recoveryAvailable = reorderState.recoveryAvailable,
+                    retryRecovery = reorderState.retryRecovery,
+                    discardRecovery = reorderState.discardRecovery,
                     modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
@@ -5751,7 +5772,7 @@ private fun GenericTaskCollection(
                     ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    reorder?.takeUnless { reorderExecuting }?.let {
+                    activeReorder?.takeUnless { reorderState.executing }?.let {
                         NextcloudBoardDragHandle(
                             itemLabel = task.title,
                             dragActive = dragging,
@@ -5759,17 +5780,18 @@ private fun GenericTaskCollection(
                                 draggingRecordId = record.id
                                 dragOrigin = position
                                 dragPosition = position
-                                reorderError = null
                             },
                             onDrag = { delta ->
                                 val position = (dragPosition ?: return@NextcloudBoardDragHandle) + delta
                                 dragPosition = position
-                                orderedRecordIds = moveNativeCollectionRecordAcrossAdjacentMidpoint(
-                                    orderedRecordIds = orderedRecordIds,
-                                    recordId = record.id,
-                                    pointerY = position.y,
-                                    movementY = delta.y,
-                                    rowBounds = rowBounds,
+                                reorderState.updateOrder(
+                                    moveNativeCollectionRecordAcrossAdjacentMidpoint(
+                                        orderedRecordIds = reorderState.orderedRecordIds,
+                                        recordId = record.id,
+                                        pointerY = position.y,
+                                        movementY = delta.y,
+                                        rowBounds = rowBounds,
+                                    ),
                                 )
                             },
                             onDragEnd = {
@@ -5777,13 +5799,13 @@ private fun GenericTaskCollection(
                                 draggingRecordId = null
                                 dragOrigin = null
                                 dragPosition = null
-                                submitReorder()
+                                reorderState.submit(reorderState.orderedRecordIds)
                             },
                             onDragCancel = {
                                 draggingRecordId = null
                                 dragOrigin = null
                                 dragPosition = null
-                                orderedRecordIds = authoritativeOrder
+                                reorderState.updateOrder(authoritativeOrder)
                             },
                         )
                     }
@@ -5900,7 +5922,7 @@ private fun GenericTaskCollection(
                             )
                         }
                     }
-                    if (reorderExecuting) {
+                    if (reorderState.executing) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     }
                     if (secondaryActions.isNotEmpty()) {

@@ -215,6 +215,73 @@ class NativeCreateMutationRecoveryTest {
     }
 
     @Test
+    fun `a confirmed prior create is cleared before a different current request is submitted`() = runBlocking {
+        val fixture = fixture("7")
+        val priorTransport = assertNotNull(
+            fixture.plan.stage(fixture.request, NativeCreateMutationPhase.TransportMayHaveObserved),
+        )
+        var stored: Map<String, String>? = priorTransport
+        var currentCreated = false
+        val events = mutableListOf<String>()
+        val currentRequest = fixture.request.copy(
+            values = fixture.request.values.mapValues { (name, value) ->
+                if (name == "chores") value.replace("Clean kitchen", "Clean bathroom") else value
+            },
+        )
+        val store = object : NativePendingMutationStore {
+            override suspend fun load(key: NativePendingMutationKey): Map<String, String>? = stored.also {
+                events += "load"
+            }
+
+            override suspend fun save(key: NativePendingMutationKey, values: Map<String, String>) {
+                events += "save:${nativeCreateMutationPostcondition(key, values)?.phase}"
+                stored = values
+            }
+
+            override suspend fun postconditionSatisfied(
+                key: NativePendingMutationKey,
+                values: Map<String, String>,
+            ): Boolean {
+                events += "reconcile"
+                return if (values == priorTransport) true else currentCreated
+            }
+
+            override suspend fun clear(key: NativePendingMutationKey) {
+                events += "clear"
+                stored = null
+            }
+        }
+
+        val result = executeNativeCreateMutation(
+            plan = fixture.plan,
+            request = currentRequest,
+            actionExecutor = NativeActionExecutor { request ->
+                events += "execute"
+                assertEquals(currentRequest, request)
+                currentCreated = true
+                NativeActionExecutionResult.Success("Created")
+            },
+            pendingMutationStore = store,
+        )
+
+        assertIs<NativeActionExecutionResult.Success>(result)
+        assertEquals(
+            listOf(
+                "load",
+                "reconcile",
+                "clear",
+                "save:Staged",
+                "save:TransportMayHaveObserved",
+                "execute",
+                "reconcile",
+                "clear",
+            ),
+            events,
+        )
+        assertNull(stored)
+    }
+
+    @Test
     fun `verified chores invite reconciles against a new nested team invitation`() {
         val evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed package route"))
         val resource = ResourceSpec(
