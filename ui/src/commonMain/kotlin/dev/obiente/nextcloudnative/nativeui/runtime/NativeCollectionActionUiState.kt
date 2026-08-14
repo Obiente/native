@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import dev.obiente.nextcloudnative.app.publicContentSha256
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_INTEGER_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.DYNAMIC_STRING_ARRAY_FORMAT
 import dev.obiente.nextcloudnative.nativeui.model.FieldKind
@@ -83,7 +84,7 @@ internal fun nativePendingCollectionReorderKey(
     resourceId: String,
 ): NativePendingMutationKey = NativePendingMutationKey(
     actionId = "$NATIVE_CATEGORY_REORDER_MUTATION_NAMESPACE:${plan.action.id}",
-    targetRecordId = resourceId,
+    targetRecordId = publicContentSha256(plan.pendingMutationScope(resourceId).encodeToByteArray()),
 )
 
 internal fun encodeNativePendingCollectionReorder(

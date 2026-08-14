@@ -718,6 +718,7 @@ private fun HomeWorkspaceSurface(
 ) {
     val sectionBounds = remember(layout.scope) { mutableStateMapOf<HomeSectionId, Rect>() }
     var draggingSectionId by remember(layout.scope) { mutableStateOf<HomeSectionId?>(null) }
+    var dragStartLayout by remember(layout.scope) { mutableStateOf<HomeWorkspaceLayout?>(null) }
     var dragOrigin by remember(layout.scope) { mutableStateOf<Offset?>(null) }
     var dragPosition by remember(layout.scope) { mutableStateOf<Offset?>(null) }
     var workspaceViewport by remember(layout.scope) { mutableStateOf<Rect?>(null) }
@@ -761,6 +762,7 @@ private fun HomeWorkspaceSurface(
             onBoundsChanged = { bounds -> sectionBounds[item.id] = bounds },
             onDragStart = { position ->
                 draggingSectionId = item.id
+                dragStartLayout = layout
                 dragOrigin = position
                 dragPosition = position
             },
@@ -779,14 +781,20 @@ private fun HomeWorkspaceSurface(
             onDragEnd = {
                 val finalLayout = dragPosition?.let(::layoutWithDraggedSectionAt) ?: layout
                 draggingSectionId = null
+                dragStartLayout = null
                 dragOrigin = null
                 dragPosition = null
                 onLayoutChanged(finalLayout, true)
             },
             onDragCancel = {
+                val restoredLayout = dragStartLayout
                 draggingSectionId = null
+                dragStartLayout = null
                 dragOrigin = null
                 dragPosition = null
+                if (restoredLayout != null && restoredLayout != layout) {
+                    onLayoutChanged(restoredLayout, false)
+                }
             },
             onMoveEarlier = {
                 onLayoutChanged(layout.move(item.id, index - 1), true)

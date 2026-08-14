@@ -4133,6 +4133,7 @@ private fun GenericCategoryCollection(
     var dragPosition by remember(reorder?.action?.id, resource.id) { mutableStateOf<Offset?>(null) }
     var reorderExecuting by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var reorderError by remember(reorder?.action?.id, resource.id) { mutableStateOf<String?>(null) }
+    var reorderRecoveryAvailable by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var reorderRequestInFlight by remember(reorder?.action?.id, resource.id) { mutableStateOf(false) }
     var durableRestoreChecked by remember(reorder?.action?.id, resource.id) {
         mutableStateOf(activeReorder == null)
@@ -4156,16 +4157,19 @@ private fun GenericCategoryCollection(
             store.load(nativePendingCollectionReorderKey(plan, resource.id))
         }.getOrElse { failure ->
             reorderError = failure.message ?: "The saved order recovery marker could not be read."
+            reorderRecoveryAvailable = true
             durableRestoreChecked = true
             return@LaunchedEffect
         }
         if (pending == null) {
             onPendingReorderChanged(plan, null, false)
             reorderExecuting = false
+            reorderRecoveryAvailable = false
         } else {
             val restored = decodeNativePendingCollectionReorder(pending)
             if (restored == null) {
                 reorderError = "The saved order recovery marker is invalid."
+                reorderRecoveryAvailable = true
             } else {
                 onPendingReorderChanged(
                     plan,
@@ -4196,6 +4200,7 @@ private fun GenericCategoryCollection(
         reorderRequestInFlight = true
         reorderExecuting = true
         reorderError = null
+        reorderRecoveryAvailable = false
         scope.launch {
             runCatching { store.save(pendingKey, stagedValues) }.onFailure { failure ->
                 reorderError = failure.message ?: "The new order could not be staged safely."
@@ -4224,6 +4229,7 @@ private fun GenericCategoryCollection(
                         onPendingReorderChanged(plan, null, false)
                         orderedRecordIds = authoritativeOrder
                         reorderExecuting = false
+                        reorderRecoveryAvailable = false
                     }
                 }
             }
@@ -4270,6 +4276,7 @@ private fun GenericCategoryCollection(
             orderedRecordIds = authoritativeOrder
             reorderExecuting = false
             reorderError = "The saved order no longer matches the authoritative collection."
+            reorderRecoveryAvailable = false
         } else if (validPendingOrder != null && authoritativeOrder == validPendingOrder) {
             orderedRecordIds = authoritativeOrder
             activeReorder?.let { plan ->
@@ -4285,15 +4292,38 @@ private fun GenericCategoryCollection(
             }
             reorderExecuting = false
             reorderError = null
+            reorderRecoveryAvailable = false
         } else if (
             validPendingOrder != null && !reorderRequestInFlight && !pendingReorderRecoveryRequested
         ) {
             orderedRecordIds = validPendingOrder
             reorderExecuting = true
+            reorderRecoveryAvailable = false
             activeReorder?.let { plan ->
                 val pendingKey = nativePendingCollectionReorderKey(plan, resource.id)
-                encodeNativePendingCollectionReorder(validPendingOrder, recoveryRequested = true)
-                    ?.let { values -> pendingMutationStore?.let { store -> runCatching { store.save(pendingKey, values) } } }
+                val values = encodeNativePendingCollectionReorder(
+                    validPendingOrder,
+                    recoveryRequested = true,
+                )
+                if (values == null) {
+                    reorderError = "The saved order could not be prepared for recovery."
+                    reorderRecoveryAvailable = pendingMutationStore != null
+                    return@LaunchedEffect
+                }
+                val store = pendingMutationStore
+                if (store == null) {
+                    onPendingReorderChanged(plan, null, false)
+                    orderedRecordIds = authoritativeOrder
+                    reorderExecuting = false
+                    reorderError = "Order recovery is unavailable; the authoritative server order is shown."
+                    reorderRecoveryAvailable = false
+                    return@LaunchedEffect
+                }
+                runCatching { store.save(pendingKey, values) }.onFailure { failure ->
+                    reorderError = failure.message ?: "The order recovery marker could not be updated."
+                    reorderRecoveryAvailable = true
+                    return@LaunchedEffect
+                }
                 onPendingReorderChanged(plan, validPendingOrder, true)
                 onActionSucceeded?.invoke(plan.action)
             }
@@ -4303,9 +4333,39 @@ private fun GenericCategoryCollection(
             orderedRecordIds = validPendingOrder
             reorderExecuting = true
             reorderError = "The submitted order is awaiting authoritative server confirmation."
+            reorderRecoveryAvailable = true
         } else if (draggingRecordId == null && !reorderExecuting) {
             orderedRecordIds = authoritativeOrder
             reorderError = null
+            reorderRecoveryAvailable = false
+        }
+    }
+    fun retryPendingReorderRecovery() {
+        val plan = activeReorder ?: return
+        val callback = onActionSucceeded ?: return
+        reorderRecoveryAvailable = false
+        reorderExecuting = true
+        reorderError = "Checking the authoritative server order again."
+        callback(plan.action)
+    }
+    fun discardPendingReorderRecovery() {
+        val plan = activeReorder ?: return
+        val store = pendingMutationStore ?: return
+        reorderRecoveryAvailable = false
+        reorderExecuting = true
+        scope.launch {
+            runCatching {
+                store.clear(nativePendingCollectionReorderKey(plan, resource.id))
+            }.onSuccess {
+                onPendingReorderChanged(plan, null, false)
+                orderedRecordIds = authoritativeOrder
+                reorderExecuting = false
+                reorderError = null
+            }.onFailure { failure ->
+                reorderExecuting = true
+                reorderRecoveryAvailable = true
+                reorderError = failure.message ?: "The saved order recovery marker could not be cleared."
+            }
         }
     }
     fun moveDraggedRecord(position: Offset) {
@@ -4420,12 +4480,29 @@ private fun GenericCategoryCollection(
         ) {
             reorderError?.let { message ->
                 item(key = "category-reorder-error") {
-                    Text(
-                        message,
+                    Column(
                         modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
+                    ) {
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (reorderRecoveryAvailable) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                                TextButton(
+                                    onClick = ::retryPendingReorderRecovery,
+                                    enabled = onActionSucceeded != null,
+                                ) {
+                                    Text("Check again")
+                                }
+                                TextButton(onClick = ::discardPendingReorderRecovery) {
+                                    Text("Use server order")
+                                }
+                            }
+                        }
+                    }
                 }
             }
             items(visibleRows, key = { row -> row.record.id }) { row ->

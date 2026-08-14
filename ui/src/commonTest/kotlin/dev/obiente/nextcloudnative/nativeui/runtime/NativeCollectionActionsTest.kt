@@ -353,6 +353,23 @@ class NativeCollectionActionsTest {
         )
         assertEquals("id", plan.identityFieldId)
         assertEquals("sortOrder", plan.orderFieldId)
+        val siblingPlan = assertNotNull(
+            nativeCollectionActions(
+                schema(resource, read, reorder),
+                read,
+                resource,
+                records.map { record ->
+                    record.copy(bindingContext = mapOf("groupId" to "8"))
+                },
+                mapOf("groupId" to "8"),
+                collectionComplete = true,
+            ).reorder,
+        )
+        assertTrue(plan.pendingMutationScope(resource.id) != siblingPlan.pendingMutationScope(resource.id))
+        assertTrue(
+            nativePendingCollectionReorderKey(plan, resource.id).targetRecordId !=
+                nativePendingCollectionReorderKey(siblingPlan, resource.id).targetRecordId,
+        )
 
         val request = plan.request(
             listOf(

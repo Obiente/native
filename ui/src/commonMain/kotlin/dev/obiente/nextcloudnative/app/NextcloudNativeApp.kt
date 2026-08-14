@@ -4316,16 +4316,15 @@ private fun DynamicDiscoveredAppScreen(
     LaunchedEffect(
         descriptor,
         selectedView.id,
-        retainedChoresTeamRecord,
         loadAttempt,
     ) {
         val kind = nativeChoresWorkspaceKind(schema, selectedView)
-        if (
-            retainedChoresTeamRecord != null ||
-            kind !in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History)
-        ) {
+        if (kind !in setOf(NativeChoresWorkspaceKind.Chores, NativeChoresWorkspaceKind.History)) {
             return@LaunchedEffect
         }
+        // Child reads and team authority can change independently. Clear the retained authority
+        // before every child refresh so writes stay unavailable until a fresh Team read succeeds.
+        retainedChoresTeamRecord = null
         val teamView = schema.views.singleOrNull { candidate ->
             nativeChoresWorkspaceKind(schema, candidate) == NativeChoresWorkspaceKind.Team &&
                 candidate.sourceActionId.isNotBlank()

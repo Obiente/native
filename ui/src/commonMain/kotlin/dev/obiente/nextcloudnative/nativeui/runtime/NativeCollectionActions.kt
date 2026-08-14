@@ -73,6 +73,22 @@ internal data class NativeCollectionReorderActionPlan(
     private val availableRecordIds: Set<String>,
     private val bindingValues: Map<String, String>,
 ) {
+    internal fun pendingMutationScope(resourceId: String): String = buildString {
+        append(resourceId.length)
+        append(':')
+        append(resourceId)
+        bindingValues.toSortedMap().forEach { (name, value) ->
+            append('|')
+            append(name.length)
+            append(':')
+            append(name)
+            append('=')
+            append(value.length)
+            append(':')
+            append(value)
+        }
+    }
+
     /**
      * Builds the default request a generic reorder UI should use.
      *
