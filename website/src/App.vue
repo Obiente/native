@@ -833,6 +833,7 @@ const frequentlyAsked = [
                         :alt="`${selectedAppFamily.title} shown in the real Nextcloud Native Compose interface with synthetic data`"
                         :width="selectedAppCapture.width"
                         :height="selectedAppCapture.height"
+                        loading="lazy"
                       />
                     </Transition>
                   </div>
@@ -1638,7 +1639,6 @@ const frequentlyAsked = [
         <a href="/roadmap/">Roadmap</a>
         <a href="/news/">Journal</a>
         <a href="/changelog/">Changelog</a>
-        <a href="/visual-qa/">Visual QA</a>
         <a href="/security/">Security</a>
         <a :href="`${githubUrl}/blob/main/LICENSE`">License</a>
       </div>

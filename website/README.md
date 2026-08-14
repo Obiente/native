@@ -111,7 +111,9 @@ npm run --prefix website verify:captures:fresh
 If the freshness command reports stale inputs, run the capture wrapper with
 JDK 21 and review the updated synthetic images. The `/visual-qa/` route lists
 scenario, feature, surface, state, platform, viewport, and pixel metadata.
-Future scenario entries may also identify the pull request they review.
+Future scenario entries may also identify the pull request they review. This
+contributor-only catalog is prerendered for direct access but intentionally
+excluded from the public sitemap and search index.
 
 For same-repository pull requests, the refresh workflow prepares an untrusted
 patch without write credentials. A separate default-branch workflow validates

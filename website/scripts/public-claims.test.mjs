@@ -14,6 +14,8 @@ test("machine-readable product claims match current supported platforms and alph
   ]);
 
   assert.match(entryServer, /operatingSystem: "Android, Linux, Windows"/);
+  assert.match(entryServer, /applicationCategory: "UtilitiesApplication"/);
+  assert.match(entryServer, /offers:\s*\{\s*"@type": "Offer",\s*price: 0,/s);
   assert.match(entryServer, /Android offline storage, and guarded folder sync/);
   assert.match(entryServer, /Native Talk history, Notes editing, Calendar, Activity/);
   assert.doesNotMatch(entryServer, /Talk messaging and calls|iOS, iPadOS|non-destructive editing/);

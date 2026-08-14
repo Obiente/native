@@ -39,6 +39,12 @@ test("platform guide metadata has a distinct canonical route and contextual imag
   assert.match(hub.description, /Android/u);
 });
 
+test("internal visual QA remains reachable without entering the search index", () => {
+  const metadata = metadataFor("/visual-qa/");
+  assert.equal(metadata.canonical, `${siteUrl}/visual-qa/`);
+  assert.equal(metadata.robots, "noindex,follow");
+});
+
 test("rendered head contains complete route-specific sharing metadata", async () => {
   const article = news[0];
   const head = sharingHeadFor(metadataFor(article.path));

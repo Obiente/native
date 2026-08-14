@@ -59,7 +59,7 @@ export async function render(pathname) {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     name: "Nextcloud Native",
-    applicationCategory: "ProductivityApplication",
+    applicationCategory: "UtilitiesApplication",
     operatingSystem: "Android, Linux, Windows",
     description:
       "An open-source native alpha client for Nextcloud on Android, Linux, and Windows, with verified Files, media, Calendar, app, offline, and sync foundations.",
@@ -78,6 +78,10 @@ export async function render(pathname) {
     },
     image: `${siteUrl}/icon-512.png`,
     isAccessibleForFree: true,
+    offers: {
+      "@type": "Offer",
+      price: 0,
+    },
     inLanguage: "en",
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
     softwareHelp: `${siteUrl}/guides/`,
@@ -93,7 +97,7 @@ export async function render(pathname) {
       captureUrl("mobile-home"),
     ],
   };
-  const structuredData = [
+  const structuredData = initialPath === "/" ? [
     softwareData,
     {
       "@context": "https://schema.org",
@@ -105,7 +109,7 @@ export async function render(pathname) {
       sameAs: ["https://github.com/Obiente/nc-native"],
       inLanguage: "en",
     },
-  ];
+  ] : [];
   if (initialPath !== "/") {
     const guide = guides.find((entry) => entry.path === initialPath);
     const guideHub = guidePlatformHubForPath(initialPath);
@@ -216,7 +220,7 @@ export async function render(pathname) {
     `<title>${escapeHtml(metadata.title)}</title>`,
     `<meta name="description" content="${escapeHtml(metadata.description)}">`,
     sharingHeadFor(metadata),
-    `<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">`,
+    `<meta name="robots" content="${metadata.robots ?? "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"}">`,
     `<meta name="author" content="Obiente">`,
     `<link rel="alternate" type="application/rss+xml" title="Nextcloud Native project news" href="${siteUrl}/news.xml">`,
     `<script type="application/ld+json">${safeJson(structuredData)}</script>`,
@@ -240,6 +244,7 @@ export const routes = [
   ...guides.map((guide) => guide.path),
   ...docs.map((doc) => doc.path),
 ];
+export const sitemapRoutes = routes.filter((route) => route !== "/visual-qa/");
 export const newsEntries = news;
 const latestModification = (entries) => entries
   .map((entry) => entry.lastUpdated)

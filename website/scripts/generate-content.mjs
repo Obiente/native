@@ -200,10 +200,14 @@ function headingsFrom(source) {
   }));
 }
 
+function withoutLeadingTitle(source) {
+  return source.replace(/^#\s+[^\r\n]+\r?\n(?:\r?\n)*/u, "");
+}
+
 const docs = await Promise.all(
   sources.map(async (source) => {
     const markdownSource = await readFile(path.join(repositoryRoot, source.file), "utf8");
-    const html = markdown.render(markdownSource);
+    const html = markdown.render(withoutLeadingTitle(markdownSource));
     const text = textOnly(markdownSource);
     return {
       ...source,

@@ -71,6 +71,7 @@ export function metadataFor(path) {
         "Browse synthetic desktop and mobile screenshots rendered directly from the Nextcloud Native Compose UI.",
       canonical: `${siteUrl}/visual-qa/`,
       type: "website",
+      robots: "noindex,follow",
     };
   }
   if (path === changelog.path) {

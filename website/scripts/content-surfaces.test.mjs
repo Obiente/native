@@ -347,6 +347,8 @@ test("visual QA and mobile navigation are driven by registered captures", async 
   );
 
   assert.match(entryServer, /"\/visual-qa\/"/u);
+  assert.match(entryServer, /sitemapRoutes = routes\.filter/u);
+  assert.doesNotMatch(appSource, /<a href="\/visual-qa\/">Visual QA<\/a>/u);
   assert.match(
     styles,
     /\.visual-qa-image\s*\{[^}]*overflow:\s*hidden;/su,

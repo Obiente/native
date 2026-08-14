@@ -25,7 +25,7 @@ for (const route of serverEntry.routes) {
 }
 
 const baseUrl = "https://nc-native.obiente.dev";
-const sitemap = buildSitemap(serverEntry.routes, serverEntry.sitemapEntries, baseUrl);
+const sitemap = buildSitemap(serverEntry.sitemapRoutes, serverEntry.sitemapEntries, baseUrl);
 await writeFile(path.join(root, "dist", "sitemap.xml"), sitemap);
 const rss = buildRss(serverEntry.newsEntries, baseUrl);
 await writeFile(path.join(root, "dist", "news.xml"), rss);
@@ -37,5 +37,5 @@ const indexNow = await prepareIndexNowArtifacts({
 });
 await rm(path.join(root, "dist-ssr"), { recursive: true, force: true });
 
-console.log(`Prerendered ${serverEntry.routes.length} crawlable routes.`);
+console.log(`Prerendered ${serverEntry.routes.length} routes.`);
 console.log(`Prepared ${indexNow.urlCount} IndexNow URLs for deployment ${indexNow.fingerprint}.`);
