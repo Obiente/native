@@ -285,15 +285,23 @@ fun GenericNativeAppScreen(
         nestedBoard != null -> GenericNativeSurface.Board
         else -> view.genericSurface(presentedResource, presentedRecords)
     }
-    val searchableCollection = state is NativeScreenState.Ready &&
-        presentedRecords.size > 1 &&
-        presentedSurface in setOf(
-            GenericNativeSurface.List,
-            GenericNativeSurface.Grid,
-            GenericNativeSurface.Table,
-        )
+    val mailWorkspaceSection = remember(schema, presentedResource, datasetContext) {
+        presentedResource?.let { currentResource ->
+            nativeMailWorkspaceSection(schema, currentResource, datasetContext)
+        } ?: NativeMailWorkspaceSection.Unknown
+    }
+    val mailWorkspaceEligible = remember(schema, mailWorkspaceSection) {
+        schema.hasNativeMailWorkspaceSemantics() &&
+            mailWorkspaceSection != NativeMailWorkspaceSection.Unknown
+    }
+    val searchableCollection = genericCollectionSearchAvailable(
+        state = state,
+        recordCount = presentedRecords.size,
+        surface = presentedSurface,
+        nativeMailWorkspaceEligible = mailWorkspaceEligible,
+    )
     val collectionSearchContextKey = remember(datasetContext) {
-        buildString {
+        datasetContext.collectionSearchScopeKey ?: buildString {
             append(datasetContext.parentResourceId.orEmpty())
             append('\u0000')
             append(datasetContext.parentRecord?.id.orEmpty())
@@ -307,8 +315,8 @@ fun GenericNativeAppScreen(
     }
     var collectionQuery by rememberSaveable(
         schema.app.id,
-        view.id,
         collectionSearchContextKey,
+        view.id.takeIf { datasetContext.collectionSearchScopeKey == null },
     ) { mutableStateOf("") }
     val visiblePresentedRecords = remember(
         presentedResource,
@@ -693,15 +701,6 @@ fun GenericNativeAppScreen(
                 GenericNativeSurface.Table,
             )
     }
-    val mailWorkspaceSection = remember(schema, presentedResource, datasetContext) {
-        presentedResource?.let { currentResource ->
-            nativeMailWorkspaceSection(schema, currentResource, datasetContext)
-        } ?: NativeMailWorkspaceSection.Unknown
-    }
-    val mailWorkspaceEligible = remember(schema, mailWorkspaceSection) {
-        schema.hasNativeMailWorkspaceSemantics() &&
-            mailWorkspaceSection != NativeMailWorkspaceSection.Unknown
-    }
     val mailWorkspacePlan = remember(
         schema,
         presentedResource,
@@ -710,6 +709,7 @@ fun GenericNativeAppScreen(
         selectedRecordId,
         selectedRecordResourceId,
         mailWorkspaceEligible,
+        mailWorkspaceSection,
     ) {
         presentedResource
             ?.takeIf { mailWorkspaceEligible }
@@ -724,6 +724,11 @@ fun GenericNativeAppScreen(
                 )
             }
     }
+    val mailWorkspaceSearchable = nativeMailWorkspaceSearchAvailable(
+        stateReady = state is NativeScreenState.Ready,
+        messageCount = mailWorkspacePlan?.messages?.size ?: 0,
+        query = collectionQuery,
+    )
     val mailWorkspaceDetailTarget = remember(
         schema,
         presentedResource,
@@ -856,13 +861,29 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    searchQuery = collectionQuery,
+                    onSearchQueryChanged = { query: String -> collectionQuery = query }.takeIf {
+                        mailWorkspaceSearchable
+                    },
                 )
             mailWorkspacePlan != null && state is NativeScreenState.Error ->
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    searchQuery = collectionQuery,
+                    onSearchQueryChanged = { query: String -> collectionQuery = query }.takeIf {
+                        mailWorkspaceSearchable
+                    },
                 )
             state is NativeScreenState.Loading -> GenericRendererLoading(view.title)
             state is NativeScreenState.Error -> GenericRendererError(
@@ -892,7 +913,15 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    searchQuery = collectionQuery,
+                    onSearchQueryChanged = { query: String -> collectionQuery = query }.takeIf {
+                        mailWorkspaceSearchable
+                    },
                 )
             state is NativeScreenState.Ready &&
                 presentedRecords.isEmpty() &&
@@ -927,7 +956,15 @@ fun GenericNativeAppScreen(
                 NativeMailWorkspace(
                     plan = mailWorkspacePlan,
                     onSelectRecord = onSelectRecord,
+                    collectionStateKey = collectionSearchContextKey,
                     contentState = mailWorkspaceContentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    searchQuery = collectionQuery,
+                    onSearchQueryChanged = { query: String -> collectionQuery = query }.takeIf {
+                        mailWorkspaceSearchable
+                    },
                     detailContent = mailWorkspaceDetailTarget
                         ?.let { target ->
                         {
@@ -1378,7 +1415,7 @@ private fun GenericCollectionCommandBar(
 }
 
 @Composable
-private fun GenericCollectionSearchField(
+internal fun GenericCollectionSearchField(
     resourceName: String,
     query: String,
     onQueryChanged: (String) -> Unit,
@@ -10451,6 +10488,12 @@ private fun GenericRelationPagingItem(paging: NativeRelatedRecordPaging?) {
             onClick = loadMore,
         )
     }
+    paging.retry?.let { retry ->
+        DropdownMenuItem(
+            text = { Text("Retry loading choices") },
+            onClick = retry,
+        )
+    }
     paging.returnToFirstPage?.let { returnToFirstPage ->
         DropdownMenuItem(
             text = {
@@ -11239,6 +11282,21 @@ internal fun nativeDedicatedCollectionState(
     )
     else -> state
 }
+
+internal fun genericCollectionSearchAvailable(
+    state: NativeScreenState,
+    recordCount: Int,
+    surface: GenericNativeSurface,
+    nativeMailWorkspaceEligible: Boolean,
+): Boolean = state is NativeScreenState.Ready &&
+    recordCount > 1 &&
+    !nativeMailWorkspaceEligible &&
+    surface in setOf(
+        GenericNativeSurface.List,
+        GenericNativeSurface.Grid,
+        GenericNativeSurface.Table,
+        GenericNativeSurface.Mailbox,
+    )
 
 internal fun nativeEnumOptionLabel(field: FieldSpec, option: String): String =
     field.enumLabels?.get(option) ?: option.dynamicSettingLabel()

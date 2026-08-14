@@ -908,6 +908,7 @@ class SignedAppStoreContractAcquirerTest {
             .getBoolean(VERIFIED_READ_ROUTE_EXTENSION))
         val messageFallback = paths.getJSONObject("/apps/mail/api/messages").getJSONObject("get")
         assertTrue(messageFallback.getBoolean(VERIFIED_READ_ROUTE_EXTENSION))
+        assertEquals("dateInt", messageFallback.getString(RECORD_CURSOR_FIELD_EXTENSION))
         val messageParameters = messageFallback.getJSONArray("parameters")
         assertEquals(
             listOf("mailboxId", "cursor", "filter", "limit", "view", "v", "OCS-APIRequest"),

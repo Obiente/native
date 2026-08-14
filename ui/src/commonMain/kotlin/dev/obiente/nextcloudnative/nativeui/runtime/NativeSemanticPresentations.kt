@@ -29,6 +29,7 @@ internal data class NativeMailboxPresentation(
     val timestamp: String?,
     val unread: Boolean,
     val unreadCount: Int?,
+    val totalCount: Int?,
     val threadSize: Int?,
     val flagged: Boolean,
     val attachmentCount: Int,
@@ -291,6 +292,8 @@ internal fun nativeMailboxPresentation(
     }
     val unreadCount = values.int("unreadcount", "unread", "unseen", "unseenmessages")
         ?.takeIf { kind == NativeMailboxItemKind.Folder }
+    val totalCount = values.int("total", "totalmessages", "messagescount", "messagecount")
+        ?.takeIf { kind == NativeMailboxItemKind.Folder }
     val seen = values.boolean("seen", "isread", "read")
     val explicitlyUnread = values.boolean("unread", "isunread", "unseen")
     val flags = values.string("flags")?.lowercase().orEmpty()
@@ -333,6 +336,7 @@ internal fun nativeMailboxPresentation(
         timestamp = timestamp,
         unread = unread,
         unreadCount = unreadCount,
+        totalCount = totalCount,
         threadSize = threadSize?.takeIf { count -> kind == NativeMailboxItemKind.Message && count > 1 },
         flagged = flagged,
         attachmentCount = attachmentCount,

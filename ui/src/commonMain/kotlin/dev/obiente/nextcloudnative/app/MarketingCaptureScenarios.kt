@@ -702,6 +702,11 @@ enum class MarketingCaptureScenario(
         "Mail", "Adaptive mailbox workspace", "Inbox message list", MarketingCapturePurpose.Showcase,
         "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
     ),
+    MailMessageBodyMobile(
+        "mail-message-body-mobile", "mail-message-body-mobile.png", NextcloudPresentation.Adaptive,
+        "Mail", "Adaptive mailbox workspace", "Uncached selected message body", MarketingCapturePurpose.StateCoverage,
+        "mobile", "phone-portrait", issue = 54, width = 1_080, height = 1_800, density = 2.625f,
+    ),
     MailWorkspaceLoadingMobile(
         "mail-workspace-loading-mobile", "mail-workspace-loading-mobile.png", NextcloudPresentation.Adaptive,
         "Mail", "Adaptive mailbox workspace", "Loading inbox", MarketingCapturePurpose.StateCoverage,
@@ -2245,6 +2250,7 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
         scenario in setOf(
             MarketingCaptureScenario.MailWorkspaceDesktop,
             MarketingCaptureScenario.MailWorkspaceMobile,
+            MarketingCaptureScenario.MailMessageBodyMobile,
             MarketingCaptureScenario.MailWorkspaceLoadingMobile,
             MarketingCaptureScenario.MailWorkspaceEmptyMobile,
             MarketingCaptureScenario.MailWorkspaceErrorDesktop,
@@ -2253,8 +2259,9 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
         "${scenario.id} is not a Mail workspace capture."
     }
     val desktop = scenario.presentation == NextcloudPresentation.Desktop
+    val messageDetail = desktop || scenario == MarketingCaptureScenario.MailMessageBodyMobile
     val composeAction = marketingMailDescriptor.preferredNativeMailComposeAction(marketingMailSchema)
-    val currentView = if (desktop) marketingMailBodyView else marketingMailMessageView
+    val currentView = if (messageDetail) marketingMailBodyView else marketingMailMessageView
     val currentState = when (scenario) {
         MarketingCaptureScenario.MailWorkspaceLoadingMobile -> NativeScreenState.Loading
         MarketingCaptureScenario.MailWorkspaceEmptyMobile -> NativeScreenState.Ready(emptyList())
@@ -2264,7 +2271,7 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
             retryLabel = "Try again",
         )
         else -> NativeScreenState.Ready(
-            if (desktop) listOf(marketingMailBodyRecord) else marketingMailMessages,
+            if (messageDetail) listOf(marketingMailBodyRecord) else marketingMailMessages,
         )
     }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -2288,17 +2295,21 @@ internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) 
             actionExecutor = NativeActionExecutor {
                 NativeActionExecutionResult.Failure("This synthetic fixture is read-only.")
             },
-            selectedRecordId = if (desktop) marketingMailSelectedMessage.id else null,
-            selectedRecordResourceId = if (desktop) "messages" else null,
-            showSelectedRecordDetail = desktop,
+            selectedRecordId = if (messageDetail) marketingMailSelectedMessage.id else null,
+            selectedRecordResourceId = if (messageDetail) "messages" else null,
+            showSelectedRecordDetail = messageDetail,
             onSelectRecord = {},
             datasetContext = NativeDatasetContext(
-                parentResourceId = if (desktop) "messages" else "mailboxes",
-                parentRecord = if (desktop) marketingMailSelectedMessage else marketingMailInbox,
+                parentResourceId = if (messageDetail) "messages" else "mailboxes",
+                parentRecord = if (messageDetail) marketingMailSelectedMessage else marketingMailInbox,
                 relatedRecords = mapOf(
                     "accounts" to listOf(marketingMailAccount),
                     "mailboxes" to marketingMailboxes,
-                    "messages" to marketingMailMessages,
+                    // The desktop fixture intentionally renders a selected body after the
+                    // envelope collection has been evicted. This keeps visual QA aligned with
+                    // direct/deep-linked detail behavior instead of relying on a warm list cache.
+                    "messages" to if (messageDetail) emptyList() else marketingMailMessages,
+                    "mailboxStats" to listOf(marketingMailInboxStats),
                 ),
             ),
             modifier = Modifier.weight(1f),
@@ -2481,19 +2492,21 @@ internal val marketingAdaptiveRecords = listOf(
 )
 
 private val marketingMailComposeAction = DynamicAction(
-    id = "compose-message",
+    id = "route.drafts.create",
     label = "Compose",
-    resourceId = "messages",
+    resourceId = "drafts",
     intent = ActionIntent.create,
     risk = ActionRisk.mutating,
     requiresConfirmation = false,
-    binding = DynamicHttpBinding(method = HttpMethod.POST, path = "/fixture/messages"),
+    // Exact Nextcloud Mail v5.10.x route. Capture data remains synthetic, but the visual QA
+    // exercises the same contract identities used by signed-package discovery.
+    binding = DynamicHttpBinding(method = HttpMethod.POST, path = "/apps/mail/api/drafts"),
     confidence = Confidence.verified,
 )
 
-private val marketingMailSchema = NativeAppSchema(
+internal val marketingMailSchema = NativeAppSchema(
     schemaVersion = "0.1",
-    app = AppIdentity("fixture-mail", "Mail", "fixture"),
+    app = AppIdentity("fixture-mail", "Mail", "5.10.12"),
     confidence = Confidence.verified,
     resources = listOf(
         ResourceSpec(
@@ -2530,12 +2543,33 @@ private val marketingMailSchema = NativeAppSchema(
             ),
         ),
         ResourceSpec(
+            id = "mailboxStats",
+            name = "Mailbox stats",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("total", "Messages", FieldKind.integer, required = true, readOnly = true),
+                FieldSpec("unread", "Unread", FieldKind.integer, required = true, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
             id = "messageBody",
             name = "Message body",
             confidence = Confidence.verified,
             fields = listOf(
                 FieldSpec("body", "Body", FieldKind.longText, required = true, readOnly = true),
                 FieldSpec("hasHtmlBody", "HTML", FieldKind.boolean, required = false, readOnly = true),
+            ),
+        ),
+        ResourceSpec(
+            id = "drafts",
+            name = "Drafts",
+            confidence = Confidence.verified,
+            fields = listOf(
+                FieldSpec("accountId", "From", FieldKind.integer, required = true, readOnly = false),
+                FieldSpec("subject", "Subject", FieldKind.string, required = true, readOnly = false),
+                FieldSpec("bodyPlain", "Message", FieldKind.longText, required = false, readOnly = false),
+                FieldSpec("editorBody", "Message", FieldKind.longText, required = false, readOnly = false),
+                FieldSpec("isHtml", "Rich text", FieldKind.boolean, required = true, readOnly = false),
             ),
         ),
     ),
@@ -2545,7 +2579,7 @@ private val marketingMailSchema = NativeAppSchema(
             title = "Inbox",
             resourceId = "messages",
             component = NativeComponent.mailbox,
-            sourceActionId = "fixture.messages.list",
+            sourceActionId = "route.messages.index",
             confidence = Confidence.verified,
         ),
         ViewSpec(
@@ -2553,11 +2587,59 @@ private val marketingMailSchema = NativeAppSchema(
             title = "Message",
             resourceId = "messageBody",
             component = NativeComponent.detail,
-            sourceActionId = "fixture.message.body",
+            sourceActionId = "route.messages.getbody",
             confidence = Confidence.verified,
         ),
     ),
     actions = listOf(
+        ActionSpec(
+            id = "route.messages.index",
+            label = "Messages",
+            resourceId = "messages",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/messages",
+                operationId = "route.messages.index",
+                queryParameterNames = listOf("mailboxId", "cursor", "filter", "limit", "view", "v"),
+                requiredQueryParameterNames = listOf("mailboxId"),
+            ),
+            intent = ActionIntent.list,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
+            id = "route.messages.getbody",
+            label = "Message body",
+            resourceId = "messageBody",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/messages/{id}/body",
+                operationId = "route.messages.getbody",
+                pathParameterNames = listOf("id"),
+                requiredPathParameterNames = listOf("id"),
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
+        ActionSpec(
+            id = "route.mailboxes.stats",
+            label = "Mailbox stats",
+            resourceId = "mailboxStats",
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/mail/api/mailboxes/{id}/stats",
+                operationId = "route.mailboxes.stats",
+                pathParameterNames = listOf("id"),
+                requiredPathParameterNames = listOf("id"),
+            ),
+            intent = ActionIntent.read,
+            risk = ActionRisk.readOnly,
+            requiresConfirmation = false,
+            confidence = Confidence.verified,
+        ),
         ActionSpec(
             id = marketingMailComposeAction.id,
             label = marketingMailComposeAction.label,
@@ -2575,9 +2657,9 @@ private val marketingMailSchema = NativeAppSchema(
     ),
 )
 
-private val marketingMailDescriptor = DynamicAppDescriptor(
+internal val marketingMailDescriptor = DynamicAppDescriptor(
     descriptorVersion = "0.1",
-    app = AppIdentity("fixture-mail", "Mail", "fixture"),
+    app = AppIdentity("fixture-mail", "Mail", "5.10.12"),
     endpointPolicy = EndpointPolicy(serverOrigin = "https://fixture.invalid"),
     resources = emptyList(),
     actions = listOf(marketingMailComposeAction),
@@ -2614,6 +2696,10 @@ private val marketingMailInbox = NativeRecord(
         "path" to "Personal/Inbox",
         "accountId" to marketingMailAccount.id,
     ),
+)
+private val marketingMailInboxStats = NativeRecord(
+    id = "inbox-stats",
+    values = mapOf("total" to "84", "unread" to "2"),
 )
 private val marketingMailboxes = listOf(
     marketingMailInbox,

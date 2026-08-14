@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -24,7 +26,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.selected
@@ -42,12 +47,18 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction
 import dev.obiente.nextcloudnative.nativeui.model.HttpMethod
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 internal data class NativeMailWorkspaceItem(
     val resource: ResourceSpec,
     val record: NativeRecord,
     val presentation: NativeMailboxPresentation,
     val hierarchyDepth: Int = 0,
+)
+
+internal data class NativeMailCollectionSummary(
+    val total: Int?,
+    val unread: Int?,
 )
 
 internal data class NativeMailWorkspacePlan(
@@ -143,6 +154,7 @@ internal fun nativeMailWorkspacePlan(
     }
     val seen = mutableSetOf<String>()
     val rawItems = datasets.flatMap { (resource, records) ->
+        if (context.isNativeMailCollectionSummaryResource(resource)) return@flatMap emptyList()
         records.mapNotNull { record ->
             if (currentIsMessageFacet && resource.id == currentResource.id) return@mapNotNull null
             val presentation = nativeMailboxPresentation(resource, record)
@@ -165,13 +177,41 @@ internal fun nativeMailWorkspacePlan(
         .filter { item -> item.presentation.kind == NativeMailboxItemKind.Folder }
         .minOfOrNull { item -> item.hierarchyDepth }
         ?: 0
-    val items = rawItems.map { item ->
+    val normalizedItems = rawItems.map { item ->
         if (item.presentation.kind == NativeMailboxItemKind.Folder) {
             item.copy(hierarchyDepth = (item.hierarchyDepth - minimumFolderDepth).coerceAtLeast(0))
         } else {
             item
         }
     }
+    // A detail response is a facet of the selected envelope, not a replacement mailbox
+    // collection. The envelope may no longer be present in relatedRecords after process restore,
+    // cache eviction, or a direct deep link. Preserve that proven parent as a workspace item so
+    // detail rendering does not depend on an incidental list-cache hit.
+    val parentMessageItem = context.parentRecord?.let { parent ->
+        context.parentResourceId
+            ?.let(schema::resource)
+            ?.let { parentResource ->
+                val presentation = nativeMailboxPresentation(parentResource, parent)
+                if (presentation.kind != NativeMailboxItemKind.Message) {
+                    null
+                } else {
+                    NativeMailWorkspaceItem(
+                        resource = parentResource,
+                        record = parent.withNativeResource(parentResource.id, currentResource.id),
+                        presentation = presentation,
+                    )
+                }
+            }
+    }
+    val items = parentMessageItem
+        ?.takeIf { parent ->
+            normalizedItems.none { item ->
+                item.nativeMailWorkspaceRecordKey() == parent.nativeMailWorkspaceRecordKey()
+            }
+        }
+        ?.let { parent -> normalizedItems + parent }
+        ?: normalizedItems
     val currentKeys = currentRecords.mapNotNullTo(hashSetOf()) { record ->
         nativeMailboxPresentation(currentResource, record)
             .takeIf { presentation -> presentation.kind != NativeMailboxItemKind.Unknown }
@@ -207,7 +247,7 @@ internal fun nativeMailWorkspacePlan(
         recordId = selectedRecordId,
         kind = NativeMailboxItemKind.Message,
     )
-    val selectedContainer = context.parentRecord?.let { parent ->
+    val rawSelectedContainer = context.parentRecord?.let { parent ->
         context.parentResourceId?.let { parentResourceId ->
             items.singleMailWorkspaceSelection(
                 resourceId = parentResourceId,
@@ -219,22 +259,47 @@ internal fun nativeMailWorkspacePlan(
         resourceId = selectedRecordResourceId,
         recordId = selectedRecordId,
         kinds = setOf(NativeMailboxItemKind.Account, NativeMailboxItemKind.Folder),
-    )
+    ) ?: selectedMessage?.let { message ->
+        items.filter { candidate ->
+            candidate.presentation.kind == NativeMailboxItemKind.Folder &&
+                message.belongsToMailbox(candidate)
+        }.singleOrNull()
+    }
+    val collectionSummary = context.nativeMailCollectionSummary(schema)
+    val selectedContainer = rawSelectedContainer?.let { container ->
+        if (container.presentation.kind != NativeMailboxItemKind.Folder || collectionSummary == null) {
+            container
+        } else {
+            container.copy(
+                presentation = container.presentation.copy(
+                    unreadCount = collectionSummary.unread ?: container.presentation.unreadCount,
+                    totalCount = collectionSummary.total ?: container.presentation.totalCount,
+                    unread = (collectionSummary.unread ?: container.presentation.unreadCount ?: 0) > 0,
+                ),
+            )
+        }
+    }
     val cachedMessagesForSelectedMailbox = selectedContainer
         ?.takeIf { container -> container.presentation.kind == NativeMailboxItemKind.Folder }
         ?.let { mailbox -> messages.filter { message -> message.belongsToMailbox(mailbox) } }
         .orEmpty()
+    val folders = items
+        .filter { item -> item.presentation.kind == NativeMailboxItemKind.Folder }
+        .map { item ->
+            selectedContainer?.takeIf { selected ->
+                selected.nativeMailWorkspaceRecordKey() == item.nativeMailWorkspaceRecordKey()
+            } ?: item
+        }
+        .sortedWith(
+            compareByDescending<NativeMailWorkspaceItem> { item -> item.inboxScore() }
+                .thenBy { item -> item.mailboxHierarchySortKey() }
+                .thenBy { item -> item.hierarchyDepth },
+        )
     return NativeMailWorkspacePlan(
         accounts = items
             .filter { item -> item.presentation.kind == NativeMailboxItemKind.Account }
             .sortedBy { item -> item.presentation.title.lowercase() },
-        folders = items
-            .filter { item -> item.presentation.kind == NativeMailboxItemKind.Folder }
-            .sortedWith(
-                compareByDescending<NativeMailWorkspaceItem> { item -> item.inboxScore() }
-                    .thenBy { item -> item.mailboxHierarchySortKey() }
-                    .thenBy { item -> item.hierarchyDepth },
-            ),
+        folders = folders,
         messages = messages,
         currentItems = currentItems,
         selectedContainer = selectedContainer,
@@ -243,10 +308,43 @@ internal fun nativeMailWorkspacePlan(
     )
 }
 
+internal fun NativeDatasetContext.nativeMailCollectionSummary(
+    schema: NativeAppSchema,
+): NativeMailCollectionSummary? {
+    val summaries = relatedRecords.mapNotNull { (resourceId, records) ->
+        val resource = schema.resource(resourceId) ?: return@mapNotNull null
+        if (!isNativeMailCollectionSummaryResource(resource)) return@mapNotNull null
+        records.singleOrNull()?.nativeMailCollectionSummary()
+    }
+    val total = summaries.mapNotNull(NativeMailCollectionSummary::total).distinct().singleOrNull()
+    val unread = summaries.mapNotNull(NativeMailCollectionSummary::unread).distinct().singleOrNull()
+    return NativeMailCollectionSummary(total = total, unread = unread)
+        .takeIf { summary -> summary.total != null || summary.unread != null }
+}
+
+private fun NativeDatasetContext.isNativeMailCollectionSummaryResource(resource: ResourceSpec): Boolean =
+    resource.id in mailCollectionSummaryResourceIds ||
+        listOf(resource.id, resource.name).flatMap(String::mailSemanticWords).any { word ->
+            word in setOf("stat", "stats", "status", "summary", "statistics")
+        }
+
+private fun NativeRecord.nativeMailCollectionSummary(): NativeMailCollectionSummary? {
+    val values = (values + displayValues).entries.associate { (key, value) ->
+        key.mailSemanticKey() to value
+    }
+    fun integer(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
+        values[key]?.trim()?.toIntOrNull()?.takeIf { value -> value >= 0 }
+    }
+    val total = integer("total", "totalmessages", "messagecount", "messagescount")
+    val unread = integer("unread", "unseen", "unreadcount", "unseenmessages")
+    return NativeMailCollectionSummary(total = total, unread = unread)
+        .takeIf { summary -> summary.total != null || summary.unread != null }
+}
+
 /**
- * Resolves a selected message body from the active response before falling back to the selected
- * message record. A body endpoint commonly returns a separate record that must be merged with
- * the selected envelope to render the desktop detail pane.
+ * Resolves a selected message body only from the active response. A body endpoint commonly
+ * returns a separate record that must be merged with the selected envelope to render the desktop
+ * detail pane. The retained envelope remains navigation context, never body authority.
  */
 internal fun nativeMailWorkspaceDetailTarget(
     schema: NativeAppSchema,
@@ -271,12 +369,15 @@ internal fun nativeMailWorkspaceDetailTarget(
         if (!parentMatchesSelection && !recordMatchesSelection) return@firstNotNullOfOrNull null
         nativeMailMessageRenderTarget(schema, currentResource, record, context)
     }
-    return currentTarget ?: nativeMailMessageRenderTarget(
-        schema = schema,
-        resource = selectedMessage.resource,
-        record = selectedMessage.record,
-        context = context,
-    )
+    if (currentTarget != null) return currentTarget
+    if (currentResource.id != selectedMessage.resource.id) return null
+    val currentEnvelope = currentRecords.firstOrNull { record ->
+        val presentation = nativeMailboxPresentation(currentResource, record)
+        presentation.kind == NativeMailboxItemKind.Message &&
+            nativeMailWorkspaceRecordKey(currentResource, record, presentation) ==
+            selectedMessage.nativeMailWorkspaceRecordKey()
+    } ?: return null
+    return nativeMailMessageRenderTarget(schema, currentResource, currentEnvelope, context)
 }
 
 internal fun isNativeMailWorkspaceContext(
@@ -465,12 +566,19 @@ internal fun DynamicAppDescriptor.preferredNativeMailComposeAction(
 internal fun NativeMailWorkspace(
     plan: NativeMailWorkspacePlan,
     onSelectRecord: ((NativeRecord) -> Unit)?,
+    collectionStateKey: String,
     modifier: Modifier = Modifier,
     detailContent: (@Composable () -> Unit)? = null,
     contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
+    searchQuery: String = "",
+    onSearchQueryChanged: ((String) -> Unit)? = null,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        when {
+    key(collectionStateKey) {
+        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+            when {
             maxWidth >= 980.dp -> Row(modifier = Modifier.fillMaxSize()) {
                 NativeMailRail(
                     plan = plan,
@@ -478,11 +586,16 @@ internal fun NativeMailWorkspace(
                     modifier = Modifier.width(252.dp).fillMaxHeight(),
                 )
                 MailPaneDivider()
-                NativeMailMessageList(
+                NativeMailSearchableMessageList(
                     items = plan.visibleMessages,
                     selectedMessage = plan.selectedMessage,
                     onSelectRecord = onSelectRecord,
                     contentState = contentState,
+                    onLoadMore = onLoadMore,
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    searchQuery = searchQuery,
+                    onSearchQueryChanged = onSearchQueryChanged,
                     emptyContent = {
                         NativeMailSelectionPlaceholder(plan)
                     },
@@ -519,11 +632,16 @@ internal fun NativeMailWorkspace(
                     ) {
                         NativeMailWorkspaceStatus(contentState)
                     } else {
-                        NativeMailMessageList(
+                        NativeMailSearchableMessageList(
                             items = plan.visibleMessages,
                             selectedMessage = plan.selectedMessage,
                             onSelectRecord = onSelectRecord,
                             contentState = contentState,
+                            onLoadMore = onLoadMore,
+                            loadingMore = loadingMore,
+                            loadMoreError = loadMoreError,
+                            searchQuery = searchQuery,
+                            onSearchQueryChanged = onSearchQueryChanged,
                             emptyContent = {
                                 NativeMailSelectionPlaceholder(plan)
                             },
@@ -544,12 +662,177 @@ internal fun NativeMailWorkspace(
                     plan.folders.isNotEmpty() -> plan.folders
                     else -> plan.accounts
                 }
-                NativeMailMessageList(
-                    items = compactItems,
-                    selectedMessage = plan.selectedMessage,
-                    onSelectRecord = onSelectRecord,
-                    contentState = contentState,
-                )
+                if (
+                    nativeMailCompactSearchAvailable(
+                        items = compactItems,
+                        searchHandlerAvailable = onSearchQueryChanged != null,
+                        query = searchQuery,
+                    )
+                ) {
+                    NativeMailSearchableMessageList(
+                        items = compactItems,
+                        selectedMessage = plan.selectedMessage,
+                        onSelectRecord = onSelectRecord,
+                        contentState = contentState,
+                        onLoadMore = onLoadMore,
+                        loadingMore = loadingMore,
+                        loadMoreError = loadMoreError,
+                        searchQuery = searchQuery,
+                        onSearchQueryChanged = onSearchQueryChanged,
+                    )
+                } else {
+                    NativeMailMessageList(
+                        items = compactItems,
+                        selectedMessage = plan.selectedMessage,
+                        onSelectRecord = onSelectRecord,
+                        contentState = contentState,
+                        onLoadMore = onLoadMore,
+                        loadingMore = loadingMore,
+                        loadMoreError = loadMoreError,
+                    )
+                }
+            }
+            }
+        }
+    }
+}
+
+internal fun nativeMailCompactSearchAvailable(
+    items: List<NativeMailWorkspaceItem>,
+    searchHandlerAvailable: Boolean,
+    query: String = "",
+): Boolean = searchHandlerAvailable && (
+    query.isNotBlank() ||
+        (
+            items.isNotEmpty() &&
+                items.all { item -> item.presentation.kind == NativeMailboxItemKind.Message }
+            )
+    )
+
+internal fun nativeMailWorkspaceSearchAvailable(
+    stateReady: Boolean,
+    messageCount: Int,
+    query: String,
+): Boolean = query.isNotBlank() || (stateReady && messageCount > 1)
+
+internal fun nativeMailVisibleMessages(
+    items: List<NativeMailWorkspaceItem>,
+    query: String,
+): List<NativeMailWorkspaceItem> = if (query.isBlank()) {
+    items
+} else {
+    items.filter { item ->
+        nativeRecordMatchesCollectionQuery(
+            resource = item.resource,
+            record = item.record,
+            query = query,
+        )
+    }
+}
+
+@Composable
+private fun NativeMailSearchableMessageList(
+    items: List<NativeMailWorkspaceItem>,
+    selectedMessage: NativeMailWorkspaceItem?,
+    onSelectRecord: ((NativeRecord) -> Unit)?,
+    modifier: Modifier = Modifier,
+    contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
+    emptyContent: (@Composable () -> Unit)? = null,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
+    searchQuery: String,
+    onSearchQueryChanged: ((String) -> Unit)?,
+) {
+    val visibleItems = remember(items, searchQuery) {
+        nativeMailVisibleMessages(items, searchQuery)
+    }
+    val searchAllowsPaging = nativeMailSearchAllowsAutoPaging(searchQuery)
+    val activeLoadMore = onLoadMore.takeIf { searchAllowsPaging }
+    Column(modifier = modifier) {
+        onSearchQueryChanged?.let { onQueryChanged ->
+            GenericCollectionSearchField(
+                resourceName = "Loaded messages",
+                query = searchQuery,
+                onQueryChanged = onQueryChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = NextcloudSpacing.Medium,
+                        vertical = NextcloudSpacing.Small,
+                    ),
+            )
+        }
+        NativeMailMessageList(
+            items = visibleItems,
+            selectedMessage = selectedMessage,
+            onSelectRecord = onSelectRecord,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentState = contentState,
+            emptyContent = if (searchQuery.isBlank()) {
+                emptyContent
+            } else {
+                {
+                    NativeMailSearchEmpty(
+                        query = searchQuery,
+                        loading = false,
+                        error = null,
+                        onRetry = null,
+                        onClear = { onSearchQueryChanged?.invoke("") },
+                    )
+                }
+            },
+            onLoadMore = activeLoadMore,
+            loadingMore = loadingMore && searchAllowsPaging,
+            loadMoreError = loadMoreError.takeIf { searchAllowsPaging },
+        )
+    }
+}
+
+internal fun nativeMailSearchAllowsAutoPaging(query: String): Boolean = query.isBlank()
+
+@Composable
+private fun NativeMailSearchEmpty(
+    query: String,
+    loading: Boolean,
+    error: String?,
+    onRetry: (() -> Unit)?,
+    onClear: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+            Text(
+                "Searching more messages...",
+                modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                if (error == null) "No matching messages" else "Could not finish searching",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                error ?: "Nothing matches \"$query\".",
+                modifier = Modifier.padding(top = NextcloudSpacing.Small),
+                color = if (error == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+            Row(
+                modifier = Modifier.padding(top = NextcloudSpacing.Medium),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                if (error != null && onRetry != null) {
+                    Button(onClick = onRetry) { Text("Retry") }
+                }
+                Button(onClick = onClear) { Text("Clear search") }
             }
         }
     }
@@ -679,6 +962,20 @@ private fun NativeMailRailRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (
+                    item.presentation.kind == NativeMailboxItemKind.Folder &&
+                    item.presentation.totalCount != null
+                ) {
+                    val total = item.presentation.totalCount
+                    val unread = item.presentation.unreadCount
+                    Text(
+                        if (unread != null) "$unread unread of $total" else "$total messages",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             item.presentation.unreadCount?.takeIf { count -> count > 0 }?.let { count ->
                 Text(
@@ -700,6 +997,9 @@ private fun NativeMailMessageList(
     modifier: Modifier = Modifier,
     contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
     emptyContent: (@Composable () -> Unit)? = null,
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    loadMoreError: String? = null,
 ) {
     if (items.isEmpty()) {
         if (contentState == NativeMailWorkspaceContentState.Ready && emptyContent != null) {
@@ -715,7 +1015,17 @@ private fun NativeMailMessageList(
         }
         return
     }
+    val listState = rememberLazyListState()
+    val pagingMessages = items.all { item -> item.presentation.kind == NativeMailboxItemKind.Message }
+    NativeMailAutoPager(
+        listState = listState,
+        itemCount = items.size,
+        onLoadMore = onLoadMore.takeIf { pagingMessages },
+        loadingMore = loadingMore,
+        loadMoreError = loadMoreError,
+    )
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = NextcloudSpacing.Medium,
@@ -834,6 +1144,80 @@ private fun NativeMailMessageList(
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        if (pagingMessages && (loadingMore || loadMoreError != null)) {
+            item(key = "mail-paging-footer") {
+                NativeMailPagingStatus(
+                    loadingMore = loadingMore,
+                    loadMoreError = loadMoreError,
+                    onRetry = onLoadMore,
+                )
+            }
+        }
+    }
+}
+
+internal fun nativeMailShouldLoadMore(
+    lastVisibleIndex: Int,
+    totalItems: Int,
+    prefetchDistance: Int = 3,
+): Boolean = totalItems > 0 && lastVisibleIndex >= (totalItems - prefetchDistance).coerceAtLeast(0)
+
+@Composable
+private fun NativeMailAutoPager(
+    listState: LazyListState,
+    itemCount: Int,
+    onLoadMore: (() -> Unit)?,
+    loadingMore: Boolean,
+    loadMoreError: String?,
+) {
+    LaunchedEffect(listState, itemCount, onLoadMore, loadingMore, loadMoreError) {
+        if (onLoadMore == null || loadingMore || loadMoreError != null) return@LaunchedEffect
+        snapshotFlow {
+            nativeMailShouldLoadMore(
+                lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1,
+                totalItems = listState.layoutInfo.totalItemsCount,
+            )
+        }.distinctUntilChanged().collect { nearEnd ->
+            if (nearEnd) onLoadMore()
+        }
+    }
+}
+
+@Composable
+private fun NativeMailPagingStatus(
+    loadingMore: Boolean,
+    loadMoreError: String?,
+    onRetry: (() -> Unit)?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (loadingMore) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+            )
+            Text(
+                "Loading more messages...",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                loadMoreError ?: "Could not load more messages.",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            if (onRetry != null) {
+                Button(onClick = onRetry) {
+                    Text("Retry")
+                }
+            }
         }
     }
 }
