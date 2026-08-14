@@ -12521,7 +12521,8 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Initializing ||
         submissionState is SupportDiagnosticsSubmissionState.Packaging ||
         submissionState is SupportDiagnosticsSubmissionState.Uploading
-    val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure
+    val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
+        submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
 
     LaunchedEffect(submissionBusy, submissionPending) {
         if (submissionBusy || submissionPending) confirmClear = false
@@ -12803,6 +12804,11 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         Text("Restoring any pending private report...", style = MaterialTheme.typography.bodySmall)
                     }
                     SupportDiagnosticsSubmissionState.Idle -> Unit
+                    is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                     SupportDiagnosticsSubmissionState.Packaging -> {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text("Preparing the private report...", style = MaterialTheme.typography.bodySmall)

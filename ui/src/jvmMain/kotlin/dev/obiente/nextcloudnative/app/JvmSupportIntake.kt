@@ -83,6 +83,7 @@ class JvmSupportIntake(
             try {
                 val storageReady = runCatching { preparePrivateStorage() }.isSuccess
                 val restored = if (storageReady) restorePendingSubmission() else null
+                val restoredCompleted = if (storageReady) restoreCompletedSubmission() else null
                 if (storageReady) pruneTemporaryReports(restored?.archive)
                 synchronized(lock) {
                     pending = restored
@@ -98,7 +99,8 @@ class JvmSupportIntake(
                                 },
                                 outcomeAmbiguous = restored.outcomeAmbiguous,
                             )
-                        } ?: SupportDiagnosticsSubmissionState.Idle,
+                        } ?: restoredCompleted?.toSubmissionState() ?: SupportDiagnosticsSubmissionState.Idle,
+                        restored?.originAccountIdentity ?: restoredCompleted?.originAccountIdentity,
                     )
                 }
             } finally {
@@ -144,7 +146,11 @@ class JvmSupportIntake(
             cancellationRequested.set(false)
             val context = try {
                 preparePrivateStorage()
-                diagnostics.prepareSubmissionContext(reproductionSteps, featureState)
+                diagnostics.prepareSubmissionContextForAccountIdentity(
+                    reproductionSteps,
+                    featureState,
+                    originAccountIdentity,
+                )
             } catch (cancellation: CancellationException) {
                 publishState(SupportDiagnosticsSubmissionState.Cancelled)
                 throw cancellation
@@ -591,15 +597,20 @@ class JvmSupportIntake(
 
     private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
         validateReceipt(receipt)
+        val completedSubmission = CompletedSubmission(submission.originAccountIdentity, receipt)
+        if (!persistCompletedSafely(completedSubmission)) {
+            synchronized(lock) { pending = submission }
+            publishState(
+                SupportDiagnosticsSubmissionState.RetryableFailure(
+                    "The report was received, but its private status could not be stored. Retry safely to recover it.",
+                    outcomeAmbiguous = true,
+                ),
+                submission.originAccountIdentity,
+            )
+            return
+        }
         finishTerminal(submission)
-        publishState(
-            SupportDiagnosticsSubmissionState.Submitted(
-                supportCode = receipt.supportCode,
-                statusUrl = receipt.statusUrl,
-                retentionUntil = receipt.retentionUntil,
-            ),
-            submission.originAccountIdentity,
-        )
+        publishState(completedSubmission.toSubmissionState(), submission.originAccountIdentity)
     }
 
     private fun validateReceipt(receipt: SupportIntakeReceipt): okhttp3.HttpUrl {
@@ -655,7 +666,12 @@ class JvmSupportIntake(
         if (persistPendingSafely(submission)) {
             publishState(SupportDiagnosticsSubmissionState.RetryableFailure(message, ambiguous))
         } else {
-            finishRejected(submission, "The private support submission could not be retained safely on this device.")
+            // Atomic replacement keeps the descriptor from immediately before the request. That
+            // record retains the idempotency key and conservatively requires reconciliation.
+            publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
+                "The updated retry state could not be stored. Keep the app open and retry safely to reconcile the report.",
+                outcomeAmbiguous = true,
+            ))
         }
     }
 
@@ -786,6 +802,56 @@ class JvmSupportIntake(
         }
     }
 
+    private fun persistCompletedSafely(submission: CompletedSubmission): Boolean = synchronized(persistenceLock) {
+        runCatching { persistCompleted(submission) }.isSuccess
+    }
+
+    private fun persistCompleted(submission: CompletedSubmission) {
+        val descriptor = completedDescriptor()
+        preparePrivateStorage()
+        writePrivateDescriptorAtomically(
+            descriptor,
+            json.encodeToString(
+                PersistedCompletedSubmission.serializer(),
+                PersistedCompletedSubmission(submission.originAccountIdentity, submission.receipt),
+            ).encodeToByteArray(),
+            ".completed-",
+        )
+    }
+
+    private fun writePrivateDescriptorAtomically(
+        descriptor: File,
+        encoded: ByteArray,
+        temporaryPrefix: String,
+    ) {
+        val parent = requireNotNull(descriptor.parentFile)
+        val temporary = Files.createTempFile(parent.toPath(), temporaryPrefix, ".tmp").toFile()
+        try {
+            restrictOwnerOnlyFile(temporary)
+            FileOutputStream(temporary).use { output ->
+                output.write(encoded)
+                output.fd.sync()
+            }
+            runCatching {
+                Files.move(
+                    temporary.toPath(),
+                    descriptor.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }.recoverCatching {
+                Files.move(
+                    temporary.toPath(),
+                    descriptor.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }.getOrThrow()
+            restrictOwnerOnlyFile(descriptor)
+        } finally {
+            temporary.delete()
+        }
+    }
+
     private fun restorePendingSubmission(): PendingSubmission? = runCatching {
         val descriptor = pendingDescriptor()
         if (!descriptor.isFile) return@runCatching null
@@ -799,10 +865,9 @@ class JvmSupportIntake(
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         require(persisted.createdAtEpochMillis >= 0L)
         val nowEpochMillis = System.currentTimeMillis()
-        require(
-            persisted.retryNotBeforeEpochMillis == null ||
-                persisted.retryNotBeforeEpochMillis <= System.currentTimeMillis() + MAX_SUPPORT_RETRY_AFTER_MILLIS,
-        )
+        val retryNotBeforeEpochMillis = persisted.retryNotBeforeEpochMillis?.takeIf { deadline ->
+            deadline <= nowEpochMillis.saturatingAdd(MAX_SUPPORT_RETRY_AFTER_MILLIS)
+        }
         persisted.receipt?.let { receipt ->
             require(persisted.cancellationPending)
             validateReceipt(receipt)
@@ -833,7 +898,7 @@ class JvmSupportIntake(
             context = persisted.context,
             cancellationPending = persisted.cancellationPending,
             outcomeAmbiguous = persisted.outcomeAmbiguous,
-            retryNotBeforeEpochMillis = persisted.retryNotBeforeEpochMillis,
+            retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
         )
     }.getOrElse {
@@ -842,6 +907,25 @@ class JvmSupportIntake(
     }
 
     private fun pendingDescriptor(): File = File(temporaryRoot, SUPPORT_PENDING_DESCRIPTOR)
+
+    private fun restoreCompletedSubmission(): CompletedSubmission? = runCatching {
+        val descriptor = completedDescriptor()
+        if (!descriptor.isFile) return@runCatching null
+        require(descriptor.length() in 1L..MAX_COMPLETED_DESCRIPTOR_BYTES)
+        val persisted = json.decodeFromString(
+            PersistedCompletedSubmission.serializer(),
+            descriptor.readText(Charsets.UTF_8),
+        )
+        require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
+        validateReceipt(persisted.receipt)
+        require(System.currentTimeMillis() <= Instant.parse(persisted.receipt.retentionUntil).toEpochMilli())
+        CompletedSubmission(persisted.originAccountIdentity, persisted.receipt)
+    }.getOrElse {
+        completedDescriptor().delete()
+        null
+    }
+
+    private fun completedDescriptor(): File = File(temporaryRoot, SUPPORT_COMPLETED_DESCRIPTOR)
 
     private data class PendingSubmission(
         var archive: File?,
@@ -865,6 +949,17 @@ class JvmSupportIntake(
         }
     }
 
+    private data class CompletedSubmission(
+        val originAccountIdentity: String,
+        val receipt: SupportIntakeReceipt,
+    ) {
+        fun toSubmissionState() = SupportDiagnosticsSubmissionState.Submitted(
+            supportCode = receipt.supportCode,
+            statusUrl = receipt.statusUrl,
+            retentionUntil = receipt.retentionUntil,
+        )
+    }
+
     @Serializable
     private data class PersistedPendingSubmission(
         val archiveName: String?,
@@ -877,6 +972,12 @@ class JvmSupportIntake(
         val outcomeAmbiguous: Boolean = true,
         val retryNotBeforeEpochMillis: Long? = null,
         val receipt: SupportIntakeReceipt? = null,
+    )
+
+    @Serializable
+    private data class PersistedCompletedSubmission(
+        val originAccountIdentity: String,
+        val receipt: SupportIntakeReceipt,
     )
 
     private fun publishState(
@@ -895,7 +996,13 @@ class JvmSupportIntake(
         actualState = next
         actualStateAccountIdentity = accountIdentity
         state.value = if (accountIdentity != null && accountIdentity != activeAccountIdentity) {
-            SupportDiagnosticsSubmissionState.Idle
+            if (pending?.originAccountIdentity == accountIdentity) {
+                SupportDiagnosticsSubmissionState.BlockedByAnotherAccount(
+                    "A pending private report belongs to another signed-in account. Switch back to finish or discard it.",
+                )
+            } else {
+                SupportDiagnosticsSubmissionState.Idle
+            }
         } else {
             next
         }
@@ -995,7 +1102,7 @@ private val SUPPORT_CODE_PATTERN = Regex("OBI-[A-HJ-KM-NP-Z2-9]{5}-[A-HJ-KM-NP-Z
 private val SUPPORT_RECEIPT_STATUS_PATTERN = Regex("[a-z][a-z_]{1,31}")
 private val SUPPORT_STATUS_PATH_PATTERN = Regex("/r/[A-Za-z0-9_-]{43}")
 private val SUPPORT_TEMPORARY_FILE_PATTERN = Regex("support-[0-9a-f-]{36}\\.zip")
-private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.pending-[A-Za-z0-9._-]+\\.tmp")
+private val SUPPORT_PENDING_TEMPORARY_FILE_PATTERN = Regex("\\.(?:pending|completed)-[A-Za-z0-9._-]+\\.tmp")
 private val SUPPORT_IDEMPOTENCY_PATTERN = Regex("[A-Za-z0-9_-]{43}")
 private val SUPPORT_ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{32}(?:[0-9a-f]{32})?")
 private val RETRYABLE_CLIENT_STATUS_CODES = setOf(425, 429)
@@ -1005,8 +1112,10 @@ private const val MAX_SUPPORT_INTAKE_RESPONSE_BYTES = 64 * 1024
 private const val MAX_SUPPORT_INTAKE_DESCRIPTION_BYTES = 8_000
 private const val MIN_SUPPORT_INTAKE_DESCRIPTION_BYTES = 10
 private const val MAX_PENDING_DESCRIPTOR_BYTES = 4L * 1024L * 1024L
+private const val MAX_COMPLETED_DESCRIPTOR_BYTES = 64L * 1024L
 private const val MAX_SUPPORT_ARCHIVE_BYTES = 4L * 1024L * 1024L
 private const val SUPPORT_PENDING_DESCRIPTOR = "pending.json"
+private const val SUPPORT_COMPLETED_DESCRIPTOR = "completed.json"
 private const val SUPPORT_TEMPORARY_MAX_AGE_MILLIS = 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val MAX_SUPPORT_RETRY_AFTER_SECONDS = 5L * 60L

@@ -32,7 +32,10 @@ class JvmSupportIntakeTest {
 
             val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertEquals("OBI-ABCDE-23456", submitted.supportCode)
-            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+            assertEquals(
+                setOf("completed.json"),
+                fixture.temporaryRoot.listFiles().orEmpty().map(File::getName).toSet(),
+            )
             val request = fixture.server.takeRequest(2, TimeUnit.SECONDS)
             requireNotNull(request)
             assertEquals("POST", request.method)
@@ -60,7 +63,10 @@ class JvmSupportIntakeTest {
             val reconcile = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertEquals(upload.headers["Idempotency-Key"], reconcile.headers["Idempotency-Key"])
             assertEquals("/api/v1/receipts", reconcile.url.encodedPath)
-            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+            assertEquals(
+                setOf("completed.json"),
+                fixture.temporaryRoot.listFiles().orEmpty().map(File::getName).toSet(),
+            )
         }
     }
 
@@ -106,12 +112,15 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
             val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertEquals(idempotencyKey, retry.headers["Idempotency-Key"])
-            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+            assertEquals(
+                setOf("completed.json"),
+                fixture.temporaryRoot.listFiles().orEmpty().map(File::getName).toSet(),
+            )
         }
     }
 
     @Test
-    fun hidesPendingSubmissionFromAnotherLocalAccount() = runBlocking {
+    fun exposesAccountNeutralBlockForAnotherLocalAccount() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
 
@@ -121,7 +130,12 @@ class JvmSupportIntakeTest {
             assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
             fixture.intake.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
 
-            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+            val blocked = assertIs<SupportDiagnosticsSubmissionState.BlockedByAnotherAccount>(
+                fixture.intake.states().value,
+            )
+            assertTrue(blocked.message.contains("another signed-in account"))
+            fixture.intake.submit("B also failed.", "nightly", emptyList())
+            assertIs<SupportDiagnosticsSubmissionState.BlockedByAnotherAccount>(fixture.intake.states().value)
             fixture.intake.retry()
             assertFalse(fixture.intake.cancel())
             assertEquals(1, fixture.server.requestCount)
@@ -130,6 +144,58 @@ class JvmSupportIntakeTest {
             fixture.intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
 
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            Unit
+        }
+    }
+
+    @Test
+    fun capturesDiagnosticsForTheAccountSnapshottedBySubmission() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.diagnostics.recordForAccountIdentity(
+                TEST_ACCOUNT_IDENTITY,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    component = SupportDiagnosticComponent.Network,
+                    operation = "network.account_a",
+                    outcome = "failed",
+                ),
+            )
+            fixture.diagnostics.recordForAccountIdentity(
+                OTHER_ACCOUNT_IDENTITY,
+                SupportDiagnosticEventDraft(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    component = SupportDiagnosticComponent.Network,
+                    operation = "network.account_b",
+                    outcome = "failed",
+                ),
+            )
+            fixture.diagnostics.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val descriptor = File(fixture.temporaryRoot, "pending.json").readText()
+            assertTrue(descriptor.contains("network.account_a"))
+            assertFalse(descriptor.contains("network.account_b"))
+        }
+    }
+
+    @Test
+    fun restoresSuccessfulReceiptForItsAccount() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            fixture.intake.close()
+
+            val restored = fixture.newIntake()
+
+            val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            assertEquals("OBI-ABCDE-23456", submitted.supportCode)
+            assertEquals(fixture.statusUrl, submitted.statusUrl)
+            assertTrue(File(fixture.temporaryRoot, "completed.json").isFile)
+            assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
+            restored.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+            assertIs<SupportDiagnosticsSubmissionState.Idle>(restored.states().value)
             Unit
         }
     }
@@ -591,6 +657,80 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
             assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun preservesLastUploadRecordWhenRetryStateCannotBeRewritten() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                MockResponse.Builder().code(503).headersDelay(1, TimeUnit.SECONDS).build(),
+            )
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val firstUpload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val retainedRoot = File(fixture.root, "submissions-retained")
+            Files.move(fixture.temporaryRoot.toPath(), retainedRoot.toPath())
+            fixture.temporaryRoot.writeText("temporarily unavailable")
+            submission.join()
+
+            val state = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(state.message.contains("updated retry state"))
+            val descriptor = File(retainedRoot, "pending.json")
+            assertTrue(descriptor.isFile)
+            assertTrue(descriptor.readText().contains(firstUpload.headers["Idempotency-Key"].orEmpty()))
+
+            assertTrue(fixture.temporaryRoot.delete())
+            Files.move(retainedRoot.toPath(), fixture.temporaryRoot.toPath())
+            fixture.intake.close()
+            val restored = fixture.newIntake()
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(firstUpload.headers["Idempotency-Key"], reconciliation.headers["Idempotency-Key"])
+            assertEquals(firstUpload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
+        }
+    }
+
+    @Test
+    fun clearsImplausibleRetryDelayWithoutDiscardingRecovery() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                MockResponse.Builder().code(429)
+                    .addHeader("Retry-After", "300")
+                    .build(),
+            )
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            val firstUpload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.intake.close()
+
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            val futureRetryAt = Instant.now().plus(1, ChronoUnit.DAYS).toEpochMilli()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    Regex("\"retryNotBeforeEpochMillis\":\\d+"),
+                    "\"retryNotBeforeEpochMillis\":$futureRetryAt",
+                ),
+            )
+            val restored = fixture.newIntake()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            assertTrue(descriptor.isFile)
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+            val retry = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(firstUpload.headers["Idempotency-Key"], retry.headers["Idempotency-Key"])
         }
     }
 

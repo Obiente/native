@@ -189,6 +189,15 @@ class AsyncJvmSupportDiagnostics(
             .prepareSubmissionContext(reproductionSteps, featureState)
     }
 
+    internal suspend fun prepareSubmissionContextForAccountIdentity(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountIdentity: String,
+    ): PreparedSupportSubmissionContext = withContext(dispatcher) {
+        ready.await().also(::drainPendingSnapshot)
+            .prepareSubmissionContextForAccountIdentity(reproductionSteps, featureState, accountIdentity)
+    }
+
     override fun close() {
         val shouldClose = synchronized(lock) {
             if (closing) {

@@ -225,16 +225,32 @@ class JvmSupportDiagnostics(
         reproductionSteps: String,
         featureState: List<SupportDiagnosticFieldDraft>,
     ): PreparedSupportSubmissionContext = synchronized(lock) {
+        prepareSubmissionContextLocked(reproductionSteps, featureState, activeAccountScope)
+    }
+
+    internal fun prepareSubmissionContextForAccountIdentity(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountIdentity: String,
+    ): PreparedSupportSubmissionContext = synchronized(lock) {
+        prepareSubmissionContextLocked(reproductionSteps, featureState, accountScope(accountIdentity))
+    }
+
+    private fun prepareSubmissionContextLocked(
+        reproductionSteps: String,
+        featureState: List<SupportDiagnosticFieldDraft>,
+        accountScope: String?,
+    ): PreparedSupportSubmissionContext {
         check(storageAvailable) { "Private diagnostic storage is unavailable." }
         require(featureState.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
         val confirmedAtEpochMillis = nowEpochMillis().coerceAtLeast(0L)
         discardedHistoryBytes += pruneEvents(confirmedAtEpochMillis)
         if (discardedHistoryBytes > 0L) persistHistory()
-        PreparedSupportSubmissionContext(
+        return PreparedSupportSubmissionContext(
             sanitizedReproductionSteps = sanitizer.sanitizeUserDescription(reproductionSteps).takeIf(String::isNotBlank),
             featureState = sanitizer.sanitizeFields(featureState),
             confirmedAtEpochMillis = confirmedAtEpochMillis,
-            events = visibleEvents(),
+            events = visibleEvents(accountScope),
         )
     }
 
@@ -380,9 +396,8 @@ class JvmSupportDiagnostics(
         require(historyFile.length() <= MAX_SUPPORT_DIAGNOSTIC_PHYSICAL_HISTORY_BYTES)
     }
 
-    private fun visibleEvents(): List<SupportDiagnosticEvent> = events.filter { event ->
-        event.accountScope == null || event.accountScope == activeAccountScope
-    }
+    private fun visibleEvents(accountScope: String? = activeAccountScope): List<SupportDiagnosticEvent> =
+        events.filter { event -> event.accountScope == null || event.accountScope == accountScope }
 
     private fun accountScope(identity: String): String =
         "<account:${keyedAlias("account\u0000$identity").take(SUPPORT_DIAGNOSTIC_ALIAS_LENGTH)}>"
