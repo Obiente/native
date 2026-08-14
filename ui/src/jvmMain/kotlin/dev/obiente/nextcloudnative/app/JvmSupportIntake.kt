@@ -83,6 +83,7 @@ class JvmSupportIntake(
     private val cancellationRequested = AtomicBoolean(false)
     private val shutdownRequested = AtomicBoolean(false)
     private val operationActive = AtomicBoolean(false)
+    private val rejectedPendingDescriptorCleanup = AtomicBoolean(false)
     private val lock = Any()
     private val persistenceLock = Any()
     private var activeAccountIdentity: String? = null
@@ -102,14 +103,18 @@ class JvmSupportIntake(
                 val restoredCompleted = if (storageFailure == null) restoreCompletedSubmissions() else emptyList()
                 if (storageFailure == null) pruneTemporaryReports(restored?.archive)
                 synchronized(lock) {
-                    storageUnavailableMessage = storageFailure?.let { SUPPORT_STORAGE_UNAVAILABLE_MESSAGE }
+                    storageUnavailableMessage = when {
+                        storageFailure != null -> SUPPORT_STORAGE_UNAVAILABLE_MESSAGE
+                        rejectedPendingDescriptorCleanup.get() -> SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE
+                        else -> null
+                    }
                     pending = restored
                     completedSubmissions = restoredCompleted
                     scheduleCompletedExpiryLocked()
                     val visibleCompleted = latestCompletedFor(activeAccountIdentity)
                     publishStateLocked(
-                        storageFailure?.let {
-                            SupportDiagnosticsSubmissionState.Unsupported(SUPPORT_STORAGE_UNAVAILABLE_MESSAGE)
+                        storageUnavailableMessage?.let { unavailableMessage ->
+                            SupportDiagnosticsSubmissionState.Unsupported(unavailableMessage)
                         } ?: restored?.let {
                             SupportDiagnosticsSubmissionState.RetryableFailure(
                                 if (restored.cancellationPending) {
@@ -674,10 +679,7 @@ class JvmSupportIntake(
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
         submission.receipt = receipt
-        if (!persistPendingSafely(submission)) {
-            finishSubmitted(submission, receipt)
-            return
-        }
+        persistPendingSafely(submission)
         val capability = statusUrl.pathSegments.last()
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
@@ -832,6 +834,7 @@ class JvmSupportIntake(
         )
         if (enforceCurrentRetentionWindow) {
             require(!createdAt.isAfter(now.plusMillis(SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS)))
+            require(retentionUntil.isAfter(now))
             require(
                 !retentionUntil.isAfter(
                     now.plusMillis(SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS + SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS),
@@ -1174,8 +1177,54 @@ class JvmSupportIntake(
             receipt = persisted.receipt,
         )
     }.getOrElse {
-        runCatching { deletePrivateDescriptorDurably(pendingDescriptor()) }
+        if (!quarantineRejectedPendingDescriptorSafely()) {
+            rejectedPendingDescriptorCleanup.set(true)
+            scope.launch { retryRejectedPendingDescriptorCleanup() }
+        }
         null
+    }
+
+    private fun quarantineRejectedPendingDescriptorSafely(): Boolean {
+        val descriptor = pendingDescriptor()
+        if (!descriptor.exists()) return true
+        val quarantined = File(temporaryRoot, ".pending-rejected-${UUID.randomUUID()}.tmp")
+        synchronized(persistenceLock) {
+            runCatching {
+                runCatching {
+                    Files.move(
+                        descriptor.toPath(),
+                        quarantined.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                    )
+                }.recoverCatching {
+                    Files.move(descriptor.toPath(), quarantined.toPath())
+                }.getOrThrow()
+                restrictOwnerOnlyFile(quarantined)
+                syncDirectoryEntry(temporaryRoot)
+            }
+        }
+        if (quarantined.isFile) deletePrivateFileOrRetry(quarantined)
+        return !descriptor.exists()
+    }
+
+    private suspend fun retryRejectedPendingDescriptorCleanup() {
+        while (!shutdownRequested.get()) {
+            delay(descriptorCleanupRetryMillis)
+            if (!quarantineRejectedPendingDescriptorSafely()) continue
+            rejectedPendingDescriptorCleanup.set(false)
+            synchronized(lock) {
+                if (storageUnavailableMessage == SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE) {
+                    storageUnavailableMessage = null
+                    publishStateLocked(
+                        latestCompletedFor(activeAccountIdentity)
+                            ?.let { submittedStateFor(it.originAccountIdentity) }
+                            ?: SupportDiagnosticsSubmissionState.Idle,
+                        activeAccountIdentity,
+                    )
+                }
+            }
+            return
+        }
     }
 
     private fun pendingDescriptor(): File = File(temporaryRoot, SUPPORT_PENDING_DESCRIPTOR)
@@ -1295,6 +1344,9 @@ class JvmSupportIntake(
         val pendingSubmission = pending
         when {
             actualState is SupportDiagnosticsSubmissionState.Initializing -> state.value = actualState
+            storageUnavailableMessage != null -> state.value = SupportDiagnosticsSubmissionState.Unsupported(
+                requireNotNull(storageUnavailableMessage),
+            )
             pendingSubmission != null -> publishStateLocked(actualState, pendingSubmission.originAccountIdentity)
             actualStateAccountIdentity == activeAccountIdentity -> state.value = actualState
             else -> state.value = latestCompletedFor(activeAccountIdentity)
@@ -1508,3 +1560,5 @@ private const val READ_ONLY_SUPPORT_MESSAGE =
 private const val SUPPORT_STORAGE_UNAVAILABLE_MESSAGE =
     "Private support submission storage is unavailable on this device. " +
         "Check available storage and app permissions, then restart the app."
+private const val SUPPORT_REJECTED_PENDING_CLEANUP_MESSAGE =
+    "An invalid private support recovery record is still being removed. Try sending again shortly."

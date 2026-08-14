@@ -267,6 +267,29 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun rejectsFreshReceiptThatHasAlreadyExpired() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(
+                    fixture.statusUrl,
+                    createdAtOffsetDays = -1,
+                    retentionUntil = Instant.now().minusSeconds(1),
+                ),
+            )
+
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(
+                fixture.intake.states().value,
+            )
+            assertTrue(retryable.outcomeAmbiguous)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            assertTrue(fixture.completedDescriptors().isEmpty())
+        }
+    }
+
+    @Test
     fun rejectsSupportUploadWhenThePlatformMutationGateIsClosed() = runBlocking {
         var mutationsAllowed = false
         testFixture(supportMutationsAllowed = { mutationsAllowed }).use { fixture ->
@@ -567,7 +590,12 @@ class JvmSupportIntakeTest {
 
             assertIs<SupportDiagnosticsSubmissionState.Unsupported>(fixture.intake.states().value)
             assertEquals(0, fixture.server.requestCount)
+
+            fixture.intake.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
+
+            assertIs<SupportDiagnosticsSubmissionState.Unsupported>(fixture.intake.states().value)
         }
+        Unit
     }
 
     @Test
@@ -689,6 +717,33 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun cancellationStillDeletesWhenReceiptPersistenceFails() = runBlocking {
+        var directorySyncs = 0
+        testFixture(
+            directorySync = {
+                directorySyncs += 1
+                if (directorySyncs == 5) throw IOException("Synthetic receipt persistence failure.")
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
     fun doesNotForwardPrivateReceiptKeyAcrossRedirects() = runBlocking {
         MockWebServer().use { redirectedServer ->
             redirectedServer.start()
@@ -721,6 +776,33 @@ class JvmSupportIntakeTest {
 
             assertFalse(orphan.exists())
             assertFalse(descriptor.exists())
+        }
+    }
+
+    @Test
+    fun retriesCleanupOfAnUnreadablePendingDescriptor() = runBlocking {
+        var deleteAttempts = 0
+        testFixture(
+            privateFileDelete = { file ->
+                deleteAttempts += 1
+                deleteAttempts > 2 && file.delete()
+            },
+            descriptorCleanupRetryMillis = 1_000L,
+            invalidPendingBeforeInitialization = true,
+        ).use { fixture ->
+            assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
+            assertTrue(
+                fixture.temporaryRoot.listFiles().orEmpty().any {
+                    it.name.startsWith(".pending-rejected-") && it.extension == "tmp"
+                },
+            )
+
+            withTimeout(5_000) {
+                while (fixture.temporaryRoot.listFiles().orEmpty().any { it.name.startsWith(".pending-rejected-") }) {
+                    delay(10)
+                }
+            }
+            assertTrue(deleteAttempts >= 3)
         }
     }
 
@@ -1178,6 +1260,7 @@ class JvmSupportIntakeTest {
         privateFileDelete: (File) -> Boolean = File::delete,
         submissionStorageBlocked: Boolean = false,
         pendingTemporaryBeforeInitialization: Boolean = false,
+        invalidPendingBeforeInitialization: Boolean = false,
     ): Fixture {
         val root = createTempDirectory("support-intake-test").toFile()
         val diagnosticRoot = File(root, "diagnostics")
@@ -1190,6 +1273,10 @@ class JvmSupportIntakeTest {
         if (pendingTemporaryBeforeInitialization) {
             require(temporaryRoot.mkdirs())
             File(temporaryRoot, ".pending-orphan.tmp").writeText("private context")
+        }
+        if (invalidPendingBeforeInitialization) {
+            require(temporaryRoot.isDirectory || temporaryRoot.mkdirs())
+            File(temporaryRoot, "pending.json").writeText("not-json")
         }
         val environment = SupportDiagnosticsEnvironment(
             appVersion = "0.1.0-test",
