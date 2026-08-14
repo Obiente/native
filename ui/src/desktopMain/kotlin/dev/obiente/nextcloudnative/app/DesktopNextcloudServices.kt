@@ -3391,6 +3391,10 @@ class DesktopNextcloudServices(
 
     override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
 
+    override suspend fun deleteSubmittedSupportDiagnosticsReport(
+        deletionUrl: String,
+    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
+
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(
             SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),

@@ -12516,21 +12516,27 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     var confirmDiscard by rememberSaveable { mutableStateOf(false) }
     var showPreview by rememberSaveable { mutableStateOf(false) }
     var reportPageIndex by rememberSaveable { mutableStateOf(0) }
+    var reportDeletionTarget by remember { mutableStateOf<SupportDiagnosticsSubmissionState.SubmittedReport?>(null) }
     val submissionState by remember(services) {
         services.supportDiagnosticsSubmissionStates()
     }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
     val submissionBusy = submissionState is SupportDiagnosticsSubmissionState.Initializing ||
         submissionState is SupportDiagnosticsSubmissionState.Packaging ||
         submissionState is SupportDiagnosticsSubmissionState.Cancelling ||
+        submissionState is SupportDiagnosticsSubmissionState.DeletingSubmittedReport ||
         submissionState is SupportDiagnosticsSubmissionState.Uploading
     val submissionCancellable = submissionState is SupportDiagnosticsSubmissionState.Packaging ||
         submissionState is SupportDiagnosticsSubmissionState.Uploading
     val submissionPending = submissionState is SupportDiagnosticsSubmissionState.RetryableFailure ||
         submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
-    val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported
+    val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported ||
+        submissionState is SupportDiagnosticsSubmissionState.AccountRequired
 
-    LaunchedEffect(submissionBusy, submissionPending) {
-        if (submissionBusy || submissionPending) confirmClear = false
+    LaunchedEffect(submissionBusy, submissionPending, submissionUnavailable) {
+        if (submissionBusy || submissionPending || submissionUnavailable) {
+            confirmClear = false
+            confirmSend = false
+        }
     }
 
     if (confirmClear) {
@@ -12617,6 +12623,41 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
             },
             dismissButton = {
                 TextButton(onClick = { confirmDiscard = false }) { Text("Keep report") }
+            },
+        )
+    }
+
+    reportDeletionTarget?.let { report ->
+        AlertDialog(
+            onDismissRequest = { if (!submissionBusy) reportDeletionTarget = null },
+            title = { Text("Delete this submitted report?") },
+            text = {
+                Text(
+                    "This permanently deletes report ${report.supportCode} from Obiente Support and removes its private receipt from this device.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !submissionBusy,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    onClick = {
+                        reportDeletionTarget = null
+                        scope.launch {
+                            status = when (
+                                val result = services.deleteSubmittedSupportDiagnosticsReport(report.deletionUrl)
+                            ) {
+                                SupportDiagnosticsDeletionResult.Deleted -> "Submitted support report deleted."
+                                is SupportDiagnosticsDeletionResult.Failed -> result.message
+                                is SupportDiagnosticsDeletionResult.Unsupported -> result.reason
+                            }
+                        }
+                    },
+                ) { Text("Delete report") }
+            },
+            dismissButton = {
+                TextButton(enabled = !submissionBusy, onClick = { reportDeletionTarget = null }) {
+                    Text("Keep report")
+                }
             },
         )
     }
@@ -12809,6 +12850,11 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text("Restoring any pending private report...", style = MaterialTheme.typography.bodySmall)
                     }
+                    SupportDiagnosticsSubmissionState.AccountRequired -> Text(
+                        "Sign in before sending a private support report.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     SupportDiagnosticsSubmissionState.Idle -> Unit
                     is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> Text(
                         current.message,
@@ -12822,6 +12868,10 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                     SupportDiagnosticsSubmissionState.Cancelling -> {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text("Finishing private report cancellation...", style = MaterialTheme.typography.bodySmall)
+                    }
+                    SupportDiagnosticsSubmissionState.DeletingSubmittedReport -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Deleting the submitted support report...", style = MaterialTheme.typography.bodySmall)
                     }
                     is SupportDiagnosticsSubmissionState.Uploading -> {
                         if (current.progress == null) {
@@ -12903,6 +12953,14 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                                     ) { Text("Copy support code") }
                                     TextButton(onClick = { services.openExternalUrl(report.statusUrl) }) {
                                         Text("Open private status")
+                                    }
+                                    TextButton(
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error,
+                                        ),
+                                        onClick = { reportDeletionTarget = report },
+                                    ) {
+                                        Text("Delete report")
                                     }
                                 }
                             }

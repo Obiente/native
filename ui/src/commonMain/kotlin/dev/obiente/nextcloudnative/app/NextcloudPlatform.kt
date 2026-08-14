@@ -534,6 +534,12 @@ interface NextcloudPlatformServices {
     /** Cancels packaging or upload and removes its app-private temporary archive. */
     suspend fun cancelSupportDiagnosticsSubmission(): Boolean = false
 
+    /** Deletes one retained submitted report after an explicit user confirmation. */
+    suspend fun deleteSubmittedSupportDiagnosticsReport(deletionUrl: String): SupportDiagnosticsDeletionResult =
+        SupportDiagnosticsDeletionResult.Unsupported(
+            "Deleting submitted support reports is unavailable on this platform.",
+        )
+
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
     suspend fun clearSupportDiagnostics(): Boolean = false
 

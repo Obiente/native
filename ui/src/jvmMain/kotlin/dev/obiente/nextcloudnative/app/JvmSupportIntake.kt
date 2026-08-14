@@ -168,9 +168,7 @@ class JvmSupportIntake(
             }
             val originAccountIdentity = synchronized(lock) { activeAccountIdentity }
             if (originAccountIdentity == null) {
-                publishState(SupportDiagnosticsSubmissionState.Rejected(
-                    "Sign in before sending a private support report.",
-                ))
+                publishState(SupportDiagnosticsSubmissionState.AccountRequired)
                 return@withContext
             }
             cancellationRequested.set(false)
@@ -359,6 +357,39 @@ class JvmSupportIntake(
         }
     }
 
+    suspend fun deleteCompletedReport(deletionUrl: String): SupportDiagnosticsDeletionResult =
+        withContext(Dispatchers.IO) {
+            awaitInitialization()
+            synchronized(lock) { storageUnavailableMessage }?.let { message ->
+                return@withContext SupportDiagnosticsDeletionResult.Unsupported(message)
+            }
+            if (!supportMutationsAreAllowed()) {
+                return@withContext SupportDiagnosticsDeletionResult.Unsupported(READ_ONLY_SUPPORT_MESSAGE)
+            }
+            if (!beginOperation()) {
+                return@withContext SupportDiagnosticsDeletionResult.Failed(
+                    "Another private support operation is still in progress.",
+                )
+            }
+            try {
+                val completed = synchronized(lock) {
+                    completedSubmissions.firstOrNull { submission ->
+                        submission.originAccountIdentity == activeAccountIdentity &&
+                            submission.receipt.deletionUrl == deletionUrl
+                    }
+                } ?: return@withContext SupportDiagnosticsDeletionResult.Failed(
+                    "This submitted support report is no longer available on this device.",
+                )
+                publishState(
+                    SupportDiagnosticsSubmissionState.DeletingSubmittedReport,
+                    completed.originAccountIdentity,
+                )
+                deleteCompletedReportFromServer(completed)
+            } finally {
+                endOperation()
+            }
+        }
+
     private fun cancelAfterIntentPublished(): Boolean {
         val submission = synchronized(lock) { pending }
         if (submission != null) {
@@ -414,6 +445,121 @@ class JvmSupportIntake(
         } else {
             activeCall.compareAndSet(null, call)
         }
+    }
+
+    private fun registerActiveCall(call: Call): Boolean = synchronized(lock) {
+        !shutdownRequested.get() && activeCall.compareAndSet(null, call)
+    }
+
+    private fun deleteCompletedReportFromServer(
+        completed: CompletedSubmission,
+    ): SupportDiagnosticsDeletionResult {
+        val capability = try {
+            val statusUrl = validateReceipt(completed.receipt)
+            val deletionUrl = completed.receipt.deletionUrl.toHttpUrl()
+            require(
+                deletionUrl.scheme == statusUrl.scheme &&
+                    deletionUrl.host == statusUrl.host &&
+                    deletionUrl.port == statusUrl.port &&
+                    deletionUrl.encodedPath == statusUrl.encodedPath &&
+                    deletionUrl.encodedQuery == null &&
+                    deletionUrl.fragment == null,
+            )
+            statusUrl.pathSegments.last()
+        } catch (_: IllegalArgumentException) {
+            return failCompletedDeletion(completed, "The private deletion capability is invalid.")
+        }
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
+            .header("Accept", "application/json")
+            .delete()
+            .build()
+        val call = client.newCall(request)
+        if (!registerActiveCall(call)) {
+            call.cancel()
+            return failCompletedDeletion(completed, "Deletion was interrupted before it could start.")
+        }
+        return try {
+            call.execute().use { response ->
+                response.readBoundedText()
+                activeCall.compareAndSet(call, null)
+                when {
+                    response.code in TERMINAL_DELETION_STATUS_CODES || response.code == 404 ->
+                        finishCompletedDeletion(completed)
+                    response.isSuccessful -> verifyCompletedDeletion(completed, capability)
+                    else -> failCompletedDeletion(
+                        completed,
+                        "The submitted support report could not be deleted. Try again.",
+                    )
+                }
+            }
+        } catch (_: IOException) {
+            failCompletedDeletion(
+                completed,
+                "Deletion could not be confirmed. Check your connection, then try again.",
+            )
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+    }
+
+    private fun verifyCompletedDeletion(
+        completed: CompletedSubmission,
+        capability: String,
+    ): SupportDiagnosticsDeletionResult {
+        val request = Request.Builder()
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
+            .header("Accept", "application/json")
+            .get()
+            .build()
+        val call = client.newCall(request)
+        if (!registerActiveCall(call)) {
+            call.cancel()
+            return failCompletedDeletion(completed, "Deletion verification was interrupted. Try again.")
+        }
+        return try {
+            call.execute().use { response ->
+                response.readBoundedText()
+                if (response.code == 404) {
+                    finishCompletedDeletion(completed)
+                } else {
+                    failCompletedDeletion(
+                        completed,
+                        "Deletion is still being processed. Try again to verify it was removed.",
+                    )
+                }
+            }
+        } catch (_: IOException) {
+            failCompletedDeletion(
+                completed,
+                "Deletion was accepted but could not be verified. Check your connection, then try again.",
+            )
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+    }
+
+    private fun finishCompletedDeletion(completed: CompletedSubmission): SupportDiagnosticsDeletionResult {
+        val next = synchronized(lock) {
+            completedSubmissions = completedSubmissions.filterNot { submission ->
+                submission.recordId == completed.recordId
+            }
+            scheduleCompletedExpiryLocked()
+            latestCompletedFor(completed.originAccountIdentity)
+                ?.let { submittedStateFor(it.originAccountIdentity) }
+                ?: SupportDiagnosticsSubmissionState.Idle
+        }
+        deleteCompletedDescriptorOrRetry(completedDescriptor(completed.recordId))
+        publishState(next, completed.originAccountIdentity)
+        return SupportDiagnosticsDeletionResult.Deleted
+    }
+
+    private fun failCompletedDeletion(
+        completed: CompletedSubmission,
+        message: String,
+    ): SupportDiagnosticsDeletionResult.Failed {
+        publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
+        return SupportDiagnosticsDeletionResult.Failed(message)
     }
 
     private suspend fun packageSubmission(submission: PendingSubmission): Boolean {
@@ -1300,7 +1446,7 @@ class JvmSupportIntake(
                     outcomeAmbiguous = submission.outcomeAmbiguous,
                 )
             } ?: visibleCompleted?.let { submittedStateFor(it.originAccountIdentity) }
-                ?: SupportDiagnosticsSubmissionState.Idle,
+                ?: idleStateForActiveAccountLocked(),
             pendingSubmission?.originAccountIdentity ?: visibleCompleted?.originAccountIdentity,
         )
     }
@@ -1442,7 +1588,7 @@ class JvmSupportIntake(
             } else if (operationActive.get()) {
                 blockedByAnotherAccountOperation()
             } else {
-                SupportDiagnosticsSubmissionState.Idle
+                idleStateForActiveAccountLocked()
             }
         } else {
             next
@@ -1460,10 +1606,11 @@ class JvmSupportIntake(
             operationActive.get() && actualStateAccountIdentity != activeAccountIdentity -> {
                 state.value = blockedByAnotherAccountOperation()
             }
+            activeAccountIdentity == null -> state.value = SupportDiagnosticsSubmissionState.AccountRequired
             actualStateAccountIdentity == activeAccountIdentity -> state.value = actualState
             else -> state.value = latestCompletedFor(activeAccountIdentity)
                 ?.let { submittedStateFor(it.originAccountIdentity) }
-                ?: SupportDiagnosticsSubmissionState.Idle
+                ?: idleStateForActiveAccountLocked()
         }
     }
 
@@ -1471,6 +1618,13 @@ class JvmSupportIntake(
         SupportDiagnosticsSubmissionState.BlockedByAnotherAccount(
             "A private support report is being prepared for another signed-in account. Wait for it to finish or switch back.",
         )
+
+    private fun idleStateForActiveAccountLocked(): SupportDiagnosticsSubmissionState =
+        if (activeAccountIdentity == null) {
+            SupportDiagnosticsSubmissionState.AccountRequired
+        } else {
+            SupportDiagnosticsSubmissionState.Idle
+        }
 
     private fun latestCompletedFor(accountIdentity: String?): CompletedSubmission? =
         completedSubmissions.filter {
@@ -1492,6 +1646,7 @@ class JvmSupportIntake(
                     SupportDiagnosticsSubmissionState.SubmittedReport(
                         supportCode = completed.receipt.supportCode,
                         statusUrl = completed.receipt.statusUrl,
+                        deletionUrl = completed.receipt.deletionUrl,
                         retentionUntil = completed.receipt.retentionUntil,
                     )
                 },

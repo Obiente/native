@@ -198,11 +198,60 @@ class JvmSupportIntakeTest {
             val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
             assertEquals("OBI-ABCDE-23456", submitted.supportCode)
             assertEquals(fixture.statusUrl, submitted.statusUrl)
+            assertEquals(fixture.statusUrl, submitted.reports.single().deletionUrl)
             assertEquals(1, fixture.completedDescriptors().size)
             assertFalse(File(fixture.temporaryRoot, "pending.json").exists())
             restored.setActiveAccountIdentity(OTHER_ACCOUNT_IDENTITY)
             assertIs<SupportDiagnosticsSubmissionState.Idle>(restored.states().value)
             Unit
+        }
+    }
+
+    @Test
+    fun deletesSubmittedReceiptAfterAcceptedDeletionIsReconciled() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            assertEquals(1, fixture.completedDescriptors().size)
+            fixture.server.enqueue(MockResponse.Builder().code(202).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(404).body("{}").build())
+
+            val result = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+
+            assertIs<SupportDiagnosticsDeletionResult.Deleted>(result)
+            assertIs<SupportDiagnosticsSubmissionState.Idle>(fixture.intake.states().value)
+            assertTrue(fixture.completedDescriptors().isEmpty())
+            assertEquals("POST", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+        }
+    }
+
+    @Test
+    fun keepsSubmittedReceiptWhenEarlyDeletionFails() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            fixture.server.enqueue(MockResponse.Builder().code(503).body("{}").build())
+
+            val result = fixture.intake.deleteCompletedReport(fixture.statusUrl)
+
+            assertIs<SupportDiagnosticsDeletionResult.Failed>(result)
+            assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(1, fixture.completedDescriptors().size)
+        }
+    }
+
+    @Test
+    fun requiresAnAccountBeforeSupportSubmission() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.intake.setActiveAccountIdentity(null)
+
+            assertIs<SupportDiagnosticsSubmissionState.AccountRequired>(fixture.intake.states().value)
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.AccountRequired>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
         }
     }
 

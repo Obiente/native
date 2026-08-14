@@ -186,10 +186,12 @@ sealed interface SupportDiagnosticsExportResult {
 
 sealed interface SupportDiagnosticsSubmissionState {
     data object Initializing : SupportDiagnosticsSubmissionState
+    data object AccountRequired : SupportDiagnosticsSubmissionState
     data object Idle : SupportDiagnosticsSubmissionState
     data class BlockedByAnotherAccount(val message: String) : SupportDiagnosticsSubmissionState
     data object Packaging : SupportDiagnosticsSubmissionState
     data object Cancelling : SupportDiagnosticsSubmissionState
+    data object DeletingSubmittedReport : SupportDiagnosticsSubmissionState
     data class Uploading(val progress: Float?) : SupportDiagnosticsSubmissionState {
         init {
             require(progress == null || progress in 0f..1f)
@@ -202,6 +204,7 @@ sealed interface SupportDiagnosticsSubmissionState {
     data class SubmittedReport(
         val supportCode: String,
         val statusUrl: String,
+        val deletionUrl: String,
         val retentionUntil: String,
     )
     data class Submitted(val reports: List<SubmittedReport>) : SupportDiagnosticsSubmissionState {
@@ -214,6 +217,12 @@ sealed interface SupportDiagnosticsSubmissionState {
         val retentionUntil: String get() = reports.first().retentionUntil
     }
     data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
+}
+
+sealed interface SupportDiagnosticsDeletionResult {
+    data object Deleted : SupportDiagnosticsDeletionResult
+    data class Failed(val message: String) : SupportDiagnosticsDeletionResult
+    data class Unsupported(val reason: String) : SupportDiagnosticsDeletionResult
 }
 
 @Serializable
