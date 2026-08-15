@@ -993,6 +993,35 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun cancellationDuringReceiptReconciliationSendsAuthoritativeTombstone() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+            fixture.server.enqueue(
+                MockResponse.Builder().code(404).headersDelay(10, TimeUnit.SECONDS).build(),
+            )
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", reconciliation.method)
+
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
+            assertEquals(3, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
     fun serverFailureRemainsAmbiguousUntilCancellationIsConfirmed() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().code(503).build())

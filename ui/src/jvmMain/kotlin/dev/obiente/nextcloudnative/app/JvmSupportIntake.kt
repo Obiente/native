@@ -798,13 +798,17 @@ class JvmSupportIntake(
                 response.code to response.readBoundedText()
             }
         } catch (_: IOException) {
-            retainForRetry(
-                submission,
-                uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
-                    ?.takeIf(String::isNotBlank)
-                    ?: "The upload result is uncertain. Check your connection before retrying.",
-                true,
-            )
+            if (cancellationRequested.get() || submission.cancellationPending) {
+                cancelPendingSubmission(submission)
+            } else {
+                retainForRetry(
+                    submission,
+                    uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
+                        ?.takeIf(String::isNotBlank)
+                        ?: "The upload result is uncertain. Check your connection before retrying.",
+                    true,
+                )
+            }
             return
         } finally {
             activeCall.compareAndSet(call, null)
