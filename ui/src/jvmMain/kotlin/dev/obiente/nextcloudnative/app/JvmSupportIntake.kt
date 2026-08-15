@@ -392,7 +392,7 @@ class JvmSupportIntake(
     private fun cancelAfterIntentPublished(): Boolean {
         val submission = synchronized(lock) { pending }
         if (submission != null) {
-            if (!submission.outcomeAmbiguous && activeCall.get() == null) {
+            if (!submission.cancellationRequiresTombstone && activeCall.get() == null) {
                 finishCancelled(submission)
                 return true
             }
@@ -670,6 +670,7 @@ class JvmSupportIntake(
         }
         submission.latestUploadAttemptAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
         submission.outcomeAmbiguous = true
+        submission.cancellationRequiresTombstone = true
         if (!persistPendingSafely(submission)) {
             finishRejected(submission, "The private support submission could not be retained safely on this device.")
             return
@@ -837,7 +838,7 @@ class JvmSupportIntake(
                 }
             }
             responseCode == 404 ->
-                retainForRetry(submission, "The upload did not complete. You can retry it safely.", true)
+                retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
             responseCode == 410 -> finishCancelled(submission)
             else -> retainForRetry(
                 submission,
@@ -1198,6 +1199,7 @@ class JvmSupportIntake(
                     context = submission.context,
                     cancellationPending = submission.cancellationPending,
                     outcomeAmbiguous = submission.outcomeAmbiguous,
+                    cancellationRequiresTombstone = submission.cancellationRequiresTombstone,
                     latestUploadAttemptAtEpochMillis = submission.latestUploadAttemptAtEpochMillis,
                     retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis,
                     receipt = submission.receipt,
@@ -1324,7 +1326,7 @@ class JvmSupportIntake(
             } else {
                 persisted.createdAtEpochMillis.saturatingAdd(SUPPORT_RECOVERY_MAX_AGE_MILLIS)
             }
-        require(nowEpochMillis <= recoveryDeadlineEpochMillis)
+        require(persisted.cancellationPending || nowEpochMillis <= recoveryDeadlineEpochMillis)
         val archiveAgeMillis = (nowEpochMillis - persisted.createdAtEpochMillis).coerceAtLeast(0L)
         val archiveIsRetained = archiveAgeMillis <= SUPPORT_TEMPORARY_MAX_AGE_MILLIS
         val archive = persisted.archiveName?.let { archiveName ->
@@ -1357,6 +1359,12 @@ class JvmSupportIntake(
             context = persisted.context,
             cancellationPending = persisted.cancellationPending,
             outcomeAmbiguous = persisted.outcomeAmbiguous,
+            cancellationRequiresTombstone = persisted.cancellationRequiresTombstone
+                ?: (
+                    persisted.latestUploadAttemptAtEpochMillis != null ||
+                        persisted.outcomeAmbiguous ||
+                        persisted.receipt != null
+                    ),
             latestUploadAttemptAtEpochMillis = persisted.latestUploadAttemptAtEpochMillis,
             retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
@@ -1544,6 +1552,7 @@ class JvmSupportIntake(
         val context: PreparedSupportSubmissionContext,
         var cancellationPending: Boolean = false,
         var outcomeAmbiguous: Boolean = false,
+        var cancellationRequiresTombstone: Boolean = false,
         var latestUploadAttemptAtEpochMillis: Long? = null,
         var retryNotBeforeEpochMillis: Long? = null,
         var receipt: SupportIntakeReceipt? = null,
@@ -1584,6 +1593,7 @@ class JvmSupportIntake(
         val context: PreparedSupportSubmissionContext,
         val cancellationPending: Boolean = false,
         val outcomeAmbiguous: Boolean = true,
+        val cancellationRequiresTombstone: Boolean? = null,
         val latestUploadAttemptAtEpochMillis: Long? = null,
         // Read descriptors written by early PR #386 builds, but never use wall time to confirm
         // cancellation. Only the server's idempotency-key tombstone is terminal.
