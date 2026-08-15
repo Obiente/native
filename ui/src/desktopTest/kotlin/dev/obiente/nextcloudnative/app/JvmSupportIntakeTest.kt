@@ -1081,6 +1081,40 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun cancellationAfterReceiptIntentCheckContinuesWithAuthoritativeTombstone() = runBlocking {
+        val dispositionEntered = CountDownLatch(1)
+        val allowDisposition = CountDownLatch(1)
+        testFixture(
+            beforeReceiptResponseDisposition = {
+                dispositionEntered.countDown()
+                assertTrue(allowDisposition.await(2, TimeUnit.SECONDS))
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(dispositionEntered.await(2, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            allowDisposition.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
     fun cancellationAfterUploadResponseCompletesSendsAuthoritativeTombstone() = runBlocking {
         val responseCompleted = CountDownLatch(1)
         val allowResponseResult = CountDownLatch(1)
@@ -1109,6 +1143,38 @@ class JvmSupportIntakeTest {
             assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
             assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
             assertEquals(2, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun cancellationAfterUploadIntentCheckContinuesWithAuthoritativeTombstone() = runBlocking {
+        val dispositionEntered = CountDownLatch(1)
+        val allowDisposition = CountDownLatch(1)
+        testFixture(
+            beforeUploadResponseDisposition = {
+                dispositionEntered.countDown()
+                assertTrue(allowDisposition.await(2, TimeUnit.SECONDS))
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(dispositionEntered.await(2, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            allowDisposition.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
@@ -1961,7 +2027,9 @@ class JvmSupportIntakeTest {
         beforeBundlePackaging: () -> Unit = {},
         afterBundlePackaging: () -> Unit = {},
         afterUploadResponse: () -> Unit = {},
+        beforeUploadResponseDisposition: () -> Unit = {},
         afterReceiptLookup: () -> Unit = {},
+        beforeReceiptResponseDisposition: () -> Unit = {},
         privateFileDelete: (File) -> Boolean = File::delete,
         pendingDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
         completedDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
@@ -2027,7 +2095,9 @@ class JvmSupportIntakeTest {
             beforeBundlePackaging = beforeBundlePackaging,
             afterBundlePackaging = afterBundlePackaging,
             afterUploadResponse = afterUploadResponse,
+            beforeUploadResponseDisposition = beforeUploadResponseDisposition,
             afterReceiptLookup = afterReceiptLookup,
+            beforeReceiptResponseDisposition = beforeReceiptResponseDisposition,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,
@@ -2073,7 +2143,9 @@ class JvmSupportIntakeTest {
         val beforeBundlePackaging: () -> Unit,
         val afterBundlePackaging: () -> Unit,
         val afterUploadResponse: () -> Unit,
+        val beforeUploadResponseDisposition: () -> Unit,
         val afterReceiptLookup: () -> Unit,
+        val beforeReceiptResponseDisposition: () -> Unit,
         val privateFileDelete: (File) -> Boolean,
         val pendingDescriptorRead: (File) -> String,
         val completedDescriptorRead: (File) -> String,
@@ -2098,7 +2170,9 @@ class JvmSupportIntakeTest {
             beforeBundlePackaging = beforeBundlePackaging,
             afterBundlePackaging = afterBundlePackaging,
             afterUploadResponse = afterUploadResponse,
+            beforeUploadResponseDisposition = beforeUploadResponseDisposition,
             afterReceiptLookup = afterReceiptLookup,
+            beforeReceiptResponseDisposition = beforeReceiptResponseDisposition,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,

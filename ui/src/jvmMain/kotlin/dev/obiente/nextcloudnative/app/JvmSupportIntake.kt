@@ -67,7 +67,9 @@ class JvmSupportIntake(
     private val beforeBundlePackaging: () -> Unit = {},
     private val afterBundlePackaging: () -> Unit = {},
     private val afterUploadResponse: () -> Unit = {},
+    private val beforeUploadResponseDisposition: () -> Unit = {},
     private val afterReceiptLookup: () -> Unit = {},
+    private val beforeReceiptResponseDisposition: () -> Unit = {},
     private val privateFileDelete: (File) -> Boolean = File::delete,
     private val pendingDescriptorRead: (File) -> String = { descriptor ->
         descriptor.readText(Charsets.UTF_8)
@@ -94,6 +96,7 @@ class JvmSupportIntake(
     private val cancellationRequested = AtomicBoolean(false)
     private val shutdownRequested = AtomicBoolean(false)
     private val operationActive = AtomicBoolean(false)
+    private val cancellationContinuationRequested = AtomicBoolean(false)
     private val rejectedPendingDescriptorCleanup = AtomicBoolean(false)
     private val pendingDescriptorRestorePending = AtomicBoolean(false)
     private val completedDescriptorRestorePending = AtomicBoolean(false)
@@ -318,6 +321,7 @@ class JvmSupportIntake(
     private fun supportMutationsAreAllowed(): Boolean = runCatching(supportMutationsAllowed).getOrDefault(false)
 
     private fun endOperation() {
+        var cancellationContinuation: PendingSubmission? = null
         synchronized(lock) {
             if (actualState is SupportDiagnosticsSubmissionState.Cancelling && pending == null) {
                 publishStateLocked(
@@ -326,7 +330,28 @@ class JvmSupportIntake(
                 )
             }
             operationActive.set(false)
-            refreshVisibleStateLocked()
+            val submission = pending
+            if (
+                cancellationContinuationRequested.getAndSet(false) &&
+                submission?.cancellationPending == true &&
+                !shutdownRequested.get() &&
+                operationActive.compareAndSet(false, true)
+            ) {
+                cancellationContinuation = submission
+            } else {
+                refreshVisibleStateLocked()
+            }
+        }
+        cancellationContinuation?.let { submission ->
+            try {
+                publishState(
+                    SupportDiagnosticsSubmissionState.Cancelling,
+                    submission.originAccountIdentity,
+                )
+                cancelPendingSubmission(submission)
+            } finally {
+                endOperation()
+            }
         }
     }
 
@@ -399,11 +424,12 @@ class JvmSupportIntake(
             submission.cancellationPending = true
             submission.outcomeAmbiguous = true
             val archive = submission.archive
+            val callAtIntent = activeCall.get()
             val cancellationPersisted = persistMinimalCancellationSafely(
                 submission,
                 deleteArchiveAfterPersist = false,
             )
-            val call = activeCall.getAndSet(null)
+            val call = callAtIntent?.takeIf { activeCall.compareAndSet(it, null) }
             if (!cancellationPersisted) {
                 call?.cancel()
                 publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
@@ -421,9 +447,15 @@ class JvmSupportIntake(
                 )
                 return true
             }
-        }
-        if (submission != null) {
-            if (beginOperation()) {
+            val startCancellation = synchronized(lock) {
+                if (operationActive.compareAndSet(false, true)) {
+                    true
+                } else {
+                    cancellationContinuationRequested.set(true)
+                    false
+                }
+            }
+            if (startCancellation) {
                 try {
                     publishState(
                         SupportDiagnosticsSubmissionState.Cancelling,
@@ -737,6 +769,7 @@ class JvmSupportIntake(
                     cancelPendingSubmission(submission)
                     return
                 }
+                beforeUploadResponseDisposition()
                 when {
                     response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
                     response.code == 408 -> reconcileAfterAmbiguousResult(
@@ -831,6 +864,7 @@ class JvmSupportIntake(
             cancelPendingSubmission(submission)
             return
         }
+        beforeReceiptResponseDisposition()
         val (responseCode, responseText) = responseResult
         when {
             responseCode in 200..299 -> {
@@ -877,6 +911,7 @@ class JvmSupportIntake(
         submission: PendingSubmission,
         receipt: SupportIntakeReceipt? = submission.receipt,
     ) {
+        cancellationContinuationRequested.set(false)
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
         submission.receipt = receipt
