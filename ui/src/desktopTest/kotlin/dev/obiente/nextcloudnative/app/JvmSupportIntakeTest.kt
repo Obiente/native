@@ -696,6 +696,59 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun concurrentCancellationPersistenceNeverRepopulatesPrivatePayload() = runBlocking {
+        val rejectNextCancellationWrite = AtomicBoolean(false)
+        val cancellationWriteEntered = CountDownLatch(1)
+        val allowCancellationWriteFailure = CountDownLatch(1)
+        val uploadResponseCompleted = CountDownLatch(1)
+        testFixture(
+            directorySync = {
+                if (rejectNextCancellationWrite.compareAndSet(true, false)) {
+                    cancellationWriteEntered.countDown()
+                    assertTrue(allowCancellationWriteFailure.await(3, TimeUnit.SECONDS))
+                    throw IOException("Synthetic cancellation persistence failure.")
+                }
+            },
+            afterUploadResponse = { uploadResponseCompleted.countDown() },
+        ).use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(fixture.statusUrl).newBuilder().headersDelay(1, TimeUnit.SECONDS).build(),
+            )
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit(
+                    "Private concurrent cancellation note.",
+                    "nightly",
+                    listOf(SupportDiagnosticFieldDraft("private_concurrent_field", "Private concurrent value")),
+                )
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            rejectNextCancellationWrite.set(true)
+            val cancellation = launch(Dispatchers.Default) {
+                assertFalse(fixture.intake.cancel())
+            }
+            assertTrue(cancellationWriteEntered.await(2, TimeUnit.SECONDS))
+            assertTrue(uploadResponseCompleted.await(3, TimeUnit.SECONDS))
+
+            allowCancellationWriteFailure.countDown()
+            cancellation.join()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val tombstone = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", tombstone.method)
+            assertEquals(upload.headers["Idempotency-Key"], tombstone.headers["Idempotency-Key"])
+            assertFalse(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            val descriptor = File(fixture.temporaryRoot, "pending.json").readText()
+            assertTrue(descriptor.contains(upload.headers["Idempotency-Key"].orEmpty()))
+            assertTrue(descriptor.contains("\"cancellationPending\":true"))
+            assertFalse(descriptor.contains("Private concurrent cancellation note."))
+            assertFalse(descriptor.contains("private_concurrent_field"))
+            assertFalse(descriptor.contains("Private concurrent value"))
+        }
+    }
+
+    @Test
     fun publishesCancellingWhileAnInterruptedUploadIsReconciled() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(

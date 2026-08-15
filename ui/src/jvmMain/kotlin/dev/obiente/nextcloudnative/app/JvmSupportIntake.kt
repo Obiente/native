@@ -965,7 +965,7 @@ class JvmSupportIntake(
     private fun persistMinimalCancellationSafely(
         submission: PendingSubmission,
         deleteArchiveAfterPersist: Boolean = true,
-    ): Boolean {
+    ): Boolean = synchronized(persistenceLock) {
         val archive = submission.archive
         val metadata = submission.metadata
         val context = submission.context
@@ -978,10 +978,10 @@ class JvmSupportIntake(
             submission.context = context
             submission.receipt = receipt
             submission.retryNotBeforeEpochMillis = retryNotBeforeEpochMillis
-            return false
+            return@synchronized false
         }
         if (deleteArchiveAfterPersist) deletePrivateFileOrRetry(archive)
-        return true
+        true
     }
 
     private fun stripPrivateCancellationPayload(submission: PendingSubmission): File? {
