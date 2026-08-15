@@ -653,16 +653,20 @@ class JvmSupportIntakeTest {
             fixture.server.enqueue(
                 receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build(),
             )
-            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            assertEquals("POST", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("POST", upload.method)
 
             assertFalse(fixture.intake.cancel())
 
             withTimeout(5_000) { submission.join() }
-            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
@@ -683,9 +687,12 @@ class JvmSupportIntakeTest {
             assertTrue(fixture.intake.cancel())
             assertIs<SupportDiagnosticsSubmissionState.Cancelling>(fixture.intake.states().value)
 
-            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             withTimeout(5_000) { submission.join() }
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
         }
         Unit
     }
@@ -964,7 +971,7 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun cancellingAmbiguousSubmissionFinishesAfterConfirmedAbsence() = runBlocking {
+    fun cancellingAmbiguousSubmissionUsesAuthoritativeServerTombstone() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
@@ -972,20 +979,22 @@ class JvmSupportIntakeTest {
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
 
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             assertTrue(fixture.intake.cancel())
-            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
-            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
-
-            fixture.server.enqueue(MockResponse.Builder().code(404).build())
-            fixture.intake.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun serverFailureRemainsAmbiguousUntilDiscardReconcilesAndDeletes() = runBlocking {
+    fun serverFailureRemainsAmbiguousUntilCancellationIsConfirmed() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
 
@@ -994,32 +1003,23 @@ class JvmSupportIntakeTest {
             val retryable = assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
             assertTrue(retryable.outcomeAmbiguous)
             val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             assertTrue(fixture.intake.cancel())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
-
-            fixture.intake.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val deletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals(upload.headers["Idempotency-Key"], reconciliation.headers["Idempotency-Key"])
-            assertEquals("GET", reconciliation.method)
-            assertEquals("DELETE", deletion.method)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun cancellationRechecksInitialAbsenceAndDeletesLateReceipt() = runBlocking {
-        testFixture(
-            cancellationReconcileWindowMillis = 1_000L,
-            cancellationReconcilePollMillis = 1L,
-        ).use { fixture ->
+    fun cancellationDoesNotPollReceiptAbsenceBeforeDiscardingRecovery() = runBlocking {
+        testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(MockResponse.Builder().code(404).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
 
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
@@ -1029,25 +1029,18 @@ class JvmSupportIntakeTest {
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            val firstReconcile = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val secondReconcile = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val deletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals(upload.headers["Idempotency-Key"], firstReconcile.headers["Idempotency-Key"])
-            assertEquals(upload.headers["Idempotency-Key"], secondReconcile.headers["Idempotency-Key"])
-            assertEquals("GET", firstReconcile.method)
-            assertEquals("GET", secondReconcile.method)
-            assertEquals("DELETE", deletion.method)
-            assertTrue(deletion.url.encodedPath.startsWith("/api/v1/reports/"))
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(2, fixture.server.requestCount)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun cancellationRetryFinishesAfterBoundedConfirmedAbsence() = runBlocking {
-        testFixture(
-            cancellationReconcileWindowMillis = 0L,
-            cancellationReconcilePollMillis = 1L,
-        ).use { fixture ->
+    fun cancellationRetryWaitsForAuthoritativeTerminalResult() = runBlocking {
+        testFixture().use { fixture ->
             fixture.server.enqueue(
                 receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build(),
             )
@@ -1063,49 +1056,46 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
             val descriptor = File(fixture.temporaryRoot, "pending.json")
             assertTrue(descriptor.isFile)
+            val firstCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", firstCancellation.method)
             fixture.intake.close()
-            descriptor.writeText(
-                descriptor.readText().replace(
-                    Regex(",\"cancellationRequestedAtEpochMillis\":\\d+"),
-                    "",
-                ),
-            )
             val restored = fixture.newIntake()
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
-            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
 
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
-            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("GET", reconciliation.method)
+            val retryCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", retryCancellation.method)
+            assertEquals("/api/v1/receipts", retryCancellation.url.encodedPath)
+            assertEquals(
+                firstCancellation.headers["Idempotency-Key"],
+                retryCancellation.headers["Idempotency-Key"],
+            )
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
             restored.close()
         }
     }
 
     @Test
-    fun cancellationStillDeletesWhenReceiptPersistenceFails() = runBlocking {
-        var directorySyncs = 0
-        testFixture(
-            directorySync = {
-                directorySyncs += 1
-                if (directorySyncs == 5) throw IOException("Synthetic receipt persistence failure.")
-            },
-        ).use { fixture ->
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
-            val submission = launch(Dispatchers.Default) {
-                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
-            }
+    fun cancellationRetainsRecoveryUntilTerminalNoContent() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-
+            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
             assertTrue(fixture.intake.cancel())
-            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+            val nonTerminal = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", nonTerminal.method)
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
+
+            fixture.intake.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
             assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
@@ -1249,23 +1239,21 @@ class JvmSupportIntakeTest {
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
-            val firstReconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("GET", firstReconciliation.method)
+            val firstCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", firstCancellation.method)
             fixture.intake.close()
 
             val restored = fixture.newIntake()
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
 
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
-            val retryReconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val deletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals(upload.headers["Idempotency-Key"], retryReconciliation.headers["Idempotency-Key"])
-            assertEquals("GET", retryReconciliation.method)
-            assertEquals("DELETE", deletion.method)
+            val retryCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals(upload.headers["Idempotency-Key"], retryCancellation.headers["Idempotency-Key"])
+            assertEquals("DELETE", retryCancellation.method)
+            assertEquals("/api/v1/receipts", retryCancellation.url.encodedPath)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
@@ -1367,85 +1355,52 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun retriesPersistedDeletionCapabilityWithoutResubmitting() = runBlocking {
+    fun retriesPersistedCancellationWithoutResubmitting() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
 
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertTrue(fixture.intake.cancel())
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
-            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val failedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("GET", reconciliation.method)
-            assertEquals("DELETE", failedDeletion.method)
+            val failedCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", failedCancellation.method)
+            assertEquals("/api/v1/receipts", failedCancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], failedCancellation.headers["Idempotency-Key"])
             fixture.intake.close()
 
             val restored = fixture.newIntake()
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
-            val retriedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("DELETE", retriedDeletion.method)
-            assertEquals(4, fixture.server.requestCount)
+            val retriedCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", retriedCancellation.method)
+            assertEquals("/api/v1/receipts", retriedCancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], retriedCancellation.headers["Idempotency-Key"])
+            assertEquals(3, fixture.server.requestCount)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun acceptedDeletionKeepsReceiptUntilStatusConfirmsRemoval() = runBlocking {
+    fun keepsCancellationKeyAfterTheLocalArchiveRetentionWindow() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(202).body("{}").build())
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
-
-            val submission = launch(Dispatchers.Default) {
-                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
-            }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertTrue(fixture.intake.cancel())
-            submission.join()
-
-            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
-            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
-            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val acceptedDeletion = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val statusCheck = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("GET", reconciliation.method)
-            assertEquals("DELETE", acceptedDeletion.method)
-            assertEquals("GET", statusCheck.method)
-
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
-            fixture.intake.retry()
-
-            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
-            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
-        }
-    }
-
-    @Test
-    fun keepsDeletionCapabilityAfterTheLocalArchiveRetentionWindow() = runBlocking {
-        testFixture().use { fixture ->
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
 
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertTrue(fixture.intake.cancel())
             submission.join()
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
             requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             fixture.intake.close()
 
@@ -1462,29 +1417,29 @@ class JvmSupportIntakeTest {
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
             assertTrue(descriptor.isFile)
             assertFalse(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
-            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun restoresDeletionCapabilityWhenTheWallClockMovesBackward() = runBlocking {
+    fun restoresCancellationKeyWhenTheWallClockMovesBackward() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
 
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertTrue(fixture.intake.cancel())
             submission.join()
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             fixture.intake.close()
 
@@ -1501,20 +1456,21 @@ class JvmSupportIntakeTest {
 
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
             assertTrue(descriptor.isFile)
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
-            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun preservesLastPersistedReceiptWhenRetryStateCannotBeRewritten() = runBlocking {
+    fun preservesLastCancellationRecordWhenRetryStateCannotBeRewritten() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
             fixture.server.enqueue(
                 MockResponse.Builder().code(503).headersDelay(1, TimeUnit.SECONDS).build(),
             )
@@ -1522,10 +1478,10 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
             assertTrue(fixture.intake.cancel())
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
             val retainedRoot = File(fixture.root, "submissions-retained")
             Files.move(fixture.temporaryRoot.toPath(), retainedRoot.toPath())
             fixture.temporaryRoot.writeText("temporarily unavailable")
@@ -1535,19 +1491,21 @@ class JvmSupportIntakeTest {
             assertTrue(state.message.contains("could not be stored"))
             val descriptor = File(retainedRoot, "pending.json")
             assertTrue(descriptor.isFile)
-            assertTrue(descriptor.readText().contains("OBI-ABCDE-23456"))
+            assertTrue(descriptor.readText().contains(upload.headers["Idempotency-Key"].orEmpty()))
 
             assertTrue(fixture.temporaryRoot.delete())
             Files.move(retainedRoot.toPath(), fixture.temporaryRoot.toPath())
             fixture.intake.close()
             val restored = fixture.newIntake()
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
 
             restored.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
-            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            val retryCancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", retryCancellation.method)
+            assertEquals(upload.headers["Idempotency-Key"], retryCancellation.headers["Idempotency-Key"])
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
     }
@@ -1709,8 +1667,6 @@ class JvmSupportIntakeTest {
         privateFileDelete: (File) -> Boolean = File::delete,
         pendingDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
         completedDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
-        cancellationReconcileWindowMillis: Long = 0L,
-        cancellationReconcilePollMillis: Long = 1L,
         submissionStorageBlocked: Boolean = false,
         pendingTemporaryBeforeInitialization: Boolean = false,
         archiveTemporaryBeforeInitialization: Boolean = false,
@@ -1775,8 +1731,6 @@ class JvmSupportIntakeTest {
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,
-            cancellationReconcileWindowMillis = cancellationReconcileWindowMillis,
-            cancellationReconcilePollMillis = cancellationReconcilePollMillis,
         )
     }
 
@@ -1821,8 +1775,6 @@ class JvmSupportIntakeTest {
         val privateFileDelete: (File) -> Boolean,
         val pendingDescriptorRead: (File) -> String,
         val completedDescriptorRead: (File) -> String,
-        val cancellationReconcileWindowMillis: Long,
-        val cancellationReconcilePollMillis: Long,
     ) : AutoCloseable {
         val intake = newIntake()
         val statusUrl: String get() = server.url("/r/abcdefghijklmnopqrstuvwxyzABCDEFGH_12345678").toString()
@@ -1846,8 +1798,6 @@ class JvmSupportIntakeTest {
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,
-            cancellationReconcileWindowMillis = cancellationReconcileWindowMillis,
-            cancellationReconcilePollMillis = cancellationReconcilePollMillis,
         ).also { intake ->
             intake.setActiveAccountIdentity(TEST_ACCOUNT_IDENTITY)
             runBlocking { intake.awaitInitialization() }

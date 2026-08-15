@@ -73,8 +73,6 @@ class JvmSupportIntake(
     private val completedDescriptorRead: (File) -> String = { descriptor ->
         descriptor.readText(Charsets.UTF_8)
     },
-    private val cancellationReconcileWindowMillis: Long = SUPPORT_CANCELLATION_RECONCILE_WINDOW_MILLIS,
-    private val cancellationReconcilePollMillis: Long = SUPPORT_CANCELLATION_RECONCILE_POLL_MILLIS,
 ) : AutoCloseable {
     private val baseUrl = supportBaseUrl.toHttpUrl()
     private val client = client.newBuilder()
@@ -109,8 +107,6 @@ class JvmSupportIntake(
 
     init {
         require(descriptorCleanupRetryMillis > 0L)
-        require(cancellationReconcileWindowMillis in 0L..MAX_CANCELLATION_RECONCILE_WINDOW_MILLIS)
-        require(cancellationReconcilePollMillis > 0L)
         scope.launch {
             try {
                 val storageFailure = runCatching { preparePrivateStorage() }.exceptionOrNull()
@@ -278,15 +274,7 @@ class JvmSupportIntake(
                     SupportDiagnosticsSubmissionState.Cancelling,
                     submission.originAccountIdentity,
                 )
-                val receipt = submission.receipt
-                if (receipt == null) {
-                    reconcileAfterAmbiguousResult(
-                        submission,
-                        IOException("Cancellation still needs to be reconciled."),
-                    )
-                } else {
-                    deleteCancelledReceipt(submission, receipt)
-                }
+                cancelPendingSubmission(submission)
                 return@withContext
             }
             val waitMillis = submission.retryNotBeforeEpochMillis?.minus(System.currentTimeMillis()) ?: 0L
@@ -408,9 +396,6 @@ class JvmSupportIntake(
             }
             submission.cancellationPending = true
             submission.outcomeAmbiguous = true
-            submission.cancellationRequestedAtEpochMillis =
-                submission.cancellationRequestedAtEpochMillis
-                    ?: System.currentTimeMillis().coerceAtLeast(0L)
             val cancellationPersisted = persistPendingSafely(submission)
             val call = activeCall.getAndSet(null)
             if (!cancellationPersisted) {
@@ -431,10 +416,22 @@ class JvmSupportIntake(
             }
         }
         if (submission != null) {
-            publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
-                "Cancellation could not be confirmed. Retry safely to reconcile and delete the private report.",
-                outcomeAmbiguous = true,
-            ))
+            if (beginOperation()) {
+                try {
+                    publishState(
+                        SupportDiagnosticsSubmissionState.Cancelling,
+                        submission.originAccountIdentity,
+                    )
+                    cancelPendingSubmission(submission)
+                } finally {
+                    endOperation()
+                }
+            } else {
+                publishState(
+                    SupportDiagnosticsSubmissionState.Cancelling,
+                    submission.originAccountIdentity,
+                )
+            }
             return true
         }
         cancellationRequested.compareAndSet(true, false)
@@ -739,6 +736,7 @@ class JvmSupportIntake(
                         ambiguous = false,
                         retryNotBeforeEpochMillis = response.retryNotBeforeEpochMillis(),
                     )
+                    response.code == 410 && cancellationRequested.get() -> finishCancelled(submission)
                     response.code in 400..499 -> finishRejected(submission, decodeProblem(responseText))
                     else -> retainForRetry(
                         submission,
@@ -773,105 +771,62 @@ class JvmSupportIntake(
         submission: PendingSubmission,
         uploadFailure: IOException,
     ) {
+        if (cancellationRequested.get() || submission.cancellationPending) {
+            cancelPendingSubmission(submission)
+            return
+        }
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments("api/v1/receipts").build())
             .header("Accept", "application/json")
             .header("Idempotency-Key", submission.idempotencyKey)
             .get()
             .build()
-        var cancellationDeadlineNanos: Long? = null
-        var cancellationDeadlineEpochMillis: Long? = null
-        while (true) {
-            val call = client.newCall(request)
-            if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
-                call.cancel()
-                if (synchronized(lock) { pending === submission }) {
-                    retainForRetry(
-                        submission,
-                        "The upload result still needs to be reconciled. You can retry it safely.",
-                        ambiguous = true,
-                    )
-                }
-                return
-            }
-            val responseResult = try {
-                call.execute().use { response ->
-                    response.code to response.readBoundedText()
-                }
-            } catch (_: IOException) {
+        val call = client.newCall(request)
+        if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
+            call.cancel()
+            if (synchronized(lock) { pending === submission }) {
                 retainForRetry(
                     submission,
-                    if (cancellationRequested.get()) {
-                        "Cancellation could not be confirmed. Reconcile the private submission before retrying."
-                    } else uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
-                        ?.takeIf(String::isNotBlank)
-                        ?: "The upload result is uncertain. Check your connection before retrying.",
-                    true,
+                    "The upload result still needs to be reconciled. You can retry it safely.",
+                    ambiguous = true,
                 )
-                return
-            } finally {
-                activeCall.compareAndSet(call, null)
             }
-            val (responseCode, responseText) = responseResult
-            when {
-                responseCode in 200..299 -> {
-                    try {
-                        finishReceived(submission, decodeReceipt(responseText))
-                    } catch (_: IOException) {
-                        retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
-                    } catch (_: IllegalArgumentException) {
-                        retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
-                    }
-                    return
-                }
-                responseCode == 404 && cancellationRequested.get() -> {
-                    val nowNanos = System.nanoTime()
-                    val nowEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
-                    val requestedAtEpochMillis = submission.cancellationRequestedAtEpochMillis
-                        ?: (submission.latestUploadAttemptAtEpochMillis ?: nowEpochMillis)
-                            .coerceAtMost(nowEpochMillis)
-                            .also { requestedAt ->
-                                submission.cancellationRequestedAtEpochMillis = requestedAt
-                            }
-                    val deadlineEpochMillis = cancellationDeadlineEpochMillis
-                        ?: requestedAtEpochMillis.saturatingAdd(cancellationReconcileWindowMillis)
-                            .also { cancellationDeadlineEpochMillis = it }
-                    val deadlineNanos = cancellationDeadlineNanos
-                        ?: nowNanos.saturatingAdd(cancellationReconcileWindowMillis * NANOS_PER_MILLISECOND)
-                            .also { cancellationDeadlineNanos = it }
-                    val remainingEpochMillis = (deadlineEpochMillis - nowEpochMillis).coerceAtLeast(0L)
-                    val remainingMonotonicMillis = ((deadlineNanos - nowNanos) / NANOS_PER_MILLISECOND)
-                        .coerceAtLeast(0L)
-                    val remainingMillis = minOf(remainingEpochMillis, remainingMonotonicMillis)
-                    if (remainingMillis > 0L) {
-                        val delayMillis = minOf(
-                            cancellationReconcilePollMillis,
-                            remainingMillis,
-                        )
-                        delay(delayMillis)
-                        continue
-                    }
-                    // The service handles report creation synchronously and exposes the committed
-                    // receipt through the idempotency key. Once the bounded server-processing
-                    // window has elapsed and reconciliation still returns 404, there is no remote
-                    // capability to delete. Honor the user's cancellation and remove the retained
-                    // local report instead of trapping it in an endless retry loop.
-                    finishCancelled(submission)
-                    return
-                }
-                responseCode == 404 -> {
-                    retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
-                    return
-                }
-                else -> {
-                    retainForRetry(
-                        submission,
-                        "The upload result is uncertain. Check your connection before retrying.",
-                        true,
-                    )
-                    return
+            return
+        }
+        val responseResult = try {
+            call.execute().use { response ->
+                response.code to response.readBoundedText()
+            }
+        } catch (_: IOException) {
+            retainForRetry(
+                submission,
+                uploadFailure.message?.filterSupportMetadata(MAX_SUPPORT_INTAKE_MESSAGE_LENGTH)
+                    ?.takeIf(String::isNotBlank)
+                    ?: "The upload result is uncertain. Check your connection before retrying.",
+                true,
+            )
+            return
+        } finally {
+            activeCall.compareAndSet(call, null)
+        }
+        val (responseCode, responseText) = responseResult
+        when {
+            responseCode in 200..299 -> {
+                try {
+                    finishReceived(submission, decodeReceipt(responseText))
+                } catch (_: IOException) {
+                    retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
+                } catch (_: IllegalArgumentException) {
+                    retainForRetry(submission, "Obiente Support returned an invalid receipt.", true)
                 }
             }
+            responseCode == 404 ->
+                retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
+            else -> retainForRetry(
+                submission,
+                "The upload result is uncertain. Check your connection before retrying.",
+                true,
+            )
         }
     }
 
@@ -889,45 +844,35 @@ class JvmSupportIntake(
             }
         }
         if (!submitReceivedReport) {
-            deleteCancelledReceipt(submission, receipt)
+            cancelPendingSubmission(submission, receipt)
         } else {
             finishSubmitted(submission, receipt)
         }
     }
 
-    private fun deleteCancelledReceipt(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
-        val statusUrl = validateReceipt(receipt)
-        val deletionUrl = receipt.deletionUrl.toHttpUrl()
-        require(
-            deletionUrl.scheme == statusUrl.scheme &&
-                deletionUrl.host == statusUrl.host &&
-                deletionUrl.port == statusUrl.port &&
-                deletionUrl.encodedPath == statusUrl.encodedPath &&
-                deletionUrl.encodedQuery == null &&
-                deletionUrl.fragment == null,
-        )
+    private fun cancelPendingSubmission(
+        submission: PendingSubmission,
+        receipt: SupportIntakeReceipt? = submission.receipt,
+    ) {
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
-        submission.cancellationRequestedAtEpochMillis =
-            submission.cancellationRequestedAtEpochMillis
-                ?: System.currentTimeMillis().coerceAtLeast(0L)
         submission.receipt = receipt
         persistPendingSafely(submission)
-        val capability = statusUrl.pathSegments.last()
         val request = Request.Builder()
-            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
+            .url(baseUrl.newBuilder().addPathSegments("api/v1/receipts").build())
             .header("Accept", "application/json")
+            .header("Idempotency-Key", submission.idempotencyKey)
             .delete()
             .build()
         if (!supportMutationsAreAllowed()) {
-            retainCancellationForRetry(submission, receipt, READ_ONLY_SUPPORT_MESSAGE)
+            retainCancellationForRetry(submission, READ_ONLY_SUPPORT_MESSAGE)
             return
         }
         val call = client.newCall(request)
         if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
             call.cancel()
             if (synchronized(lock) { pending === submission }) {
-                retainCancellationForRetry(submission, receipt, "Deletion still needs to be confirmed. Retry safely.")
+                retainCancellationForRetry(submission, "Cancellation still needs to be confirmed. Retry safely.")
             }
             return
         }
@@ -936,71 +881,17 @@ class JvmSupportIntake(
                 response.readBoundedText()
                 activeCall.compareAndSet(call, null)
                 when {
-                    response.code in TERMINAL_DELETION_STATUS_CODES || response.code == 404 ->
-                        finishCancelled(submission)
-                    response.isSuccessful -> verifyDeletionAfterAccepted(
-                        submission,
-                        receipt,
-                        capability,
-                    )
+                    response.code == 204 -> finishCancelled(submission)
                     else -> retainCancellationForRetry(
                         submission,
-                        receipt,
-                        "Deletion could not be confirmed. Retry safely to delete the private report.",
+                        "Obiente Support did not confirm cancellation. Retry safely; the private report remains recoverable.",
                     )
                 }
             }
         } catch (_: IOException) {
             retainCancellationForRetry(
                 submission,
-                receipt,
-                "Deletion could not be confirmed. Check your connection, then retry safely.",
-            )
-        } finally {
-            activeCall.compareAndSet(call, null)
-        }
-    }
-
-    private fun verifyDeletionAfterAccepted(
-        submission: PendingSubmission,
-        receipt: SupportIntakeReceipt,
-        capability: String,
-    ) {
-        val request = Request.Builder()
-            .url(baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability).build())
-            .header("Accept", "application/json")
-            .get()
-            .build()
-        val call = client.newCall(request)
-        if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
-            call.cancel()
-            if (synchronized(lock) { pending === submission }) {
-                retainCancellationForRetry(
-                    submission,
-                    receipt,
-                    "Deletion verification was interrupted. Retry safely.",
-                )
-            }
-            return
-        }
-        try {
-            call.execute().use { response ->
-                response.readBoundedText()
-                if (response.code == 404) {
-                    finishCancelled(submission)
-                } else {
-                    retainCancellationForRetry(
-                        submission,
-                        receipt,
-                        "Deletion is still being processed. Retry safely to verify the private report was removed.",
-                    )
-                }
-            }
-        } catch (_: IOException) {
-            retainCancellationForRetry(
-                submission,
-                receipt,
-                "Deletion was accepted but could not be verified. Check your connection, then retry safely.",
+                "Cancellation could not be confirmed. Check your connection, then retry safely.",
             )
         } finally {
             activeCall.compareAndSet(call, null)
@@ -1184,12 +1075,10 @@ class JvmSupportIntake(
 
     private fun retainCancellationForRetry(
         submission: PendingSubmission,
-        receipt: SupportIntakeReceipt,
         message: String,
     ) {
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
-        submission.receipt = receipt
         synchronized(lock) { pending = submission }
         if (persistPendingSafely(submission)) {
             publishState(SupportDiagnosticsSubmissionState.RetryableFailure(message, outcomeAmbiguous = true))
@@ -1197,7 +1086,7 @@ class JvmSupportIntake(
             // The receipt was persisted before deletion began. Atomic replacement leaves that last
             // valid recovery record in place when this newer retry-state write fails.
             publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
-                "Deletion was not confirmed and its updated retry state could not be stored. Keep the app open and retry.",
+                "Cancellation was not confirmed and its updated retry state could not be stored. Keep the app open and retry.",
                 outcomeAmbiguous = true,
             ))
         }
@@ -1287,7 +1176,6 @@ class JvmSupportIntake(
                     cancellationPending = submission.cancellationPending,
                     outcomeAmbiguous = submission.outcomeAmbiguous,
                     latestUploadAttemptAtEpochMillis = submission.latestUploadAttemptAtEpochMillis,
-                    cancellationRequestedAtEpochMillis = submission.cancellationRequestedAtEpochMillis,
                     retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis,
                     receipt = submission.receipt,
                 ),
@@ -1397,10 +1285,6 @@ class JvmSupportIntake(
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         require(persisted.createdAtEpochMillis >= 0L)
         require(persisted.latestUploadAttemptAtEpochMillis == null || persisted.latestUploadAttemptAtEpochMillis >= 0L)
-        require(
-            persisted.cancellationRequestedAtEpochMillis == null ||
-                persisted.cancellationRequestedAtEpochMillis >= 0L,
-        )
         val nowEpochMillis = System.currentTimeMillis()
         val retryNotBeforeEpochMillis = persisted.retryNotBeforeEpochMillis?.takeIf { deadline ->
             deadline <= nowEpochMillis.saturatingAdd(MAX_SUPPORT_RETRY_AFTER_MILLIS)
@@ -1451,7 +1335,6 @@ class JvmSupportIntake(
             cancellationPending = persisted.cancellationPending,
             outcomeAmbiguous = persisted.outcomeAmbiguous,
             latestUploadAttemptAtEpochMillis = persisted.latestUploadAttemptAtEpochMillis,
-            cancellationRequestedAtEpochMillis = persisted.cancellationRequestedAtEpochMillis,
             retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
         )
@@ -1557,7 +1440,7 @@ class JvmSupportIntake(
             } ?: pendingSubmission?.let { submission ->
                 SupportDiagnosticsSubmissionState.RetryableFailure(
                     if (submission.cancellationPending) {
-                        "Cancellation was interrupted. Retry safely to reconcile and delete the private report."
+                        "Cancellation was interrupted. Retry safely to obtain terminal confirmation from Obiente Support."
                     } else if (submission.archive == null) {
                         "Private report preparation was interrupted. You can retry it safely."
                     } else {
@@ -1639,7 +1522,6 @@ class JvmSupportIntake(
         var cancellationPending: Boolean = false,
         var outcomeAmbiguous: Boolean = false,
         var latestUploadAttemptAtEpochMillis: Long? = null,
-        var cancellationRequestedAtEpochMillis: Long? = null,
         var retryNotBeforeEpochMillis: Long? = null,
         var receipt: SupportIntakeReceipt? = null,
     ) {
@@ -1680,6 +1562,8 @@ class JvmSupportIntake(
         val cancellationPending: Boolean = false,
         val outcomeAmbiguous: Boolean = true,
         val latestUploadAttemptAtEpochMillis: Long? = null,
+        // Read descriptors written by early PR #386 builds, but never use wall time to confirm
+        // cancellation. Only the server's idempotency-key tombstone is terminal.
         val cancellationRequestedAtEpochMillis: Long? = null,
         val retryNotBeforeEpochMillis: Long? = null,
         val receipt: SupportIntakeReceipt? = null,
@@ -1952,12 +1836,6 @@ private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_00
 private const val SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
 private const val SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS = 60L * 1_000L
-// The support service accepts request bodies synchronously with a 30-second read timeout. Wait
-// beyond that bound before treating repeated 404 reconciliation responses as confirmed absence.
-private const val SUPPORT_CANCELLATION_RECONCILE_WINDOW_MILLIS = 35L * 1_000L
-private const val SUPPORT_CANCELLATION_RECONCILE_POLL_MILLIS = 500L
-private const val MAX_CANCELLATION_RECONCILE_WINDOW_MILLIS = 60L * 1_000L
-private const val NANOS_PER_MILLISECOND = 1_000_000L
 private const val SUPPORT_PENDING_RESTORE_MESSAGE =
     "Private support report recovery is temporarily unavailable. The app will retry automatically."
 private const val SUPPORT_COMPLETED_RESTORE_MESSAGE =

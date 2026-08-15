@@ -4,4 +4,4 @@ pull: 386
 platforms: android, desktop
 user-facing: yes
 
-Finish cancelling a private support report after Obiente Support confirms that an interrupted upload created no report to delete.
+Finish cancelling a private support report only after Obiente Support confirms that its upload key is terminally cancelled.
