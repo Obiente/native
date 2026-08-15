@@ -398,7 +398,11 @@ class JvmSupportIntake(
             }
             submission.cancellationPending = true
             submission.outcomeAmbiguous = true
-            val cancellationPersisted = persistPendingSafely(submission)
+            val archive = submission.archive
+            val cancellationPersisted = persistMinimalCancellationSafely(
+                submission,
+                deleteArchiveAfterPersist = false,
+            )
             val call = activeCall.getAndSet(null)
             if (!cancellationPersisted) {
                 call?.cancel()
@@ -408,12 +412,13 @@ class JvmSupportIntake(
                 ))
                 return false
             }
+            call?.cancel()
+            deletePrivateFileOrRetry(archive)
             if (call != null) {
                 publishState(
                     SupportDiagnosticsSubmissionState.Cancelling,
                     submission.originAccountIdentity,
                 )
-                call.cancel()
                 return true
             }
         }
@@ -922,12 +927,30 @@ class JvmSupportIntake(
         }
     }
 
-    private fun persistMinimalCancellationSafely(submission: PendingSubmission): Boolean {
+    private fun persistMinimalCancellationSafely(
+        submission: PendingSubmission,
+        deleteArchiveAfterPersist: Boolean = true,
+    ): Boolean {
         val archive = submission.archive
         val metadata = submission.metadata
         val context = submission.context
         val receipt = submission.receipt
         val retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis
+        stripPrivateCancellationPayload(submission)
+        if (!persistPendingSafely(submission)) {
+            submission.archive = archive
+            submission.metadata = metadata
+            submission.context = context
+            submission.receipt = receipt
+            submission.retryNotBeforeEpochMillis = retryNotBeforeEpochMillis
+            return false
+        }
+        if (deleteArchiveAfterPersist) deletePrivateFileOrRetry(archive)
+        return true
+    }
+
+    private fun stripPrivateCancellationPayload(submission: PendingSubmission): File? {
+        val archive = submission.archive
         submission.archive = null
         submission.metadata = SupportIntakeMetadata(
             title = "",
@@ -942,16 +965,7 @@ class JvmSupportIntake(
         )
         submission.receipt = null
         submission.retryNotBeforeEpochMillis = null
-        if (!persistPendingSafely(submission)) {
-            submission.archive = archive
-            submission.metadata = metadata
-            submission.context = context
-            submission.receipt = receipt
-            submission.retryNotBeforeEpochMillis = retryNotBeforeEpochMillis
-            return false
-        }
-        deletePrivateFileOrRetry(archive)
-        return true
+        return archive
     }
 
     private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
@@ -1382,7 +1396,7 @@ class JvmSupportIntake(
             }
         }
         pendingDescriptorRestorePending.set(false)
-        PendingSubmission(
+        val restored = PendingSubmission(
             archive = archive,
             metadata = persisted.metadata,
             idempotencyKey = persisted.idempotencyKey,
@@ -1401,6 +1415,12 @@ class JvmSupportIntake(
             retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
         )
+        if (restored.cancellationPending) {
+            val privateArchive = stripPrivateCancellationPayload(restored)
+            persistPending(restored)
+            deletePrivateFileOrRetry(privateArchive)
+        }
+        restored
     } catch (failure: Throwable) {
         if (failure is IOException || failure is SecurityException) {
             val retryWasNotScheduled = pendingDescriptorRestorePending.compareAndSet(false, true)

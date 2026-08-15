@@ -1603,6 +1603,48 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun restorationMinimizesPreviouslyPersistedCancellationIntent() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            fixture.intake.submit(
+                "Private restored cancellation note.",
+                "nightly",
+                listOf(SupportDiagnosticFieldDraft("private_restored_field", "Private restored value")),
+            )
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            assertTrue(descriptor.readText().contains("Private restored cancellation note."))
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            fixture.intake.close()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    "\"cancellationPending\":false",
+                    "\"cancellationPending\":true",
+                ),
+            )
+
+            val restored = fixture.newIntake()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            assertFalse(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            val minimized = descriptor.readText()
+            assertTrue(minimized.contains(upload.headers["Idempotency-Key"].orEmpty()))
+            assertTrue(minimized.contains("\"cancellationPending\":true"))
+            assertFalse(minimized.contains("Private restored cancellation note."))
+            assertFalse(minimized.contains("private_restored_field"))
+            assertFalse(minimized.contains("Private restored value"))
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
+
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+            restored.close()
+        }
+    }
+
+    @Test
     fun keepsCancellationKeyAfterTheLocalArchiveRetentionWindow() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build())
