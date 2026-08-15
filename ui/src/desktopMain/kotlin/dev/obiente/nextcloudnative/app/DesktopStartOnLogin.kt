@@ -154,6 +154,19 @@ internal class DesktopStartOnLoginController(
         return true
     }
 
+    internal fun refreshLinuxUserServiceLauncher(): Boolean {
+        if (platform != DesktopStartOnLoginPlatform.Linux) return true
+        val launcher = launcherPath?.takeIf(String::isNotBlank) ?: return true
+        val service = File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME")
+        if (!service.isFile || linuxUserServiceUsesLauncher(service, launcher)) return true
+        if (
+            !runCatching {
+                processRunner(listOf("systemctl", "--user", "stop", LINUX_USER_SERVICE_NAME)) == 0
+            }.getOrDefault(false)
+        ) return false
+        return runCatching { configureLinux(enabled = true, launcher = launcher).configured }.getOrDefault(false)
+    }
+
     private fun removeLinuxUserService() {
         val userDirectory = File(linuxConfigHome, "systemd/user")
         val service = File(userDirectory, LINUX_USER_SERVICE_NAME)
@@ -245,6 +258,13 @@ internal fun isCurrentProcessOwnedByLinuxUserService(
 
 private const val LINUX_USER_SERVICE_NAME = "nextcloud-native.service"
 
+private fun linuxUserServiceUsesLauncher(service: File, launcher: String): Boolean {
+    val expected = "ExecStart=${systemdExecArgument(launcher)} --background --service"
+    return runCatching {
+        service.useLines { lines -> lines.any { line -> line == expected } }
+    }.getOrDefault(false)
+}
+
 /** Lets the portable XDG launch request enter the supervised unit when one was configured. */
 internal fun handoffLinuxAutostartToUserService(
     osName: String = System.getProperty("os.name").orEmpty(),
@@ -271,6 +291,7 @@ internal fun handoffLinuxForegroundLaunchToUserService(
     osName: String = System.getProperty("os.name").orEmpty(),
     userHome: File = File(System.getProperty("user.home")),
     linuxConfigHome: File = linuxDesktopConfigHome(userHome),
+    launcherPath: String? = packagedDesktopLauncherPath(),
     processRunner: (List<String>) -> Int = { command ->
         ProcessBuilder(command).redirectErrorStream(true).start().also { process ->
             process.inputStream.bufferedReader().use { it.readText() }
@@ -280,6 +301,16 @@ internal fun handoffLinuxForegroundLaunchToUserService(
 ): Boolean {
     if (!osName.lowercase().contains("linux")) return false
     if (!File(linuxConfigHome, "systemd/user/$LINUX_USER_SERVICE_NAME").isFile) return false
+    val launcherReady = DesktopStartOnLoginController(
+        osName = osName,
+        userHome = userHome,
+        linuxConfigHome = linuxConfigHome,
+        launcherPath = launcherPath,
+        processRunner = processRunner,
+        linuxSystemdAvailable = { true },
+        linuxGraphicalSessionManaged = { true },
+    ).refreshLinuxUserServiceLauncher()
+    if (!launcherReady) return false
     val started = runCatching {
         processRunner(listOf("systemctl", "--user", "start", LINUX_USER_SERVICE_NAME)) == 0
     }.getOrDefault(false)
