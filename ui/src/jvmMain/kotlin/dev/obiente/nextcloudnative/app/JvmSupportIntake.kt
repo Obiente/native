@@ -274,6 +274,10 @@ class JvmSupportIntake(
             }
             if (submission.cancellationPending) {
                 cancellationRequested.set(true)
+                publishState(
+                    SupportDiagnosticsSubmissionState.Cancelling,
+                    submission.originAccountIdentity,
+                )
                 val receipt = submission.receipt
                 if (receipt == null) {
                     reconcileAfterAmbiguousResult(
@@ -404,6 +408,9 @@ class JvmSupportIntake(
             }
             submission.cancellationPending = true
             submission.outcomeAmbiguous = true
+            submission.cancellationRequestedAtEpochMillis =
+                submission.cancellationRequestedAtEpochMillis
+                    ?: System.currentTimeMillis().coerceAtLeast(0L)
             val cancellationPersisted = persistPendingSafely(submission)
             val call = activeCall.getAndSet(null)
             if (!cancellationPersisted) {
@@ -773,6 +780,7 @@ class JvmSupportIntake(
             .get()
             .build()
         var cancellationDeadlineNanos: Long? = null
+        var cancellationDeadlineEpochMillis: Long? = null
         while (true) {
             val call = client.newCall(request)
             if (!registerActiveCall(submission, call, allowCancellationRequested = true)) {
@@ -818,23 +826,37 @@ class JvmSupportIntake(
                 }
                 responseCode == 404 && cancellationRequested.get() -> {
                     val nowNanos = System.nanoTime()
+                    val nowEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
+                    val requestedAtEpochMillis = submission.cancellationRequestedAtEpochMillis
+                        ?: (submission.latestUploadAttemptAtEpochMillis ?: nowEpochMillis)
+                            .coerceAtMost(nowEpochMillis)
+                            .also { requestedAt ->
+                                submission.cancellationRequestedAtEpochMillis = requestedAt
+                            }
+                    val deadlineEpochMillis = cancellationDeadlineEpochMillis
+                        ?: requestedAtEpochMillis.saturatingAdd(cancellationReconcileWindowMillis)
+                            .also { cancellationDeadlineEpochMillis = it }
                     val deadlineNanos = cancellationDeadlineNanos
                         ?: nowNanos.saturatingAdd(cancellationReconcileWindowMillis * NANOS_PER_MILLISECOND)
                             .also { cancellationDeadlineNanos = it }
-                    val remainingNanos = deadlineNanos - nowNanos
-                    if (remainingNanos > 0L) {
+                    val remainingEpochMillis = (deadlineEpochMillis - nowEpochMillis).coerceAtLeast(0L)
+                    val remainingMonotonicMillis = ((deadlineNanos - nowNanos) / NANOS_PER_MILLISECOND)
+                        .coerceAtLeast(0L)
+                    val remainingMillis = minOf(remainingEpochMillis, remainingMonotonicMillis)
+                    if (remainingMillis > 0L) {
                         val delayMillis = minOf(
                             cancellationReconcilePollMillis,
-                            (remainingNanos / NANOS_PER_MILLISECOND).coerceAtLeast(1L),
+                            remainingMillis,
                         )
                         delay(delayMillis)
                         continue
                     }
-                    retainForRetry(
-                        submission,
-                        "Support has not confirmed receipt yet. Retry again to finish deleting the private report safely.",
-                        ambiguous = true,
-                    )
+                    // The service handles report creation synchronously and exposes the committed
+                    // receipt through the idempotency key. Once the bounded server-processing
+                    // window has elapsed and reconciliation still returns 404, there is no remote
+                    // capability to delete. Honor the user's cancellation and remove the retained
+                    // local report instead of trapping it in an endless retry loop.
+                    finishCancelled(submission)
                     return
                 }
                 responseCode == 404 -> {
@@ -886,6 +908,9 @@ class JvmSupportIntake(
         )
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
+        submission.cancellationRequestedAtEpochMillis =
+            submission.cancellationRequestedAtEpochMillis
+                ?: System.currentTimeMillis().coerceAtLeast(0L)
         submission.receipt = receipt
         persistPendingSafely(submission)
         val capability = statusUrl.pathSegments.last()
@@ -1262,6 +1287,7 @@ class JvmSupportIntake(
                     cancellationPending = submission.cancellationPending,
                     outcomeAmbiguous = submission.outcomeAmbiguous,
                     latestUploadAttemptAtEpochMillis = submission.latestUploadAttemptAtEpochMillis,
+                    cancellationRequestedAtEpochMillis = submission.cancellationRequestedAtEpochMillis,
                     retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis,
                     receipt = submission.receipt,
                 ),
@@ -1371,6 +1397,10 @@ class JvmSupportIntake(
         require(persisted.originAccountIdentity.matches(SUPPORT_ACCOUNT_IDENTITY_PATTERN))
         require(persisted.createdAtEpochMillis >= 0L)
         require(persisted.latestUploadAttemptAtEpochMillis == null || persisted.latestUploadAttemptAtEpochMillis >= 0L)
+        require(
+            persisted.cancellationRequestedAtEpochMillis == null ||
+                persisted.cancellationRequestedAtEpochMillis >= 0L,
+        )
         val nowEpochMillis = System.currentTimeMillis()
         val retryNotBeforeEpochMillis = persisted.retryNotBeforeEpochMillis?.takeIf { deadline ->
             deadline <= nowEpochMillis.saturatingAdd(MAX_SUPPORT_RETRY_AFTER_MILLIS)
@@ -1421,6 +1451,7 @@ class JvmSupportIntake(
             cancellationPending = persisted.cancellationPending,
             outcomeAmbiguous = persisted.outcomeAmbiguous,
             latestUploadAttemptAtEpochMillis = persisted.latestUploadAttemptAtEpochMillis,
+            cancellationRequestedAtEpochMillis = persisted.cancellationRequestedAtEpochMillis,
             retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
             receipt = persisted.receipt,
         )
@@ -1608,6 +1639,7 @@ class JvmSupportIntake(
         var cancellationPending: Boolean = false,
         var outcomeAmbiguous: Boolean = false,
         var latestUploadAttemptAtEpochMillis: Long? = null,
+        var cancellationRequestedAtEpochMillis: Long? = null,
         var retryNotBeforeEpochMillis: Long? = null,
         var receipt: SupportIntakeReceipt? = null,
     ) {
@@ -1648,6 +1680,7 @@ class JvmSupportIntake(
         val cancellationPending: Boolean = false,
         val outcomeAmbiguous: Boolean = true,
         val latestUploadAttemptAtEpochMillis: Long? = null,
+        val cancellationRequestedAtEpochMillis: Long? = null,
         val retryNotBeforeEpochMillis: Long? = null,
         val receipt: SupportIntakeReceipt? = null,
     )
@@ -1919,7 +1952,9 @@ private const val SUPPORT_RECOVERY_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_00
 private const val SUPPORT_SERVER_RETENTION_MAX_AGE_MILLIS = 30L * 24L * 60L * 60L * 1_000L
 private const val SUPPORT_RECEIPT_CLOCK_SKEW_MILLIS = 5L * 60L * 1_000L
 private const val SUPPORT_DESCRIPTOR_DELETE_RETRY_MILLIS = 60L * 1_000L
-private const val SUPPORT_CANCELLATION_RECONCILE_WINDOW_MILLIS = 10L * 1_000L
+// The support service accepts request bodies synchronously with a 30-second read timeout. Wait
+// beyond that bound before treating repeated 404 reconciliation responses as confirmed absence.
+private const val SUPPORT_CANCELLATION_RECONCILE_WINDOW_MILLIS = 35L * 1_000L
 private const val SUPPORT_CANCELLATION_RECONCILE_POLL_MILLIS = 500L
 private const val MAX_CANCELLATION_RECONCILE_WINDOW_MILLIS = 60L * 1_000L
 private const val NANOS_PER_MILLISECOND = 1_000_000L

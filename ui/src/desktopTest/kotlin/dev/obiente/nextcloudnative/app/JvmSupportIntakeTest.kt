@@ -663,16 +663,8 @@ class JvmSupportIntakeTest {
 
             withTimeout(5_000) { submission.join() }
             assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
-            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
-            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
-
-            fixture.intake.retry()
-
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            assertEquals("GET", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
-            assertEquals("DELETE", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
         }
         Unit
     }
@@ -693,7 +685,7 @@ class JvmSupportIntakeTest {
 
             fixture.server.enqueue(MockResponse.Builder().code(404).build())
             withTimeout(5_000) { submission.join() }
-            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
         }
         Unit
     }
@@ -972,7 +964,7 @@ class JvmSupportIntakeTest {
     }
 
     @Test
-    fun cancellingAmbiguousSubmissionRequiresDeletionReconciliation() = runBlocking {
+    fun cancellingAmbiguousSubmissionFinishesAfterConfirmedAbsence() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
@@ -985,13 +977,6 @@ class JvmSupportIntakeTest {
             assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
 
             fixture.server.enqueue(MockResponse.Builder().code(404).build())
-            fixture.intake.retry()
-
-            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
-            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.server.enqueue(MockResponse.Builder().code(200).body("{}").build())
-
             fixture.intake.retry()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
@@ -1054,6 +1039,48 @@ class JvmSupportIntakeTest {
             assertEquals("DELETE", deletion.method)
             assertTrue(deletion.url.encodedPath.startsWith("/api/v1/reports/"))
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun cancellationRetryFinishesAfterBoundedConfirmedAbsence() = runBlocking {
+        testFixture(
+            cancellationReconcileWindowMillis = 0L,
+            cancellationReconcilePollMillis = 1L,
+        ).use { fixture ->
+            fixture.server.enqueue(
+                receiptResponse(fixture.statusUrl).newBuilder().headersDelay(10, TimeUnit.SECONDS).build(),
+            )
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertTrue(fixture.intake.cancel())
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val descriptor = File(fixture.temporaryRoot, "pending.json")
+            assertTrue(descriptor.isFile)
+            fixture.intake.close()
+            descriptor.writeText(
+                descriptor.readText().replace(
+                    Regex(",\"cancellationRequestedAtEpochMillis\":\\d+"),
+                    "",
+                ),
+            )
+            val restored = fixture.newIntake()
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(restored.states().value)
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+
+            restored.retry()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(restored.states().value)
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", reconciliation.method)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+            restored.close()
         }
     }
 
