@@ -1,7 +1,7 @@
 category: feature
 issue: 351
-pull: 386
+pull: none
 platforms: android, desktop
 user-facing: yes
 
-Send a reviewed, privacy-filtered diagnostic report directly to Obiente Support, retain a local-copy option, and finish cancellation after the service confirms that an interrupted upload created no private report.
+Send a reviewed, privacy-filtered diagnostic report directly to Obiente Support while retaining the option to save a local copy.
