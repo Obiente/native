@@ -66,6 +66,7 @@ class JvmSupportIntake(
     private val beforeSubmissionPreparation: () -> Unit = {},
     private val beforeBundlePackaging: () -> Unit = {},
     private val afterBundlePackaging: () -> Unit = {},
+    private val afterReceiptLookup: () -> Unit = {},
     private val privateFileDelete: (File) -> Boolean = File::delete,
     private val pendingDescriptorRead: (File) -> String = { descriptor ->
         descriptor.readText(Charsets.UTF_8)
@@ -812,6 +813,11 @@ class JvmSupportIntake(
             return
         } finally {
             activeCall.compareAndSet(call, null)
+        }
+        afterReceiptLookup()
+        if (cancellationRequested.get() || submission.cancellationPending) {
+            cancelPendingSubmission(submission)
+            return
         }
         val (responseCode, responseText) = responseResult
         when {

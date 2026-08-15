@@ -1022,6 +1022,42 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun cancellationAfterReceiptLookupCompletesSendsAuthoritativeTombstone() = runBlocking {
+        val lookupCompleted = CountDownLatch(1)
+        val allowLookupResult = CountDownLatch(1)
+        testFixture(
+            afterReceiptLookup = {
+                lookupCompleted.countDown()
+                assertTrue(allowLookupResult.await(2, TimeUnit.SECONDS))
+            },
+        ).use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
+            fixture.server.enqueue(MockResponse.Builder().code(404).build())
+            fixture.server.enqueue(MockResponse.Builder().code(204).build())
+
+            val submission = launch(Dispatchers.Default) {
+                fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+            }
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", reconciliation.method)
+            assertTrue(lookupCompleted.await(2, TimeUnit.SECONDS))
+
+            assertTrue(fixture.intake.cancel())
+            allowLookupResult.countDown()
+            submission.join()
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
+            assertEquals(3, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
     fun serverFailureRemainsAmbiguousUntilCancellationIsConfirmed() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
@@ -1732,6 +1768,7 @@ class JvmSupportIntakeTest {
         beforeSubmissionPreparation: () -> Unit = {},
         beforeBundlePackaging: () -> Unit = {},
         afterBundlePackaging: () -> Unit = {},
+        afterReceiptLookup: () -> Unit = {},
         privateFileDelete: (File) -> Boolean = File::delete,
         pendingDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
         completedDescriptorRead: (File) -> String = { descriptor -> descriptor.readText() },
@@ -1796,6 +1833,7 @@ class JvmSupportIntakeTest {
             beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
             afterBundlePackaging = afterBundlePackaging,
+            afterReceiptLookup = afterReceiptLookup,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,
@@ -1840,6 +1878,7 @@ class JvmSupportIntakeTest {
         val beforeSubmissionPreparation: () -> Unit,
         val beforeBundlePackaging: () -> Unit,
         val afterBundlePackaging: () -> Unit,
+        val afterReceiptLookup: () -> Unit,
         val privateFileDelete: (File) -> Boolean,
         val pendingDescriptorRead: (File) -> String,
         val completedDescriptorRead: (File) -> String,
@@ -1863,6 +1902,7 @@ class JvmSupportIntakeTest {
             beforeSubmissionPreparation = beforeSubmissionPreparation,
             beforeBundlePackaging = beforeBundlePackaging,
             afterBundlePackaging = afterBundlePackaging,
+            afterReceiptLookup = afterReceiptLookup,
             privateFileDelete = privateFileDelete,
             pendingDescriptorRead = pendingDescriptorRead,
             completedDescriptorRead = completedDescriptorRead,
