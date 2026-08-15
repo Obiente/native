@@ -736,7 +736,7 @@ class JvmSupportIntake(
                         ambiguous = false,
                         retryNotBeforeEpochMillis = response.retryNotBeforeEpochMillis(),
                     )
-                    response.code == 410 && cancellationRequested.get() -> finishCancelled(submission)
+                    response.code == 410 -> finishCancelled(submission)
                     response.code in 400..499 -> finishRejected(submission, decodeProblem(responseText))
                     else -> retainForRetry(
                         submission,
@@ -822,6 +822,7 @@ class JvmSupportIntake(
             }
             responseCode == 404 ->
                 retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
+            responseCode == 410 -> finishCancelled(submission)
             else -> retainForRetry(
                 submission,
                 "The upload result is uncertain. Check your connection before retrying.",
@@ -857,7 +858,13 @@ class JvmSupportIntake(
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
         submission.receipt = receipt
-        persistPendingSafely(submission)
+        if (!persistPendingSafely(submission)) {
+            publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
+                "Cancellation was not sent because its recovery state could not be stored safely. Keep the app open and retry.",
+                outcomeAmbiguous = true,
+            ))
+            return
+        }
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments("api/v1/receipts").build())
             .header("Accept", "application/json")
