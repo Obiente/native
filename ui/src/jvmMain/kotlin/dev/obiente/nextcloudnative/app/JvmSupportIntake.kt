@@ -66,6 +66,7 @@ class JvmSupportIntake(
     private val beforeSubmissionPreparation: () -> Unit = {},
     private val beforeBundlePackaging: () -> Unit = {},
     private val afterBundlePackaging: () -> Unit = {},
+    private val afterUploadResponse: () -> Unit = {},
     private val afterReceiptLookup: () -> Unit = {},
     private val privateFileDelete: (File) -> Boolean = File::delete,
     private val pendingDescriptorRead: (File) -> String = { descriptor ->
@@ -265,10 +266,6 @@ class JvmSupportIntake(
             if (!submission.belongsTo(synchronized(lock) { activeAccountIdentity })) {
                 return@withContext
             }
-            if (submission.recoveryExpired(System.currentTimeMillis())) {
-                finishRejected(submission, "The private report recovery capability expired and was removed from this device.")
-                return@withContext
-            }
             if (submission.cancellationPending) {
                 cancellationRequested.set(true)
                 publishState(
@@ -276,6 +273,10 @@ class JvmSupportIntake(
                     submission.originAccountIdentity,
                 )
                 cancelPendingSubmission(submission)
+                return@withContext
+            }
+            if (submission.recoveryExpired(System.currentTimeMillis())) {
+                finishRejected(submission, "The private report recovery capability expired and was removed from this device.")
                 return@withContext
             }
             val waitMillis = submission.retryNotBeforeEpochMillis?.minus(System.currentTimeMillis()) ?: 0L
@@ -725,6 +726,11 @@ class JvmSupportIntake(
             call.execute().use { response ->
                 val responseText = response.readBoundedText()
                 activeCall.compareAndSet(call, null)
+                afterUploadResponse()
+                if (cancellationRequested.get() || submission.cancellationPending) {
+                    cancelPendingSubmission(submission)
+                    return
+                }
                 when {
                     response.isSuccessful -> finishReceived(submission, decodeReceipt(responseText))
                     response.code == 408 -> reconcileAfterAmbiguousResult(
@@ -831,7 +837,7 @@ class JvmSupportIntake(
                 }
             }
             responseCode == 404 ->
-                retainForRetry(submission, "The upload did not complete. You can retry it safely.", false)
+                retainForRetry(submission, "The upload did not complete. You can retry it safely.", true)
             responseCode == 410 -> finishCancelled(submission)
             else -> retainForRetry(
                 submission,
