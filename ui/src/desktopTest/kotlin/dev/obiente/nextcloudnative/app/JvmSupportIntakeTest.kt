@@ -560,6 +560,29 @@ class JvmSupportIntakeTest {
     }
 
     @Test
+    fun transportGateClosingBeforePostStillAllowsLocalCancellation() = runBlocking {
+        var gateChecks = 0
+        testFixture(
+            supportMutationsAllowed = {
+                gateChecks += 1
+                gateChecks <= 2
+            },
+        ).use { fixture ->
+            fixture.intake.submit("A refresh failed.", "nightly", emptyList())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+            assertTrue(File(fixture.temporaryRoot, "pending.json").isFile)
+
+            assertTrue(fixture.intake.cancel())
+
+            assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
+            assertEquals(0, fixture.server.requestCount)
+            assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
     fun cancellationWinsBeforeTheUploadCallIsRegistered() = runBlocking {
         val registrationEntered = CountDownLatch(1)
         val allowRegistration = CountDownLatch(1)
@@ -1548,6 +1571,34 @@ class JvmSupportIntakeTest {
             assertEquals(upload.headers["Idempotency-Key"], retriedCancellation.headers["Idempotency-Key"])
             assertEquals(3, fixture.server.requestCount)
             assertTrue(fixture.temporaryRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    @Test
+    fun failedCancellationRetainsOnlyMinimalRecoveryState() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+            fixture.intake.submit(
+                "Private cancellation reproduction note.",
+                "nightly",
+                listOf(SupportDiagnosticFieldDraft("private_field", "Private value")),
+            )
+            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            fixture.server.enqueue(MockResponse.Builder().code(503).build())
+
+            assertTrue(fixture.intake.cancel())
+
+            assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
+            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("DELETE", cancellation.method)
+            assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
+            assertFalse(fixture.temporaryRoot.listFiles().orEmpty().any { it.extension == "zip" })
+            val descriptor = File(fixture.temporaryRoot, "pending.json").readText()
+            assertTrue(descriptor.contains(upload.headers["Idempotency-Key"].orEmpty()))
+            assertTrue(descriptor.contains("\"cancellationPending\":true"))
+            assertFalse(descriptor.contains("Private cancellation reproduction note."))
+            assertFalse(descriptor.contains("private_field"))
+            assertFalse(descriptor.contains("Private value"))
         }
     }
 

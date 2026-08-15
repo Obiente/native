@@ -668,13 +668,6 @@ class JvmSupportIntake(
             retainForRetry(submission, READ_ONLY_SUPPORT_MESSAGE, ambiguous = false)
             return
         }
-        submission.latestUploadAttemptAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
-        submission.outcomeAmbiguous = true
-        submission.cancellationRequiresTombstone = true
-        if (!persistPendingSafely(submission)) {
-            finishRejected(submission, "The private support submission could not be retained safely on this device.")
-            return
-        }
         val archive = requireNotNull(submission.archive) { "The private support archive has not been prepared." }
         require(archive.isFile && archive.length() in 1L..MAX_SUPPORT_ARCHIVE_BYTES)
         val metadata = json.encodeToString(SupportIntakeMetadata.serializer(), submission.metadata)
@@ -706,6 +699,13 @@ class JvmSupportIntake(
         }
         if (!mutationAllowedAtTransport) {
             retainForRetry(submission, READ_ONLY_SUPPORT_MESSAGE, ambiguous = false)
+            return
+        }
+        submission.latestUploadAttemptAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L)
+        submission.outcomeAmbiguous = true
+        submission.cancellationRequiresTombstone = true
+        if (!persistPendingSafely(submission)) {
+            finishRejected(submission, "The private support submission could not be retained safely on this device.")
             return
         }
         publishState(SupportDiagnosticsSubmissionState.Uploading(0f))
@@ -875,7 +875,7 @@ class JvmSupportIntake(
         submission.cancellationPending = true
         submission.outcomeAmbiguous = true
         submission.receipt = receipt
-        if (!persistPendingSafely(submission)) {
+        if (!persistMinimalCancellationSafely(submission)) {
             publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
                 "Cancellation was not sent because its recovery state could not be stored safely. Keep the app open and retry.",
                 outcomeAmbiguous = true,
@@ -920,6 +920,38 @@ class JvmSupportIntake(
         } finally {
             activeCall.compareAndSet(call, null)
         }
+    }
+
+    private fun persistMinimalCancellationSafely(submission: PendingSubmission): Boolean {
+        val archive = submission.archive
+        val metadata = submission.metadata
+        val context = submission.context
+        val receipt = submission.receipt
+        val retryNotBeforeEpochMillis = submission.retryNotBeforeEpochMillis
+        submission.archive = null
+        submission.metadata = SupportIntakeMetadata(
+            title = "",
+            description = "",
+            release = SupportIntakeRelease("", "", "", "", ""),
+        )
+        submission.context = PreparedSupportSubmissionContext(
+            sanitizedReproductionSteps = null,
+            featureState = emptyList(),
+            confirmedAtEpochMillis = 0L,
+            events = emptyList(),
+        )
+        submission.receipt = null
+        submission.retryNotBeforeEpochMillis = null
+        if (!persistPendingSafely(submission)) {
+            submission.archive = archive
+            submission.metadata = metadata
+            submission.context = context
+            submission.receipt = receipt
+            submission.retryNotBeforeEpochMillis = retryNotBeforeEpochMillis
+            return false
+        }
+        deletePrivateFileOrRetry(archive)
+        return true
     }
 
     private fun finishSubmitted(submission: PendingSubmission, receipt: SupportIntakeReceipt) {
@@ -1545,11 +1577,11 @@ class JvmSupportIntake(
 
     private data class PendingSubmission(
         var archive: File?,
-        val metadata: SupportIntakeMetadata,
+        var metadata: SupportIntakeMetadata,
         val idempotencyKey: String,
         val createdAtEpochMillis: Long,
         val originAccountIdentity: String,
-        val context: PreparedSupportSubmissionContext,
+        var context: PreparedSupportSubmissionContext,
         var cancellationPending: Boolean = false,
         var outcomeAmbiguous: Boolean = false,
         var cancellationRequiresTombstone: Boolean = false,
