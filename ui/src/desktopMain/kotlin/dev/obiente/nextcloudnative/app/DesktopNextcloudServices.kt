@@ -4019,8 +4019,12 @@ class DesktopNextcloudServices(
         true
     }.getOrDefault(false)
 
-    override suspend fun beginLogin(serverUrl: String): LoginChallenge = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeServerUrl(serverUrl)
+    override suspend fun beginLogin(
+        serverUrl: String,
+        transportSecurity: LoginTransportSecurity,
+    ): LoginChallenge = withContext(Dispatchers.IO) {
+        val baseUrl = normalizeServerUrl(serverUrl, transportSecurity)
+        val effectiveTransport = loginTransportSecurity(baseUrl)
         val response = request("POST", "$baseUrl/index.php/login/v2")
         check(response.status in 200..299) { "Nextcloud Login Flow v2 failed (HTTP ${response.status})." }
         val json = JSONObject(response.text)
@@ -4047,6 +4051,10 @@ class DesktopNextcloudServices(
                         "poll_fallback_available",
                         (relationships.pollFallbackEndpoint != null).toString(),
                     ),
+                    SupportDiagnosticFieldDraft(
+                        "transport_security",
+                        effectiveTransport.diagnosticValue,
+                    ),
                 ),
             ),
         )
@@ -4056,6 +4064,7 @@ class DesktopNextcloudServices(
             pollFallbackEndpoint = relationships.pollFallbackEndpoint,
             token = poll.getString("token"),
             loginUrl = loginUrl,
+            transportSecurity = effectiveTransport,
         )
     }
 
@@ -4136,7 +4145,11 @@ class DesktopNextcloudServices(
         }
         runCatching {
             val json = JSONObject(response.text)
-            val resultServerUrl = normalizeServerUrl(json.getString("server"))
+            val resultServerUrl = normalizeServerUrl(json.getString("server"), challenge.transportSecurity)
+            val resultOriginMatchesEntered = loginResultOriginMatchesEntered(
+                challenge.enteredServerUrl,
+                resultServerUrl,
+            )
             val loginName = json.getString("loginName")
             val appPassword = json.getString("appPassword")
             registerSupportDiagnosticPrivateValue(loginName)
@@ -4151,7 +4164,7 @@ class DesktopNextcloudServices(
                         fields = listOf(
                             SupportDiagnosticFieldDraft(
                                 "result_origin_matches_entered",
-                                loginResultOriginMatchesEntered(challenge.enteredServerUrl, resultServerUrl).toString(),
+                                resultOriginMatchesEntered.toString(),
                             ),
                             SupportDiagnosticFieldDraft(
                                 "poll_fallback_used",
@@ -5945,12 +5958,32 @@ class DesktopNextcloudServices(
     private fun org.w3c.dom.Node.childCount(namespace: String, name: String): Int =
         (this as? org.w3c.dom.Element)?.getElementsByTagNameNS(namespace, name)?.length ?: 0
 
-    private fun normalizeServerUrl(value: String): String {
+    private fun normalizeServerUrl(
+        value: String,
+        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+    ): String {
         val candidate = value.trim().let { if ("://" in it) it else "https://$it" }
         val uri = URI(candidate)
-        require(uri.scheme == "https" && !uri.host.isNullOrBlank()) { "Enter a valid secure https:// server address." }
+        val scheme = uri.scheme?.lowercase()
+        require(
+            (scheme == "https" ||
+                (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp)) &&
+                !uri.host.isNullOrBlank(),
+        ) {
+            "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
+        }
         return candidate.trimEnd('/').removeSuffix("/index.php")
     }
+
+    private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
+        if (serverUrl.startsWith("http://", ignoreCase = true)) {
+            LoginTransportSecurity.PlainHttp
+        } else {
+            LoginTransportSecurity.Tls
+        }
+
+    private val LoginTransportSecurity.diagnosticValue: String
+        get() = if (this == LoginTransportSecurity.PlainHttp) "plaintext" else "tls"
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

@@ -13,9 +13,16 @@ fun validateLoginEndpointRelationships(
     loginUrl: String,
     pollEndpoint: String,
 ): LoginEndpointRelationships {
-    val entered = requireSecureLoginUri(enteredServerUrl, "server")
-    val login = requireSecureLoginUri(loginUrl, "browser login")
-    val poll = requireSecureLoginUri(pollEndpoint, "login polling")
+    val entered = requireLoginUri(enteredServerUrl, "server", allowPlainHttp = true)
+    val allowPlainHttp = entered.scheme.equals("http", ignoreCase = true)
+    val login = requireLoginUri(loginUrl, "browser login", allowPlainHttp)
+    val poll = requireLoginUri(pollEndpoint, "login polling", allowPlainHttp)
+    require(!login.scheme.equals("http", ignoreCase = true) || entered.hasSameOrigin(login)) {
+        "The browser login address may use plain HTTP only on the entered server origin."
+    }
+    require(!poll.scheme.equals("http", ignoreCase = true) || entered.hasSameOrigin(poll)) {
+        "The login polling address may use plain HTTP only on the entered server origin."
+    }
     return LoginEndpointRelationships(
         loginOriginMatchesEntered = entered.hasSameOrigin(login),
         pollOriginMatchesEntered = entered.hasSameOrigin(poll),
@@ -24,14 +31,26 @@ fun validateLoginEndpointRelationships(
 }
 
 fun loginResultOriginMatchesEntered(enteredServerUrl: String, resultServerUrl: String): Boolean =
-    requireSecureLoginUri(enteredServerUrl, "server")
-        .hasSameOrigin(requireSecureLoginUri(resultServerUrl, "authenticated server"))
+    requireLoginUri(enteredServerUrl, "server", allowPlainHttp = true).let { entered ->
+        val result = requireLoginUri(
+            resultServerUrl,
+            "authenticated server",
+            allowPlainHttp = entered.scheme.equals("http", ignoreCase = true),
+        )
+        val matches = entered.hasSameOrigin(result)
+        require(!result.scheme.equals("http", ignoreCase = true) || matches) {
+            "The authenticated server may use plain HTTP only on the entered server origin."
+        }
+        matches
+    }
 
-private fun requireSecureLoginUri(value: String, label: String): URI {
+private fun requireLoginUri(value: String, label: String, allowPlainHttp: Boolean): URI {
     val uri = runCatching { URI(value) }
         .getOrElse { throw IllegalArgumentException("The $label address is invalid.") }
-    require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) {
-        "The $label address must use a valid https:// hostname."
+    val validScheme = uri.scheme.equals("https", ignoreCase = true) ||
+        (allowPlainHttp && uri.scheme.equals("http", ignoreCase = true))
+    require(validScheme && !uri.host.isNullOrBlank()) {
+        "The $label address must use a valid HTTPS hostname."
     }
     require(uri.rawUserInfo == null && uri.rawFragment == null) {
         "The $label address contains unsupported URL components."
@@ -47,7 +66,11 @@ private fun URI.hasSameOrigin(other: URI): Boolean =
         host.equals(other.host, ignoreCase = true) &&
         effectivePort() == other.effectivePort()
 
-private fun URI.effectivePort(): Int = if (port >= 0) port else 443
+private fun URI.effectivePort(): Int = when {
+    port >= 0 -> port
+    scheme.equals("http", ignoreCase = true) -> 80
+    else -> 443
+}
 
 private fun URI.canonicalPollEndpoint(): String {
     val basePath = rawPath.orEmpty().trimEnd('/')

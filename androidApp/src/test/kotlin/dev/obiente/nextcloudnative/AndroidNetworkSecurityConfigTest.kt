@@ -21,7 +21,7 @@ class AndroidNetworkSecurityConfigTest {
         val baseConfig = configuration.getElementsByTagName("base-config")
         assertEquals(1, baseConfig.length)
         assertEquals(
-            "false",
+            "true",
             baseConfig.item(0).attributes.getNamedItem("cleartextTrafficPermitted").nodeValue,
         )
         assertEquals(0, configuration.getElementsByTagName("domain-config").length)
