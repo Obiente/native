@@ -43,7 +43,10 @@ jq -e '
   length == (unique | length) and
   all(.[]; type == "string" and test("^[a-f0-9]{64}$"))
 ' <<<"$signer_digests_json" >/dev/null
-changes="$(node "$(dirname "$0")/update-changelog.mjs" "$version_code")"
+changes='[]'
+if (( version_code > 20000000 )); then
+    changes="$(node "$(dirname "$0")/update-changelog.mjs" "$version_code")"
+fi
 
 mkdir -p "$(dirname "$output")"
 jq -n \
