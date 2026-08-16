@@ -59,6 +59,20 @@ data class LoginChallenge(
     val loginUrl: String,
 )
 
+data class ServerCertificateReview(
+    val serverOrigin: String,
+    val serverDisplayName: String,
+    val subject: String,
+    val issuer: String,
+    val sha256Fingerprint: String,
+    val validFrom: String,
+    val validUntil: String,
+)
+
+data class TrustedServerCertificate(
+    val sha256Fingerprint: String,
+)
+
 sealed interface LoginPollResult {
     data object Pending : LoginPollResult
 
@@ -696,6 +710,21 @@ interface NextcloudPlatformServices {
     )
 
     suspend fun beginLogin(serverUrl: String): LoginChallenge
+
+    /** Returns a review only when a platform can safely offer explicit certificate trust. */
+    suspend fun inspectServerCertificateFailure(
+        serverUrl: String,
+        failure: Throwable,
+    ): ServerCertificateReview? = null
+
+    /** Revalidates and persists the exact reviewed certificate for its HTTPS origin. */
+    suspend fun trustServerCertificate(review: ServerCertificateReview) {
+        error("Explicit server certificate trust is not supported on this platform.")
+    }
+
+    fun trustedServerCertificate(serverUrl: String): TrustedServerCertificate? = null
+
+    fun removeTrustedServerCertificate(serverUrl: String): Boolean = false
 
     suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult
 

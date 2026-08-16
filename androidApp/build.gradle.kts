@@ -104,6 +104,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:okhttp-tls:5.4.0")
 }
 
 val validateReleaseSigning by tasks.registering {

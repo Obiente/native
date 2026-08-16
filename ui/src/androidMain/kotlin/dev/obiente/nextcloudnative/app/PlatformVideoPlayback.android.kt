@@ -92,6 +92,7 @@ private fun Media3VideoPlayer(
             Base64.NO_WRAP,
         )
         val client = OkHttpClient.Builder()
+            .useAndroidNextcloudCertificateTrust(context.applicationContext)
             .followRedirects(false)
             .followSslRedirects(false)
             .build()

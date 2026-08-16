@@ -33,6 +33,10 @@ import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiReadFailure
 import dev.obiente.nextcloudnative.app.NextcloudApiRequest
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.app.ServerCertificateReview
+import dev.obiente.nextcloudnative.app.TrustedServerCertificate
+import dev.obiente.nextcloudnative.app.AndroidServerCertificateTrust
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import dev.obiente.nextcloudnative.app.LocalUploadFile
 import dev.obiente.nextcloudnative.app.LocalUploadSelectionResult
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
@@ -446,7 +450,10 @@ internal class AndroidNextcloudServices(
     private val activity = context as? Activity
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
     private val sessionCipher = SessionCipher()
-    private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
+    private val httpClient = OkHttpClient.Builder()
+        .useAndroidNextcloudCertificateTrust(appContext)
+        .trackJvmNetworkFailures()
+        .build()
     private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
     private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
@@ -1320,6 +1327,63 @@ internal class AndroidNextcloudServices(
         )
     }
 
+    override suspend fun inspectServerCertificateFailure(
+        serverUrl: String,
+        failure: Throwable,
+    ): ServerCertificateReview? = withContext(Dispatchers.IO) {
+        if (!AndroidServerCertificateTrust.isCertificateFailure(failure)) return@withContext null
+        runCatching { AndroidServerCertificateTrust.inspect(serverUrl) }
+            .onSuccess {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "tls.certificate_review",
+                        outcome = "required",
+                    ),
+                )
+            }
+            .onFailure {
+                recordSupportDiagnostic(
+                    SupportDiagnosticEventDraft(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        component = SupportDiagnosticComponent.Authentication,
+                        operation = "tls.certificate_review",
+                        outcome = "blocked",
+                    ),
+                )
+            }
+            .getOrThrow()
+    }
+
+    override suspend fun trustServerCertificate(review: ServerCertificateReview) = withContext(Dispatchers.IO) {
+        AndroidServerCertificateTrust.approve(appContext, review)
+        recordSupportDiagnostic(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Warning,
+                component = SupportDiagnosticComponent.Authentication,
+                operation = "tls.certificate_trust",
+                outcome = "approved",
+            ),
+        )
+    }
+
+    override fun trustedServerCertificate(serverUrl: String): TrustedServerCertificate? =
+        AndroidServerCertificateTrust.trustedCertificate(appContext, serverUrl)
+
+    override fun removeTrustedServerCertificate(serverUrl: String): Boolean {
+        val removed = AndroidServerCertificateTrust.revoke(appContext, serverUrl)
+        recordSupportDiagnostic(
+            SupportDiagnosticEventDraft(
+                severity = SupportDiagnosticSeverity.Info,
+                component = SupportDiagnosticComponent.Authentication,
+                operation = "tls.certificate_trust",
+                outcome = if (removed) "revoked" else "not_found",
+            ),
+        )
+        return removed
+    }
+
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         val formBody = "token=" + URLEncoder.encode(challenge.token, StandardCharsets.UTF_8.name())
         var networkFailure: JvmNetworkFailureDiagnostic? = null
@@ -1645,7 +1709,12 @@ internal class AndroidNextcloudServices(
         val offline = fileOfflineRepository.loadCenter(session)
         val documentWritebacks = androidDocumentPendingWritebacks(appContext, session)
         if (documentWritebacks.isNotEmpty()) {
-            val webDav = NextcloudDocumentWebDav(cloudMutationsAllowed = appContext.cloudMutationGate())
+            val webDav = NextcloudDocumentWebDav(
+                client = OkHttpClient.Builder()
+                    .useAndroidNextcloudCertificateTrust(appContext)
+                    .build(),
+                cloudMutationsAllowed = appContext.cloudMutationGate(),
+            )
             documentWritebacks.forEach { discovered ->
                 val pending = claimAndroidDocumentPendingWritebackForRecovery(
                     appContext,

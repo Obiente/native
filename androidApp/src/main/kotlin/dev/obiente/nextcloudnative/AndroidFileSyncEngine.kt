@@ -46,6 +46,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
+import okhttp3.OkHttpClient
 
 /**
  * Foreground execution engine for SAF-backed sync pairs.
@@ -57,6 +59,9 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val appContext = context.applicationContext
     private val store = AndroidFileSyncStore(appContext)
     private val webDav = NextcloudDocumentWebDav(
+        client = OkHttpClient.Builder()
+            .useAndroidNextcloudCertificateTrust(appContext)
+            .build(),
         cloudMutationsAllowed = appContext.cloudMutationGate(),
     )
     private val scheduler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
