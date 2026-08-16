@@ -11,6 +11,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
+import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
@@ -203,7 +204,7 @@ internal fun backgroundSyncCompletionDiagnosticFields(
     require(failedCount >= 0)
     require(conflictCount >= 0)
     val rejection = result as? FileSyncCenterActionResult.Rejected
-    val preflightRejected = rejection != null && failedCount == 0
+    val preflightRejected = rejection?.scope == FileSyncRejectionScope.Preflight
     return buildList {
         add(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
         add(SupportDiagnosticFieldDraft("failure_scope", if (preflightRejected) "preflight" else "items"))
