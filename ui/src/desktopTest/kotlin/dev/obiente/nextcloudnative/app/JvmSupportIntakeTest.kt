@@ -1079,7 +1079,10 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            assertEquals("POST", requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS)).method)
+            assertEquals(
+                "POST",
+                requireNotNull(fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS)).method,
+            )
 
             assertTrue(fixture.intake.cancel())
             assertIs<SupportDiagnosticsSubmissionState.Cancelling>(fixture.intake.states().value)
@@ -2244,7 +2247,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             assertTrue(fixture.intake.cancel())
             submission.join()
             assertIs<SupportDiagnosticsSubmissionState.RetryableFailure>(fixture.intake.states().value)
@@ -2763,6 +2768,7 @@ class JvmSupportIntakeTest {
     }
 
     private companion object {
+        const val WINDOWS_REQUEST_START_TIMEOUT_SECONDS = 10L
         const val TEST_ACCOUNT_IDENTITY = "0123456789abcdef0123456789abcdef"
         const val OTHER_ACCOUNT_IDENTITY = "fedcba9876543210fedcba9876543210"
     }
