@@ -1844,6 +1844,7 @@ private fun AuthenticatedApp(
     var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
         mutableStateOf(loadedAppPins.storageAuthoritative)
     }
+    var appPinsPersistenceError by remember(appPinsAccountScope) { mutableStateOf<String?>(null) }
     val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
         if (!appPinsStorageAuthoritative) {
             return@togglePinnedApp "Pinned apps cannot be changed because their saved settings could not be read. Restart the app and try again."
@@ -1855,6 +1856,7 @@ private fun AuthenticatedApp(
         if (appPinsRepository.save(appPinsAccountScope, updated)) {
             pinnedAppIds = updated
             appPinsStorageAuthoritative = true
+            appPinsPersistenceError = null
             null
         } else {
             "Pinned apps could not be saved on this device. Try again."
@@ -2016,13 +2018,13 @@ private fun AuthenticatedApp(
                     installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
                     appsAuthoritative = discovered.appsAuthoritative,
                 )
-                if (
-                    reconciled != null &&
-                    reconciled != pinnedAppIds &&
-                    appPinsStorageAuthoritative &&
-                    appPinsRepository.save(appPinsAccountScope, reconciled)
-                ) {
+                if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
                     pinnedAppIds = reconciled
+                    appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                        null
+                    } else {
+                        "Unavailable pins were removed for this session, but the change could not be saved on this device."
+                    }
                 }
             }
             .onFailure { discoveryError = it.message ?: "Could not load server details." }
@@ -2636,6 +2638,7 @@ private fun AuthenticatedApp(
                     error = discoveryError,
                     lastOpenedAppId = lastOpenedAppId,
                     pinnedAppIds = pinnedAppIds,
+                    pinnedAppsError = appPinsPersistenceError,
                     onTogglePinnedApp = togglePinnedApp,
                     onRetry = { discoveryAttempt += 1 },
                     onSettings = { destination = NextcloudDestination.Settings },
@@ -3215,6 +3218,7 @@ private fun AppsScreen(
     error: String?,
     lastOpenedAppId: String?,
     pinnedAppIds: List<String>,
+    pinnedAppsError: String?,
     onTogglePinnedApp: (String) -> String?,
     onRetry: () -> Unit,
     onSettings: () -> Unit,
@@ -3226,6 +3230,7 @@ private fun AppsScreen(
         error = error,
         lastOpenedAppId = lastOpenedAppId,
         pinnedAppIds = pinnedAppIds,
+        pinnedAppsError = pinnedAppsError,
         onTogglePinnedApp = onTogglePinnedApp,
         onRetry = onRetry,
         onSettings = onSettings,

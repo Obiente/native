@@ -67,6 +67,7 @@ internal fun NativeAppsWorkspace(
     error: String?,
     lastOpenedAppId: String?,
     pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
+    pinnedAppsError: String? = null,
     onTogglePinnedApp: (String) -> String? = { null },
     onRetry: () -> Unit,
     onSettings: () -> Unit,
@@ -114,7 +115,7 @@ internal fun NativeAppsWorkspace(
             onSettings = onSettings,
             onSearch = onSearch,
             onOpenApp = onOpenApp,
-            pinError = pinError,
+            pinError = pinError ?: pinnedAppsError,
             canPinMore = canPinMore,
             onTogglePinnedApp = togglePinnedApp,
         )
@@ -129,7 +130,7 @@ internal fun NativeAppsWorkspace(
             onSettings = onSettings,
             onSearch = onSearch,
             onOpenApp = onOpenApp,
-            pinError = pinError,
+            pinError = pinError ?: pinnedAppsError,
             canPinMore = canPinMore,
             onTogglePinnedApp = togglePinnedApp,
         )

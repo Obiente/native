@@ -71,14 +71,14 @@ fun NextcloudCardOverflow(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
             modifier = Modifier.semantics {
-                contentDescription = "Record actions for $itemLabel"
+                contentDescription = "Actions for $itemLabel"
             },
         ) {
             actions.forEach { action ->
                 DropdownMenuItem(
-                    modifier = action.semanticId?.let { semanticId ->
+                    modifier = action.semanticId?.let {
                         Modifier.semantics(mergeDescendants = true) {
-                            contentDescription = "Run record action $semanticId"
+                            contentDescription = action.label
                         }
                     } ?: Modifier.semantics(mergeDescendants = true) {},
                     text = {

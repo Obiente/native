@@ -604,6 +604,7 @@ private fun DashboardQuickActionsCard(
     val quickApps = remember(installedApps, pinnedAppIds) {
         installedApps
             .filter { canonicalAppWorkspaceId(it.id) in pinnedAppIds }
+            .distinctBy { canonicalAppWorkspaceId(it.id) }
             .sortedBy { pinnedAppIds.indexOf(canonicalAppWorkspaceId(it.id)) }
             .take(MAX_APP_WORKSPACE_PINS)
     }
