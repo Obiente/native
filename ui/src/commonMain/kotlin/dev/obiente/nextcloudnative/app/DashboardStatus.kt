@@ -132,6 +132,32 @@ internal fun dashboardItemsFetchResult(
     }
 }
 
+/**
+ * A missing Dashboard route means the optional server app is unavailable. Keep this deliberately
+ * narrow so authentication, permission, transport, and malformed-response failures remain visible.
+ */
+internal fun isDashboardApiUnavailable(response: NextcloudApiResponse): Boolean {
+    if (response.status == 404) return true
+    if (response.status !in 200..299) return false
+    val statusCode = runCatching {
+        val root = dashboardJson.parseToJsonElement(response.body.decodeToString()).jsonObject
+        val ocs = root["ocs"] as? JsonObject
+        val meta = ocs?.get("meta") as? JsonObject
+        (meta?.get("statuscode") as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+    }.getOrNull()
+    return statusCode == 404
+}
+
+internal fun DashboardItemsRequestPlan.v1FallbackRequest(
+    widgets: List<NativeDashboardWidget>,
+): NextcloudApiRequest? {
+    if (apiVersion != DashboardItemApiVersion.V2) return null
+    val selectedWidgets = widgets.filter { it.id in widgetIds }
+    if (selectedWidgets.mapTo(mutableSetOf(), NativeDashboardWidget::id) != widgetIds) return null
+    if (selectedWidgets.any { 1 !in it.itemApiVersions }) return null
+    return request.copy(relativePath = "/ocs/v2.php/apps/dashboard/api/v1/widget-items")
+}
+
 enum class NativeUserPresence(val wireValue: String) {
     Online("online"),
     Away("away"),

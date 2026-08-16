@@ -318,7 +318,11 @@ internal fun rememberNativeDashboardState(
                 val widgetsDeferred = async {
                     runCatching {
                         val response = services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
-                        withContext(Dispatchers.Default) { parseDashboardWidgets(response) }
+                        if (isDashboardApiUnavailable(response)) {
+                            emptyList()
+                        } else {
+                            withContext(Dispatchers.Default) { parseDashboardWidgets(response) }
+                        }
                     }.getOrElse { failure ->
                         if (failure is CancellationException) throw failure
                         services.recordSupportDiagnostic(
@@ -389,17 +393,27 @@ internal fun rememberNativeDashboardState(
                             }
                             var reservationSettled = false
                             val result = runCatching {
-                                val response = services.executeNextcloudApi(
+                                var effectiveApiVersion = plan.apiVersion
+                                var response = services.executeNextcloudApi(
                                     session,
                                     plan.request.copy(maximumResponseBytes = reservedBytes),
                                 )
+                                if (isDashboardApiUnavailable(response)) {
+                                    plan.v1FallbackRequest(widgets)?.let { fallback ->
+                                        effectiveApiVersion = DashboardItemApiVersion.V1
+                                        response = services.executeNextcloudApi(
+                                            session,
+                                            fallback.copy(maximumResponseBytes = reservedBytes),
+                                        )
+                                    }
+                                }
                                 responseBudgetMutex.withLock {
                                     responseBudget.releaseUnused(reservedBytes, response.body.size.toLong())
                                 }
                                 reservationSettled = true
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
                                 val payload = withContext(Dispatchers.Default) {
-                                    when (plan.apiVersion) {
+                                    when (effectiveApiVersion) {
                                         DashboardItemApiVersion.V1 -> DashboardItemsPayload(
                                             itemsByWidget = parseDashboardItems(response, selectedWidgets),
                                         )
