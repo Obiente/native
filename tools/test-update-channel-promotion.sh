@@ -50,6 +50,7 @@ jq -n \
       schemaVersion: 1,
       channel: "nightly-v1",
       versionCode: 2,
+      changes: [],
       releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $tag),
       apkUrl: ("https://github.com/Obiente/nc-native/releases/download/" + $tag + "/app.apk")
     }' >"$candidate"
@@ -88,6 +89,7 @@ jq -n \
       versionCode: 2,
       packageVersion: "2.0.0",
       releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $tag),
+      changes: [],
       assets: [{
         platform: "linux",
         format: "deb",
