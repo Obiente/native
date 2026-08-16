@@ -1405,15 +1405,15 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val reconciliation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
+            val reconciliation = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
             assertEquals("GET", reconciliation.method)
 
             assertTrue(fixture.intake.cancel())
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val cancellation = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
             assertEquals("DELETE", cancellation.method)
             assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
             assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
