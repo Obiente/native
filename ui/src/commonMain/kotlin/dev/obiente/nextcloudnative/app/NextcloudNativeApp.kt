@@ -1881,6 +1881,21 @@ private fun AuthenticatedApp(
     val appUpdateResult by remember(services) {
         services.observeAppUpdateCheckResult()
     }.collectAsState(null)
+    val supportSubmissionState by remember(services) {
+        services.supportDiagnosticsSubmissionStates()
+    }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
+    val submittedSupportReports = (supportSubmissionState as? SupportDiagnosticsSubmissionState.Submitted)
+        ?.reports
+        .orEmpty()
+    val submittedSupportReportCodes = submittedSupportReports
+        .map(SupportDiagnosticsSubmissionState.SubmittedReport::supportCode)
+    LaunchedEffect(services, submittedSupportReportCodes) {
+        if (submittedSupportReportCodes.isEmpty()) return@LaunchedEffect
+        while (currentCoroutineContext().isActive) {
+            services.refreshSubmittedSupportDiagnosticsReports()
+            delay(SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS)
+        }
+    }
     val pendingEditorNavigationRequests = remember(session) {
         mutableStateListOf<NextcloudPendingNavigationRequest>()
     }
@@ -3005,6 +3020,22 @@ private fun AuthenticatedApp(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
     ) {
+        val supportUpdates = submittedSupportReports.filter { report ->
+            report.statusChanged || report.unreadMaintainerMessages > 0
+        }
+        if (supportUpdates.isNotEmpty() && (screen != Screen.Root || destination != NextcloudDestination.Settings)) {
+            SupportUpdateAvailableBanner(
+                reports = supportUpdates,
+                enabled = !groupwareMutationInProgress,
+                onReview = {
+                    if (!groupwareMutationInProgress) {
+                        leaveAppWorkspace()
+                        screen = Screen.Root
+                        destination = NextcloudDestination.Settings
+                    }
+                },
+            )
+        }
         val availableUpdate = (appUpdateResult as? AppUpdateCheckResult.Available)
             ?.takeIf { screen != Screen.Root || destination != NextcloudDestination.Settings }
         availableUpdate?.let { update ->
@@ -3068,6 +3099,39 @@ private fun AuthenticatedApp(
                     screenContent()
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SupportUpdateAvailableBanner(
+    reports: List<SupportDiagnosticsSubmissionState.SubmittedReport>,
+    enabled: Boolean,
+    onReview: () -> Unit,
+) {
+    val messageCount = reports.sumOf(SupportDiagnosticsSubmissionState.SubmittedReport::unreadMaintainerMessages)
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Obiente Support updated your report", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    when {
+                        messageCount == 1 -> "You have one new private support message."
+                        messageCount > 1 -> "You have $messageCount new private support messages."
+                        reports.size == 1 -> "The status of your private support report changed."
+                        else -> "The status of ${reports.size} private support reports changed."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onReview, enabled = enabled) { Text("View support") }
         }
     }
 }
@@ -14279,6 +14343,8 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     var showPreview by rememberSaveable { mutableStateOf(false) }
     var reportPageIndex by rememberSaveable { mutableStateOf(0) }
     var reportDeletionTarget by remember { mutableStateOf<SupportDiagnosticsSubmissionState.SubmittedReport?>(null) }
+    var reportReplyTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var reportReplyDraft by rememberSaveable { mutableStateOf("") }
     val submissionState by remember(services) {
         services.supportDiagnosticsSubmissionStates()
     }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
@@ -14293,7 +14359,6 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
         submissionState is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount
     val submissionUnavailable = submissionState is SupportDiagnosticsSubmissionState.Unsupported ||
         submissionState is SupportDiagnosticsSubmissionState.AccountRequired
-
     LaunchedEffect(submissionBusy, submissionPending, submissionUnavailable) {
         if (submissionBusy || submissionPending || submissionUnavailable) {
             confirmClear = false
@@ -14689,12 +14754,149 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
+                        OutlinedButton(
+                            enabled = current.reports.none { report -> report.conversationLoading },
+                            onClick = {
+                                scope.launch {
+                                    status = when (val result = services.refreshSubmittedSupportDiagnosticsReports()) {
+                                        SupportDiagnosticsConversationResult.Updated -> "Support status refreshed."
+                                        is SupportDiagnosticsConversationResult.Failed -> result.message
+                                        is SupportDiagnosticsConversationResult.Unsupported -> result.reason
+                                    }
+                                }
+                            },
+                        ) { Text("Refresh support status") }
                         reportPage.items.forEach { report ->
                             Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                                 Text(
                                     "Support code: ${report.supportCode}",
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
+                                Text(
+                                    "Status: ${supportReportStatusLabel(report.status)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (report.conversationLoading) {
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                                if (report.statusChanged || report.unreadMaintainerMessages > 0) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        shape = RoundedCornerShape(NextcloudRadii.Small),
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                                            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                        ) {
+                                            Text(
+                                                buildString {
+                                                    if (report.statusChanged) append("Support updated this report.")
+                                                    if (report.statusChanged && report.unreadMaintainerMessages > 0) append(" ")
+                                                    if (report.unreadMaintainerMessages > 0) {
+                                                        append(report.unreadMaintainerMessages)
+                                                        append(if (report.unreadMaintainerMessages == 1) " new message." else " new messages.")
+                                                    }
+                                                },
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                            TextButton(
+                                                onClick = {
+                                                    scope.launch {
+                                                        status = if (
+                                                            services.markSubmittedSupportDiagnosticsReportRead(report.statusUrl)
+                                                        ) {
+                                                            "Support update marked as read."
+                                                        } else {
+                                                            "The support update could not be marked as read."
+                                                        }
+                                                    }
+                                                },
+                                            ) { Text("Mark read") }
+                                        }
+                                    }
+                                }
+                                report.conversationError?.let { message ->
+                                    Text(
+                                        message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                                report.messages.takeLast(MAX_VISIBLE_SUPPORT_MESSAGES).forEach { message ->
+                                    Surface(
+                                        color = if (message.author == SupportDiagnosticsMessageAuthor.Maintainer) {
+                                            MaterialTheme.colorScheme.secondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerHigh
+                                        },
+                                        shape = RoundedCornerShape(NextcloudRadii.Small),
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            Text(
+                                                if (message.author == SupportDiagnosticsMessageAuthor.Maintainer) {
+                                                    "Obiente Support"
+                                                } else {
+                                                    "You"
+                                                },
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                            Text(message.body, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                    }
+                                }
+                                if (reportReplyTarget == report.statusUrl) {
+                                    OutlinedTextField(
+                                        value = reportReplyDraft,
+                                        onValueChange = { reportReplyDraft = it.take(MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !report.conversationLoading,
+                                        label = { Text("Reply privately") },
+                                        minLines = 2,
+                                        maxLines = 6,
+                                        supportingText = {
+                                            Text("This message is visible only to you and Obiente Support.")
+                                        },
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                                    ) {
+                                        Button(
+                                            enabled = reportReplyDraft.isNotBlank() && !report.conversationLoading,
+                                            onClick = {
+                                                val message = reportReplyDraft
+                                                scope.launch {
+                                                    status = when (
+                                                        val result = services.sendSubmittedSupportDiagnosticsMessage(
+                                                            report.statusUrl,
+                                                            message,
+                                                        )
+                                                    ) {
+                                                        SupportDiagnosticsConversationResult.Updated -> {
+                                                            reportReplyDraft = ""
+                                                            reportReplyTarget = null
+                                                            "Reply sent privately."
+                                                        }
+                                                        is SupportDiagnosticsConversationResult.Failed -> result.message
+                                                        is SupportDiagnosticsConversationResult.Unsupported -> result.reason
+                                                    }
+                                                }
+                                            },
+                                        ) { Text("Send reply") }
+                                        TextButton(
+                                            onClick = {
+                                                reportReplyDraft = ""
+                                                reportReplyTarget = null
+                                            },
+                                        ) { Text("Cancel") }
+                                    }
+                                }
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -14716,6 +14918,13 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
                                     TextButton(onClick = { services.openExternalUrl(report.statusUrl) }) {
                                         Text("Open private status")
                                     }
+                                    TextButton(
+                                        enabled = !report.conversationLoading,
+                                        onClick = {
+                                            reportReplyTarget = report.statusUrl
+                                            reportReplyDraft = ""
+                                        },
+                                    ) { Text("Reply in app") }
                                     TextButton(
                                         colors = ButtonDefaults.textButtonColors(
                                             contentColor = MaterialTheme.colorScheme.error,
@@ -14794,6 +15003,19 @@ internal fun <T> supportReportPage(
 }
 
 private const val SUPPORT_REPORT_PAGE_SIZE = 5
+private const val MAX_VISIBLE_SUPPORT_MESSAGES = 20
+private const val MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH = 8_192
+private const val SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS = 5L * 60L * 1_000L
+
+private fun supportReportStatusLabel(status: String): String = when (status) {
+    "new" -> "Received"
+    "needs_information" -> "More information requested"
+    "accepted" -> "Accepted"
+    "duplicate" -> "Duplicate"
+    "resolved" -> "Resolved"
+    "rejected" -> "Closed"
+    else -> "Updated"
+}
 
 @Composable
 internal fun DesktopStartOnLoginSettingsCard(

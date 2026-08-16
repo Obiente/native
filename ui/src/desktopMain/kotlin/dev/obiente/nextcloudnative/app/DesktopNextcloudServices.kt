@@ -3449,7 +3449,12 @@ class DesktopNextcloudServices(
                             is AppUpdateInstallResult.Rejected -> result.message
                             else -> null
                         },
-                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        fields = buildList {
+                            add(SupportDiagnosticFieldDraft("release", release.versionName))
+                            if (result is AppUpdateInstallResult.Rejected) {
+                                add(SupportDiagnosticFieldDraft("reason", result.diagnosticCode))
+                            }
+                        },
                     ),
                 )
                 result
@@ -3498,6 +3503,17 @@ class DesktopNextcloudServices(
     override suspend fun deleteSubmittedSupportDiagnosticsReport(
         deletionUrl: String,
     ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
+
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        supportIntake.refreshCompletedReports()
+
+    override suspend fun sendSubmittedSupportDiagnosticsMessage(
+        statusUrl: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(statusUrl, message)
+
+    override suspend fun markSubmittedSupportDiagnosticsReportRead(statusUrl: String): Boolean =
+        supportIntake.markCompletedReportRead(statusUrl)
 
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(

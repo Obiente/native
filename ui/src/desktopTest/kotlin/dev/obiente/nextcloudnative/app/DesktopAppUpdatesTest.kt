@@ -500,6 +500,7 @@ class DesktopAppUpdatesTest {
             val result = runBlocking { updater.beginUpdate(alphaRelease) }
             val rejected = assertIs<AppUpdateInstallResult.Rejected>(result)
             assertTrue(rejected.message.contains("channel changed", ignoreCase = true))
+            assertEquals("desktop-channel-changed", rejected.diagnosticCode)
         } finally {
             node.removeNode()
             directory.deleteRecursively()

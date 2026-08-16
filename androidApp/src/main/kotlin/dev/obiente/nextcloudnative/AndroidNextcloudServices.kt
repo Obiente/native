@@ -49,6 +49,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudFileListing
 import dev.obiente.nextcloudnative.app.NextcloudFileListingHttpException
+import dev.obiente.nextcloudnative.app.NextcloudFileSearchHttpException
 import dev.obiente.nextcloudnative.app.parseDavStatusCode
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import dev.obiente.nextcloudnative.app.FileVersionDavRecord
@@ -121,6 +122,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
+import dev.obiente.nextcloudnative.app.SupportDiagnosticsConversationResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsDeletionResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsSummary
@@ -673,7 +675,12 @@ internal class AndroidNextcloudServices(
                             is AppUpdateInstallResult.Rejected -> "rejected"
                         },
                         durationMillis = elapsedMillis(started),
-                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        fields = buildList {
+                            add(SupportDiagnosticFieldDraft("release", release.versionName))
+                            if (result is AppUpdateInstallResult.Rejected) {
+                                add(SupportDiagnosticFieldDraft("reason", result.diagnosticCode))
+                            }
+                        },
                     ),
                 )
                 result
@@ -721,6 +728,17 @@ internal class AndroidNextcloudServices(
     override suspend fun deleteSubmittedSupportDiagnosticsReport(
         deletionUrl: String,
     ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
+
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        supportIntake.refreshCompletedReports()
+
+    override suspend fun sendSubmittedSupportDiagnosticsMessage(
+        statusUrl: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(statusUrl, message)
+
+    override suspend fun markSubmittedSupportDiagnosticsReportRead(statusUrl: String): Boolean =
+        supportIntake.markCompletedReportRead(statusUrl)
 
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(
@@ -1612,7 +1630,7 @@ internal class AndroidNextcloudServices(
             contentType = "application/xml; charset=utf-8",
             headers = mapOf("Accept" to "application/xml"),
         )
-        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        if (response.status != 207) throw NextcloudFileSearchHttpException(response.status)
         parseDavFiles(response.body, userId)
             .distinctBy(NextcloudFile::path)
             .take(maximumResults)
