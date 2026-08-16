@@ -31,7 +31,12 @@ fun OkHttpClient.Builder.useAndroidNextcloudCertificateTrust(context: Context): 
     val registry = AndroidServerCertificateTrustRegistry.get(context.applicationContext)
     return sslSocketFactory(registry.sslSocketFactory, registry.trustManager)
         .connectionPool(registry.connectionPool)
+        .rejectTlsDowngradeRedirects()
 }
+
+/** Keeps ordinary redirects while requiring scheme changes to be handled by an explicit policy. */
+internal fun OkHttpClient.Builder.rejectTlsDowngradeRedirects(): OkHttpClient.Builder =
+    followSslRedirects(false)
 
 object AndroidServerCertificateTrust {
     fun isCertificateFailure(failure: Throwable): Boolean = generateSequence(failure) { it.cause }
