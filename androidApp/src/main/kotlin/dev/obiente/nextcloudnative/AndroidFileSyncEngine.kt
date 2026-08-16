@@ -17,6 +17,7 @@ import dev.obiente.nextcloudnative.app.FileSyncExecutionState
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import dev.obiente.nextcloudnative.app.FileSyncNetworkState
 import dev.obiente.nextcloudnative.app.FileSyncPairRunState
+import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
@@ -354,13 +355,20 @@ internal class AndroidFileSyncEngine(context: Context) {
     ): FileSyncCenterActionResult {
         var persisted = store.load()
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
-            ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
+            ?: return FileSyncCenterActionResult.Rejected(
+                "The folder sync pair no longer exists.",
+                FileSyncRejectionScope.Preflight,
+            )
         if (initialPair.accountId != NextcloudDocumentIds.accountKey(session)) {
-            return FileSyncCenterActionResult.Rejected("This folder sync pair belongs to another account.")
+            return FileSyncCenterActionResult.Rejected(
+                "This folder sync pair belongs to another account.",
+                FileSyncRejectionScope.Preflight,
+            )
         }
         if (!supportsAndroidFileSyncDirection(initialPair.localRootId, initialPair.configuration.direction)) {
             return FileSyncCenterActionResult.Rejected(
                 "This detected media-folder pair is not upload-only. Remove it and add it again.",
+                FileSyncRejectionScope.Preflight,
             )
         }
         return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
