@@ -721,7 +721,7 @@ private fun FilesSearchPrompt() {
             }
             Text("Search all files", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Enter at least 2 characters. Results include nested files and folders matching a name or file type.",
+                "Enter at least 2 characters. Results include nested files and folders matching a name.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
