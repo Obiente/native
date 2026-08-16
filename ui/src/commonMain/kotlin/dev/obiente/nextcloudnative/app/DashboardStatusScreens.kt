@@ -620,7 +620,11 @@ private fun DashboardQuickActionsCard(
             )
             if (quickApps.isEmpty()) {
                 Text(
-                    "Your shortcuts will appear as native apps become available.",
+                    if (pinnedAppIds.isEmpty()) {
+                        "Pin apps from Apps to add quick actions."
+                    } else {
+                        "Your pinned apps are not currently available."
+                    },
                     modifier = Modifier.padding(top = NextcloudSpacing.Medium),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

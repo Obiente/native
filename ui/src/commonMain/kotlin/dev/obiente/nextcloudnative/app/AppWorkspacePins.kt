@@ -55,6 +55,15 @@ internal fun toggleAppWorkspacePin(appIds: List<String>, appId: String): List<St
 internal fun defaultAppWorkspacePinnedIds(): List<String> =
     listOf("files", "photos", "spreed", "calendar")
 
+internal fun reconcileAppWorkspacePinnedIds(
+    appIds: List<String>,
+    installedAppIds: Collection<String>,
+): List<String> {
+    val installed = installedAppIds.mapTo(mutableSetOf(), ::canonicalAppWorkspaceId)
+    return (validatedAppWorkspacePinnedIds(appIds) ?: defaultAppWorkspacePinnedIds())
+        .filter { it in installed }
+}
+
 private fun validatedAppWorkspacePinnedIds(appIds: List<String>): List<String>? {
     if (appIds.size > MAX_APP_WORKSPACE_PINS) return null
     val canonical = appIds.map(::canonicalAppWorkspaceId)
@@ -63,9 +72,11 @@ private fun validatedAppWorkspacePinnedIds(appIds: List<String>): List<String>? 
 }
 
 private fun String.isSafePinnedAppId(): Boolean =
-    length in 1..64 && all { it in 'a'..'z' || it in '0'..'9' || it == '_' }
+    length in 1..64 && all {
+        it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '-' || it == '.'
+    }
 
 private val appWorkspacePinsJson = Json { ignoreUnknownKeys = true }
 private const val APP_WORKSPACE_PINS_SCHEMA_VERSION = 1
-private const val MAX_APP_WORKSPACE_PINS = 8
+internal const val MAX_APP_WORKSPACE_PINS = 8
 private const val MAX_APP_WORKSPACE_PINS_CHARACTERS = 1024

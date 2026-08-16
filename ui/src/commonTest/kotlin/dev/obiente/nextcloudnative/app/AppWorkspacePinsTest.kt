@@ -37,6 +37,28 @@ class AppWorkspacePinsTest {
         assertFalse(repository.save(account, listOf("../unsafe")))
     }
 
+    @Test
+    fun `supported punctuation is retained and unsafe paths remain rejected`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val account = "d".repeat(64)
+
+        assertTrue(repository.save(account, listOf("assistant-ai", "files_external.v2")))
+        assertEquals(listOf("assistant-ai", "files_external.v2"), repository.load(account))
+        assertFalse(repository.save(account, listOf("../unsafe")))
+    }
+
+    @Test
+    fun `successful discovery removes unavailable pins before enforcing the limit`() {
+        assertEquals(
+            listOf("files", "deck"),
+            reconcileAppWorkspacePinnedIds(
+                appIds = listOf("files", "disabled-app", "deck"),
+                installedAppIds = listOf("deck", "files"),
+            ),
+        )
+    }
+
     private class MemoryStorage : HomeWorkspaceLayoutStorage {
         val values = mutableMapOf<String, String>()
 
