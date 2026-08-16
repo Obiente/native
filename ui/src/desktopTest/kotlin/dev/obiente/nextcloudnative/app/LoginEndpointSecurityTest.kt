@@ -51,6 +51,61 @@ class LoginEndpointSecurityTest {
     }
 
     @Test
+    fun explicitlyEnteredPlainHttpIsLimitedToTheEnteredOrigin() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "http://cloud.home.test:8080/nextcloud",
+            loginUrl = "http://cloud.home.test:8080/nextcloud/login",
+            pollEndpoint = "http://cloud.home.test:8080/nextcloud/login/v2/poll",
+        )
+
+        assertTrue(relationships.loginOriginMatchesEntered)
+        assertTrue(relationships.pollOriginMatchesEntered)
+        assertEquals(null, relationships.pollFallbackEndpoint)
+        assertTrue(serverAddressUsesPlainHttp(" HTTP://cloud.home.test "))
+        assertFalse(serverAddressUsesPlainHttp("cloud.home.test"))
+
+        assertFailsWith<IllegalArgumentException> {
+            validateLoginEndpointRelationships(
+                enteredServerUrl = "http://cloud.home.test",
+                loginUrl = "http://other.home.test/login",
+                pollEndpoint = "http://cloud.home.test/login/v2/poll",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateLoginEndpointRelationships(
+                enteredServerUrl = "https://cloud.example.com",
+                loginUrl = "https://cloud.example.com/login",
+                pollEndpoint = "http://cloud.example.com/login/v2/poll",
+            )
+        }
+    }
+
+    @Test
+    fun plainHttpMayUpgradeAdvertisedEndpointsToHttps() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "http://cloud.home.test",
+            loginUrl = "https://identity.example.test/login",
+            pollEndpoint = "https://cloud.home.test/login/v2/poll",
+        )
+
+        assertFalse(relationships.loginOriginMatchesEntered)
+        assertFalse(relationships.pollOriginMatchesEntered)
+        assertEquals("http://cloud.home.test/index.php/login/v2/poll", relationships.pollFallbackEndpoint)
+        assertFalse(
+            loginResultOriginMatchesEntered(
+                "http://cloud.home.test",
+                "https://cloud.example.test",
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            loginResultOriginMatchesEntered(
+                "http://cloud.home.test",
+                "http://other.home.test",
+            )
+        }
+    }
+
+    @Test
     fun onlyPreExchangeDnsFailureIsSafeToRetry() {
         val dns = JvmNetworkFailureDiagnostic(
             code = "NETWORK_DNS_UNRESOLVED",

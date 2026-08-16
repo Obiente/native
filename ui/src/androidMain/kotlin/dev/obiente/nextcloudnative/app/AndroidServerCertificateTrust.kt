@@ -4,7 +4,9 @@ import android.content.Context
 import okhttp3.ConnectionPool
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Interceptor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.KeyStore
@@ -31,7 +33,49 @@ fun OkHttpClient.Builder.useAndroidNextcloudCertificateTrust(context: Context): 
     val registry = AndroidServerCertificateTrustRegistry.get(context.applicationContext)
     return sslSocketFactory(registry.sslSocketFactory, registry.trustManager)
         .connectionPool(registry.connectionPool)
+        .addInterceptor(AndroidInitialTransportInterceptor())
+        .addNetworkInterceptor(AndroidCleartextOriginInterceptor())
 }
+
+private data class AndroidApprovedPlainHttpOrigin(
+    val host: String,
+    val port: Int,
+)
+
+private class AndroidInitialTransportInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+        val request = chain.request()
+        val approvedOrigin = request.url.takeIf { it.scheme == "http" }?.let {
+            AndroidApprovedPlainHttpOrigin(it.host, it.port)
+        }
+        return chain.proceed(
+            request.newBuilder()
+                .tag(AndroidApprovedPlainHttpOrigin::class.java, approvedOrigin)
+                .build(),
+        )
+    }
+}
+
+private class AndroidCleartextOriginInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+        val request = chain.request()
+        val approvedOrigin = request.tag(AndroidApprovedPlainHttpOrigin::class.java)
+        if (!androidTransportRequestAllowed(approvedOrigin?.host, approvedOrigin?.port, request.url)) {
+            throw IOException("A secure Nextcloud request refused a cleartext redirect.")
+        }
+        return chain.proceed(request)
+    }
+}
+
+internal fun androidTransportRequestAllowed(
+    approvedPlainHttpHost: String?,
+    approvedPlainHttpPort: Int?,
+    requestUrl: HttpUrl,
+): Boolean = requestUrl.scheme == "https" || (
+    requestUrl.scheme == "http" &&
+        requestUrl.host == approvedPlainHttpHost &&
+        requestUrl.port == approvedPlainHttpPort
+    )
 
 object AndroidServerCertificateTrust {
     fun isCertificateFailure(failure: Throwable): Boolean = generateSequence(failure) { it.cause }

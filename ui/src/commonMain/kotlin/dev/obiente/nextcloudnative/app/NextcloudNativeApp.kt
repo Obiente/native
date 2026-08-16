@@ -1552,16 +1552,20 @@ private fun LoginScreen(
     var certificateReview by remember { mutableStateOf<ServerCertificateReview?>(null) }
     var trustedCertificate by remember { mutableStateOf<TrustedServerCertificate?>(null) }
     var trustingCertificate by remember { mutableStateOf(false) }
+    var confirmPlainHttp by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun startLogin(certificateJustApproved: String? = null) {
+    fun startLogin(
+        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+        certificateJustApproved: String? = null,
+    ) {
         connecting = true
         error = null
         status = "Contacting your server..."
         scope.launch {
             try {
-                val challenge = services.beginLogin(serverUrl)
+                val challenge = services.beginLogin(serverUrl, transportSecurity)
                 services.openLoginUrl(challenge.loginUrl)
                 status = "Finish signing in in your browser, then return here."
                 val started = TimeSource.Monotonic.markNow()
@@ -1604,6 +1608,32 @@ private fun LoginScreen(
                 status = null
             }
         }
+    }
+
+    if (confirmPlainHttp) {
+        AlertDialog(
+            onDismissRequest = { confirmPlainHttp = false },
+            title = { Text("Connect without encryption?") },
+            text = {
+                Text(
+                    "This server uses plain HTTP. Your sign-in token, app password, files, messages, " +
+                        "and all other Nextcloud data can be read or changed by anyone able to observe " +
+                        "the network path. Continue only for a server you reach through a trusted local " +
+                        "network or a VPN such as WireGuard. HTTPS is strongly recommended.",
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPlainHttp = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmPlainHttp = false
+                        startLogin(LoginTransportSecurity.PlainHttp)
+                    },
+                ) { Text("Connect without encryption") }
+            },
+        )
     }
 
     certificateReview?.let { review ->
@@ -1652,7 +1682,7 @@ private fun LoginScreen(
                                     trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
                                     certificateReview = null
                                     trustingCertificate = false
-                                    startLogin(review.sha256Fingerprint)
+                                    startLogin(certificateJustApproved = review.sha256Fingerprint)
                                 }
                                 .onFailure { failure ->
                                     if (failure is CancellationException) throw failure
@@ -1739,7 +1769,13 @@ private fun LoginScreen(
             Button(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 enabled = serverUrl.isNotBlank() && !connecting,
-                onClick = { startLogin() },
+                onClick = {
+                    if (serverAddressUsesPlainHttp(serverUrl)) {
+                        confirmPlainHttp = true
+                    } else {
+                        startLogin()
+                    }
+                },
             ) {
                 if (connecting) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp).padding(end = 4.dp))

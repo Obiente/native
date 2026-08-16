@@ -25,6 +25,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
+import dev.obiente.nextcloudnative.app.LoginTransportSecurity
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
 import dev.obiente.nextcloudnative.app.MAX_NOTE_BYTES
@@ -1285,8 +1286,12 @@ internal class AndroidNextcloudServices(
         )
     }
 
-    override suspend fun beginLogin(serverUrl: String): LoginChallenge = withContext(Dispatchers.IO) {
-        val baseUrl = normalizeServerUrl(serverUrl)
+    override suspend fun beginLogin(
+        serverUrl: String,
+        transportSecurity: LoginTransportSecurity,
+    ): LoginChallenge = withContext(Dispatchers.IO) {
+        val baseUrl = normalizeServerUrl(serverUrl, transportSecurity)
+        val effectiveTransport = loginTransportSecurity(baseUrl)
         val response = request(method = "POST", url = "$baseUrl/index.php/login/v2")
         check(response.status in 200..299) {
             "This server did not start Nextcloud Login Flow v2 (HTTP ${response.status})."
@@ -1315,6 +1320,10 @@ internal class AndroidNextcloudServices(
                         "poll_fallback_available",
                         (relationships.pollFallbackEndpoint != null).toString(),
                     ),
+                    SupportDiagnosticFieldDraft(
+                        "transport_security",
+                        effectiveTransport.diagnosticValue,
+                    ),
                 ),
             ),
         )
@@ -1324,6 +1333,7 @@ internal class AndroidNextcloudServices(
             pollFallbackEndpoint = relationships.pollFallbackEndpoint,
             token = poll.getString("token"),
             loginUrl = loginUrl,
+            transportSecurity = effectiveTransport,
         )
     }
 
@@ -1462,7 +1472,11 @@ internal class AndroidNextcloudServices(
         }
         runCatching {
             val json = JSONObject(response.text)
-            val resultServerUrl = normalizeServerUrl(json.getString("server"))
+            val resultServerUrl = normalizeServerUrl(json.getString("server"), challenge.transportSecurity)
+            val resultOriginMatchesEntered = loginResultOriginMatchesEntered(
+                challenge.enteredServerUrl,
+                resultServerUrl,
+            )
             val loginName = json.getString("loginName")
             val appPassword = json.getString("appPassword")
             registerSupportDiagnosticPrivateValue(loginName)
@@ -1477,7 +1491,7 @@ internal class AndroidNextcloudServices(
                         fields = listOf(
                             SupportDiagnosticFieldDraft(
                                 "result_origin_matches_entered",
-                                loginResultOriginMatchesEntered(challenge.enteredServerUrl, resultServerUrl).toString(),
+                                resultOriginMatchesEntered.toString(),
                             ),
                             SupportDiagnosticFieldDraft(
                                 "poll_fallback_used",
@@ -3860,13 +3874,32 @@ internal class AndroidNextcloudServices(
         .replace("\"", "&quot;")
         .replace("'", "&apos;")
 
-    private fun normalizeServerUrl(value: String): String {
+    private fun normalizeServerUrl(
+        value: String,
+        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+    ): String {
         val withScheme = value.trim().let { if ("://" in it) it else "https://$it" }
         val uri = URI(withScheme)
-        require(uri.scheme == "https") { "Use a secure https:// server address." }
+        val scheme = uri.scheme?.lowercase()
+        require(
+            scheme == "https" ||
+                (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp),
+        ) {
+            "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
+        }
         require(!uri.host.isNullOrBlank()) { "Enter a valid Nextcloud server address." }
         return withScheme.trimEnd('/').removeSuffix("/index.php")
     }
+
+    private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
+        if (serverUrl.startsWith("http://", ignoreCase = true)) {
+            LoginTransportSecurity.PlainHttp
+        } else {
+            LoginTransportSecurity.Tls
+        }
+
+    private val LoginTransportSecurity.diagnosticValue: String
+        get() = if (this == LoginTransportSecurity.PlainHttp) "plaintext" else "tls"
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

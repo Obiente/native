@@ -57,7 +57,16 @@ data class LoginChallenge(
     val pollFallbackEndpoint: String?,
     val token: String,
     val loginUrl: String,
+    val transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
 )
+
+enum class LoginTransportSecurity {
+    Tls,
+    PlainHttp,
+}
+
+internal fun serverAddressUsesPlainHttp(value: String): Boolean =
+    value.trim().startsWith("http://", ignoreCase = true)
 
 data class ServerCertificateReview(
     val serverOrigin: String,
@@ -709,7 +718,10 @@ interface NextcloudPlatformServices {
             ?: "Deck attachment handoff is not supported on this platform.",
     )
 
-    suspend fun beginLogin(serverUrl: String): LoginChallenge
+    suspend fun beginLogin(
+        serverUrl: String,
+        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+    ): LoginChallenge
 
     /** Returns a review only when a platform can safely offer explicit certificate trust. */
     suspend fun inspectServerCertificateFailure(
