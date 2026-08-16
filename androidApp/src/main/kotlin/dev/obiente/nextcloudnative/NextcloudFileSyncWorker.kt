@@ -101,16 +101,11 @@ internal class NextcloudFileSyncWorker(
                     component = SupportDiagnosticComponent.Sync,
                     operation = "sync.background-run",
                     outcome = "needs-attention",
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
-                        SupportDiagnosticFieldDraft("failure_scope", "items"),
-                        SupportDiagnosticFieldDraft("failed_count", pair.failedCount.toString()),
-                        SupportDiagnosticFieldDraft("conflict_count", pair.conflicts.size.toString()),
-                        SupportDiagnosticFieldDraft(
-                            "result",
-                            if (result is FileSyncCenterActionResult.Rejected) "rejected" else "completed",
-                        ),
-                        SupportDiagnosticFieldDraft("retry_scheduled", "false"),
+                    fields = backgroundSyncCompletionDiagnosticFields(
+                        pairId = pairId,
+                        failedCount = pair.failedCount,
+                        conflictCount = pair.conflicts.size,
+                        result = result,
                     ),
                 ),
             )
@@ -196,6 +191,29 @@ internal fun backgroundSyncFailureDisposition(runAttemptCount: Int): BackgroundS
         BackgroundSyncWorkerDisposition.Retry
     } else {
         BackgroundSyncWorkerDisposition.WaitForNextPeriod
+    }
+}
+
+internal fun backgroundSyncCompletionDiagnosticFields(
+    pairId: String,
+    failedCount: Int,
+    conflictCount: Int,
+    result: FileSyncCenterActionResult,
+): List<SupportDiagnosticFieldDraft> {
+    require(failedCount >= 0)
+    require(conflictCount >= 0)
+    val rejection = result as? FileSyncCenterActionResult.Rejected
+    val preflightRejected = rejection != null && failedCount == 0
+    return buildList {
+        add(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
+        add(SupportDiagnosticFieldDraft("failure_scope", if (preflightRejected) "preflight" else "items"))
+        add(SupportDiagnosticFieldDraft("failed_count", failedCount.toString()))
+        add(SupportDiagnosticFieldDraft("conflict_count", conflictCount.toString()))
+        add(SupportDiagnosticFieldDraft("result", if (rejection != null) "rejected" else "completed"))
+        if (preflightRejected) {
+            add(SupportDiagnosticFieldDraft("rejection_reason", rejection.reason))
+        }
+        add(SupportDiagnosticFieldDraft("retry_scheduled", "false"))
     }
 }
 
