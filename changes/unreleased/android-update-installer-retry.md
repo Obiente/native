@@ -1,4 +1,4 @@
-category: fixed
+category: fix
 issue: 176
 pull: none
 platforms: android
