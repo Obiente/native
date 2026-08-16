@@ -102,6 +102,8 @@ class DashboardStatusTest {
         assertEquals("/ocs/v2.php/apps/dashboard/api/v1/widget-items", fallback?.relativePath)
         assertEquals(setOf("calendar"), compatible.widgetIds)
         assertNull(v2Only.v1FallbackRequest(listOf(widget("calendar", setOf(2)))))
+        assertEquals(700L, dashboardFallbackResponseBudget(1_000L, 300L))
+        assertEquals(0L, dashboardFallbackResponseBudget(1_000L, 1_000L))
     }
 
     @Test

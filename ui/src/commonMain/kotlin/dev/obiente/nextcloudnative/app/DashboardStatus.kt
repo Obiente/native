@@ -158,6 +158,12 @@ internal fun DashboardItemsRequestPlan.v1FallbackRequest(
     return request.copy(relativePath = "/ocs/v2.php/apps/dashboard/api/v1/widget-items")
 }
 
+internal fun dashboardFallbackResponseBudget(reservedBytes: Long, firstResponseBytes: Long): Long {
+    require(reservedBytes > 0L)
+    require(firstResponseBytes in 0L..reservedBytes)
+    return reservedBytes - firstResponseBytes
+}
+
 enum class NativeUserPresence(val wireValue: String) {
     Online("online"),
     Away("away"),
