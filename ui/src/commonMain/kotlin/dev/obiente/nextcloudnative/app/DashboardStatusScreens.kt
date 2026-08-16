@@ -114,6 +114,10 @@ private enum class DashboardV2RouteAvailability {
     Unavailable,
 }
 
+private class DashboardV2RouteUnavailableException : IllegalStateException(
+    "The Dashboard widget-items V2 route is unavailable.",
+)
+
 private suspend fun executeDashboardItemsPlan(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -146,34 +150,38 @@ private suspend fun executeDashboardItemsPlan(
         )
     }
 
-    if (plan.apiVersion != DashboardItemApiVersion.V2 || fallback == null) {
+    if (plan.apiVersion != DashboardItemApiVersion.V2) {
         return execute(plan.request, plan.apiVersion, reservedBytes)
     }
     return when (v2RouteMutex.withLock { readV2RouteAvailability() }) {
         DashboardV2RouteAvailability.Available ->
             execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
         DashboardV2RouteAvailability.Unavailable ->
-            execute(fallback, DashboardItemApiVersion.V1, reservedBytes)
+            fallback?.let { execute(it, DashboardItemApiVersion.V1, reservedBytes) }
+                ?: throw DashboardV2RouteUnavailableException()
         DashboardV2RouteAvailability.Unknown -> v2RouteMutex.withLock {
             when (readV2RouteAvailability()) {
                 DashboardV2RouteAvailability.Available ->
                     execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
                 DashboardV2RouteAvailability.Unavailable ->
-                    execute(fallback, DashboardItemApiVersion.V1, reservedBytes)
+                    fallback?.let { execute(it, DashboardItemApiVersion.V1, reservedBytes) }
+                        ?: throw DashboardV2RouteUnavailableException()
                 DashboardV2RouteAvailability.Unknown -> {
                     val v2 = execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
                     if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(v2.response) }) {
                         writeV2RouteAvailability(DashboardV2RouteAvailability.Unavailable)
-                        val remainingBytes = dashboardFallbackResponseBudget(
-                            reservedBytes,
-                            v2.combinedResponseBytes,
-                        )
-                        execute(
-                            request = fallback,
-                            apiVersion = DashboardItemApiVersion.V1,
-                            maximumBytes = remainingBytes,
-                            priorResponseBytes = v2.combinedResponseBytes,
-                        )
+                        fallback?.let {
+                            val remainingBytes = dashboardFallbackResponseBudget(
+                                reservedBytes,
+                                v2.combinedResponseBytes,
+                            )
+                            execute(
+                                request = it,
+                                apiVersion = DashboardItemApiVersion.V1,
+                                maximumBytes = remainingBytes,
+                                priorResponseBytes = v2.combinedResponseBytes,
+                            )
+                        } ?: v2
                     } else {
                         writeV2RouteAvailability(DashboardV2RouteAvailability.Available)
                         v2
@@ -308,6 +316,12 @@ internal fun NativeDashboardPresentation(
                 val bindingsBySection = remember(bindings) {
                     bindings.associateBy(HomeDashboardWidgetBinding::sectionId)
                 }
+                if (!current.widgetsAuthoritative) {
+                    DashboardUnavailableNotice(
+                        showingSavedContent = current.snapshot.widgets.isNotEmpty(),
+                        onRetry = onRefresh,
+                    )
+                }
                 current.status?.let { status ->
                     CurrentStatusStrip(status = status, onClick = onOpenStatus)
                 }
@@ -405,7 +419,11 @@ internal fun rememberNativeDashboardState(
             NextcloudApiCachePolicy.PreferCache
         }
         previousSnapshot?.let {
-            state = DashboardSurfaceState.Available(it, previousStatus)
+            state = DashboardSurfaceState.Available(
+                snapshot = it,
+                status = previousStatus,
+                widgetsAuthoritative = cached != null || displayed?.widgetsAuthoritative != false,
+            )
         }
         runCatching {
             coroutineScope {
@@ -655,6 +673,38 @@ private fun DashboardHeader(
 }
 
 internal fun dashboardRefreshDescription(title: String): String = "Refresh $title"
+
+@Composable
+private fun DashboardUnavailableNotice(
+    showingSavedContent: Boolean,
+    onRetry: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = NextcloudSpacing.Large,
+                vertical = NextcloudSpacing.Small,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (showingSavedContent) {
+                    "The Dashboard app is unavailable. Showing your saved Home content."
+                } else {
+                    "The Dashboard app is unavailable. Quick actions remain available."
+                },
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
 
 @Composable
 private fun CurrentStatusStrip(
