@@ -273,7 +273,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/CalendarWorkspacePresentation.kt": "35660659bd1f6e6b47879f651cae91ad8b1c9a8a13749c361d8e7f8a2cd269f5",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt": "8e56d2a1815182b6c2f30c3640a5b92dc6bc06f8bf797b0484430dce495dd85f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusPresentation.kt": "96eb3aa478be8932e695e2dfe2067cc7b8dccf5ffa6cc1370f2db27b8119e0ff",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt": "6dfe5db2d8f00b98fa2de982d7370387771c6a91f2c36a6ef3c08c47f79a63f8",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt": "717d97fc18e68c04d2aac4d10fe0aeda76693fe8ef7d24dd6442d43483493f68",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckAsyncSafety.kt": "f6d939c1d1cf41b2421aad6906e9de7fb64800b146906312210472eebd22a93e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckCardDraftPersistence.kt": "127ff173d1bd2e0ab3983e3ec8284e8cd6976b58476b4d9537794923517511ae",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckCardOrdering.kt": "05c093d91943d6434df1f7ba4d55f1284f88fb637feaec22bf671e0e207b1a5d",
