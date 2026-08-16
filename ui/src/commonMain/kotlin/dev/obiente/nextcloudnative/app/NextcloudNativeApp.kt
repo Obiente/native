@@ -13104,6 +13104,26 @@ private fun AppUpdateSettingsCard(
         installing = true
         installMessage = null
         scope.launch {
+            val refreshed = services.checkForAppUpdate(updateChannel)
+            val latest = (refreshed as? AppUpdateCheckResult.Available)?.release
+            if (latest == null) {
+                installMessage = when (refreshed) {
+                    is AppUpdateCheckResult.Current -> "This installation is already current."
+                    is AppUpdateCheckResult.Failed ->
+                        "The latest release could not be confirmed. Check again before installing."
+                    is AppUpdateCheckResult.Unavailable ->
+                        "Direct updates are no longer available for this installation."
+                    is AppUpdateCheckResult.Available -> error("Handled above")
+                }
+                installing = false
+                return@launch
+            }
+            if (latest.versionCode != release.versionCode) {
+                installMessage =
+                    "A newer release is available. Review its changes before installing."
+                installing = false
+                return@launch
+            }
             installMessage = when (val install = services.beginAppUpdate(release)) {
                 AppUpdateInstallResult.ConfirmationOpened ->
                     "The system installer opened the update confirmation."
@@ -13338,6 +13358,9 @@ private fun AppUpdateSettingsCard(
             when (val checked = observedCheckResult) {
                 is AppUpdateCheckResult.Available -> {
                     val release = checked.release
+                    val changes = remember(support.currentVersionCode, release) {
+                        appUpdateChangesSince(support.currentVersionCode, release)
+                    }
                     val releaseState = updateState.takeIf { state ->
                         when (state) {
                             is AppUpdateInstallState.Downloading -> state.versionCode == release.versionCode
@@ -13355,8 +13378,18 @@ private fun AppUpdateSettingsCard(
                         "Version ${release.versionName} is available.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    if (changes.isNotEmpty()) {
+                        Text("Changes since your version", style = MaterialTheme.typography.titleSmall)
+                        changes.forEach { change ->
+                            Text(
+                                "• ${change.summary}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     TextButton(onClick = { services.openExternalUrl(release.releaseNotesUrl) }) {
-                        Text("Read release notes")
+                        Text("Open full release notes")
                     }
                     when (releaseState) {
                         is AppUpdateInstallState.Downloading -> {

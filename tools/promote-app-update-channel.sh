@@ -51,6 +51,7 @@ manifest_code() {
           select(.schemaVersion == 1) |
           select(.channel == $channel) |
           select(.versionCode | type == "number" and . > 0 and floor == .) |
+          select(.changes | type == "array" and length <= 1000) |
           select(.releaseNotesUrl ==
             "https://github.com/Obiente/nc-native/releases/tag/" + $tag
           ) |
@@ -77,7 +78,7 @@ desktop_pointer_state() {
         '
           . as $manifest |
           select(keys == [
-            "assets", "channel", "packageVersion", "releaseNotesUrl",
+            "assets", "changes", "channel", "packageVersion", "releaseNotesUrl",
             "schemaVersion", "versionCode", "versionName"
           ]) |
           select(.schemaVersion == 1 and .channel == $channel) |
