@@ -114,6 +114,12 @@ private enum class DashboardV2RouteAvailability {
     Unavailable,
 }
 
+private enum class DashboardV2ExecutionDecision {
+    ExecuteV2,
+    ExecuteV1Fallback,
+    ReturnProbe,
+}
+
 internal class DashboardV2RouteUnavailableException : IllegalStateException(
     "The Dashboard widget-items V2 route is unavailable.",
 )
@@ -159,34 +165,38 @@ private suspend fun executeDashboardItemsPlan(
         DashboardV2RouteAvailability.Unavailable ->
             fallback?.let { execute(it, DashboardItemApiVersion.V1, reservedBytes) }
                 ?: throw DashboardV2RouteUnavailableException()
-        DashboardV2RouteAvailability.Unknown -> v2RouteMutex.withLock {
-            when (readV2RouteAvailability()) {
-                DashboardV2RouteAvailability.Available ->
-                    execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
-                DashboardV2RouteAvailability.Unavailable ->
-                    fallback?.let { execute(it, DashboardItemApiVersion.V1, reservedBytes) }
-                        ?: throw DashboardV2RouteUnavailableException()
-                DashboardV2RouteAvailability.Unknown -> {
-                    val v2 = execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
-                    if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(v2.response) }) {
-                        writeV2RouteAvailability(DashboardV2RouteAvailability.Unavailable)
-                        fallback?.let {
-                            val remainingBytes = dashboardFallbackResponseBudget(
-                                reservedBytes,
-                                v2.combinedResponseBytes,
-                            )
-                            execute(
-                                request = it,
-                                apiVersion = DashboardItemApiVersion.V1,
-                                maximumBytes = remainingBytes,
-                                priorResponseBytes = v2.combinedResponseBytes,
-                            )
-                        } ?: v2
-                    } else {
-                        writeV2RouteAvailability(DashboardV2RouteAvailability.Available)
-                        v2
+        DashboardV2RouteAvailability.Unknown -> {
+            var probe: DashboardItemsHttpResult? = null
+            val decision = v2RouteMutex.withLock {
+                when (readV2RouteAvailability()) {
+                    DashboardV2RouteAvailability.Available -> DashboardV2ExecutionDecision.ExecuteV2
+                    DashboardV2RouteAvailability.Unavailable -> DashboardV2ExecutionDecision.ExecuteV1Fallback
+                    DashboardV2RouteAvailability.Unknown -> {
+                        val v2 = execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
+                        probe = v2
+                        if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(v2.response) }) {
+                            writeV2RouteAvailability(DashboardV2RouteAvailability.Unavailable)
+                            DashboardV2ExecutionDecision.ExecuteV1Fallback
+                        } else {
+                            writeV2RouteAvailability(DashboardV2RouteAvailability.Available)
+                            DashboardV2ExecutionDecision.ReturnProbe
+                        }
                     }
                 }
+            }
+            when (decision) {
+                DashboardV2ExecutionDecision.ExecuteV2 ->
+                    execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
+                DashboardV2ExecutionDecision.ExecuteV1Fallback -> fallback?.let {
+                    val priorResponseBytes = probe?.combinedResponseBytes ?: 0L
+                    execute(
+                        request = it,
+                        apiVersion = DashboardItemApiVersion.V1,
+                        maximumBytes = dashboardFallbackResponseBudget(reservedBytes, priorResponseBytes),
+                        priorResponseBytes = priorResponseBytes,
+                    )
+                } ?: probe ?: throw DashboardV2RouteUnavailableException()
+                DashboardV2ExecutionDecision.ReturnProbe -> requireNotNull(probe)
             }
         }
     }
@@ -466,9 +476,8 @@ internal fun rememberNativeDashboardState(
                     runCatching {
                         val response = services.executeNextcloudApi(session, currentUserStatusRequest())
                         withContext(Dispatchers.Default) { parseCurrentUserStatus(response) }
-                    }.getOrElse { failure ->
+                    }.onFailure { failure ->
                         if (failure is CancellationException) throw failure
-                        null
                     }
                 }
                 val widgetsLoad = widgetsDeferred.await()
@@ -479,7 +488,7 @@ internal fun rememberNativeDashboardState(
                         previousStatus,
                         widgetsAuthoritative = false,
                     )
-                    val status = statusDeferred.await()
+                    val status = statusDeferred.await().getOrElse { previousStatus }
                     state = DashboardSurfaceState.Available(snapshot, status, widgetsAuthoritative = false)
                     return@coroutineScope DashboardLoadResult(snapshot, status, widgetsAuthoritative = false)
                 }
@@ -608,7 +617,11 @@ internal fun rememberNativeDashboardState(
                 }
                 requests.awaitAll()
                 completedResults.close()
-                DashboardLoadResult(snapshot, statusDeferred.await(), widgetsAuthoritative = true)
+                DashboardLoadResult(
+                    snapshot,
+                    statusDeferred.await().getOrElse { previousStatus },
+                    widgetsAuthoritative = true,
+                )
             }
         }.onSuccess { result ->
             if (result.widgetsAuthoritative) {
