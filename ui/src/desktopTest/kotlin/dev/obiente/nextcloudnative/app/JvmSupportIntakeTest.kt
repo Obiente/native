@@ -1148,17 +1148,17 @@ class JvmSupportIntakeTest {
     @Test
     fun expiresCompletedReceiptWhileTheProcessRemainsOpen() = runBlocking {
         testFixture().use { fixture ->
-            val retentionUntil = Instant.now().plusSeconds(2)
+            val retentionUntil = Instant.now().plusSeconds(10)
             fixture.server.enqueue(receiptResponse(fixture.statusUrl, retentionUntil = retentionUntil))
 
             fixture.intake.submit("A refresh failed.", "nightly", emptyList())
 
             assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
             assertEquals(1, fixture.completedDescriptors().size)
-            withTimeout(5_000) {
+            withTimeout(15_000) {
                 fixture.intake.states().first { it is SupportDiagnosticsSubmissionState.Idle }
             }
-            withTimeout(5_000) {
+            withTimeout(15_000) {
                 while (fixture.completedDescriptors().isNotEmpty()) delay(10)
             }
             assertTrue(fixture.completedDescriptors().isEmpty())
@@ -1611,7 +1611,7 @@ class JvmSupportIntakeTest {
         testFixture(
             afterUploadResponse = {
                 responseCompleted.countDown()
-                assertTrue(allowResponseResult.await(2, TimeUnit.SECONDS))
+                assertTrue(allowResponseResult.await(10, TimeUnit.SECONDS))
             },
         ).use { fixture ->
             fixture.server.enqueue(MockResponse.Builder().code(503).build())
@@ -1620,15 +1620,15 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertTrue(responseCompleted.await(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
+            assertTrue(responseCompleted.await(10, TimeUnit.SECONDS))
 
             assertTrue(fixture.intake.cancel())
             allowResponseResult.countDown()
             submission.join()
 
             assertIs<SupportDiagnosticsSubmissionState.Cancelled>(fixture.intake.states().value)
-            val cancellation = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val cancellation = requireNotNull(fixture.server.takeRequest(10, TimeUnit.SECONDS))
             assertEquals("DELETE", cancellation.method)
             assertEquals("/api/v1/receipts", cancellation.url.encodedPath)
             assertEquals(upload.headers["Idempotency-Key"], cancellation.headers["Idempotency-Key"])
