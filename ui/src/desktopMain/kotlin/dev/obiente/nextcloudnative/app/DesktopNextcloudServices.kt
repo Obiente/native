@@ -1070,6 +1070,7 @@ class DesktopNextcloudServices(
     )
     private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
+    private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val fileMutationHttpExecutor = DesktopHttpMutationExecutor(httpClient)
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -4068,6 +4069,7 @@ class DesktopNextcloudServices(
                 body = "token=" + encodeForm(challenge.token),
                 contentType = "application/x-www-form-urlencoded",
                 client = loginPollHttpClient,
+                diagnosticIgnoredHttpStatuses = setOf(404),
                 onNetworkFailure = { networkFailure = it },
             )
         }
@@ -4118,7 +4120,12 @@ class DesktopNextcloudServices(
                 return@withContext initialResult
             }
         }
-        if (response.status == 404) return@withContext LoginPollResult.Pending
+        if (response.status == 404) {
+            if (loginPollPendingTokens.add(challenge.token)) {
+                recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
+            }
+            return@withContext LoginPollResult.Pending
+        }
         if (response.status !in 200..299) {
             val result = LoginPollResult.FatalFailure(
                 "Login approval failed (HTTP ${response.status}). Please try again.",
@@ -4163,6 +4170,7 @@ class DesktopNextcloudServices(
 
     override fun finishLoginPolling(challenge: LoginChallenge) {
         loginPollFallbackTokens -= challenge.token
+        loginPollPendingTokens -= challenge.token
     }
 
     override suspend fun loadServerInfo(session: NextcloudSession): NextcloudServerInfo =
@@ -5669,6 +5677,7 @@ class DesktopNextcloudServices(
         onAmbiguousMutationResult: () -> Unit = {},
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
+        diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -5734,7 +5743,7 @@ class DesktopNextcloudServices(
                     consume = ::consumeResponse,
                 )
             }
-            if (result.status !in 200..399) {
+            if (shouldRecordHttpStatusDiagnostic(result.status, diagnosticIgnoredHttpStatuses)) {
                 recordDesktopRequestDiagnostic(
                     session,
                     SupportDiagnosticEventDraft(
