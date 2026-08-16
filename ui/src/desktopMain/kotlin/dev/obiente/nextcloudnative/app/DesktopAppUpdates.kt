@@ -269,19 +269,30 @@ internal class DesktopAppUpdater(
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
         val desktopRelease = release as? DesktopDirectRelease
-            ?: return AppUpdateInstallResult.Rejected("This is not a desktop update package.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "This is not a desktop update package.",
+                "desktop-package-type",
+            )
         if (desktopRelease.updateChannel != updateChannel()) {
             return AppUpdateInstallResult.Rejected(
                 "The update channel changed. Check again before downloading this package.",
+                "desktop-channel-changed",
             )
         }
         if (!updateMutex.tryLock()) {
-            return AppUpdateInstallResult.Rejected("An app update is already in progress.")
+            return AppUpdateInstallResult.Rejected(
+                "An app update is already in progress.",
+                "desktop-already-running",
+            )
         }
+        var diagnosticStage = "preflight"
         try {
             val support = support()
             if (!support.canCheckDirectUpdates || !isNewerAppRelease(support.currentVersionCode, desktopRelease)) {
-                return AppUpdateInstallResult.Rejected("This release cannot update the installed desktop package.")
+                return AppUpdateInstallResult.Rejected(
+                    "This release cannot update the installed desktop package.",
+                    "desktop-release-ineligible",
+                )
             }
             val selectedTarget = requireNotNull(target)
             check(desktopRelease.asset.platform == selectedTarget.platform)
@@ -290,6 +301,7 @@ internal class DesktopAppUpdater(
             check(updateDirectory.isDirectory || updateDirectory.mkdirs()) {
                 "Could not create the desktop app-update cache."
             }
+            diagnosticStage = "cache"
             val packageFile = File(updateDirectory, desktopRelease.asset.url.substringAfterLast('/'))
             val temporary = File(updateDirectory, "${packageFile.name}.part")
             cleanupDesktopUpdatePackages(updateDirectory, activePartial = temporary)
@@ -302,6 +314,7 @@ internal class DesktopAppUpdater(
                 totalBytes = desktopRelease.asset.size,
                 resumedFromBytes = 0,
             )
+            diagnosticStage = "download"
             downloadDesktopUpdatePackage(
                 client = client,
                 release = desktopRelease,
@@ -322,6 +335,7 @@ internal class DesktopAppUpdater(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
+            diagnosticStage = "verification"
             check(temporary.sha256() == desktopRelease.asset.sha256) {
                 "Update checksum verification failed."
             }
@@ -330,11 +344,13 @@ internal class DesktopAppUpdater(
                 packageFile.toPath(),
                 StandardCopyOption.REPLACE_EXISTING,
             )
+            diagnosticStage = "installer-preparation"
             prepareInstaller(packageFile, desktopRelease)
             mutableInstallState.value = AppUpdateInstallState.Installing(
                 desktopRelease.versionName,
                 desktopRelease.versionCode,
             )
+            diagnosticStage = "installer-handoff"
             return when (openInstaller(packageFile)) {
                 DesktopPackageInstallerOutcome.InstallerHandoffStarted -> {
                     mutableInstallState.value = AppUpdateInstallState.ConfirmationOpened(
@@ -345,6 +361,7 @@ internal class DesktopAppUpdater(
                     AppUpdateInstallResult.ConfirmationOpened
                 }
                 DesktopPackageInstallerOutcome.InstallationCompleted -> {
+                    diagnosticStage = "installed-version-verification"
                     val installedVersion = installedPackageVersion(selectedTarget)
                     requireInstalledDesktopPackageVersion(installedVersion, desktopRelease.packageVersion)
                     mutableInstallState.value = AppUpdateInstallState.Installed(
@@ -393,6 +410,7 @@ internal class DesktopAppUpdater(
             )
             return AppUpdateInstallResult.Rejected(
                 failure.message ?: "The desktop update could not be verified.",
+                "desktop-$diagnosticStage",
             )
         } finally {
             cancellationRequested = false

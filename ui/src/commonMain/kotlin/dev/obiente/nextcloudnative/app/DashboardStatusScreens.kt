@@ -86,8 +86,130 @@ internal sealed interface DashboardSurfaceState {
     data class Available(
         val snapshot: NativeDashboardSnapshot,
         val status: NativeUserStatus?,
+        val widgetsAuthoritative: Boolean = true,
     ) : DashboardSurfaceState
     data class Failed(val message: String) : DashboardSurfaceState
+}
+
+private data class DashboardWidgetsLoad(
+    val widgets: List<NativeDashboardWidget>,
+    val authoritative: Boolean,
+)
+
+private data class DashboardLoadResult(
+    val snapshot: NativeDashboardSnapshot,
+    val status: NativeUserStatus?,
+    val widgetsAuthoritative: Boolean,
+)
+
+private data class DashboardItemsHttpResult(
+    val response: NextcloudApiResponse,
+    val apiVersion: DashboardItemApiVersion,
+    val combinedResponseBytes: Long,
+)
+
+private enum class DashboardV2RouteAvailability {
+    Unknown,
+    Available,
+    Unavailable,
+}
+
+private enum class DashboardV2ExecutionDecision {
+    ExecuteV2,
+    ExecuteV1Fallback,
+    ReturnProbe,
+}
+
+internal class DashboardV2RouteUnavailableException : IllegalStateException(
+    "The Dashboard widget-items V2 route is unavailable.",
+)
+
+internal class DashboardFallbackReadFailure(
+    val priorResponseBytes: Long,
+    cause: Throwable,
+) : RuntimeException(cause)
+
+private suspend fun executeDashboardItemsPlan(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    plan: DashboardItemsRequestPlan,
+    widgets: List<NativeDashboardWidget>,
+    reservedBytes: Long,
+    v2RouteMutex: Mutex,
+    readV2RouteAvailability: () -> DashboardV2RouteAvailability,
+    writeV2RouteAvailability: (DashboardV2RouteAvailability) -> Unit,
+    onEffectiveApiVersion: (DashboardItemApiVersion) -> Unit,
+): DashboardItemsHttpResult {
+    val fallback = plan.v1FallbackRequest(widgets)
+
+    suspend fun execute(
+        request: NextcloudApiRequest,
+        apiVersion: DashboardItemApiVersion,
+        maximumBytes: Long,
+        priorResponseBytes: Long = 0L,
+    ): DashboardItemsHttpResult {
+        onEffectiveApiVersion(apiVersion)
+        require(maximumBytes > 0L) { "The Dashboard fallback response budget is exhausted." }
+        val response = services.executeNextcloudApi(
+            session,
+            request.copy(maximumResponseBytes = maximumBytes),
+        )
+        return DashboardItemsHttpResult(
+            response = response,
+            apiVersion = apiVersion,
+            combinedResponseBytes = priorResponseBytes + response.body.size.toLong(),
+        )
+    }
+
+    if (plan.apiVersion != DashboardItemApiVersion.V2) {
+        return execute(plan.request, plan.apiVersion, reservedBytes)
+    }
+    return when (v2RouteMutex.withLock { readV2RouteAvailability() }) {
+        DashboardV2RouteAvailability.Available ->
+            execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
+        DashboardV2RouteAvailability.Unavailable ->
+            fallback?.let { execute(it, DashboardItemApiVersion.V1, reservedBytes) }
+                ?: throw DashboardV2RouteUnavailableException()
+        DashboardV2RouteAvailability.Unknown -> {
+            var probe: DashboardItemsHttpResult? = null
+            val decision = v2RouteMutex.withLock {
+                when (readV2RouteAvailability()) {
+                    DashboardV2RouteAvailability.Available -> DashboardV2ExecutionDecision.ExecuteV2
+                    DashboardV2RouteAvailability.Unavailable -> DashboardV2ExecutionDecision.ExecuteV1Fallback
+                    DashboardV2RouteAvailability.Unknown -> {
+                        val v2 = execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
+                        probe = v2
+                        if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(v2.response) }) {
+                            writeV2RouteAvailability(DashboardV2RouteAvailability.Unavailable)
+                            DashboardV2ExecutionDecision.ExecuteV1Fallback
+                        } else {
+                            writeV2RouteAvailability(DashboardV2RouteAvailability.Available)
+                            DashboardV2ExecutionDecision.ReturnProbe
+                        }
+                    }
+                }
+            }
+            when (decision) {
+                DashboardV2ExecutionDecision.ExecuteV2 ->
+                    execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
+                DashboardV2ExecutionDecision.ExecuteV1Fallback -> fallback?.let {
+                    val priorResponseBytes = probe?.combinedResponseBytes ?: 0L
+                    try {
+                        execute(
+                            request = it,
+                            apiVersion = DashboardItemApiVersion.V1,
+                            maximumBytes = dashboardFallbackResponseBudget(reservedBytes, priorResponseBytes),
+                            priorResponseBytes = priorResponseBytes,
+                        )
+                    } catch (failure: Throwable) {
+                        if (failure is CancellationException || priorResponseBytes == 0L) throw failure
+                        throw DashboardFallbackReadFailure(priorResponseBytes, failure)
+                    }
+                } ?: probe ?: throw DashboardV2RouteUnavailableException()
+                DashboardV2ExecutionDecision.ReturnProbe -> requireNotNull(probe)
+            }
+        }
+    }
 }
 
 @Composable
@@ -172,6 +294,13 @@ internal fun NativeDashboardPresentation(
     LaunchedEffect(workspaceLayout) {
         if (workspaceLayout != activeWorkspaceLayout) activeWorkspaceLayout = workspaceLayout
     }
+    val widgetsAuthoritative = (state as? DashboardSurfaceState.Available)?.widgetsAuthoritative != false
+    LaunchedEffect(widgetsAuthoritative) {
+        if (!widgetsAuthoritative) {
+            customizeWorkspace = false
+            workspacePersistenceError = null
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
@@ -183,7 +312,11 @@ internal fun NativeDashboardPresentation(
             },
             onBack = onBack,
             onRefresh = onRefresh,
-            onCustomize = { customizeWorkspace = true },
+            onCustomize = if (widgetsAuthoritative) {
+                { customizeWorkspace = true }
+            } else {
+                null
+            },
             onSearch = onSearch,
             onSettings = onSettings,
         )
@@ -208,14 +341,20 @@ internal fun NativeDashboardPresentation(
                 val effectiveLayout = remember(activeWorkspaceLayout, availableSectionIds) {
                     activeWorkspaceLayout.reconcileAvailableSections(availableSectionIds)
                 }
-                LaunchedEffect(effectiveLayout) {
-                    if (effectiveLayout != activeWorkspaceLayout) {
+                LaunchedEffect(effectiveLayout, current.widgetsAuthoritative) {
+                    if (current.widgetsAuthoritative && effectiveLayout != activeWorkspaceLayout) {
                         activeWorkspaceLayout = effectiveLayout
                         onWorkspaceLayoutChanged(effectiveLayout)
                     }
                 }
                 val bindingsBySection = remember(bindings) {
                     bindings.associateBy(HomeDashboardWidgetBinding::sectionId)
+                }
+                if (!current.widgetsAuthoritative) {
+                    DashboardUnavailableNotice(
+                        showingSavedContent = current.snapshot.widgets.isNotEmpty(),
+                        onRetry = onRefresh,
+                    )
                 }
                 current.status?.let { status ->
                     CurrentStatusStrip(status = status, onClick = onOpenStatus)
@@ -228,7 +367,7 @@ internal fun NativeDashboardPresentation(
                 }
                 val updateWorkspaceLayout: (HomeWorkspaceLayout, Boolean) -> Unit = { updated, persist ->
                     activeWorkspaceLayout = updated
-                    if (persist) {
+                    if (persist && current.widgetsAuthoritative) {
                         workspacePersistenceError = if (onWorkspaceLayoutChanged(updated)) {
                             null
                         } else {
@@ -315,14 +454,25 @@ internal fun rememberNativeDashboardState(
             NextcloudApiCachePolicy.PreferCache
         }
         previousSnapshot?.let {
-            state = DashboardSurfaceState.Available(it, previousStatus)
+            state = DashboardSurfaceState.Available(
+                snapshot = it,
+                status = previousStatus,
+                widgetsAuthoritative = cached != null || displayed?.widgetsAuthoritative != false,
+            )
         }
         runCatching {
             coroutineScope {
                 val widgetsDeferred = async {
                     runCatching {
                         val response = services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
-                        withContext(Dispatchers.Default) { parseDashboardWidgets(response) }
+                        if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(response) }) {
+                            DashboardWidgetsLoad(emptyList(), authoritative = false)
+                        } else {
+                            DashboardWidgetsLoad(
+                                withContext(Dispatchers.Default) { parseDashboardWidgets(response) },
+                                authoritative = true,
+                            )
+                        }
                     }.getOrElse { failure ->
                         if (failure is CancellationException) throw failure
                         services.recordSupportDiagnostic(
@@ -340,12 +490,23 @@ internal fun rememberNativeDashboardState(
                     runCatching {
                         val response = services.executeNextcloudApi(session, currentUserStatusRequest())
                         withContext(Dispatchers.Default) { parseCurrentUserStatus(response) }
-                    }.getOrElse { failure ->
+                    }.onFailure { failure ->
                         if (failure is CancellationException) throw failure
-                        null
                     }
                 }
-                val widgets = widgetsDeferred.await()
+                val widgetsLoad = widgetsDeferred.await()
+                if (!widgetsLoad.authoritative) {
+                    val snapshot = previousSnapshot ?: NativeDashboardSnapshot(emptyList(), emptyMap())
+                    state = DashboardSurfaceState.Available(
+                        snapshot,
+                        previousStatus,
+                        widgetsAuthoritative = false,
+                    )
+                    val status = statusDeferred.await().getOrElse { previousStatus }
+                    state = DashboardSurfaceState.Available(snapshot, status, widgetsAuthoritative = false)
+                    return@coroutineScope DashboardLoadResult(snapshot, status, widgetsAuthoritative = false)
+                }
+                val widgets = widgetsLoad.widgets
                 val unsupportedWidgetIds = unsupportedDashboardWidgetIds(widgets)
                 if (unsupportedWidgetIds.isNotEmpty()) {
                     services.recordSupportDiagnostic(
@@ -373,6 +534,8 @@ internal fun rememberNativeDashboardState(
                 val requestLimiter = Semaphore(MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
                 val responseBudget = DashboardResponseBudget()
                 val responseBudgetMutex = Mutex()
+                val v2RouteMutex = Mutex()
+                var v2RouteAvailability = DashboardV2RouteAvailability.Unknown
                 val requests = plans.map { plan ->
                     async {
                         requestLimiter.withPermit {
@@ -392,18 +555,28 @@ internal fun rememberNativeDashboardState(
                                 return@withPermit
                             }
                             var reservationSettled = false
+                            var effectiveApiVersion = plan.apiVersion
                             val result = runCatching {
-                                val response = services.executeNextcloudApi(
-                                    session,
-                                    plan.request.copy(maximumResponseBytes = reservedBytes),
+                                val fetched = executeDashboardItemsPlan(
+                                    services = services,
+                                    session = session,
+                                    plan = plan,
+                                    widgets = widgets,
+                                    reservedBytes = reservedBytes,
+                                    v2RouteMutex = v2RouteMutex,
+                                    readV2RouteAvailability = { v2RouteAvailability },
+                                    writeV2RouteAvailability = { v2RouteAvailability = it },
+                                    onEffectiveApiVersion = { effectiveApiVersion = it },
                                 )
+                                effectiveApiVersion = fetched.apiVersion
+                                val response = fetched.response
                                 responseBudgetMutex.withLock {
-                                    responseBudget.releaseUnused(reservedBytes, response.body.size.toLong())
+                                    responseBudget.releaseUnused(reservedBytes, fetched.combinedResponseBytes)
                                 }
                                 reservationSettled = true
                                 val selectedWidgets = widgets.filter { it.id in plan.widgetIds }
                                 val payload = withContext(Dispatchers.Default) {
-                                    when (plan.apiVersion) {
+                                    when (effectiveApiVersion) {
                                         DashboardItemApiVersion.V1 -> DashboardItemsPayload(
                                             itemsByWidget = parseDashboardItems(response, selectedWidgets),
                                         )
@@ -414,7 +587,7 @@ internal fun rememberNativeDashboardState(
                                     if (result is DashboardItemsFetchResult.Failed) {
                                         services.recordSupportDiagnostic(
                                             dashboardLoadFailureDiagnostic(
-                                                stage = "widget_items_v${plan.apiVersion.wireValue}",
+                                                stage = "widget_items_v${effectiveApiVersion.wireValue}",
                                                 code = "DASHBOARD_WIDGET_ITEMS_OMITTED",
                                                 cachedAvailable = previousSnapshot != null,
                                                 severity = SupportDiagnosticSeverity.Warning,
@@ -431,8 +604,8 @@ internal fun rememberNativeDashboardState(
                                 if (failure is CancellationException) throw failure
                                 services.recordSupportDiagnostic(
                                     dashboardLoadFailureDiagnostic(
-                                        stage = "widget_items_v${plan.apiVersion.wireValue}",
-                                        code = "DASHBOARD_WIDGET_ITEMS_V${plan.apiVersion.wireValue}_FAILED",
+                                        stage = "widget_items_v${effectiveApiVersion.wireValue}",
+                                        code = "DASHBOARD_WIDGET_ITEMS_V${effectiveApiVersion.wireValue}_FAILED",
                                         cachedAvailable = previousSnapshot != null,
                                         severity = SupportDiagnosticSeverity.Warning,
                                     ),
@@ -458,16 +631,26 @@ internal fun rememberNativeDashboardState(
                 }
                 requests.awaitAll()
                 completedResults.close()
-                snapshot to statusDeferred.await()
+                DashboardLoadResult(
+                    snapshot,
+                    statusDeferred.await().getOrElse { previousStatus },
+                    widgetsAuthoritative = true,
+                )
             }
-        }.onSuccess { (snapshot, status) ->
-            sharedDashboardStatusMemoryCache.store(
-                session = session,
-                dashboard = snapshot,
-                status = status,
-                nowEpochSeconds = currentDashboardEpochSeconds(),
+        }.onSuccess { result ->
+            if (result.widgetsAuthoritative) {
+                sharedDashboardStatusMemoryCache.store(
+                    session = session,
+                    dashboard = result.snapshot,
+                    status = result.status,
+                    nowEpochSeconds = currentDashboardEpochSeconds(),
+                )
+            }
+            state = DashboardSurfaceState.Available(
+                result.snapshot,
+                result.status,
+                widgetsAuthoritative = result.widgetsAuthoritative,
             )
-            state = DashboardSurfaceState.Available(snapshot, status)
         }.onFailure { failure ->
             if (failure is CancellationException) throw failure
             if (state !is DashboardSurfaceState.Available) {
@@ -533,6 +716,38 @@ private fun DashboardHeader(
 }
 
 internal fun dashboardRefreshDescription(title: String): String = "Refresh $title"
+
+@Composable
+private fun DashboardUnavailableNotice(
+    showingSavedContent: Boolean,
+    onRetry: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = NextcloudSpacing.Large,
+                vertical = NextcloudSpacing.Small,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (showingSavedContent) {
+                    "The Dashboard app is unavailable. Showing your saved Home content."
+                } else {
+                    "The Dashboard app is unavailable. Quick actions remain available."
+                },
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
 
 @Composable
 private fun CurrentStatusStrip(

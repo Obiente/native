@@ -244,7 +244,10 @@ sealed interface FileSyncCenterActionResult {
         }
     }
 
-    data class Rejected(val reason: String) : FileSyncCenterActionResult {
+    data class Rejected(
+        val reason: String,
+        val scope: FileSyncRejectionScope = FileSyncRejectionScope.Items,
+    ) : FileSyncCenterActionResult {
         init {
             require(reason.isSafeFileSyncCenterText(1_024))
         }
@@ -255,6 +258,11 @@ sealed interface FileSyncCenterActionResult {
             require(reason.isSafeFileSyncCenterText(1_024))
         }
     }
+}
+
+enum class FileSyncRejectionScope {
+    Preflight,
+    Items,
 }
 
 fun FileSyncPair.toCenterSummary(

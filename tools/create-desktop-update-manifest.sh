@@ -74,6 +74,10 @@ while IFS= read -r -d '' asset; do
 done < <(find "$asset_directory" -maxdepth 1 -type f -print0 | sort -z)
 
 assets="$(jq -s '.' "$assets_json")"
+changes='[]'
+if (( version_code > 20000000 )); then
+    changes="$(node "$(dirname "$0")/update-changelog.mjs" "$version_code")"
+fi
 jq -e '
   length >= 1 and length <= 8 and
   (map([.platform,.format,.architecture] | join(":")) | length == (unique | length))
@@ -88,5 +92,6 @@ jq -n \
     --arg packageVersion "$package_version" \
     --arg releaseNotesUrl "https://github.com/${repository}/releases/tag/${tag}" \
     --argjson assets "$assets" \
-    '{schemaVersion:$schemaVersion,channel:$channel,versionName:$versionName,versionCode:$versionCode,packageVersion:$packageVersion,releaseNotesUrl:$releaseNotesUrl,assets:$assets}' \
+    --argjson changes "$changes" \
+    '{schemaVersion:$schemaVersion,channel:$channel,versionName:$versionName,versionCode:$versionCode,packageVersion:$packageVersion,releaseNotesUrl:$releaseNotesUrl,assets:$assets,changes:$changes}' \
     >"$output"

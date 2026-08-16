@@ -133,7 +133,17 @@ sealed interface AppUpdateRelease {
     val versionCode: Long
     val packageSize: Long
     val releaseNotesUrl: String
+    val changes: List<AppUpdateChange>
 }
+
+@Serializable
+data class AppUpdateChange(
+    val id: String,
+    val category: String,
+    val summary: String,
+    val platforms: List<String>,
+    val introducedSourceSequence: Long,
+)
 
 @Serializable
 data class AndroidDirectRelease(
@@ -148,6 +158,7 @@ data class AndroidDirectRelease(
     val apkSha256: String,
     val signingCertificateSha256Digests: List<String>,
     override val releaseNotesUrl: String,
+    override val changes: List<AppUpdateChange> = emptyList(),
 ) : AppUpdateRelease {
     override val packageSize: Long get() = apkSize
 }
@@ -161,6 +172,7 @@ data class DesktopUpdateManifest(
     val packageVersion: String,
     val releaseNotesUrl: String,
     val assets: List<DesktopUpdateAsset>,
+    val changes: List<AppUpdateChange> = emptyList(),
 )
 
 @Serializable
@@ -180,9 +192,24 @@ data class DesktopDirectRelease(
     val packageVersion: String,
     val asset: DesktopUpdateAsset,
     override val releaseNotesUrl: String,
+    override val changes: List<AppUpdateChange> = emptyList(),
 ) : AppUpdateRelease {
     override val packageSize: Long get() = asset.size
 }
+
+fun appUpdateChangesSince(
+    currentVersionCode: Long,
+    release: AppUpdateRelease,
+): List<AppUpdateChange> {
+    val currentSequence = appUpdateSourceSequence(currentVersionCode) ?: return emptyList()
+    val targetSequence = appUpdateSourceSequence(release.versionCode) ?: return emptyList()
+    return release.changes
+        .filter { change -> change.introducedSourceSequence in (currentSequence + 1)..targetSequence }
+        .distinctBy(AppUpdateChange::id)
+}
+
+private fun appUpdateSourceSequence(versionCode: Long): Long? =
+    versionCode.takeIf { it > 20_000_000L }?.let { (it - 20_000_000L) / 10L }
 
 data class AppUpdatePreferences(
     val automaticChecks: Boolean = true,
@@ -258,7 +285,10 @@ sealed interface AppUpdateInstallResult {
     data object Installed : AppUpdateInstallResult
     data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
-    data class Rejected(val message: String) : AppUpdateInstallResult
+    data class Rejected(
+        val message: String,
+        val diagnosticCode: String = "rejected",
+    ) : AppUpdateInstallResult
 }
 
 private val publicContentJson = Json {
@@ -381,6 +411,7 @@ fun validateAndroidDirectRelease(
         release.releaseNotesUrl ==
             "https://github.com/Obiente/nc-native/releases/tag/$tag",
     )
+    validateAppUpdateChanges(release.versionCode, release.changes)
     return release
 }
 
@@ -414,6 +445,7 @@ fun parseDesktopDirectRelease(
         packageVersion = manifest.packageVersion,
         asset = asset,
         releaseNotesUrl = manifest.releaseNotesUrl,
+        changes = manifest.changes,
     )
 }
 
@@ -443,6 +475,7 @@ fun validateDesktopUpdateManifest(
         manifest.releaseNotesUrl ==
             "https://github.com/Obiente/nc-native/releases/tag/$tag",
     )
+    validateAppUpdateChanges(manifest.versionCode, manifest.changes)
     manifest.assets.forEach { asset ->
         require(asset.platform in setOf("linux", "windows", "macos"))
         require(
@@ -464,6 +497,24 @@ fun validateDesktopUpdateManifest(
         )
     }
     return manifest
+}
+
+private fun validateAppUpdateChanges(versionCode: Long, changes: List<AppUpdateChange>) {
+    if (changes.isEmpty()) return
+    val targetSequence = requireNotNull(appUpdateSourceSequence(versionCode))
+    require(changes.size <= 1_000 && changes.distinctBy(AppUpdateChange::id).size == changes.size)
+    changes.forEach { change ->
+        require(change.id.matches(Regex("[a-z0-9]+(?:-[a-z0-9]+)*")))
+        require(change.category in setOf("feature", "fix", "security", "platform", "docs"))
+        require(change.summary.isBoundedPublicText(320))
+        require(
+            change.platforms.isNotEmpty() &&
+                change.platforms.size <= 8 &&
+                change.platforms.distinct().size == change.platforms.size &&
+                change.platforms.all { it in setOf("all", "android", "desktop", "ios", "linux", "macos", "windows") },
+        )
+        require(change.introducedSourceSequence in 1..targetSequence)
+    }
 }
 
 fun isCanonicalDesktopUpdateManifestUrl(
