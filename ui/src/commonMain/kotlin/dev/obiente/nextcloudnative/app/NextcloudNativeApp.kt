@@ -1845,6 +1845,9 @@ private fun AuthenticatedApp(
         mutableStateOf(loadedAppPins.storageAuthoritative)
     }
     val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
+        if (!appPinsStorageAuthoritative) {
+            return@togglePinnedApp "Pinned apps cannot be changed because their saved settings could not be read. Restart the app and try again."
+        }
         val updated = runCatching { toggleAppWorkspacePin(pinnedAppIds, appId) }
             .getOrElse {
                 return@togglePinnedApp "You can pin up to $MAX_APP_WORKSPACE_PINS installed apps. Unpin one first."
