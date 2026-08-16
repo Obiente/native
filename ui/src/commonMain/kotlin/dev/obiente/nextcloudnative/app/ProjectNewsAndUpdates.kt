@@ -258,7 +258,10 @@ sealed interface AppUpdateInstallResult {
     data object Installed : AppUpdateInstallResult
     data class Cancelled(val canResume: Boolean) : AppUpdateInstallResult
     data class PermissionRequired(val message: String) : AppUpdateInstallResult
-    data class Rejected(val message: String) : AppUpdateInstallResult
+    data class Rejected(
+        val message: String,
+        val diagnosticCode: String = "rejected",
+    ) : AppUpdateInstallResult
 }
 
 private val publicContentJson = Json {

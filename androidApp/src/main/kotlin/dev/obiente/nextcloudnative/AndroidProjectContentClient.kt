@@ -276,9 +276,15 @@ internal class AndroidProjectContentClient(
 
     suspend fun beginUpdate(release: AppUpdateRelease): AppUpdateInstallResult {
         val androidRelease = release as? AndroidDirectRelease
-            ?: return AppUpdateInstallResult.Rejected("This is not an Android update package.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "This is not an Android update package.",
+                "android-package-type",
+            )
         if (!updateMutex.tryLock()) {
-            return AppUpdateInstallResult.Rejected("An app update is already in progress.")
+            return AppUpdateInstallResult.Rejected(
+                "An app update is already in progress.",
+                "android-already-running",
+            )
         }
         try {
             return beginUpdateLocked(androidRelease)
@@ -291,10 +297,13 @@ internal class AndroidProjectContentClient(
     private suspend fun beginUpdateLocked(release: AndroidDirectRelease): AppUpdateInstallResult {
         val support = support()
         if (!support.canCheckDirectUpdates) {
-            return AppUpdateInstallResult.Rejected(support.explanation)
+            return AppUpdateInstallResult.Rejected(support.explanation, "android-distribution-ineligible")
         }
         if (!isNewerAndroidRelease(support.currentVersionCode, release)) {
-            return AppUpdateInstallResult.Rejected("This release is not newer than the installed app.")
+            return AppUpdateInstallResult.Rejected(
+                "This release is not newer than the installed app.",
+                "android-release-ineligible",
+            )
         }
         val selectedChannel = updateChannel()
         runCatching {
@@ -302,10 +311,14 @@ internal class AndroidProjectContentClient(
         }.getOrElse {
             return AppUpdateInstallResult.Rejected(
                 "The update metadata is invalid for the selected ${selectedChannel.name} channel.",
+                "android-metadata",
             )
         }
         val foregroundActivity = activity
-            ?: return AppUpdateInstallResult.Rejected("Open the app before installing an update.")
+            ?: return AppUpdateInstallResult.Rejected(
+                "Open the app before installing an update.",
+                "android-no-foreground-activity",
+            )
         if (!appContext.packageManager.canRequestPackageInstalls()) {
             val message =
                 "Allow installs from Nextcloud Native, then return and confirm the update again."
@@ -335,6 +348,7 @@ internal class AndroidProjectContentClient(
             activePartial = temporary,
         )
         updateCancellationRequested = false
+        var diagnosticStage = "download"
         return try {
             val resumedFromBytes = settleUpdatePartial(
                 file = temporary,
@@ -370,9 +384,11 @@ internal class AndroidProjectContentClient(
                 versionName = release.versionName,
                 versionCode = release.versionCode,
             )
+            diagnosticStage = "verification"
             verifyDownloadedApk(release, temporary)
             if (staged.exists()) check(staged.delete())
             check(temporary.renameTo(staged)) { "Could not stage the verified update." }
+            diagnosticStage = "installer-handoff"
             val uri = FileProvider.getUriForFile(
                 appContext,
                 "${appContext.packageName}.sharedfiles",
@@ -435,7 +451,10 @@ internal class AndroidProjectContentClient(
                 downloadedBytes = retainedBytes,
                 canResume = recoverable && retainedBytes in 1 until release.apkSize,
             )
-            AppUpdateInstallResult.Rejected(failure.message ?: "The update could not be verified.")
+            AppUpdateInstallResult.Rejected(
+                failure.message ?: "The update could not be verified.",
+                "android-$diagnosticStage",
+            )
         } finally {
             updateCancellationRequested = false
         }
