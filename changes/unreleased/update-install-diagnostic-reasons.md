@@ -1,4 +1,4 @@
-category: fix
+category: internal
 issue: 351
 pull: none
 platforms: android, linux, macos, windows
