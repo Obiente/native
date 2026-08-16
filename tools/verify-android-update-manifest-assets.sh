@@ -47,6 +47,7 @@ jq -e \
       .apkSize == $apk_size and
       .apkSha256 == $apk_sha256 and
       .releaseNotesUrl == $release_notes_url and
+      (.changes | type == "array" and length <= 1000) and
       (.signingCertificateSha256Digests | type == "array" and length > 0) and
       all(
         .signingCertificateSha256Digests[];
