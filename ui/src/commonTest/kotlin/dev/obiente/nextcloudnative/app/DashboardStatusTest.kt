@@ -75,6 +75,38 @@ class DashboardStatusTest {
     }
 
     @Test
+    fun `only missing Dashboard routes are treated as an unavailable optional app`() {
+        assertTrue(isDashboardApiUnavailable(response("not found", status = 404)))
+        assertTrue(
+            isDashboardApiUnavailable(
+                NextcloudApiResponse(
+                    status = 200,
+                    body = """{"ocs":{"meta":{"statuscode":404},"data":[]}}""".encodeToByteArray(),
+                    contentType = "application/json",
+                    etag = null,
+                ),
+            ),
+        )
+        assertFalse(isDashboardApiUnavailable(response("unauthorized", status = 401)))
+        assertFalse(isDashboardApiUnavailable(response("broken", status = 500)))
+        assertFalse(isDashboardApiUnavailable(response("not-json")))
+    }
+
+    @Test
+    fun `v2 plans fall back only when every requested widget supports v1`() {
+        val compatible = dashboardItemsRequestPlans(listOf(widget("calendar", setOf(1, 2)))).single()
+        val v2Only = dashboardItemsRequestPlans(listOf(widget("calendar", setOf(2)))).single()
+
+        val fallback = compatible.v1FallbackRequest(listOf(widget("calendar", setOf(1, 2))))
+
+        assertEquals("/ocs/v2.php/apps/dashboard/api/v1/widget-items", fallback?.relativePath)
+        assertEquals(setOf("calendar"), compatible.widgetIds)
+        assertNull(v2Only.v1FallbackRequest(listOf(widget("calendar", setOf(2)))))
+        assertEquals(700L, dashboardFallbackResponseBudget(1_000L, 300L))
+        assertEquals(0L, dashboardFallbackResponseBudget(1_000L, 1_000L))
+    }
+
+    @Test
     fun `dashboard response budget bounds isolated widget requests`() {
         val budget = DashboardResponseBudget(totalBytes = 1_000L)
         val first = budget.reserve(maximumBytes = 600L)
@@ -118,6 +150,28 @@ class DashboardStatusTest {
         val parsingReservation = parsingBudget.reserve(maximumBytes = 600L)
         parsingBudget.settleFailedRead(parsingReservation, IllegalArgumentException("invalid JSON"))
         assertEquals(400L, parsingBudget.remainingBytes)
+
+        val skippedV2Budget = DashboardResponseBudget(totalBytes = 1_000L)
+        val skippedV2Reservation = skippedV2Budget.reserve(maximumBytes = 600L)
+        skippedV2Budget.settleFailedRead(
+            skippedV2Reservation,
+            DashboardV2RouteUnavailableException(),
+        )
+        assertEquals(1_000L, skippedV2Budget.remainingBytes)
+
+        val failedFallbackBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val failedFallbackReservation = failedFallbackBudget.reserve(maximumBytes = 600L)
+        failedFallbackBudget.settleFailedRead(
+            failedFallbackReservation,
+            DashboardFallbackReadFailure(
+                priorResponseBytes = 125L,
+                cause = NextcloudApiReadFailure(
+                    responseBodyMayHaveStarted = false,
+                    cause = IllegalStateException("offline"),
+                ),
+            ),
+        )
+        assertEquals(875L, failedFallbackBudget.remainingBytes)
     }
 
     @Test
