@@ -53,7 +53,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
-import dev.obiente.nextcloudnative.app.design.NextcloudAppTile
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -64,6 +63,8 @@ internal fun NativeAppsWorkspace(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     lastOpenedAppId: String?,
+    pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
+    onTogglePinnedApp: (String) -> Unit = {},
     onRetry: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
@@ -74,10 +75,11 @@ internal fun NativeAppsWorkspace(
     var selectedCategoryName by rememberSaveable { mutableStateOf(AppWorkspaceCategory.All.name) }
     val selectedCategory = AppWorkspaceCategory.entries.firstOrNull { it.name == selectedCategoryName }
         ?: AppWorkspaceCategory.All
-    val presentation = remember(serverInfo?.apps, lastOpenedAppId, query, selectedCategory) {
+    val presentation = remember(serverInfo?.apps, lastOpenedAppId, pinnedAppIds, query, selectedCategory) {
         buildAppWorkspacePresentation(
             apps = serverInfo?.apps.orEmpty(),
             lastOpenedAppId = lastOpenedAppId,
+            pinnedAppIds = pinnedAppIds,
             query = query,
             category = selectedCategory,
         )
@@ -104,6 +106,7 @@ internal fun NativeAppsWorkspace(
             onSettings = onSettings,
             onSearch = onSearch,
             onOpenApp = onOpenApp,
+            onTogglePinnedApp = onTogglePinnedApp,
         )
     } else {
         CompactAppsWorkspace(
@@ -116,6 +119,7 @@ internal fun NativeAppsWorkspace(
             onSettings = onSettings,
             onSearch = onSearch,
             onOpenApp = onOpenApp,
+            onTogglePinnedApp = onTogglePinnedApp,
         )
     }
 }
@@ -135,6 +139,7 @@ private fun DesktopAppsWorkspace(
     onSettings: () -> Unit,
     onSearch: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
+    onTogglePinnedApp: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         WorkspaceHeader(
@@ -206,6 +211,7 @@ private fun DesktopAppsWorkspace(
                                     selected = selectedEntry?.app?.id == entry.app.id,
                                     onSelect = { onSelected(entry) },
                                     onOpen = { onOpenApp(entry.app) },
+                                    onTogglePinned = { onTogglePinnedApp(entry.app.id) },
                                 )
                             }
                         }
@@ -235,6 +241,7 @@ private fun CompactAppsWorkspace(
     onSettings: () -> Unit,
     onSearch: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
+    onTogglePinnedApp: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         WorkspaceHeader("Apps", "Everything connected to your cloud", onSettings, onSearch)
@@ -253,19 +260,18 @@ private fun CompactAppsWorkspace(
                     shape = RoundedCornerShape(NextcloudRadii.Card),
                 )
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(150.dp),
+                    columns = GridCells.Adaptive(220.dp),
                     contentPadding = PaddingValues(NextcloudSpacing.Medium),
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     items(presentation.entries, key = { it.app.id }) { entry ->
-                        NextcloudAppTile(
-                            title = entry.app.name,
-                            icon = NextcloudIcons.app(entry.app.id),
-                            supportingText = entry.category.title,
-                            onClick = { onOpenApp(entry.app) },
-                            modifier = Modifier.fillMaxWidth().height(140.dp),
-                            accessibilityId = entry.app.id,
+                        AppWorkspaceCard(
+                            entry = entry,
+                            selected = false,
+                            onSelect = { onOpenApp(entry.app) },
+                            onOpen = { onOpenApp(entry.app) },
+                            onTogglePinned = { onTogglePinnedApp(entry.app.id) },
                         )
                     }
                 }
@@ -403,6 +409,7 @@ private fun AppWorkspaceCard(
     selected: Boolean,
     onSelect: () -> Unit,
     onOpen: () -> Unit,
+    onTogglePinned: () -> Unit,
 ) {
     Card(
         onClick = onSelect,
@@ -438,6 +445,16 @@ private fun AppWorkspaceCard(
                 }
                 TextButton(onClick = onOpen, contentPadding = PaddingValues(horizontal = 8.dp)) {
                     Text("Open")
+                }
+                IconButton(onClick = onTogglePinned) {
+                    Icon(
+                        if (entry.pinned) NextcloudIcons.Favorite else NextcloudIcons.FavoriteBorder,
+                        contentDescription = if (entry.pinned) {
+                            "Unpin ${entry.app.name}"
+                        } else {
+                            "Pin ${entry.app.name}"
+                        },
+                    )
                 }
             }
             Text(

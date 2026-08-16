@@ -58,4 +58,16 @@ class AppWorkspacePresentationTest {
         assertTrue(presentation.recentEntries.any { it.app.id == "spreed" })
         assertEquals("spreed", canonicalAppWorkspaceId("talk"))
     }
+
+    @Test
+    fun `custom pins replace defaults and canonicalize Talk`() {
+        val presentation = buildAppWorkspacePresentation(
+            apps = apps,
+            lastOpenedAppId = null,
+            pinnedAppIds = listOf("deck", "talk"),
+        )
+
+        assertEquals(listOf("deck", "talk"), presentation.pinnedEntries.map { it.app.id })
+        assertFalse(presentation.pinnedEntries.any { it.app.id == "files" })
+    }
 }

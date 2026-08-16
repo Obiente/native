@@ -1834,6 +1834,17 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
+    val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
+    val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
+    val appPinsAccountScope = remember(session) { previewCacheDigest(session) }
+    var pinnedAppIds by remember(appPinsAccountScope) {
+        mutableStateOf(appPinsRepository.load(appPinsAccountScope))
+    }
+    val togglePinnedApp: (String) -> Unit = { appId ->
+        runCatching { toggleAppWorkspacePin(pinnedAppIds, appId) }.getOrNull()?.let { updated ->
+            if (appPinsRepository.save(appPinsAccountScope, updated)) pinnedAppIds = updated
+        }
+    }
     var memoriesLivePhotoCapability by remember(session) {
         mutableStateOf<MemoriesLivePhotoCapability>(MemoriesLivePhotoCapability.NotAdvertised)
     }
@@ -2543,19 +2554,13 @@ private fun AuthenticatedApp(
     }
 
     val desktopIdentity = serverInfo?.let { info ->
-        val shortcutAppIds = listOf(
-            listOf("files"),
-            listOf("photos", "memories"),
-            listOf("talk", "spreed"),
-            listOf("calendar"),
-        )
         NextcloudDesktopIdentity(
             displayName = info.displayName,
             cloudName = info.themeName ?: "Nextcloud",
             connectionLabel = "Connected",
             serverVersion = info.version,
-            shortcuts = shortcutAppIds.mapNotNull { candidateIds ->
-                info.apps.firstOrNull { app -> app.id in candidateIds }?.let { app ->
+            shortcuts = pinnedAppIds.take(4).mapNotNull { pinnedId ->
+                info.apps.firstOrNull { app -> canonicalAppWorkspaceId(app.id) == pinnedId }?.let { app ->
                     NextcloudDesktopSidebarApp(id = app.id, label = app.name)
                 }
             },
@@ -2575,6 +2580,7 @@ private fun AuthenticatedApp(
                     services = services,
                     session = session,
                     installedApps = serverInfo?.apps.orEmpty(),
+                    pinnedAppIds = pinnedAppIds,
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
                     onOpenLink = { link ->
                         launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
@@ -2599,6 +2605,8 @@ private fun AuthenticatedApp(
                     serverInfo = serverInfo,
                     error = discoveryError,
                     lastOpenedAppId = lastOpenedAppId,
+                    pinnedAppIds = pinnedAppIds,
+                    onTogglePinnedApp = togglePinnedApp,
                     onRetry = { discoveryAttempt += 1 },
                     onSettings = { destination = NextcloudDestination.Settings },
                     onSearch = ::openSearch,
@@ -3175,6 +3183,8 @@ private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     lastOpenedAppId: String?,
+    pinnedAppIds: List<String>,
+    onTogglePinnedApp: (String) -> Unit,
     onRetry: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
@@ -3184,6 +3194,8 @@ private fun AppsScreen(
         serverInfo = serverInfo,
         error = error,
         lastOpenedAppId = lastOpenedAppId,
+        pinnedAppIds = pinnedAppIds,
+        onTogglePinnedApp = onTogglePinnedApp,
         onRetry = onRetry,
         onSettings = onSettings,
         onSearch = onSearch,
