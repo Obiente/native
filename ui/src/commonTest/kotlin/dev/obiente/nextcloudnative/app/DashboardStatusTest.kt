@@ -158,6 +158,20 @@ class DashboardStatusTest {
             DashboardV2RouteUnavailableException(),
         )
         assertEquals(1_000L, skippedV2Budget.remainingBytes)
+
+        val failedFallbackBudget = DashboardResponseBudget(totalBytes = 1_000L)
+        val failedFallbackReservation = failedFallbackBudget.reserve(maximumBytes = 600L)
+        failedFallbackBudget.settleFailedRead(
+            failedFallbackReservation,
+            DashboardFallbackReadFailure(
+                priorResponseBytes = 125L,
+                cause = NextcloudApiReadFailure(
+                    responseBodyMayHaveStarted = false,
+                    cause = IllegalStateException("offline"),
+                ),
+            ),
+        )
+        assertEquals(875L, failedFallbackBudget.remainingBytes)
     }
 
     @Test

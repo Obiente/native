@@ -124,6 +124,11 @@ internal class DashboardV2RouteUnavailableException : IllegalStateException(
     "The Dashboard widget-items V2 route is unavailable.",
 )
 
+internal class DashboardFallbackReadFailure(
+    val priorResponseBytes: Long,
+    cause: Throwable,
+) : RuntimeException(cause)
+
 private suspend fun executeDashboardItemsPlan(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -189,12 +194,17 @@ private suspend fun executeDashboardItemsPlan(
                     execute(plan.request, DashboardItemApiVersion.V2, reservedBytes)
                 DashboardV2ExecutionDecision.ExecuteV1Fallback -> fallback?.let {
                     val priorResponseBytes = probe?.combinedResponseBytes ?: 0L
-                    execute(
-                        request = it,
-                        apiVersion = DashboardItemApiVersion.V1,
-                        maximumBytes = dashboardFallbackResponseBudget(reservedBytes, priorResponseBytes),
-                        priorResponseBytes = priorResponseBytes,
-                    )
+                    try {
+                        execute(
+                            request = it,
+                            apiVersion = DashboardItemApiVersion.V1,
+                            maximumBytes = dashboardFallbackResponseBudget(reservedBytes, priorResponseBytes),
+                            priorResponseBytes = priorResponseBytes,
+                        )
+                    } catch (failure: Throwable) {
+                        if (failure is CancellationException || priorResponseBytes == 0L) throw failure
+                        throw DashboardFallbackReadFailure(priorResponseBytes, failure)
+                    }
                 } ?: probe ?: throw DashboardV2RouteUnavailableException()
                 DashboardV2ExecutionDecision.ReturnProbe -> requireNotNull(probe)
             }

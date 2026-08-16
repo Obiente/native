@@ -718,6 +718,13 @@ internal fun DashboardResponseBudget.settleFailedRead(
     reservedBytes: Long,
     failure: Throwable,
 ) {
+    if (failure is DashboardFallbackReadFailure) {
+        val fallbackFailure = failure.cause
+        if (fallbackFailure is NextcloudApiReadFailure && !fallbackFailure.responseBodyMayHaveStarted) {
+            releaseUnused(reservedBytes, failure.priorResponseBytes)
+        }
+        return
+    }
     if (
         failure is DashboardV2RouteUnavailableException ||
         failure is NextcloudApiReadFailure && !failure.responseBodyMayHaveStarted
