@@ -1834,6 +1834,34 @@ private fun AuthenticatedApp(
     ) { mutableStateOf(NextcloudDestination.Home) }
     var serverInfo by remember(session) { mutableStateOf<NextcloudServerInfo?>(null) }
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
+    val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
+    val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
+    val appPinsAccountScope = remember(session) { previewCacheDigest(session) }
+    val loadedAppPins = remember(appPinsAccountScope) {
+        appPinsRepository.loadWithProvenance(appPinsAccountScope)
+    }
+    var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
+    var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
+        mutableStateOf(loadedAppPins.storageAuthoritative)
+    }
+    var appPinsPersistenceError by remember(appPinsAccountScope) { mutableStateOf<String?>(null) }
+    val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
+        if (!appPinsStorageAuthoritative) {
+            return@togglePinnedApp "Pinned apps cannot be changed because their saved settings could not be read. Restart the app and try again."
+        }
+        val updated = runCatching { toggleAppWorkspacePin(pinnedAppIds, appId) }
+            .getOrElse {
+                return@togglePinnedApp "You can pin up to $MAX_APP_WORKSPACE_PINS installed apps. Unpin one first."
+            }
+        if (appPinsRepository.save(appPinsAccountScope, updated)) {
+            pinnedAppIds = updated
+            appPinsStorageAuthoritative = true
+            appPinsPersistenceError = null
+            null
+        } else {
+            "Pinned apps could not be saved on this device. Try again."
+        }
+    }
     var memoriesLivePhotoCapability by remember(session) {
         mutableStateOf<MemoriesLivePhotoCapability>(MemoriesLivePhotoCapability.NotAdvertised)
     }
@@ -1998,7 +2026,22 @@ private fun AuthenticatedApp(
     LaunchedEffect(session, discoveryAttempt) {
         discoveryError = null
         runCatching { services.loadServerInfo(session) }
-            .onSuccess { serverInfo = it }
+            .onSuccess { discovered ->
+                serverInfo = discovered
+                val reconciled = reconciledAppWorkspacePinsForDiscovery(
+                    appIds = pinnedAppIds,
+                    installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
+                    appsAuthoritative = discovered.appsAuthoritative,
+                )
+                if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
+                    pinnedAppIds = reconciled
+                    appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                        null
+                    } else {
+                        "Unavailable pins were removed for this session, but the change could not be saved on this device."
+                    }
+                }
+            }
             .onFailure { discoveryError = it.message ?: "Could not load server details." }
     }
 
@@ -2558,22 +2601,16 @@ private fun AuthenticatedApp(
     }
 
     val desktopIdentity = serverInfo?.let { info ->
-        val shortcutAppIds = listOf(
-            listOf("files"),
-            listOf("photos", "memories"),
-            listOf("talk", "spreed"),
-            listOf("calendar"),
-        )
         NextcloudDesktopIdentity(
             displayName = info.displayName,
             cloudName = info.themeName ?: "Nextcloud",
             connectionLabel = "Connected",
             serverVersion = info.version,
-            shortcuts = shortcutAppIds.mapNotNull { candidateIds ->
-                info.apps.firstOrNull { app -> app.id in candidateIds }?.let { app ->
+            shortcuts = pinnedAppIds.mapNotNull { pinnedId ->
+                info.apps.firstOrNull { app -> canonicalAppWorkspaceId(app.id) == pinnedId }?.let { app ->
                     NextcloudDesktopSidebarApp(id = app.id, label = app.name)
                 }
-            },
+            }.take(4),
             recentApp = info.apps.firstOrNull { app -> app.id == lastOpenedAppId }
                 ?.let { app -> NextcloudDesktopSidebarApp(app.id, app.name) },
             syncSummary = if (services.supportsRecursiveFileOfflineStorage) {
@@ -2590,6 +2627,7 @@ private fun AuthenticatedApp(
                     services = services,
                     session = session,
                     installedApps = serverInfo?.apps.orEmpty(),
+                    pinnedAppIds = pinnedAppIds,
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
                     onOpenLink = { link ->
                         launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
@@ -2614,6 +2652,9 @@ private fun AuthenticatedApp(
                     serverInfo = serverInfo,
                     error = discoveryError,
                     lastOpenedAppId = lastOpenedAppId,
+                    pinnedAppIds = pinnedAppIds,
+                    pinnedAppsError = appPinsPersistenceError,
+                    onTogglePinnedApp = togglePinnedApp,
                     onRetry = { discoveryAttempt += 1 },
                     onSettings = { destination = NextcloudDestination.Settings },
                     onSearch = ::openSearch,
@@ -2759,6 +2800,7 @@ private fun AuthenticatedApp(
             services = services,
             session = session,
             installedApps = serverInfo?.apps.orEmpty(),
+            pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
             onOpenLink = { link ->
                 launchNextcloudLinkNavigation(link, NextcloudLinkSource.InApp)
@@ -3239,6 +3281,9 @@ private fun AppsScreen(
     serverInfo: NextcloudServerInfo?,
     error: String?,
     lastOpenedAppId: String?,
+    pinnedAppIds: List<String>,
+    pinnedAppsError: String?,
+    onTogglePinnedApp: (String) -> String?,
     onRetry: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
@@ -3248,6 +3293,9 @@ private fun AppsScreen(
         serverInfo = serverInfo,
         error = error,
         lastOpenedAppId = lastOpenedAppId,
+        pinnedAppIds = pinnedAppIds,
+        pinnedAppsError = pinnedAppsError,
+        onTogglePinnedApp = onTogglePinnedApp,
         onRetry = onRetry,
         onSettings = onSettings,
         onSearch = onSearch,

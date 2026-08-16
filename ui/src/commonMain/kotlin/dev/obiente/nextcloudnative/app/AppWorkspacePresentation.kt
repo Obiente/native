@@ -30,6 +30,7 @@ internal data class AppWorkspacePresentation(
 internal fun buildAppWorkspacePresentation(
     apps: List<NextcloudAppEntry>,
     lastOpenedAppId: String?,
+    pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     query: String = "",
     category: AppWorkspaceCategory = AppWorkspaceCategory.All,
 ): AppWorkspacePresentation {
@@ -40,7 +41,7 @@ internal fun buildAppWorkspacePresentation(
         .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
         .toList()
     val installedIds = installed.mapTo(linkedSetOf()) { app -> canonicalAppWorkspaceId(app.id) }
-    val pinnedIds = APP_WORKSPACE_PINNED_IDS.filterTo(linkedSetOf()) { it in installedIds }
+    val pinnedIds = pinnedAppIds.map(::canonicalAppWorkspaceId).filterTo(linkedSetOf()) { it in installedIds }
     val recentIds = buildList {
         lastOpenedAppId?.let(::canonicalAppWorkspaceId)?.takeIf(installedIds::contains)?.let(::add)
         APP_WORKSPACE_RECENT_FALLBACK_IDS.forEach { id ->
@@ -125,7 +126,6 @@ internal fun canonicalAppWorkspaceId(appId: String): String = when (appId.lowerc
     else -> appId.lowercase()
 }
 
-private val APP_WORKSPACE_PINNED_IDS = listOf("files", "photos", "spreed", "calendar")
 private val APP_WORKSPACE_RECENT_FALLBACK_IDS = listOf("files", "spreed", "calendar")
 private val APP_WORKSPACE_NATIVE_IDS = setOf(
     "files",

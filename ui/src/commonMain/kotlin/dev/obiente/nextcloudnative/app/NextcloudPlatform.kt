@@ -109,6 +109,7 @@ data class NextcloudServerInfo(
     val themeName: String?,
     val themeColor: String?,
     val apps: List<NextcloudAppEntry>,
+    val appsAuthoritative: Boolean = true,
     val recognizeBridge: RecognizeBridgeDiscovery = RecognizeBridgeDiscovery.NotAdvertised,
     val fileSharing: NextcloudFileSharingCapabilities = NextcloudFileSharingCapabilities.Unavailable,
 )

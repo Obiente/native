@@ -217,6 +217,7 @@ internal fun NativeDashboardScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     installedApps: List<NextcloudAppEntry>,
+    pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     onOpenApp: (NextcloudAppEntry) -> Unit,
     onOpenLink: (String) -> Unit,
     onOpenStatus: (() -> Unit)?,
@@ -248,6 +249,7 @@ internal fun NativeDashboardScreen(
     NativeDashboardPresentation(
         state = state,
         installedApps = installedApps,
+        pinnedAppIds = pinnedAppIds,
         workspaceLayout = workspaceLayout,
         onWorkspaceLayoutChanged = { updated ->
             workspaceLayout = updated
@@ -273,6 +275,7 @@ internal fun NativeDashboardScreen(
 internal fun NativeDashboardPresentation(
     state: DashboardSurfaceState,
     installedApps: List<NextcloudAppEntry>,
+    pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     workspaceLayout: HomeWorkspaceLayout,
     onWorkspaceLayoutChanged: (HomeWorkspaceLayout) -> Boolean,
     onOpenApp: (NextcloudAppEntry) -> Unit,
@@ -404,6 +407,7 @@ internal fun NativeDashboardPresentation(
                     when (section.id) {
                         HomeSectionIds.QuickActions -> DashboardQuickActionsCard(
                             installedApps = installedApps,
+                            pinnedAppIds = pinnedAppIds,
                             onOpenApp = onOpenApp,
                         )
 
@@ -809,13 +813,15 @@ internal fun homeDashboardWidgetBindings(
 @Composable
 private fun DashboardQuickActionsCard(
     installedApps: List<NextcloudAppEntry>,
+    pinnedAppIds: List<String>,
     onOpenApp: (NextcloudAppEntry) -> Unit,
 ) {
-    val quickApps = remember(installedApps) {
+    val quickApps = remember(installedApps, pinnedAppIds) {
         installedApps
-            .filter { it.id in DASHBOARD_QUICK_ACTION_APP_IDS }
-            .sortedBy { DASHBOARD_QUICK_ACTION_APP_IDS.indexOf(it.id) }
-            .take(MAX_DASHBOARD_QUICK_ACTIONS)
+            .filter { canonicalAppWorkspaceId(it.id) in pinnedAppIds }
+            .distinctBy { canonicalAppWorkspaceId(it.id) }
+            .sortedBy { pinnedAppIds.indexOf(canonicalAppWorkspaceId(it.id)) }
+            .take(MAX_APP_WORKSPACE_PINS)
     }
     Card(
         modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
@@ -830,7 +836,11 @@ private fun DashboardQuickActionsCard(
             )
             if (quickApps.isEmpty()) {
                 Text(
-                    "Your shortcuts will appear as native apps become available.",
+                    if (pinnedAppIds.isEmpty()) {
+                        "Pin apps from Apps to add quick actions."
+                    } else {
+                        "Your pinned apps are not currently available."
+                    },
                     modifier = Modifier.padding(top = NextcloudSpacing.Medium),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1963,16 +1973,6 @@ private fun StatusExpiryChoice.expiryEpochSeconds(): Long? =
 
 private fun currentDashboardEpochSeconds(): Long = Clock.System.now().epochSeconds
 
-private val DASHBOARD_QUICK_ACTION_APP_IDS = listOf(
-    "files",
-    "photos",
-    "memories",
-    "notes",
-    "calendar",
-    "spreed",
-    "talk",
-)
-private const val MAX_DASHBOARD_QUICK_ACTIONS = 6
 private const val MAX_DASHBOARD_SECTION_READABLE_ID_LENGTH = 48
 private const val FNV_OFFSET_BASIS: UInt = 2_166_136_261u
 private const val FNV_PRIME: UInt = 16_777_619u
