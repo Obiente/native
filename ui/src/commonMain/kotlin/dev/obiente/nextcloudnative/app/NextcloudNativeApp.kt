@@ -2003,11 +2003,16 @@ private fun AuthenticatedApp(
         runCatching { services.loadServerInfo(session) }
             .onSuccess { discovered ->
                 serverInfo = discovered
-                val reconciled = reconcileAppWorkspacePinnedIds(
+                val reconciled = reconciledAppWorkspacePinsForDiscovery(
                     appIds = pinnedAppIds,
                     installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
+                    appsAuthoritative = discovered.appsAuthoritative,
                 )
-                if (reconciled != pinnedAppIds && appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                if (
+                    reconciled != null &&
+                    reconciled != pinnedAppIds &&
+                    appPinsRepository.save(appPinsAccountScope, reconciled)
+                ) {
                     pinnedAppIds = reconciled
                 }
             }

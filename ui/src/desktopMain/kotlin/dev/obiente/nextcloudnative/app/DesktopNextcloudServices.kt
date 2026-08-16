@@ -4205,6 +4205,7 @@ class DesktopNextcloudServices(
                 theming?.optString("name")?.takeIf(String::isNotBlank),
                 theming?.optString("color")?.takeIf(String::isNotBlank),
                 navigation?.toAppEntries() ?: capabilities.toCapabilityEntries(),
+                navigation != null,
                 discoverRecognizeBridge(capabilities.toString()),
                 parseNextcloudFileSharingCapabilities(capabilities.toString()),
             )

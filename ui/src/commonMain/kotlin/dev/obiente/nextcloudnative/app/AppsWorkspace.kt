@@ -228,6 +228,7 @@ private fun DesktopAppsWorkspace(
                                     onOpen = { onOpenApp(entry.app) },
                                     onTogglePinned = { onTogglePinnedApp(entry.app.id) },
                                     canPin = canPinMore,
+                                    primaryActionLabel = "Select ${entry.app.name}",
                                 )
                             }
                         }
@@ -292,6 +293,7 @@ private fun CompactAppsWorkspace(
                             onOpen = { onOpenApp(entry.app) },
                             onTogglePinned = { onTogglePinnedApp(entry.app.id) },
                             canPin = canPinMore,
+                            primaryActionLabel = "Open ${entry.app.name}",
                         )
                     }
                 }
@@ -431,13 +433,14 @@ private fun AppWorkspaceCard(
     onOpen: () -> Unit,
     onTogglePinned: () -> Unit,
     canPin: Boolean,
+    primaryActionLabel: String,
 ) {
     var actionsExpanded by remember(entry.app.id) { mutableStateOf(false) }
     Card(
         modifier = Modifier.nextcloudCardInteractions(
             onOpen = onSelect,
             onShowActions = { actionsExpanded = true },
-            openLabel = "Select ${entry.app.name}",
+            openLabel = primaryActionLabel,
             actionsLabel = "Actions for ${entry.app.name}",
         ),
         colors = CardDefaults.cardColors(

@@ -1541,6 +1541,7 @@ internal class AndroidNextcloudServices(
                 themeName = theming?.optString("name")?.takeIf(String::isNotBlank),
                 themeColor = theming?.optString("color")?.takeIf(String::isNotBlank),
                 apps = navigation?.toAppEntries() ?: capabilities.toCapabilityEntries(),
+                appsAuthoritative = navigation != null,
                 recognizeBridge = discoverRecognizeBridge(capabilities.toString()),
                 fileSharing = parseNextcloudFileSharingCapabilities(capabilities.toString()),
             )

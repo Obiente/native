@@ -59,6 +59,18 @@ class AppWorkspacePinsTest {
         )
     }
 
+    @Test
+    fun `fallback app discovery never removes persisted pins`() {
+        assertEquals(
+            null,
+            reconciledAppWorkspacePinsForDiscovery(
+                appIds = listOf("files", "deck"),
+                installedAppIds = listOf("files"),
+                appsAuthoritative = false,
+            ),
+        )
+    }
+
     private class MemoryStorage : HomeWorkspaceLayoutStorage {
         val values = mutableMapOf<String, String>()
 

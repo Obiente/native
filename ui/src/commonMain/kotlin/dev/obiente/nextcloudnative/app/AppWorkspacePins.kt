@@ -64,6 +64,16 @@ internal fun reconcileAppWorkspacePinnedIds(
         .filter { it in installed }
 }
 
+internal fun reconciledAppWorkspacePinsForDiscovery(
+    appIds: List<String>,
+    installedAppIds: Collection<String>,
+    appsAuthoritative: Boolean,
+): List<String>? = if (appsAuthoritative) {
+    reconcileAppWorkspacePinnedIds(appIds, installedAppIds)
+} else {
+    null
+}
+
 private fun validatedAppWorkspacePinnedIds(appIds: List<String>): List<String>? {
     if (appIds.size > MAX_APP_WORKSPACE_PINS) return null
     val canonical = appIds.map(::canonicalAppWorkspaceId)
