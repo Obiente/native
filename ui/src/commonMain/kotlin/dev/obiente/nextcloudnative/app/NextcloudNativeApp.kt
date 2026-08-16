@@ -13380,11 +13380,19 @@ private fun AppUpdateSettingsCard(
                                 Text("Continue update")
                             }
                         }
-                        is AppUpdateInstallState.ConfirmationOpened -> Text(
-                            "The system installer opened the update confirmation.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = NextcloudTheme.colors.success,
-                        )
+                        is AppUpdateInstallState.ConfirmationOpened -> {
+                            Text(
+                                "The system installer opened the update confirmation. If you closed it, open it again without downloading the APK again.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = { requestInstall(release) },
+                                enabled = !installing,
+                            ) {
+                                Text("Open installer again")
+                            }
+                        }
                         is AppUpdateInstallState.Installed -> Text(
                             "The update was installed. Restart Nextcloud Native to use the new version.",
                             style = MaterialTheme.typography.bodySmall,

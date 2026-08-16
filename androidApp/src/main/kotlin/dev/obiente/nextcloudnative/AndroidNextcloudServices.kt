@@ -673,6 +673,11 @@ internal class AndroidNextcloudServices(
                             is AppUpdateInstallResult.Rejected -> "rejected"
                         },
                         durationMillis = elapsedMillis(started),
+                        message = when (result) {
+                            is AppUpdateInstallResult.PermissionRequired -> result.message
+                            is AppUpdateInstallResult.Rejected -> result.message
+                            else -> null
+                        },
                         fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
                     ),
                 )
