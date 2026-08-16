@@ -49,6 +49,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudFileListing
 import dev.obiente.nextcloudnative.app.NextcloudFileListingHttpException
+import dev.obiente.nextcloudnative.app.NextcloudFileSearchHttpException
 import dev.obiente.nextcloudnative.app.parseDavStatusCode
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import dev.obiente.nextcloudnative.app.FileVersionDavRecord
@@ -1629,7 +1630,7 @@ internal class AndroidNextcloudServices(
             contentType = "application/xml; charset=utf-8",
             headers = mapOf("Accept" to "application/xml"),
         )
-        if (response.status != 207) throw NextcloudFileListingHttpException(response.status)
+        if (response.status != 207) throw NextcloudFileSearchHttpException(response.status)
         parseDavFiles(response.body, userId)
             .distinctBy(NextcloudFile::path)
             .take(maximumResults)
