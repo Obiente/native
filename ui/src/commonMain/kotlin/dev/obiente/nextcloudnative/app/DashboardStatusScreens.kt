@@ -260,6 +260,7 @@ internal fun NativeDashboardPresentation(
                     editing = customizeWorkspace,
                     sectionLabels = sectionLabels,
                     onLayoutChanged = updateWorkspaceLayout,
+                    modifier = Modifier.weight(1f),
                 ) { section ->
                     when (section.id) {
                         HomeSectionIds.QuickActions -> DashboardQuickActionsCard(
@@ -707,6 +708,7 @@ private fun HomeWorkspaceSurface(
     editing: Boolean,
     sectionLabels: Map<HomeSectionId, String>,
     onLayoutChanged: (HomeWorkspaceLayout, Boolean) -> Unit,
+    modifier: Modifier = Modifier,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     val sectionBounds = remember(layout.scope) { mutableStateMapOf<HomeSectionId, Rect>() }
@@ -820,6 +822,7 @@ private fun HomeWorkspaceSurface(
                 sections = layout.visibleSections,
                 state = state,
                 onViewportChanged = { workspaceViewport = it },
+                modifier = modifier,
                 sectionContent = content,
             )
         }
@@ -836,6 +839,7 @@ private fun HomeWorkspaceSurface(
                 sections = layout.visibleSections,
                 state = state,
                 onViewportChanged = { workspaceViewport = it },
+                modifier = modifier,
                 sectionContent = content,
             )
         }
@@ -852,6 +856,7 @@ private fun HomeWorkspaceSurface(
                 sections = layout.visibleSections,
                 state = state,
                 onViewportChanged = { workspaceViewport = it },
+                modifier = modifier,
                 sectionContent = content,
             )
         }
@@ -877,11 +882,12 @@ private fun MobileHomeWorkspace(
     sections: List<HomeWorkspaceSection>,
     state: LazyListState,
     onViewportChanged: (Rect) -> Unit,
+    modifier: Modifier,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     LazyColumn(
         state = state,
-        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+        modifier = modifier.fillMaxSize().onGloballyPositioned { coordinates ->
             onViewportChanged(coordinates.boundsInWindow())
         },
         contentPadding = PaddingValues(
@@ -903,12 +909,13 @@ private fun TabletHomeWorkspace(
     sections: List<HomeWorkspaceSection>,
     state: LazyStaggeredGridState,
     onViewportChanged: (Rect) -> Unit,
+    modifier: Modifier,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     LazyVerticalStaggeredGrid(
         state = state,
         columns = StaggeredGridCells.Adaptive(300.dp),
-        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+        modifier = modifier.fillMaxSize().onGloballyPositioned { coordinates ->
             onViewportChanged(coordinates.boundsInWindow())
         },
         contentPadding = PaddingValues(NextcloudSpacing.Large),
@@ -926,12 +933,13 @@ private fun DesktopHomeWorkspace(
     sections: List<HomeWorkspaceSection>,
     state: LazyStaggeredGridState,
     onViewportChanged: (Rect) -> Unit,
+    modifier: Modifier,
     sectionContent: @Composable (HomeWorkspaceSection) -> Unit,
 ) {
     LazyVerticalStaggeredGrid(
         state = state,
         columns = StaggeredGridCells.Adaptive(340.dp),
-        modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+        modifier = modifier.fillMaxSize().onGloballyPositioned { coordinates ->
             onViewportChanged(coordinates.boundsInWindow())
         },
         contentPadding = PaddingValues(
