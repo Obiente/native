@@ -114,7 +114,7 @@ private enum class DashboardV2RouteAvailability {
     Unavailable,
 }
 
-private class DashboardV2RouteUnavailableException : IllegalStateException(
+internal class DashboardV2RouteUnavailableException : IllegalStateException(
     "The Dashboard widget-items V2 route is unavailable.",
 )
 
@@ -271,6 +271,13 @@ internal fun NativeDashboardPresentation(
     LaunchedEffect(workspaceLayout) {
         if (workspaceLayout != activeWorkspaceLayout) activeWorkspaceLayout = workspaceLayout
     }
+    val widgetsAuthoritative = (state as? DashboardSurfaceState.Available)?.widgetsAuthoritative != false
+    LaunchedEffect(widgetsAuthoritative) {
+        if (!widgetsAuthoritative) {
+            customizeWorkspace = false
+            workspacePersistenceError = null
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
@@ -282,7 +289,11 @@ internal fun NativeDashboardPresentation(
             },
             onBack = onBack,
             onRefresh = onRefresh,
-            onCustomize = { customizeWorkspace = true },
+            onCustomize = if (widgetsAuthoritative) {
+                { customizeWorkspace = true }
+            } else {
+                null
+            },
             onSearch = onSearch,
             onSettings = onSettings,
         )
@@ -333,7 +344,7 @@ internal fun NativeDashboardPresentation(
                 }
                 val updateWorkspaceLayout: (HomeWorkspaceLayout, Boolean) -> Unit = { updated, persist ->
                     activeWorkspaceLayout = updated
-                    if (persist) {
+                    if (persist && current.widgetsAuthoritative) {
                         workspacePersistenceError = if (onWorkspaceLayoutChanged(updated)) {
                             null
                         } else {
@@ -463,6 +474,11 @@ internal fun rememberNativeDashboardState(
                 val widgetsLoad = widgetsDeferred.await()
                 if (!widgetsLoad.authoritative) {
                     val snapshot = previousSnapshot ?: NativeDashboardSnapshot(emptyList(), emptyMap())
+                    state = DashboardSurfaceState.Available(
+                        snapshot,
+                        previousStatus,
+                        widgetsAuthoritative = false,
+                    )
                     val status = statusDeferred.await()
                     state = DashboardSurfaceState.Available(snapshot, status, widgetsAuthoritative = false)
                     return@coroutineScope DashboardLoadResult(snapshot, status, widgetsAuthoritative = false)

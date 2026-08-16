@@ -718,7 +718,10 @@ internal fun DashboardResponseBudget.settleFailedRead(
     reservedBytes: Long,
     failure: Throwable,
 ) {
-    if (failure is NextcloudApiReadFailure && !failure.responseBodyMayHaveStarted) {
+    if (
+        failure is DashboardV2RouteUnavailableException ||
+        failure is NextcloudApiReadFailure && !failure.responseBodyMayHaveStarted
+    ) {
         releaseFailed(reservedBytes)
     }
 }

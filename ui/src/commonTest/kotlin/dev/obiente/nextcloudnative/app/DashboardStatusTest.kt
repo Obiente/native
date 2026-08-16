@@ -150,6 +150,14 @@ class DashboardStatusTest {
         val parsingReservation = parsingBudget.reserve(maximumBytes = 600L)
         parsingBudget.settleFailedRead(parsingReservation, IllegalArgumentException("invalid JSON"))
         assertEquals(400L, parsingBudget.remainingBytes)
+
+        val skippedV2Budget = DashboardResponseBudget(totalBytes = 1_000L)
+        val skippedV2Reservation = skippedV2Budget.reserve(maximumBytes = 600L)
+        skippedV2Budget.settleFailedRead(
+            skippedV2Reservation,
+            DashboardV2RouteUnavailableException(),
+        )
+        assertEquals(1_000L, skippedV2Budget.remainingBytes)
     }
 
     @Test
