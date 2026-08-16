@@ -3499,6 +3499,17 @@ class DesktopNextcloudServices(
         deletionUrl: String,
     ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
 
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        supportIntake.refreshCompletedReports()
+
+    override suspend fun sendSubmittedSupportDiagnosticsMessage(
+        statusUrl: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(statusUrl, message)
+
+    override suspend fun markSubmittedSupportDiagnosticsReportRead(statusUrl: String): Boolean =
+        supportIntake.markCompletedReportRead(statusUrl)
+
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(
             SupportDiagnosticFieldDraft("distribution", appUpdateSupport().channel.name.lowercase()),

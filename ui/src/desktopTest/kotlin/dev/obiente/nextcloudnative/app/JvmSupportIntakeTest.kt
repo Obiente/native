@@ -32,6 +32,81 @@ import okhttp3.OkHttpClient
 
 class JvmSupportIntakeTest {
     @Test
+    fun refreshesPrivateConversationAndPersistsReadPosition() = runBlocking {
+        testFixture().use { fixture ->
+            val maintainerMessageId = UUID.randomUUID().toString()
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("The updater failed.", "nightly", emptyList())
+            fixture.server.enqueue(
+                privateStatusResponse(
+                    status = "needs_information",
+                    messages = listOf(maintainerMessageId to "Which installation stage failed?"),
+                ),
+            )
+
+            assertEquals(SupportDiagnosticsConversationResult.Updated, fixture.intake.refreshCompletedReports())
+
+            val refreshed = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+                .reports.single()
+            assertEquals("needs_information", refreshed.status)
+            assertTrue(refreshed.statusChanged)
+            assertEquals(1, refreshed.unreadMaintainerMessages)
+            assertEquals("Which installation stage failed?", refreshed.messages.single().body)
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val refreshRequest = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("GET", refreshRequest.method)
+            assertTrue(refreshRequest.url.encodedPath.startsWith("/api/v1/reports/"))
+
+            assertTrue(fixture.intake.markCompletedReportRead(fixture.statusUrl))
+            fixture.intake.close()
+            fixture.newIntake().use { restored ->
+                fixture.server.enqueue(
+                    privateStatusResponse(
+                        status = "needs_information",
+                        messages = listOf(maintainerMessageId to "Which installation stage failed?"),
+                    ),
+                )
+                assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
+                val afterRestart = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
+                    .reports.single()
+                assertFalse(afterRestart.statusChanged)
+                assertEquals(0, afterRestart.unreadMaintainerMessages)
+            }
+        }
+    }
+
+    @Test
+    fun sendsReporterReplyThroughPrivateCapabilityWithoutExposingItInStateErrors() = runBlocking {
+        testFixture().use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
+            fixture.intake.submit("The updater failed.", "nightly", emptyList())
+            fixture.server.enqueue(
+                privateStatusResponse(
+                    status = "needs_information",
+                    messages = emptyList(),
+                    reporterMessage = "It failed after the download completed.",
+                ),
+            )
+
+            assertEquals(
+                SupportDiagnosticsConversationResult.Updated,
+                fixture.intake.sendCompletedReportMessage(
+                    fixture.statusUrl,
+                    "It failed after the download completed.",
+                ),
+            )
+
+            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val reply = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            assertEquals("POST", reply.method)
+            assertTrue(reply.url.encodedPath.matches(Regex("/api/v1/reports/[A-Za-z0-9_-]{43}/messages")))
+            assertTrue(reply.body?.utf8().orEmpty().contains("It failed after the download completed."))
+            val submitted = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
+            assertEquals(SupportDiagnosticsMessageAuthor.Reporter, submitted.reports.single().messages.single().author)
+        }
+    }
+
+    @Test
     fun submitsSanitizedBundleAndRemovesTemporaryArchive() = runBlocking {
         testFixture().use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl))
@@ -2684,6 +2759,39 @@ class JvmSupportIntakeTest {
     private fun submissionCancelledResponse(): MockResponse = MockResponse.Builder().code(410).body(
         """{"contractVersion":1,"code":"submission_cancelled","message":"Submission cancelled."}""",
     ).build()
+
+    private fun privateStatusResponse(
+        status: String,
+        messages: List<Pair<String, String>>,
+        reporterMessage: String? = null,
+    ): MockResponse {
+        val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val encodedMessages = buildList {
+            messages.forEach { (id, body) ->
+                add("""{"id":"$id","author":"maintainer","body":"$body","createdAt":"$now"}""")
+            }
+            reporterMessage?.let { body ->
+                add(
+                    """{"id":"${UUID.randomUUID()}","author":"reporter","body":"$body","createdAt":"$now"}""",
+                )
+            }
+        }.joinToString(",")
+        return MockResponse.Builder().code(if (reporterMessage == null) 200 else 201).body(
+            """
+                {
+                  "contractVersion": 1,
+                  "supportCode": "OBI-ABCDE-23456",
+                  "productId": "nextcloud-native",
+                  "requestType": "bug",
+                  "status": "$status",
+                  "createdAt": "$now",
+                  "updatedAt": "$now",
+                  "retentionUntil": "${now.plus(30, ChronoUnit.DAYS)}",
+                  "messages": [$encodedMessages]
+                }
+            """.trimIndent(),
+        ).build()
+    }
 
     private data class Fixture(
         val root: File,

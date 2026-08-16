@@ -206,6 +206,13 @@ sealed interface SupportDiagnosticsSubmissionState {
         val statusUrl: String,
         val deletionUrl: String,
         val retentionUntil: String,
+        val status: String,
+        val updatedAt: String? = null,
+        val messages: List<SupportDiagnosticsMessage> = emptyList(),
+        val unreadMaintainerMessages: Int = 0,
+        val statusChanged: Boolean = false,
+        val conversationLoading: Boolean = false,
+        val conversationError: String? = null,
     )
     data class Submitted(val reports: List<SubmittedReport>) : SupportDiagnosticsSubmissionState {
         init {
@@ -217,6 +224,24 @@ sealed interface SupportDiagnosticsSubmissionState {
         val retentionUntil: String get() = reports.first().retentionUntil
     }
     data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
+}
+
+enum class SupportDiagnosticsMessageAuthor {
+    Maintainer,
+    Reporter,
+}
+
+data class SupportDiagnosticsMessage(
+    val id: String,
+    val author: SupportDiagnosticsMessageAuthor,
+    val body: String,
+    val createdAt: String,
+)
+
+sealed interface SupportDiagnosticsConversationResult {
+    data object Updated : SupportDiagnosticsConversationResult
+    data class Failed(val message: String) : SupportDiagnosticsConversationResult
+    data class Unsupported(val reason: String) : SupportDiagnosticsConversationResult
 }
 
 sealed interface SupportDiagnosticsDeletionResult {
