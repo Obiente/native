@@ -11,18 +11,38 @@ internal data class AppWorkspacePinsSnapshot(
     val appIds: List<String>,
 )
 
+internal data class AppWorkspacePinsLoad(
+    val appIds: List<String>,
+    val storageAuthoritative: Boolean,
+)
+
 internal class AppWorkspacePinsRepository(
     private val storage: HomeWorkspaceLayoutStorage,
 ) {
     fun load(accountScopeDigest: String): List<String> {
-        val encoded = runCatching { storage.read(persistenceKey(accountScopeDigest)) }.getOrNull()
-            ?: return defaultAppWorkspacePinnedIds()
-        if (encoded.length !in 1..MAX_APP_WORKSPACE_PINS_CHARACTERS) return defaultAppWorkspacePinnedIds()
+        return loadWithProvenance(accountScopeDigest).appIds
+    }
+
+    fun loadWithProvenance(accountScopeDigest: String): AppWorkspacePinsLoad {
+        val read = runCatching { storage.read(persistenceKey(accountScopeDigest)) }
+        if (read.isFailure) {
+            return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = false)
+        }
+        val encoded = read.getOrNull()
+            ?: return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
+        if (encoded.length !in 1..MAX_APP_WORKSPACE_PINS_CHARACTERS) {
+            return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
+        }
         val snapshot = runCatching {
             appWorkspacePinsJson.decodeFromString<AppWorkspacePinsSnapshot>(encoded)
-        }.getOrNull() ?: return defaultAppWorkspacePinnedIds()
-        if (snapshot.schemaVersion != APP_WORKSPACE_PINS_SCHEMA_VERSION) return defaultAppWorkspacePinnedIds()
-        return validatedAppWorkspacePinnedIds(snapshot.appIds) ?: defaultAppWorkspacePinnedIds()
+        }.getOrNull() ?: return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
+        if (snapshot.schemaVersion != APP_WORKSPACE_PINS_SCHEMA_VERSION) {
+            return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
+        }
+        return AppWorkspacePinsLoad(
+            validatedAppWorkspacePinnedIds(snapshot.appIds) ?: defaultAppWorkspacePinnedIds(),
+            storageAuthoritative = true,
+        )
     }
 
     fun save(accountScopeDigest: String, appIds: List<String>): Boolean {
@@ -88,5 +108,5 @@ private fun String.isSafePinnedAppId(): Boolean =
 
 private val appWorkspacePinsJson = Json { ignoreUnknownKeys = true }
 private const val APP_WORKSPACE_PINS_SCHEMA_VERSION = 1
-internal const val MAX_APP_WORKSPACE_PINS = 8
+internal const val MAX_APP_WORKSPACE_PINS = 6
 private const val MAX_APP_WORKSPACE_PINS_CHARACTERS = 1024

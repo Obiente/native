@@ -1837,8 +1837,12 @@ private fun AuthenticatedApp(
     val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
     val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
     val appPinsAccountScope = remember(session) { previewCacheDigest(session) }
-    var pinnedAppIds by remember(appPinsAccountScope) {
-        mutableStateOf(appPinsRepository.load(appPinsAccountScope))
+    val loadedAppPins = remember(appPinsAccountScope) {
+        appPinsRepository.loadWithProvenance(appPinsAccountScope)
+    }
+    var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
+    var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
+        mutableStateOf(loadedAppPins.storageAuthoritative)
     }
     val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
         val updated = runCatching { toggleAppWorkspacePin(pinnedAppIds, appId) }
@@ -1847,6 +1851,7 @@ private fun AuthenticatedApp(
             }
         if (appPinsRepository.save(appPinsAccountScope, updated)) {
             pinnedAppIds = updated
+            appPinsStorageAuthoritative = true
             null
         } else {
             "Pinned apps could not be saved on this device. Try again."
@@ -2011,6 +2016,7 @@ private fun AuthenticatedApp(
                 if (
                     reconciled != null &&
                     reconciled != pinnedAppIds &&
+                    appPinsStorageAuthoritative &&
                     appPinsRepository.save(appPinsAccountScope, reconciled)
                 ) {
                     pinnedAppIds = reconciled

@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AppWorkspacePinsTest {
@@ -24,6 +25,15 @@ class AppWorkspacePinsTest {
     fun `pin toggles canonical aliases without duplicates`() {
         assertEquals(listOf("files", "spreed"), toggleAppWorkspacePin(listOf("files"), "talk"))
         assertEquals(listOf("files"), toggleAppWorkspacePin(listOf("files", "spreed"), "talk"))
+    }
+
+    @Test
+    fun `pin limit matches the rendered Home shortcut capacity`() {
+        val full = List(MAX_APP_WORKSPACE_PINS) { index -> "app-$index" }
+
+        assertFailsWith<IllegalArgumentException> {
+            toggleAppWorkspacePin(full, "one-more")
+        }
     }
 
     @Test
@@ -71,6 +81,16 @@ class AppWorkspacePinsTest {
         )
     }
 
+    @Test
+    fun `failed storage reads retain fallback provenance`() {
+        val repository = AppWorkspacePinsRepository(FailingReadStorage())
+
+        val loaded = repository.loadWithProvenance("e".repeat(64))
+
+        assertEquals(defaultAppWorkspacePinnedIds(), loaded.appIds)
+        assertFalse(loaded.storageAuthoritative)
+    }
+
     private class MemoryStorage : HomeWorkspaceLayoutStorage {
         val values = mutableMapOf<String, String>()
 
@@ -79,5 +99,11 @@ class AppWorkspacePinsTest {
         override fun write(persistenceKey: String, encodedSnapshot: String) {
             values[persistenceKey] = encodedSnapshot
         }
+    }
+
+    private class FailingReadStorage : HomeWorkspaceLayoutStorage {
+        override fun read(persistenceKey: String): String? = error("storage unavailable")
+
+        override fun write(persistenceKey: String, encodedSnapshot: String) = Unit
     }
 }

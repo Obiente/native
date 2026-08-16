@@ -94,7 +94,7 @@ internal fun NativeAppsWorkspace(
     val selectedEntry = presentation.entries.firstOrNull { it.app.id == selectedAppId }
         ?: presentation.recentEntries.firstOrNull()
         ?: presentation.entries.firstOrNull()
-    val canPinMore = presentation.pinnedEntries.size < MAX_APP_WORKSPACE_PINS
+    val canPinMore = pinnedAppIds.size < MAX_APP_WORKSPACE_PINS
     val togglePinnedApp: (String) -> Unit = { appId ->
         pinError = onTogglePinnedApp(appId)
     }

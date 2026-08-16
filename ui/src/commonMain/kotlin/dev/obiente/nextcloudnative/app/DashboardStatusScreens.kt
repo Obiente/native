@@ -605,7 +605,7 @@ private fun DashboardQuickActionsCard(
         installedApps
             .filter { canonicalAppWorkspaceId(it.id) in pinnedAppIds }
             .sortedBy { pinnedAppIds.indexOf(canonicalAppWorkspaceId(it.id)) }
-            .take(MAX_DASHBOARD_QUICK_ACTIONS)
+            .take(MAX_APP_WORKSPACE_PINS)
     }
     Card(
         modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
@@ -1757,7 +1757,6 @@ private fun StatusExpiryChoice.expiryEpochSeconds(): Long? =
 
 private fun currentDashboardEpochSeconds(): Long = Clock.System.now().epochSeconds
 
-private const val MAX_DASHBOARD_QUICK_ACTIONS = 6
 private const val MAX_DASHBOARD_SECTION_READABLE_ID_LENGTH = 48
 private const val FNV_OFFSET_BASIS: UInt = 2_166_136_261u
 private const val FNV_PRIME: UInt = 16_777_619u
