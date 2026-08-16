@@ -98,6 +98,8 @@ import dev.obiente.nextcloudnative.app.NextcloudNotePresence
 import dev.obiente.nextcloudnative.app.createNoteRequest
 import dev.obiente.nextcloudnative.app.deleteNoteRequest
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
+import dev.obiente.nextcloudnative.app.loginPollPendingDiagnostic
+import dev.obiente.nextcloudnative.app.shouldRecordHttpStatusDiagnostic
 import dev.obiente.nextcloudnative.app.NextcloudPerson
 import dev.obiente.nextcloudnative.app.syntheticMemoriesPersonFile
 import dev.obiente.nextcloudnative.app.NextcloudServerInfo
@@ -447,6 +449,7 @@ internal class AndroidNextcloudServices(
     private val httpClient = OkHttpClient.Builder().trackJvmNetworkFailures().build()
     private val loginPollHttpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build()
     private val loginPollFallbackTokens = ConcurrentHashMap.newKeySet<String>()
+    private val loginPollPendingTokens = ConcurrentHashMap.newKeySet<String>()
     private val noRedirectHttpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -1328,6 +1331,7 @@ internal class AndroidNextcloudServices(
                 body = formBody,
                 contentType = "application/x-www-form-urlencoded",
                 client = loginPollHttpClient,
+                diagnosticIgnoredHttpStatuses = setOf(404),
                 onNetworkFailure = { networkFailure = it },
             )
         }
@@ -1378,7 +1382,12 @@ internal class AndroidNextcloudServices(
                 return@withContext initialResult
             }
         }
-        if (response.status == 404) return@withContext LoginPollResult.Pending
+        if (response.status == 404) {
+            if (loginPollPendingTokens.add(challenge.token)) {
+                recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
+            }
+            return@withContext LoginPollResult.Pending
+        }
         if (response.status !in 200..299) {
             val result = LoginPollResult.FatalFailure(
                 "Login approval failed (HTTP ${response.status}). Please try again.",
@@ -1423,6 +1432,7 @@ internal class AndroidNextcloudServices(
 
     override fun finishLoginPolling(challenge: LoginChallenge) {
         loginPollFallbackTokens -= challenge.token
+        loginPollPendingTokens -= challenge.token
     }
 
     override suspend fun awaitLoginNetworkAvailability() {
@@ -3448,6 +3458,7 @@ internal class AndroidNextcloudServices(
         streamingBody: RequestBody? = null,
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
+        diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
     ): HttpResponse {
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
@@ -3505,7 +3516,7 @@ internal class AndroidNextcloudServices(
                     contentRange = response.header("Content-Range"),
                 )
             }
-            if (result.status !in 200..399) {
+            if (shouldRecordHttpStatusDiagnostic(result.status, diagnosticIgnoredHttpStatuses)) {
                 recordRequestDiagnostic(
                     session,
                     SupportDiagnosticEventDraft(
