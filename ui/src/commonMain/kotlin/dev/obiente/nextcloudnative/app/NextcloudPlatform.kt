@@ -576,6 +576,23 @@ interface NextcloudPlatformServices {
             "Deleting submitted support reports is unavailable on this platform.",
         )
 
+    /** Refreshes private report statuses and conversations using their retained capabilities. */
+    suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        SupportDiagnosticsConversationResult.Unsupported(
+            "Private support conversations are unavailable on this platform.",
+        )
+
+    /** Sends one reporter reply through the retained private report capability. */
+    suspend fun sendSubmittedSupportDiagnosticsMessage(
+        statusUrl: String,
+        message: String,
+    ): SupportDiagnosticsConversationResult = SupportDiagnosticsConversationResult.Unsupported(
+        "Private support conversations are unavailable on this platform.",
+    )
+
+    /** Acknowledges the currently visible status and maintainer messages on this device. */
+    suspend fun markSubmittedSupportDiagnosticsReportRead(statusUrl: String): Boolean = false
+
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
     suspend fun clearSupportDiagnostics(): Boolean = false
 
