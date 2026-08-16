@@ -497,6 +497,7 @@ fun validateDesktopUpdateManifest(
 }
 
 private fun validateAppUpdateChanges(versionCode: Long, changes: List<AppUpdateChange>) {
+    if (changes.isEmpty()) return
     val targetSequence = requireNotNull(appUpdateSourceSequence(versionCode))
     require(changes.size <= 1_000 && changes.distinctBy(AppUpdateChange::id).size == changes.size)
     changes.forEach { change ->
