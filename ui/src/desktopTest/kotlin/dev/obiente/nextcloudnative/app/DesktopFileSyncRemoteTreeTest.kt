@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.nio.file.Files
 import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,6 +17,54 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
+    @Test
+    fun `replacing an existing file uses a destination guarded put`() {
+        val methods = mutableListOf<String>()
+        val conditionalHeaders = mutableListOf<String?>()
+        var listingCount = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            methods += chain.request().method
+            conditionalHeaders += chain.request().header("If-Match")
+            when (chain.request().method) {
+                "PROPFIND" -> {
+                    listingCount += 1
+                    response(
+                        chain.request(),
+                        207,
+                        """
+                        <d:multistatus xmlns:d="DAV:">
+                          <d:response><d:href>/remote.php/dav/files/alice/note.md</d:href>
+                            <d:propstat><d:prop><d:getetag>${if (listingCount == 1) "old-etag" else "new-etag"}</d:getetag>
+                              <d:getcontentlength>7</d:getcontentlength><d:resourcetype/></d:prop>
+                            </d:propstat></d:response>
+                        </d:multistatus>
+                        """.trimIndent(),
+                    )
+                }
+                "PUT" -> response(chain.request(), 204)
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "",
+            client = client,
+        )
+        val source = Files.createTempFile("nextcloud-sync-replacement", ".tmp").toFile()
+        try {
+            source.writeText("updated")
+
+            val result = tree.writeFile("note.md", source, expectedRemoteEtag = "old-etag")
+
+            assertEquals("new-etag", result.etag)
+            assertEquals(listOf("PROPFIND", "PUT", "PROPFIND"), methods)
+            assertEquals(listOf(null, "old-etag", null), conditionalHeaders)
+        } finally {
+            assertTrue(source.delete())
+        }
+    }
+
     @Test
     fun `definitive mutation rejection preserves cached metadata`() {
         val invalidated = mutableListOf<String>()

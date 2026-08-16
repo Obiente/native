@@ -447,31 +447,14 @@ internal class DesktopFileSyncRemoteTree(
         expectedEtag: String,
         vararg mutationRelativePaths: String,
     ) {
-        val parent = path.substringBeforeLast('/', "")
-        val stagingPath = listOf(parent, ".nextcloud-native-${UUID.randomUUID()}.upload")
-            .filter(String::isNotBlank).joinToString("/")
-        val stagingUrl = fileUrl(stagingPath)
-        val destinationUrl = fileUrl(path)
-        val stagedEtag = createFile(stagingPath, source)
-        try {
-            val builder = requestBuilder(stagingUrl)
-                .header("Destination", destinationUrl)
-                .header("Overwrite", "T")
-                .header("If", "<$destinationUrl> ([$expectedEtag])")
-            stagedEtag?.let { builder.header("If-Match", it) }
-            executeMutation(
-                builder.method("MOVE", EMPTY_BODY).build(),
-                "replace file",
-                *mutationRelativePaths,
-            )
-        } catch (failure: Throwable) {
-            runCatching {
-                val cleanup = requestBuilder(stagingUrl)
-                stagedEtag?.let { cleanup.header("If-Match", it) }
-                execute(cleanup.delete().build(), "remove staged upload")
-            }
-            throw failure
-        }
+        executeMutation(
+            requestBuilder(fileUrl(path))
+                .header("If-Match", safeEtag(expectedEtag))
+                .put(source.asRequestBody(OCTET_STREAM))
+                .build(),
+            "replace file",
+            *mutationRelativePaths,
+        )
     }
 
     private fun executeMutationForEtag(
