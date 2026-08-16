@@ -3449,7 +3449,12 @@ class DesktopNextcloudServices(
                             is AppUpdateInstallResult.Rejected -> result.message
                             else -> null
                         },
-                        fields = listOf(SupportDiagnosticFieldDraft("release", release.versionName)),
+                        fields = buildList {
+                            add(SupportDiagnosticFieldDraft("release", release.versionName))
+                            if (result is AppUpdateInstallResult.Rejected) {
+                                add(SupportDiagnosticFieldDraft("reason", result.diagnosticCode))
+                            }
+                        },
                     ),
                 )
                 result
