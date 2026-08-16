@@ -1,6 +1,6 @@
 category: fix
 issue: 360
-pull: none
+pull: 395
 platforms: android
 user-facing: yes
 
