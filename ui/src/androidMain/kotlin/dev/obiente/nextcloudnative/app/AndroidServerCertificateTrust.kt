@@ -261,8 +261,9 @@ private class CapturingTrustManager : X509ExtendedTrustManager() {
 }
 
 private fun platformTrustManager(): X509TrustManager {
+    val androidCertificateStore = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
     val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-    factory.init(null as KeyStore?)
+    factory.init(androidCertificateStore)
     return factory.trustManagers.filterIsInstance<X509TrustManager>().singleOrNull()
         ?: error("Android did not provide a single X.509 trust manager.")
 }

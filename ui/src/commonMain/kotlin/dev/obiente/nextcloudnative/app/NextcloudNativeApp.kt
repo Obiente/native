@@ -14153,7 +14153,7 @@ private fun TrustedCertificateSettings(
             Text("Explicitly trusted server certificate", style = MaterialTheme.typography.titleSmall)
             Text(
                 "Android could not verify this server through its certificate authorities. " +
-                    "Nextcloud Native accepts only the exact SHA-256 fingerprint below for this account's server.",
+                    "Nextcloud Native accepts only the exact SHA-256 fingerprint below for this server address.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(certificate.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
