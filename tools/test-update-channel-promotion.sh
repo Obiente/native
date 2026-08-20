@@ -119,6 +119,24 @@ jq -n \
         sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       }]
     }' >"$desktop_candidate"
+expanded_desktop_candidate="$temporary_directory/expanded-desktop-candidate.json"
+jq '.assets[0].futureField = "unsupported"' \
+    "$desktop_candidate" >"$expanded_desktop_candidate"
+if PATH="$fake_bin:$PATH" \
+    FAKE_POINTER_MANIFEST="$desktop_candidate" \
+    FAKE_POINTER_MANIFEST_NAME=desktop-update-manifest.json \
+    FAKE_UPLOADED_MANIFEST="$temporary_directory/unexpected-desktop-upload.json" \
+    "$project_root/tools/promote-app-update-channel.sh" \
+    Obiente/nc-native \
+    channel-nightly \
+    "$immutable_tag" \
+    0123456789abcdef0123456789abcdef01234567 \
+    - \
+    "$expanded_desktop_candidate" \
+    1 >/dev/null 2>&1; then
+    echo "A desktop promotion candidate with an unknown asset field was accepted." >&2
+    exit 1
+fi
 malformed_desktop="$temporary_directory/malformed-desktop.json"
 jq '.versionCode = 3 | .assets[0].sha256 = "invalid"' \
     "$desktop_candidate" >"$malformed_desktop"

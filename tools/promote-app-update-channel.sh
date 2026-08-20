@@ -69,6 +69,9 @@ manifest_code() {
               "schemaVersion", "versionCode", "versionName"
             ]) |
             select(.assets | type == "array" and length > 0) |
+            select(all(.assets[];
+              keys == ["architecture", "format", "platform", "sha256", "size", "url"]
+            )) |
             select(all(.assets[]; .url | startswith(
               "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
             )))

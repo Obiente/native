@@ -27,7 +27,11 @@ jq -e \
       .versionName == $version and
       .versionCode == $version_code and
       .packageVersion == $package_version and
-      (.assets | length >= 1 and length <= 8) and
+      (.assets |
+        type == "array" and
+        length >= 1 and length <= 8 and
+        all(.[]; keys == ["architecture", "format", "platform", "sha256", "size", "url"])
+      ) and
       (.assets | map([.platform,.format,.architecture] | join(":")) | length == (unique | length))
     ' "$manifest" >/dev/null
 
