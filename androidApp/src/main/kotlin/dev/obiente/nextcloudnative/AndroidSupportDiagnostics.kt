@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.runCatchingPreservingCancellation
 import android.app.Activity
 import android.content.ClipData
 import android.content.Context
@@ -118,7 +119,7 @@ internal class AndroidSupportBundleExporter(
         val host = activity ?: return SupportDiagnosticsExportResult.Unsupported(
             "Open Nextcloud Native before exporting a diagnostic report.",
         )
-        val archive = runCatching {
+        val archive = runCatchingPreservingCancellation {
             withContext(Dispatchers.IO) {
                 val exportDirectory = File(context.cacheDir, SUPPORT_BUNDLE_CACHE_DIRECTORY)
                 require(exportDirectory.isDirectory || exportDirectory.mkdirs()) {
@@ -136,7 +137,7 @@ internal class AndroidSupportBundleExporter(
                 failure.message?.take(240) ?: "Could not create the diagnostic report.",
             )
         }
-        return runCatching {
+        return runCatchingPreservingCancellation {
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.sharedfiles",

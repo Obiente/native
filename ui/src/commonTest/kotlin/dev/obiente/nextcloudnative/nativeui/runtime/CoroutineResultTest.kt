@@ -25,4 +25,13 @@ class CoroutineResultTest {
         assertTrue(result.isFailure)
         assertEquals("failed", result.exceptionOrNull()?.message)
     }
+
+    @Test
+    fun `fatal errors escape result capture`() {
+        assertFailsWith<AssertionError> {
+            runCatchingUnlessCancelled<Unit> {
+                throw AssertionError("fatal")
+            }
+        }
+    }
 }

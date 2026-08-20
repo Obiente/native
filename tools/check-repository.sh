@@ -27,6 +27,8 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_directory"' EXIT
 
 bash tools/test-text-hygiene.sh
+bash tools/test-kotlin-architecture.sh
+bash tools/check-kotlin-architecture.sh
 rustc --edition=2021 tools/text-hygiene.rs \
     -o "$temporary_directory/text-hygiene"
 printf '%s\0' "${candidate_files[@]}" |

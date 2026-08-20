@@ -4041,47 +4041,19 @@ class DesktopNextcloudServices(
     ): LoginChallenge = withContext(Dispatchers.IO) {
         val baseUrl = normalizeServerUrl(serverUrl, transportSecurity)
         val effectiveTransport = loginTransportSecurity(baseUrl)
-        val response = request("POST", "$baseUrl/index.php/login/v2")
-        check(response.status in 200..299) { "Nextcloud Login Flow v2 failed (HTTP ${response.status})." }
-        val json = JSONObject(response.text)
-        val poll = json.getJSONObject("poll")
-        val pollEndpoint = poll.getString("endpoint")
-        val loginUrl = json.getString("login")
-        val relationships = validateLoginEndpointRelationships(baseUrl, loginUrl, pollEndpoint)
-        recordSupportDiagnostic(
-            SupportDiagnosticEventDraft(
-                severity = SupportDiagnosticSeverity.Info,
-                component = SupportDiagnosticComponent.Authentication,
-                operation = "login.challenge",
-                outcome = "started",
-                fields = listOf(
-                    SupportDiagnosticFieldDraft(
-                        "login_origin_matches_entered",
-                        relationships.loginOriginMatchesEntered.toString(),
-                    ),
-                    SupportDiagnosticFieldDraft(
-                        "poll_origin_matches_entered",
-                        relationships.pollOriginMatchesEntered.toString(),
-                    ),
-                    SupportDiagnosticFieldDraft(
-                        "poll_fallback_available",
-                        (relationships.pollFallbackEndpoint != null).toString(),
-                    ),
-                    SupportDiagnosticFieldDraft(
-                        "transport_security",
-                        effectiveTransport.diagnosticValue,
-                    ),
-                ),
-            ),
+        val response = request(
+            "POST",
+            "$baseUrl/index.php/login/v2",
+            maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
         )
-        LoginChallenge(
+        val interpretation = interpretLoginChallengeHttpResponse(
+            status = response.status,
+            body = response.text,
             enteredServerUrl = baseUrl,
-            pollEndpoint = pollEndpoint,
-            pollFallbackEndpoint = relationships.pollFallbackEndpoint,
-            token = poll.getString("token"),
-            loginUrl = loginUrl,
             transportSecurity = effectiveTransport,
         )
+        recordSupportDiagnostic(interpretation.toStartedDiagnostic())
+        interpretation.challenge
     }
 
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
@@ -4094,6 +4066,7 @@ class DesktopNextcloudServices(
                 body = "token=" + encodeForm(challenge.token),
                 contentType = "application/x-www-form-urlencoded",
                 client = loginPollHttpClient,
+                maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
                 diagnosticIgnoredHttpStatuses = setOf(404),
                 onNetworkFailure = { networkFailure = it },
             )
@@ -4116,18 +4089,7 @@ class DesktopNextcloudServices(
                 fallback != null
             ) {
                 runCatching {
-                    recordSupportDiagnostic(
-                        SupportDiagnosticEventDraft(
-                            severity = SupportDiagnosticSeverity.Info,
-                            component = SupportDiagnosticComponent.Authentication,
-                            operation = "login.poll",
-                            outcome = "endpoint-fallback",
-                            fields = listOf(
-                                SupportDiagnosticFieldDraft("safe_to_retry", "true"),
-                                SupportDiagnosticFieldDraft("exchange_started", "false"),
-                            ),
-                        ),
-                    )
+                    recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic())
                 }
                 try {
                     poll(fallback).also {
@@ -4145,56 +4107,21 @@ class DesktopNextcloudServices(
                 return@withContext initialResult
             }
         }
-        if (response.status == 404) {
-            if (loginPollPendingTokens.add(challenge.token)) {
-                recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
+        val interpretation = interpretLoginPollHttpResponse(response.status, response.text, challenge)
+        when (val result = interpretation.result) {
+            LoginPollResult.Pending -> {
+                if (loginPollPendingTokens.add(challenge.token)) {
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
+                }
             }
-            return@withContext LoginPollResult.Pending
-        }
-        if (response.status !in 200..299) {
-            val result = LoginPollResult.FatalFailure(
-                "Login approval failed (HTTP ${response.status}). Please try again.",
-                "HTTP:${response.status}",
-            )
-            result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-            return@withContext result
-        }
-        runCatching {
-            val json = JSONObject(response.text)
-            val resultServerUrl = normalizeServerUrl(json.getString("server"), challenge.transportSecurity)
-            val resultOriginMatchesEntered = loginResultOriginMatchesEntered(
-                challenge.enteredServerUrl,
-                resultServerUrl,
-            )
-            val loginName = json.getString("loginName")
-            val appPassword = json.getString("appPassword")
-            registerSupportDiagnosticPrivateValue(loginName)
-            registerSupportDiagnosticPrivateValue(appPassword)
-            runCatching {
-                recordSupportDiagnostic(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Info,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "login.poll",
-                        outcome = "approved",
-                        fields = listOf(
-                            SupportDiagnosticFieldDraft(
-                                "result_origin_matches_entered",
-                                resultOriginMatchesEntered.toString(),
-                            ),
-                            SupportDiagnosticFieldDraft(
-                                "poll_fallback_used",
-                                usedFallback.toString(),
-                            ),
-                        ),
-                    ),
-                )
+            is LoginPollResult.Approved -> {
+                registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
+                registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
+                runCatching { recordSupportDiagnostic(interpretation.toApprovedDiagnostic(usedFallback)) }
             }
-            LoginPollResult.Approved(NextcloudSession(resultServerUrl, loginName, appPassword))
-        }.getOrElse {
-            ambiguousLoginPollResponse("The server approved sign-in, but its one-time response was invalid.")
-                .also { result -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic) }
+            else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
         }
+        result
     }
 
     override fun finishLoginPolling(challenge: LoginChallenge) {
@@ -4805,15 +4732,18 @@ class DesktopNextcloudServices(
             mutationExecutor = noRedirectFileMutationHttpExecutor,
             onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
-        handleDesktopFileVersionRestoreStatus(response.status) {
-            runCatching {
-                refreshRetainedFoldersAfterMutation(
-                    session,
-                    userId,
-                    accountId,
-                    file.path,
-                )
+        when (val result = classifyFileVersionRestoreHttpResponse(response.status)) {
+            FileVersionRestoreHttpResult.Restored -> {
+                runCatching {
+                    refreshRetainedFoldersAfterMutation(
+                        session,
+                        userId,
+                        accountId,
+                        file.path,
+                    )
+                }
             }
+            is FileVersionRestoreHttpResult.Rejected -> error(result.message)
         }
     }
 
@@ -4824,17 +4754,7 @@ class DesktopNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        val utf8 = text.toByteArray(StandardCharsets.UTF_8)
-        require(utf8.size.toLong() <= MAX_EDITABLE_TEXT_BYTES) {
-            "Text files larger than ${MAX_EDITABLE_TEXT_BYTES / (1024 * 1024)} MiB cannot be edited in the app."
-        }
-        require(expectedEtag.isNotBlank() && expectedEtag.none { it == '\r' || it == '\n' }) {
-            "A valid file version is required before saving."
-        }
-        val headers = buildMap {
-            put("Accept", "*/*")
-            put("If-Match", expectedEtag)
-        }
+        val specification = textFileDavSaveRequest(text, expectedEtag)
         val accountId = desktopFileCacheAccountId(session)
         fun queueAffectedMetadataRefresh() =
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
@@ -4842,26 +4762,26 @@ class DesktopNextcloudServices(
             "PUT",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
             session,
-            rawBody = utf8,
-            contentType = "text/plain; charset=utf-8",
-            headers = headers,
+            rawBody = specification.body,
+            contentType = specification.contentType,
+            headers = specification.headers,
             mutationExecutor = fileMutationHttpExecutor,
             onAmbiguousMutationResult = ::queueAffectedMetadataRefresh,
         )
-        check(response.status != 412) { "The file changed on the server. Reload it before saving your changes." }
-        check(response.status in 200..299) { "Saving the text file failed (HTTP ${response.status})." }
-        val etag = response.etag ?: runCatching { loadFileEtag(session, userId, path) }.getOrNull()
+        val confirmation = confirmTextFileDavSave(response.status)
+        val etag = response.etag ?:
+            runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
         runCatching {
             refreshRetainedFoldersAfterMutation(session, userId, accountId, path)
             etag?.let {
                 fileReadCache.storeContent(
                     accountId,
                     path,
-                    NextcloudFileContent(utf8, "text/plain; charset=utf-8", it),
+                    NextcloudFileContent(specification.body, specification.contentType, it),
                 )
             }
         }
-        SavedTextFile(etag, response.status == 201)
+        SavedTextFile(etag, confirmation.created)
     }
 
     override suspend fun createTextFileIfAbsent(

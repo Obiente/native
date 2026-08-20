@@ -7,6 +7,6 @@ internal inline fun <T> runCatchingUnlessCancelled(block: () -> T): Result<T> =
         Result.success(block())
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (failure: Throwable) {
+    } catch (failure: Exception) {
         Result.failure(failure)
     }

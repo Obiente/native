@@ -159,7 +159,7 @@ class AsyncJvmSupportDiagnostics(
         unavailableSummary()
     }
 
-    suspend fun clear(): Boolean = runCatching {
+    suspend fun clear(): Boolean = runCatchingPreservingCancellation {
         withContext(dispatcher) {
             ready.await().also(::drainPendingSnapshot).clear()
         }

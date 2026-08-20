@@ -19,14 +19,14 @@ internal class DesktopSupportBundleExporter(
         featureState: List<SupportDiagnosticFieldDraft>,
     ): SupportDiagnosticsExportResult = withContext(Dispatchers.IO) {
         val fileName = "nextcloud-native-support-${System.currentTimeMillis().coerceAtLeast(0L)}.zip"
-        val destination = runCatching { chooseDestination(fileName) }
+        val destination = runCatchingPreservingCancellation { chooseDestination(fileName) }
             .getOrElse { failure ->
                 return@withContext SupportDiagnosticsExportResult.Failed(
                     failure.message ?: "The system save dialog could not be opened.",
                 )
             }
             ?: return@withContext SupportDiagnosticsExportResult.Cancelled
-        runCatching {
+        runCatchingPreservingCancellation {
             val normalized = destination.absoluteFile.normalizeSupportBundleDestination()
             diagnostics.writeBundle(normalized, reproductionSteps, featureState)
             normalized
