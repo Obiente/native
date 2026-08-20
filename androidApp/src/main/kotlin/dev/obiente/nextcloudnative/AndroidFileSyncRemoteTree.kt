@@ -176,7 +176,7 @@ internal class AndroidFileSyncRemoteTree(
                 "The server file changed after the sync scan."
             }
             require(!current.isDirectory) { "The server item changed type." }
-            webDav.replaceFileAtomically(
+            webDav.replaceFile(
                 session,
                 userId,
                 fullPath(relativePath),

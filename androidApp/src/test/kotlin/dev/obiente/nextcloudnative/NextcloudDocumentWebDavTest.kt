@@ -173,6 +173,37 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun replacementUsesDestinationGuardedPut() = RecordingServer().use { server ->
+        server.enqueue(204, mapOf("ETag" to "\"saved-2\""))
+        val source = Files.createTempFile("ncn-replace-put-", ".txt").toFile()
+        try {
+            source.writeText("edited")
+            val result = NextcloudDocumentWebDav().replaceFile(
+                server.session,
+                "alice",
+                "Documents/report.txt",
+                source,
+                "\"old-1\"",
+            )
+
+            assertEquals("\"saved-2\"", result.etag)
+            assertEquals(1, server.requestCount)
+            val request = server.request(0)
+            assertEquals("PUT", request.method)
+            assertEquals("/remote.php/dav/files/alice/Documents/report.txt", request.path)
+            assertEquals("\"old-1\"", request.header("If-Match"))
+            assertEquals(null, request.header("If-None-Match"))
+            assertEquals(
+                "SHA256:1fb9f4097256db2d7b1e13aff79cee44339891a31c556b9cf6093885773b3618",
+                request.header("OC-Checksum"),
+            )
+            assertEquals("edited", request.body?.utf8())
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun replacementStagesThenConditionallyMovesOverExpectedEtag() = RecordingServer().use { server ->
         server.enqueue(201, mapOf("ETag" to "\"staged-1\""))
         server.enqueue(201, mapOf("ETag" to "\"saved-2\""))
