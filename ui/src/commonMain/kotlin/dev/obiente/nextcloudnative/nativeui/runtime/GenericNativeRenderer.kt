@@ -3465,22 +3465,13 @@ private fun GenericRecordList(
         val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
             .mapNotNull { item -> item.key as? String }
             .toSet()
-        val targetId = nativeVisibleReorderTargetId(
+        moveNativeCollectionRecordToVisibleTarget(
             orderedRecordIds = reorderState.orderedRecordIds,
+            recordId = recordId,
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
-        )
-        val targetIndex = targetId?.let(reorderState.orderedRecordIds::indexOf) ?: -1
-        if (targetIndex >= 0 && targetId != recordId) {
-            reorderState.updateOrder(
-                moveNativeCollectionRecordToIndex(
-                    orderedRecordIds = reorderState.orderedRecordIds,
-                    recordId = recordId,
-                    targetIndex = targetIndex,
-                ),
-            )
-        }
+        )?.let(reorderState::updateOrder)
     }
     NativeCollectionAutoPager(
         listState = listState,
@@ -4305,7 +4296,7 @@ private fun GenericCategoryCollection(
         reorderError = null
         reorderRecoveryAvailable = false
         scope.launch {
-            runCatching { store.save(pendingKey, stagedValues) }.onFailure { failure ->
+            runCatchingUnlessCancelled { store.save(pendingKey, stagedValues) }.onFailure { failure ->
                 reorderError = failure.message ?: "The new order could not be staged safely."
                 onPendingReorderChanged(plan, null, false)
                 orderedRecordIds = authoritativeOrder
@@ -4316,7 +4307,7 @@ private fun GenericCategoryCollection(
             when (val result = actionExecutor.execute(request)) {
                 is NativeActionExecutionResult.Success -> {
                     encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
-                        ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                        ?.let { values -> runCatchingUnlessCancelled { store.save(pendingKey, values) } }
                     onPendingReorderChanged(plan, submittedOrder, true)
                     onActionSucceeded?.invoke(plan.action)
                 }
@@ -4324,11 +4315,11 @@ private fun GenericCategoryCollection(
                     reorderError = result.message
                     if (result.outcome.requiresMutationReconciliation()) {
                         encodeNativePendingCollectionReorder(submittedOrder, recoveryRequested = true)
-                            ?.let { values -> runCatching { store.save(pendingKey, values) } }
+                            ?.let { values -> runCatchingUnlessCancelled { store.save(pendingKey, values) } }
                         onPendingReorderChanged(plan, submittedOrder, true)
                         onActionSucceeded?.invoke(plan.action)
                     } else {
-                        runCatching { store.clear(pendingKey) }
+                        runCatchingUnlessCancelled { store.clear(pendingKey) }
                         onPendingReorderChanged(plan, null, false)
                         orderedRecordIds = authoritativeOrder
                         reorderExecuting = false
@@ -4422,7 +4413,7 @@ private fun GenericCategoryCollection(
                     reorderRecoveryAvailable = false
                     return@LaunchedEffect
                 }
-                runCatching { store.save(pendingKey, values) }.onFailure { failure ->
+                runCatchingUnlessCancelled { store.save(pendingKey, values) }.onFailure { failure ->
                     reorderError = failure.message ?: "The order recovery marker could not be updated."
                     reorderRecoveryAvailable = true
                     return@LaunchedEffect
@@ -4457,7 +4448,7 @@ private fun GenericCategoryCollection(
         reorderRecoveryAvailable = false
         reorderExecuting = true
         scope.launch {
-            runCatching {
+            runCatchingUnlessCancelled {
                 store.clear(nativePendingCollectionReorderKey(plan, resource.id))
             }.onSuccess {
                 onPendingReorderChanged(plan, null, false)
@@ -4476,20 +4467,13 @@ private fun GenericCategoryCollection(
         val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
             .mapNotNull { item -> item.key as? String }
             .toSet()
-        val targetId = nativeVisibleReorderTargetId(
+        orderedRecordIds = moveNativeCollectionRecordToVisibleTarget(
             orderedRecordIds = orderedRecordIds,
+            recordId = recordId,
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
-        )
-        val targetIndex = targetId?.let(orderedRecordIds::indexOf) ?: -1
-        if (targetIndex >= 0 && targetId != recordId) {
-            orderedRecordIds = moveNativeCollectionRecordToIndex(
-                orderedRecordIds = orderedRecordIds,
-                recordId = recordId,
-                targetIndex = targetIndex,
-            )
-        }
+        ) ?: return
     }
     var expandedIds by rememberSaveable(resource.id) { mutableStateOf(parentIds.toList()) }
     LaunchedEffect(parentIds) {
@@ -5689,22 +5673,13 @@ private fun GenericTaskCollection(
         val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
             .mapNotNull { item -> item.key as? String }
             .toSet()
-        val targetId = nativeVisibleReorderTargetId(
+        moveNativeCollectionRecordToVisibleTarget(
             orderedRecordIds = reorderState.orderedRecordIds,
+            recordId = recordId,
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
-        )
-        val targetIndex = targetId?.let(reorderState.orderedRecordIds::indexOf) ?: -1
-        if (targetIndex >= 0 && targetId != recordId) {
-            reorderState.updateOrder(
-                moveNativeCollectionRecordToIndex(
-                    orderedRecordIds = reorderState.orderedRecordIds,
-                    recordId = recordId,
-                    targetIndex = targetIndex,
-                ),
-            )
-        }
+        )?.let(reorderState::updateOrder)
     }
     NativeCollectionAutoPager(
         listState = listState,

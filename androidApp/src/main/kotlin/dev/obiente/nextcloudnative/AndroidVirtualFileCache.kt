@@ -498,19 +498,6 @@ internal class AndroidVirtualFileCache(context: Context) {
 
     private fun ByteArray.toHex(): String = joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun publishAtomically(source: File, destination: File) {
-        try {
-            Files.move(
-                source.toPath(),
-                destination.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(source.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        }
-    }
-
     private data class CacheState(val entries: List<CachedVirtualFile> = emptyList())
 
     private data class CachedVirtualFile(

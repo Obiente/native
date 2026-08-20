@@ -279,19 +279,6 @@ internal class AndroidFileOfflineQueueStore private constructor(
         requireStored(it in 0..MAX_ITEM_COUNT) { "Offline queue $label count exceeds its safe limit." }
     }
 
-    private fun publishAtomically(source: File, destination: File) {
-        try {
-            Files.move(
-                source.toPath(),
-                destination.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(source.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        }
-    }
-
     private fun requireStored(condition: Boolean, lazyMessage: () -> String) {
         if (!condition) throw OfflineQueueStoreException(lazyMessage())
     }

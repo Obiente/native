@@ -94,7 +94,7 @@ The repository already provides a meaningful prototype:
 - Android and desktop builds from shared Compose code;
 - official-source research for Files, Activity, Talk, Photos, Memories, Recognize, Notes, Deck, Tasks, Tables, Office, Cookbook, Cospend, Contacts, Calendar, Mail, Music, GitHub integration, and app administration.
 
-The prototype is not yet a sync client. Network and protocol code is duplicated between Android and desktop, metadata is mostly in memory, background work is not durable, Files actions are incomplete, and Talk calling is not implemented. Those gaps determine the milestone order.
+The remaining roadmap must complete the sync-client acceptance gates, consolidate shared network and protocol code, replace process-local workflow state where durability is required, complete Files actions, and implement Talk calling. The milestone order below follows those dependencies.
 
 ## 4. Target architecture
 
