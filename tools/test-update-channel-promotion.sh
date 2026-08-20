@@ -104,38 +104,40 @@ if [[ -e "$execution_marker" ]]; then
     exit 1
 fi
 
-expanded="$temporary_directory/expanded.json"
-uploaded_android="$temporary_directory/uploaded-android.json"
-jq '.versionCode = 3 | .changes = []' "$candidate" >"$expanded"
-PATH="$fake_bin:$PATH" \
-    FAKE_POINTER_MANIFEST="$expanded" \
-    FAKE_UPLOADED_MANIFEST="$uploaded_android" \
-    "$project_root/tools/promote-app-update-channel.sh" \
-    Obiente/nc-native \
-    channel-nightly \
-    "$immutable_tag" \
-    0123456789abcdef0123456789abcdef01234567 \
-    "$candidate" \
-    - \
-    1 >/dev/null
-cmp "$candidate" "$uploaded_android"
-
-oversized_pointer="$temporary_directory/oversized-pointer.json"
-oversized_pointer_upload="$temporary_directory/oversized-pointer-upload.json"
-jq --argjson size "$((max_android_apk_bytes + 1))" \
-    '.versionCode = 3 | .apkSize = $size' "$candidate" >"$oversized_pointer"
-PATH="$fake_bin:$PATH" \
-    FAKE_POINTER_MANIFEST="$oversized_pointer" \
-    FAKE_UPLOADED_MANIFEST="$oversized_pointer_upload" \
-    "$project_root/tools/promote-app-update-channel.sh" \
-    Obiente/nc-native \
-    channel-nightly \
-    "$immutable_tag" \
-    0123456789abcdef0123456789abcdef01234567 \
-    "$candidate" \
-    - \
-    1 >/dev/null
-cmp "$candidate" "$oversized_pointer_upload"
+while IFS='^' read -r corruption mutation; do
+    pointer="$temporary_directory/android-pointer-${corruption}.json"
+    uploaded="$temporary_directory/android-upload-${corruption}.json"
+    jq "$mutation" "$candidate" >"$pointer"
+    PATH="$fake_bin:$PATH" \
+        FAKE_POINTER_MANIFEST="$pointer" \
+        FAKE_UPLOADED_MANIFEST="$uploaded" \
+        "$project_root/tools/promote-app-update-channel.sh" \
+        Obiente/nc-native \
+        channel-nightly \
+        "$immutable_tag" \
+        0123456789abcdef0123456789abcdef01234567 \
+        "$candidate" \
+        - \
+        1 >/dev/null
+    cmp "$candidate" "$uploaded"
+done <<EOF
+unknown-field^.versionCode = 2 | .changes = []
+schema^.versionCode = 3 | .schemaVersion = 2
+channel^.versionCode = 3 | .channel = "stable-v1"
+version-name^.versionCode = 3 | .versionName = "nightly-invalid"
+version-code-type^.versionCode = "3"
+package-name^.versionCode = 3 | .packageName = "dev.invalid.app"
+minimum-sdk-low^.versionCode = 3 | .minimumAndroidSdk = 25
+minimum-sdk-high^.versionCode = 3 | .minimumAndroidSdk = 65
+apk-size-type^.versionCode = 3 | .apkSize = "268435456"
+apk-size-high^.versionCode = 3 | .apkSize = $((max_android_apk_bytes + 1))
+apk-sha256^.versionCode = 3 | .apkSha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+release-notes-url^.versionCode = 3 | .releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/wrong"
+apk-url^.versionCode = 3 | .apkUrl = "https://github.com/Obiente/nc-native/releases/download/wrong/app.apk"
+signers-empty^.versionCode = 3 | .signingCertificateSha256Digests = []
+signers-duplicate^.versionCode = 3 | .signingCertificateSha256Digests = ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+signers-invalid^.versionCode = 3 | .signingCertificateSha256Digests = ["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"]
+EOF
 
 desktop_candidate="$temporary_directory/desktop-candidate.json"
 jq -n \
