@@ -108,7 +108,7 @@ private fun GenericRelationUnavailableReason(
     )
 }
 
-private fun nativeRelationPaging(
+internal fun nativeRelationPaging(
     field: FieldSpec,
     formResource: ResourceSpec,
     schema: NativeAppSchema,

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -3228,15 +3229,14 @@ private fun GenericRecordList(
     fun moveDraggedRecord(position: Offset) {
         val recordId = draggingRecordId ?: return
         val visibleItemKeys = listState.layoutInfo.visibleItemsInfo
-            .mapNotNull { item -> item.key as? String }
-            .toSet()
+            .mapNotNull { item -> item.key as? String }.toSet()
         moveNativeCollectionRecordToVisibleTarget(
             orderedRecordIds = reorderState.orderedRecordIds,
             recordId = recordId,
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
-        )?.let(reorderState::updateOrder)
+        )?.let { orderedRecordIds -> reorderState.updateOrder(orderedRecordIds) }
     }
     NativeCollectionAutoPager(
         listState = listState,
@@ -5381,7 +5381,7 @@ private fun GenericTaskCollection(
             rowBounds = rowBounds,
             pointerPosition = position,
             visibleItemKeys = visibleItemKeys,
-        )?.let(reorderState::updateOrder)
+        )?.let { orderedRecordIds -> reorderState.updateOrder(orderedRecordIds) }
     }
     NativeCollectionAutoPager(
         listState = listState,

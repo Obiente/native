@@ -70,5 +70,33 @@ EOF
 expect_failure 'an empty broad catch' "$checker" "$fixture"
 rm "$fixture/androidApp/src/main/kotlin/example/EmptyCatch.kt"
 
+cat > "$fixture/ui/src/commonMain/kotlin/example/PortableSearch.kt" <<'EOF'
+package example
+
+import java.io.File
+
+fun blockThread() {
+    Thread.sleep(1)
+}
+EOF
+expect_failure 'platform and blocking APIs without ripgrep' \
+    env KOTLIN_ARCHITECTURE_FORCE_PORTABLE_SEARCH=true "$checker" "$fixture"
+rm "$fixture/ui/src/commonMain/kotlin/example/PortableSearch.kt"
+
+cat > "$fixture/androidApp/src/main/kotlin/example/PortableEmptyCatch.kt" <<'EOF'
+package example
+
+fun discardFailure(block: () -> Unit) {
+    try {
+        block()
+    } catch (failure: Throwable) {
+    }
+}
+EOF
+expect_failure 'an empty broad catch without ripgrep' \
+    env KOTLIN_ARCHITECTURE_FORCE_PORTABLE_SEARCH=true "$checker" "$fixture"
+rm "$fixture/androidApp/src/main/kotlin/example/PortableEmptyCatch.kt"
+
+env KOTLIN_ARCHITECTURE_FORCE_PORTABLE_SEARCH=true "$checker" "$fixture" >/dev/null
 "$checker" "$fixture" >/dev/null
 printf 'Kotlin architecture checker tests passed.\n'

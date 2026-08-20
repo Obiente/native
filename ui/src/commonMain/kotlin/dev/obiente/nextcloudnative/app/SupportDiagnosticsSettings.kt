@@ -28,11 +28,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -746,7 +748,7 @@ internal fun <T> supportReportPage(
 private const val SUPPORT_REPORT_PAGE_SIZE = 5
 private const val MAX_VISIBLE_SUPPORT_MESSAGES = 20
 private const val MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH = 8_192
-private const val SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS = 5L * 60L * 1_000L
+internal const val SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS = 5L * 60L * 1_000L
 
 private fun supportReportStatusLabel(status: String): String = when (status) {
     "new" -> "Received"
@@ -757,4 +759,3 @@ private fun supportReportStatusLabel(status: String): String = when (status) {
     "rejected" -> "Closed"
     else -> "Updated"
 }
-

@@ -97,6 +97,7 @@ class JvmLoginFlowHttpPolicyTest {
     private fun challenge() = LoginChallenge(
         enteredServerUrl = "https://cloud.example.test",
         pollEndpoint = "https://cloud.example.test/login/v2/poll",
+        pollFallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
         token = "one-time-token",
         loginUrl = "https://cloud.example.test/login/v2/flow/abc",
         transportSecurity = LoginTransportSecurity.Tls,

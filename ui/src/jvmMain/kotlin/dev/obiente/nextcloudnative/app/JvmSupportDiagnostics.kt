@@ -461,7 +461,7 @@ fun Throwable.toSupportDiagnosticExceptionDraft(
     type = javaClass.name,
     message = message,
     frames = stackTrace.take(MAX_JVM_SUPPORT_EXCEPTION_FRAMES).map { frame ->
-        SupportDiagnosticFrame(
+        boundedSupportDiagnosticFrame(
             declaringClass = frame.className,
             methodName = frame.methodName,
             fileName = frame.fileName,

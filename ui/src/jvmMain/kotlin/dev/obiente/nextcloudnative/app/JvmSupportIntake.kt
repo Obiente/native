@@ -2424,7 +2424,7 @@ internal class OneShotSupportMessageRequestBody(
     override fun contentType() = SUPPORT_METADATA_MEDIA_TYPE
     override fun contentLength(): Long = content.size.toLong()
     override fun isOneShot(): Boolean = true
-    override fun writeTo(sink: BufferedSink) = sink.write(content)
+    override fun writeTo(sink: BufferedSink) { sink.write(content) }
 }
 
 private fun secureIdempotencyKey(): String {

@@ -148,7 +148,7 @@ private fun GenericSectionHeading(title: String, supporting: String) {
 }
 
 @Composable
-private fun GenericRepeatableObjectField(
+internal fun GenericRepeatableObjectField(
     field: FieldSpec,
     spec: RepeatableObjectInputSpec,
     rows: List<RepeatableObjectInputRow>,

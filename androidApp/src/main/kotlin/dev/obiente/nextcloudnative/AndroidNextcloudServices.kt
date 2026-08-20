@@ -1459,7 +1459,7 @@ internal class AndroidNextcloudServices(
             }
             else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
         }
-        result
+        interpretation.result
     }
 
     override fun finishLoginPolling(challenge: LoginChallenge) {

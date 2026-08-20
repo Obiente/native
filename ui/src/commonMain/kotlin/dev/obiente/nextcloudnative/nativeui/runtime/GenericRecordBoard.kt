@@ -202,7 +202,7 @@ internal fun GenericRecordBoard(
                         actionMessage = "Update accepted. Refreshing the card..."
                         onActionSucceeded?.invoke(target.plan.action)
                     }
-                    is NativeActionExecutionResult.Failure -> actionError = result.message
+                    is NativeActionExecutionResult.Failure -> actionError = executionResult.message
                 }
             } finally {
                 busyRecordId = null
@@ -235,7 +235,7 @@ internal fun GenericRecordBoard(
                         actionMessage = "Move accepted. Refreshing the board to verify it..."
                         onActionSucceeded?.invoke(target.plan.action)
                     }
-                    is NativeActionExecutionResult.Failure -> actionError = result.message
+                    is NativeActionExecutionResult.Failure -> actionError = executionResult.message
                 }
             } finally {
                 busyRecordId = null
@@ -262,7 +262,7 @@ internal fun GenericRecordBoard(
                         actionMessage = "Card created in ${target.lane.title}. Refreshing the board..."
                         onActionSucceeded?.invoke(target.action)
                     }
-                    is NativeActionExecutionResult.Failure -> actionError = result.message
+                    is NativeActionExecutionResult.Failure -> actionError = executionResult.message
                 }
             } finally {
                 busyRecordId = null
@@ -289,7 +289,7 @@ internal fun GenericRecordBoard(
                         actionMessage = "${target.plan.label} accepted. Refreshing the board..."
                         onActionSucceeded?.invoke(target.plan.action)
                     }
-                    is NativeActionExecutionResult.Failure -> actionError = result.message
+                    is NativeActionExecutionResult.Failure -> actionError = executionResult.message
                 }
             } finally {
                 busyRecordId = null

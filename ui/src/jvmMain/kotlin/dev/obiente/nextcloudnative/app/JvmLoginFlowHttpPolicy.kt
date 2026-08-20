@@ -1,9 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
+import java.net.URI
 import org.json.JSONException
 import org.json.JSONObject
 
-const val LOGIN_FLOW_RESPONSE_MAX_BYTES = 64 * 1024
+const val LOGIN_FLOW_RESPONSE_MAX_BYTES = 64L * 1024L
 
 data class LoginChallengeHttpInterpretation(
     val challenge: LoginChallenge,
@@ -166,3 +167,23 @@ private data class LoginChallengeFields(
     val token: String,
     val loginUrl: String,
 )
+
+internal fun normalizeServerUrl(
+    value: String,
+    transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
+): String {
+    val candidate = value.trim().let { if ("://" in it) it else "https://$it" }
+    val uri = URI(candidate)
+    val scheme = uri.scheme?.lowercase()
+    require(
+        (scheme == "https" ||
+            (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp)) &&
+            !uri.host.isNullOrBlank(),
+    ) {
+        "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
+    }
+    return candidate.trimEnd('/').removeSuffix("/index.php")
+}
+
+internal val LoginTransportSecurity.diagnosticValue: String
+    get() = if (this == LoginTransportSecurity.PlainHttp) "plaintext" else "tls"

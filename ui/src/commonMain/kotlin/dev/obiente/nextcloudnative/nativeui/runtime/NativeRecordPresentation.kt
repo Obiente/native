@@ -169,7 +169,7 @@ private fun FieldSpec.isTechnicalPresentationField(): Boolean {
     ) || normalized.endsWith("id")
 }
 
-private fun FieldSpec.isNativeVisualIconField(): Boolean =
+internal fun FieldSpec.isNativeVisualIconField(): Boolean =
     id.lowercase().filter(Char::isLetterOrDigit) in setOf("icon", "symbol") &&
         kind in setOf(FieldKind.string, FieldKind.enumeration)
 

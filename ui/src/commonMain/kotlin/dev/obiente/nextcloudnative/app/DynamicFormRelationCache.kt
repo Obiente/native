@@ -32,7 +32,7 @@ internal fun shouldOfferInitialDynamicRelationRetry(
     discardedRecordCount: Int,
 ): Boolean = error != null && !hasContinuation && !loading && discardedRecordCount == 0
 
-private data class DynamicFormRelationLoadResult(
+internal data class DynamicFormRelationLoadResult(
     val records: List<NativeRecord>,
     val pagination: DynamicPaginationSpec?,
     val partialFailureMessage: String? = null,
@@ -266,7 +266,7 @@ private fun dynamicRelationLoadRequests(
     )
 }
 
-private fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
+internal fun <K, V> Map<K, V>.putBounded(key: K, value: V): Map<K, V> =
     ((this - key) + (key to value))
         .entries
         .toList()

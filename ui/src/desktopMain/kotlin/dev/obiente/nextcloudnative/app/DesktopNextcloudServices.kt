@@ -4108,7 +4108,8 @@ class DesktopNextcloudServices(
             }
         }
         val interpretation = interpretLoginPollHttpResponse(response.status, response.text, challenge)
-        when (val result = interpretation.result) {
+        val result = interpretation.result
+        when (result) {
             LoginPollResult.Pending -> {
                 if (loginPollPendingTokens.add(challenge.token)) {
                     recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
@@ -5895,32 +5896,12 @@ class DesktopNextcloudServices(
     private fun org.w3c.dom.Node.childCount(namespace: String, name: String): Int =
         (this as? org.w3c.dom.Element)?.getElementsByTagNameNS(namespace, name)?.length ?: 0
 
-    private fun normalizeServerUrl(
-        value: String,
-        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
-    ): String {
-        val candidate = value.trim().let { if ("://" in it) it else "https://$it" }
-        val uri = URI(candidate)
-        val scheme = uri.scheme?.lowercase()
-        require(
-            (scheme == "https" ||
-                (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp)) &&
-                !uri.host.isNullOrBlank(),
-        ) {
-            "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
-        }
-        return candidate.trimEnd('/').removeSuffix("/index.php")
-    }
-
     private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
         if (serverUrl.startsWith("http://", ignoreCase = true)) {
             LoginTransportSecurity.PlainHttp
         } else {
             LoginTransportSecurity.Tls
         }
-
-    private val LoginTransportSecurity.diagnosticValue: String
-        get() = if (this == LoginTransportSecurity.PlainHttp) "plaintext" else "tls"
 
     private fun JSONArray.toAppEntries(): List<NextcloudAppEntry> = buildList {
         for (index in 0 until length()) {

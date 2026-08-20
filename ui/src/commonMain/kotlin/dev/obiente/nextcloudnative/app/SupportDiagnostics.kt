@@ -382,7 +382,7 @@ internal class SupportDiagnosticSanitizer(
         depth: Int,
     ): SupportDiagnosticException {
         val boundedFrames = draft.frames.take(MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES).map { frame ->
-            SupportDiagnosticFrame(
+            boundedSupportDiagnosticFrame(
                 declaringClass = sanitizeCodeToken(frame.declaringClass, MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH),
                 methodName = sanitizeCodeToken(frame.methodName, MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH),
                 fileName = frame.fileName
@@ -489,6 +489,28 @@ internal class SupportDiagnosticSanitizer(
     }
 }
 
+internal fun boundedSupportDiagnosticFrame(
+    declaringClass: String,
+    methodName: String,
+    fileName: String?,
+    lineNumber: Int?,
+): SupportDiagnosticFrame = SupportDiagnosticFrame(
+    declaringClass = declaringClass.sanitizeSupportDiagnosticCodeToken(MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH),
+    methodName = methodName.sanitizeSupportDiagnosticCodeToken(MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH),
+    fileName = fileName
+        ?.substringAfterLast('/')
+        ?.substringAfterLast('\\')
+        ?.sanitizeSupportDiagnosticCodeToken(MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH),
+    lineNumber = lineNumber?.takeIf { it >= 0 },
+)
+
+private fun String.sanitizeSupportDiagnosticCodeToken(maximumLength: Int): String =
+    filter { character ->
+        character.isLetterOrDigit() || character in setOf('.', '_', '-', '$')
+    }
+        .ifBlank { "Unknown" }
+        .take(maximumLength)
+
 internal const val SUPPORT_DIAGNOSTIC_EVENT_SCHEMA_VERSION = 1
 internal const val MAX_SUPPORT_DIAGNOSTIC_FIELDS = 24
 internal const val MAX_SUPPORT_DIAGNOSTIC_EVENTS = 1_000
@@ -510,9 +532,9 @@ internal const val MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH = 512
 private const val MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH = 96
 private const val MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES = 16
 private const val MAX_SUPPORT_DIAGNOSTIC_CAUSE_DEPTH = 4
-private const val MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH = 180
-private const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
-private const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
+internal const val MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH = 180
+internal const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
+internal const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
 private const val MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH = 160
 internal const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
 

@@ -23,6 +23,58 @@ is_test_source() {
     [[ "$1" == *'/test/'* || "$1" == *'Test/'* || "$1" == *'Test.kt' ]]
 }
 
+has_ripgrep() {
+    [[ "${KOTLIN_ARCHITECTURE_FORCE_PORTABLE_SEARCH:-false}" != true ]] &&
+        command -v rg >/dev/null 2>&1
+}
+
+search_kotlin_lines() {
+    local pattern="$1"
+    shift
+    if has_ripgrep; then
+        rg -n "$pattern" "$@"
+        return
+    fi
+
+    local file
+    local found=false
+    local match
+    while IFS= read -r -d '' file; do
+        while IFS= read -r match; do
+            printf '%s:%s\n' "$file" "$match" >&2
+            found=true
+        done < <(grep -n -E -- "$pattern" "$file" || true)
+    done < <(find "$@" -type f -name '*.kt' -print0 2>/dev/null)
+    [[ "$found" == true ]]
+}
+
+search_empty_broad_catches() {
+    if has_ripgrep; then
+        rg -n -U -g '*.kt' 'catch\s*\([^)]*:\s*(Throwable|Exception)\)\s*\{\s*\}' "$@"
+        return
+    fi
+
+    local file
+    local found=false
+    while IFS= read -r -d '' file; do
+        if awk '
+            { source = source $0 "\n" }
+            END {
+                pattern = "catch[[:space:]]*[(][^)]*:[[:space:]]*(Throwable|Exception)[)][[:space:]]*[{][[:space:]]*[}]"
+                if (!match(source, pattern)) exit 1
+                prefix = substr(source, 1, RSTART - 1)
+                line = 1 + gsub(/\n/, "\n", prefix)
+                matched = substr(source, RSTART, RLENGTH)
+                gsub(/[[:space:]]+/, " ", matched)
+                printf "%s:%d:%s\n", FILENAME, line, matched > "/dev/stderr"
+            }
+        ' "$file"; then
+            found=true
+        fi
+    done < <(find "$@" -type f -name '*.kt' -print0 2>/dev/null)
+    [[ "$found" == true ]]
+}
+
 mapfile -d '' kotlin_files < <(
     find \
         "$project_root/ui/src" \
@@ -66,11 +118,11 @@ done < <(find "$project_root/ui/src/androidMain" -type f -name '*.android.kt' 2>
 
 common_main="$project_root/ui/src/commonMain"
 if [[ -d "$common_main" ]]; then
-    if rg -n '^import (android|java|javax|javafx|sun)\.' "$common_main" >&2; then
+    if search_kotlin_lines '^import (android|java|javax|javafx|sun)\.' "$common_main"; then
         printf 'commonMain imports a platform API. Move the implementation to the owning source set.\n' >&2
         failed=true
     fi
-    if rg -n '(GlobalScope|runBlocking\(|Thread\.sleep\()' "$common_main" >&2; then
+    if search_kotlin_lines '(GlobalScope|runBlocking\(|Thread\.sleep\()' "$common_main"; then
         printf 'commonMain contains blocking or unstructured coroutine work.\n' >&2
         failed=true
     fi
@@ -86,8 +138,8 @@ done < <(
         2>/dev/null | sort
 )
 
-if rg -n -U -g '*.kt' 'catch\s*\([^)]*:\s*(Throwable|Exception)\)\s*\{\s*\}' \
-    "$project_root/ui/src" "$project_root/androidApp/src" "$project_root/contractAcquisition/src" >&2; then
+if search_empty_broad_catches \
+    "$project_root/ui/src" "$project_root/androidApp/src" "$project_root/contractAcquisition/src"; then
     printf 'An empty broad catch discards a failure. Classify, report, or deliberately recover from it.\n' >&2
     failed=true
 fi
