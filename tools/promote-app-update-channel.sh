@@ -18,6 +18,7 @@ pointer_schema="$7"
 [[ "$pointer_schema" == "1" ]]
 [[ "$repository" == "Obiente/nc-native" ]]
 [[ "$immutable_sha" =~ ^[a-f0-9]{40}$ ]]
+max_android_apk_bytes=268435456
 
 case "$pointer_tag" in
     channel-prerelease)
@@ -34,37 +35,82 @@ case "$pointer_tag" in
         ;;
 esac
 
-manifest_code() {
+android_manifest_code() {
     local manifest="$1"
-    local kind="$2"
-    local expected_name
-    case "$kind" in
-        android) expected_name="update-manifest.json" ;;
-        desktop) expected_name="desktop-update-manifest.json" ;;
-        *) return 2 ;;
-    esac
+    local required_tag="$2"
     jq -er \
         --arg channel "$expected_channel" \
-        --arg tag "$immutable_tag" \
-        --arg expected_name "$expected_name" \
+        --arg required_tag "$required_tag" \
+        --argjson maximum_apk_size "$max_android_apk_bytes" \
         '
-          select(.schemaVersion == 1) |
-          select(.channel == $channel) |
+          select(keys == [
+            "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+            "packageName", "releaseNotesUrl", "schemaVersion",
+            "signingCertificateSha256Digests", "versionCode", "versionName"
+          ]) |
+          select(.schemaVersion == 1 and .channel == $channel) |
+          select(
+            (.versionName | type == "string" and length > 0 and length <= 64) and
+            if $channel == "prerelease-v1" then
+              (.versionName | test("^0\\.[0-9]+\\.[0-9]+-(alpha|beta|rc)\\.[0-9]+$"))
+            else
+              (.versionName | test("^nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8}$"))
+            end
+          ) |
           select(.versionCode | type == "number" and . > 0 and floor == .) |
-          select(.changes | type == "array" and length <= 1000) |
+          select(.packageName == "dev.obiente.nextcloudnative") |
+          select(.minimumAndroidSdk |
+            type == "number" and . >= 26 and . <= 64 and floor == .
+          ) |
+          select(.apkSize |
+            type == "number" and . > 0 and . <= $maximum_apk_size and floor == .
+          ) |
+          select(.apkSha256 | type == "string" and test("^[a-f0-9]{64}$")) |
+          select(
+            .signingCertificateSha256Digests |
+            type == "array" and length >= 1 and length <= 8 and
+            length == (unique | length) and
+            all(.[]; type == "string" and test("^[a-f0-9]{64}$"))
+          ) |
+          (if $channel == "prerelease-v1" then
+            "v" + .versionName
+          else
+            .versionName
+          end) as $tag |
+          select($required_tag == "" or $tag == $required_tag) |
           select(.releaseNotesUrl ==
             "https://github.com/Obiente/nc-native/releases/tag/" + $tag
           ) |
-          if $expected_name == "update-manifest.json" then
-            select(.apkUrl | startswith(
-              "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
-            ))
-          else
-            select(.assets | type == "array" and length > 0) |
-            select(all(.assets[]; .url | startswith(
-              "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
-            )))
-          end |
+          ("https://github.com/Obiente/nc-native/releases/download/" + $tag + "/") as $apk_prefix |
+          select(.apkUrl | type == "string" and startswith($apk_prefix) and endswith(".apk")) |
+          select(.apkUrl | ltrimstr($apk_prefix) |
+            test("^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")) |
+          .versionCode
+        ' "$manifest"
+}
+
+desktop_manifest_code() {
+    local manifest="$1"
+    jq -er \
+        --arg channel "$expected_channel" \
+        --arg tag "$immutable_tag" \
+        '
+          select(keys == [
+            "assets", "channel", "packageVersion", "releaseNotesUrl",
+            "schemaVersion", "versionCode", "versionName"
+          ]) |
+          select(.schemaVersion == 1 and .channel == $channel) |
+          select(.versionCode | type == "number" and . > 0 and floor == .) |
+          select(.releaseNotesUrl ==
+            "https://github.com/Obiente/nc-native/releases/tag/" + $tag
+          ) |
+          select(.assets | type == "array" and length > 0) |
+          select(all(.assets[];
+            keys == ["architecture", "format", "platform", "sha256", "size", "url"]
+          )) |
+          select(all(.assets[]; .url | startswith(
+            "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
+          ))) |
           .versionCode
         ' "$manifest"
 }
@@ -78,8 +124,8 @@ desktop_pointer_state() {
         '
           . as $manifest |
           select(keys == [
-            "assets", "changes", "channel", "packageVersion", "releaseNotesUrl",
-            "schemaVersion", "versionCode", "versionName"
+            "assets", "channel", "packageVersion", "releaseNotesUrl", "schemaVersion",
+            "versionCode", "versionName"
           ]) |
           select(.schemaVersion == 1 and .channel == $channel) |
           select(.versionName | type == "string" and length > 0) |
@@ -133,12 +179,12 @@ declare -A candidate_codes=()
 if [[ "$android_manifest" != "-" ]]; then
     [[ -f "$android_manifest" ]]
     candidates[update-manifest.json]="$android_manifest"
-    candidate_codes[update-manifest.json]="$(manifest_code "$android_manifest" android)"
+    candidate_codes[update-manifest.json]="$(android_manifest_code "$android_manifest" "$immutable_tag")"
 fi
 if [[ "$desktop_manifest" != "-" ]]; then
     [[ -f "$desktop_manifest" ]]
     candidates[desktop-update-manifest.json]="$desktop_manifest"
-    candidate_codes[desktop-update-manifest.json]="$(manifest_code "$desktop_manifest" desktop)"
+    candidate_codes[desktop-update-manifest.json]="$(desktop_manifest_code "$desktop_manifest")"
 fi
 [[ "${#candidates[@]}" -gt 0 ]]
 if [[ -n "${candidate_codes[update-manifest.json]:-}" ]] &&
@@ -184,21 +230,19 @@ for name in "${!candidates[@]}"; do
                 current_state=$'replace\tinvalid'
             fi
         else
-            current_state="$(
-                jq -er \
-                    --arg channel "$expected_channel" \
-                    --argjson candidate "${candidate_codes[$name]}" \
-                    '
-                      select(.schemaVersion == 1 and .channel == $channel) |
-                      select(.versionCode | type == "number" and . > 0 and floor == .) |
-                      [
-                        (if .versionCode >= $candidate then "keep" else "replace" end),
-                        (.versionCode | tostring)
-                      ] |
-                      @tsv
-                    ' \
-                    "$current"
-            )"
+            if ! current_code="$(android_manifest_code "$current" "" 2>/dev/null)"; then
+                current_state=$'replace\tinvalid'
+            else
+                current_state="$(
+                    jq -nr \
+                        --argjson current "$current_code" \
+                        --argjson candidate "${candidate_codes[$name]}" \
+                        '[
+                          (if $current >= $candidate then "keep" else "replace" end),
+                          ($current | tostring)
+                        ] | @tsv'
+                )"
+            fi
         fi
         IFS=$'\t' read -r promotion_action current_code <<<"$current_state"
         if [[ "$promotion_action" == "keep" ]]; then

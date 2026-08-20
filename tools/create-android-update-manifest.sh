@@ -16,6 +16,7 @@ apk_size="$7"
 apk_sha256="$8"
 signer_digests_json="$9"
 repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
+max_android_apk_bytes=268435456
 
 [[ "$repository" == "Obiente/nc-native" ]]
 case "$channel" in
@@ -35,6 +36,10 @@ esac
 [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
 [[ "$apk_name" == "nextcloud-native-${version}-android.apk" ]]
 [[ "$apk_size" =~ ^[1-9][0-9]*$ ]]
+jq -en \
+  --argjson apk_size "$apk_size" \
+  --argjson maximum "$max_android_apk_bytes" \
+  '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
 [[ "$apk_sha256" =~ ^[a-f0-9]{64}$ ]]
 jq -e '
   type == "array" and
@@ -43,11 +48,6 @@ jq -e '
   length == (unique | length) and
   all(.[]; type == "string" and test("^[a-f0-9]{64}$"))
 ' <<<"$signer_digests_json" >/dev/null
-changes='[]'
-if (( version_code > 20000000 )); then
-    changes="$(node "$(dirname "$0")/update-changelog.mjs" "$version_code")"
-fi
-
 mkdir -p "$(dirname "$output")"
 jq -n \
   --argjson schemaVersion 1 \
@@ -61,7 +61,6 @@ jq -n \
   --arg apkSha256 "$apk_sha256" \
   --argjson signingCertificateSha256Digests "$signer_digests_json" \
   --arg releaseNotesUrl "https://github.com/${repository}/releases/tag/${tag}" \
-  --argjson changes "$changes" \
   '{
     schemaVersion: $schemaVersion,
     channel: $channel,
@@ -73,6 +72,5 @@ jq -n \
     apkSize: $apkSize,
     apkSha256: $apkSha256,
     signingCertificateSha256Digests: $signingCertificateSha256Digests,
-    releaseNotesUrl: $releaseNotesUrl,
-    changes: $changes
+    releaseNotesUrl: $releaseNotesUrl
   }' >"$output"

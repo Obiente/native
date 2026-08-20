@@ -11,6 +11,5 @@
   "signingCertificateSha256Digests": [
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   ],
-  "releaseNotesUrl": "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1",
-  "changes": []
+  "releaseNotesUrl": "https://github.com/Obiente/nc-native/releases/tag/v0.1.0-alpha.1"
 }

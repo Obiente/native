@@ -302,14 +302,19 @@ sealed interface AppUpdateInstallResult {
     ) : AppUpdateInstallResult
 }
 
-private val publicContentJson = Json {
+private val strictPublicContentJson = Json {
     ignoreUnknownKeys = false
+    isLenient = false
+}
+
+private val updateMetadataJson = Json {
+    ignoreUnknownKeys = true
     isLenient = false
 }
 
 fun parseProjectNewsFeed(bytes: ByteArray): ProjectNewsFeed {
     require(bytes.isNotEmpty() && bytes.size <= MAX_PROJECT_NEWS_FEED_BYTES)
-    val feed = publicContentJson.decodeFromString<ProjectNewsFeed>(bytes.decodeToString())
+    val feed = strictPublicContentJson.decodeFromString<ProjectNewsFeed>(bytes.decodeToString())
     require(feed.schemaVersion == 1)
     require(feed.feedRevision.isSha256())
     require(feed.entries.size in 1..100)
@@ -382,7 +387,7 @@ fun parseAndroidDirectRelease(
 ): AndroidDirectRelease {
     require(bytes.isNotEmpty() && bytes.size <= MAX_ANDROID_UPDATE_METADATA_BYTES)
     require(isCanonicalAndroidUpdateManifestUrl(metadataUrl, expectedChannel))
-    val release = publicContentJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
+    val release = updateMetadataJson.decodeFromString<AndroidDirectRelease>(bytes.decodeToString())
     return validateAndroidDirectRelease(release, expectedChannel, metadataUrl)
 }
 
@@ -442,7 +447,7 @@ fun parseDesktopDirectRelease(
 ): DesktopDirectRelease {
     require(bytes.isNotEmpty() && bytes.size <= MAX_DESKTOP_UPDATE_METADATA_BYTES)
     require(isCanonicalDesktopUpdateManifestUrl(metadataUrl, expectedChannel))
-    val manifest = publicContentJson.decodeFromString<DesktopUpdateManifest>(bytes.decodeToString())
+    val manifest = updateMetadataJson.decodeFromString<DesktopUpdateManifest>(bytes.decodeToString())
     validateDesktopUpdateManifest(manifest, expectedChannel, metadataUrl)
     val asset = manifest.assets.singleOrNull { candidate ->
         candidate.platform == platform &&

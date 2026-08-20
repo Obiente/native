@@ -34,7 +34,27 @@ GITHUB_REPOSITORY=Obiente/nc-native \
     20002921 \
     1.0.2921
 
+expanded_manifest="$temporary/desktop-update-manifest-expanded.json"
+jq '.assets[0].futureField = "unsupported"' \
+    "$temporary/desktop-update-manifest.json" >"$expanded_manifest"
+if "$project_root/tools/verify-desktop-update-manifest-assets.sh" \
+    "$expanded_manifest" \
+    "$temporary" \
+    Obiente/nc-native \
+    "$tag" \
+    nightly-v1 \
+    "$tag" \
+    20002921 \
+    1.0.2921 >/dev/null 2>&1; then
+    echo "A desktop asset with an unknown field passed manifest verification." >&2
+    exit 1
+fi
+
 jq -e '
+  keys == [
+    "assets", "channel", "packageVersion", "releaseNotesUrl",
+    "schemaVersion", "versionCode", "versionName"
+  ] and
   ([.assets[] | .platform] | sort) == ["linux","linux","windows"] and
   ([.assets[] | select(.platform == "linux") | .format] | sort) == ["deb","rpm"]
 ' "$temporary/desktop-update-manifest.json" >/dev/null
@@ -56,7 +76,13 @@ GITHUB_REPOSITORY=Obiente/nc-native \
     20002921 \
     1.0.2921 \
     "$non_linux"
-jq -e '([.assets[] | .platform] | unique) == ["windows"]' \
+jq -e '
+  keys == [
+    "assets", "channel", "packageVersion", "releaseNotesUrl",
+    "schemaVersion", "versionCode", "versionName"
+  ] and
+  ([.assets[] | .platform] | unique) == ["windows"]
+' \
     "$non_linux/desktop-update-manifest.json" >/dev/null
 
 mac_only="$temporary/mac-only"

@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -44,6 +45,10 @@ class ProjectNewsAndUpdatesTest {
         val bytes = Json.encodeToString(feedOf(article)).encodeToByteArray()
 
         assertEquals(article, parseProjectNewsFeed(bytes).entries.single())
+        val feedWithUnknownField = bytes.decodeToString().dropLast(1) + ",\"futureField\":true}"
+        assertFailsWith<SerializationException> {
+            parseProjectNewsFeed(feedWithUnknownField.encodeToByteArray())
+        }
         val multilineBody = "A heading\n\nA Markdown paragraph."
         val multilineArticle = article.copy(
             bodyMarkdown = multilineBody,
@@ -232,6 +237,16 @@ class ProjectNewsAndUpdatesTest {
         assertEquals(
             release,
             parseAndroidDirectRelease(encoded, metadataUrl, AndroidUpdateChannel.Nightly),
+        )
+        val encodedWithUnknownField =
+            encoded.decodeToString().dropLast(1) + ",\"futureField\":true}"
+        assertEquals(
+            release,
+            parseAndroidDirectRelease(
+                encodedWithUnknownField.encodeToByteArray(),
+                metadataUrl,
+                AndroidUpdateChannel.Nightly,
+            ),
         )
         assertEquals(
             release,

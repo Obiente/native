@@ -59,7 +59,7 @@ node tools/changelog-fragments.mjs validate
 node tools/check-markdown-links.mjs
 node --test tools/check-markdown-links.test.mjs
 node --test tools/changelog-fragments.test.mjs
-node --test tools/update-changelog.test.mjs
+node --test tools/legacy-update-manifest-compatibility.test.mjs
 node --test tools/nightly-release-notes.test.mjs
 node --test tools/release-download-table.test.mjs
 bash tools/test-desktop-package-version.sh

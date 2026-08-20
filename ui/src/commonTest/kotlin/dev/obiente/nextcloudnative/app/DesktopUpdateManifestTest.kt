@@ -71,8 +71,23 @@ class DesktopUpdateManifestTest {
         assertEquals(AndroidUpdateChannel.Nightly, release.updateChannel)
         assertEquals("rpm", release.asset.format)
         assertEquals("windows", manifest.assets.single { it.format == "msi" }.platform)
+        assertTrue(release.changes.isEmpty())
         assertTrue(isNewerAppRelease(manifest.versionCode - 1, release))
         assertFalse(isNewerAppRelease(manifest.versionCode, release))
+
+        val bytesWithUnknownField =
+            bytes.decodeToString().dropLast(1) + ",\"futureField\":true}"
+        assertEquals(
+            release,
+            parseDesktopDirectRelease(
+                bytes = bytesWithUnknownField.encodeToByteArray(),
+                metadataUrl = AndroidUpdateChannel.Nightly.desktopManifestUrl(),
+                expectedChannel = AndroidUpdateChannel.Nightly,
+                platform = "linux",
+                format = "rpm",
+                architecture = "x86_64",
+            ),
+        )
     }
 
     @Test

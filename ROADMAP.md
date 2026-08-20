@@ -742,6 +742,8 @@ No sync/file-write beta ships until:
 - Rust format/lint/test, Kotlin format/static analysis/test, schema golden compatibility, Android unit/instrumented, desktop tests, and platform builds.
 - Containerized Nextcloud integration matrix with cached official app fixtures and nightly live-main compatibility jobs that do not block stable releases without triage.
 - Signed artifacts, checksums, SBOM, provenance, dependency/license report, and changelog generated from reviewed inputs.
+- Versioned update-metadata sidecars with compatibility tests against every
+  supported client parser and full-history provenance for cumulative changelogs.
 - Release keys live in protected platform services, not repository/user config.
 - Database migrations and adapter schema version invalidation run in upgrade tests before publishing.
 
