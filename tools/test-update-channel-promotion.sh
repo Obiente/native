@@ -43,9 +43,11 @@ EOF
 chmod +x "$fake_gh"
 
 immutable_tag="nightly-20260731-2200-run400-abcdef12"
+max_android_apk_bytes=268435456
 candidate="$temporary_directory/candidate.json"
 jq -n \
     --arg tag "$immutable_tag" \
+    --argjson apk_size "$max_android_apk_bytes" \
     '{
       schemaVersion: 1,
       channel: "nightly-v1",
@@ -53,12 +55,30 @@ jq -n \
       versionCode: 2,
       packageName: "dev.obiente.nextcloudnative",
       minimumAndroidSdk: 26,
-      apkSize: 1234,
+      apkSize: $apk_size,
       apkSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       signingCertificateSha256Digests: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
       releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $tag),
       apkUrl: ("https://github.com/Obiente/nc-native/releases/download/" + $tag + "/app.apk")
     }' >"$candidate"
+
+oversized_candidate="$temporary_directory/oversized-candidate.json"
+jq --argjson size "$((max_android_apk_bytes + 1))" '.apkSize = $size' \
+    "$candidate" >"$oversized_candidate"
+if PATH="$fake_bin:$PATH" \
+    FAKE_POINTER_MANIFEST="$candidate" \
+    FAKE_UPLOADED_MANIFEST="$temporary_directory/unexpected-oversized-upload.json" \
+    "$project_root/tools/promote-app-update-channel.sh" \
+    Obiente/nc-native \
+    channel-nightly \
+    "$immutable_tag" \
+    0123456789abcdef0123456789abcdef01234567 \
+    "$oversized_candidate" \
+    - \
+    1 >/dev/null 2>&1; then
+    echo "An Android promotion candidate larger than 256 MiB was accepted." >&2
+    exit 1
+fi
 
 execution_marker="$temporary_directory/untrusted-version-code-executed"
 malicious_code='array[$(touch '"$execution_marker"')]'
@@ -99,6 +119,23 @@ PATH="$fake_bin:$PATH" \
     - \
     1 >/dev/null
 cmp "$candidate" "$uploaded_android"
+
+oversized_pointer="$temporary_directory/oversized-pointer.json"
+oversized_pointer_upload="$temporary_directory/oversized-pointer-upload.json"
+jq --argjson size "$((max_android_apk_bytes + 1))" \
+    '.versionCode = 3 | .apkSize = $size' "$candidate" >"$oversized_pointer"
+PATH="$fake_bin:$PATH" \
+    FAKE_POINTER_MANIFEST="$oversized_pointer" \
+    FAKE_UPLOADED_MANIFEST="$oversized_pointer_upload" \
+    "$project_root/tools/promote-app-update-channel.sh" \
+    Obiente/nc-native \
+    channel-nightly \
+    "$immutable_tag" \
+    0123456789abcdef0123456789abcdef01234567 \
+    "$candidate" \
+    - \
+    1 >/dev/null
+cmp "$candidate" "$oversized_pointer_upload"
 
 desktop_candidate="$temporary_directory/desktop-candidate.json"
 jq -n \

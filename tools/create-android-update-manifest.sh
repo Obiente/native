@@ -16,6 +16,7 @@ apk_size="$7"
 apk_sha256="$8"
 signer_digests_json="$9"
 repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
+max_android_apk_bytes=268435456
 
 [[ "$repository" == "Obiente/nc-native" ]]
 case "$channel" in
@@ -35,6 +36,10 @@ esac
 [[ "$version_code" =~ ^[1-9][0-9]*$ ]]
 [[ "$apk_name" == "nextcloud-native-${version}-android.apk" ]]
 [[ "$apk_size" =~ ^[1-9][0-9]*$ ]]
+jq -en \
+  --argjson apk_size "$apk_size" \
+  --argjson maximum "$max_android_apk_bytes" \
+  '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
 [[ "$apk_sha256" =~ ^[a-f0-9]{64}$ ]]
 jq -e '
   type == "array" and

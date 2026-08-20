@@ -18,6 +18,7 @@ pointer_schema="$7"
 [[ "$pointer_schema" == "1" ]]
 [[ "$repository" == "Obiente/nc-native" ]]
 [[ "$immutable_sha" =~ ^[a-f0-9]{40}$ ]]
+max_android_apk_bytes=268435456
 
 case "$pointer_tag" in
     channel-prerelease)
@@ -47,6 +48,7 @@ manifest_code() {
         --arg channel "$expected_channel" \
         --arg tag "$immutable_tag" \
         --arg expected_name "$expected_name" \
+        --argjson maximum_apk_size "$max_android_apk_bytes" \
         '
           select(.schemaVersion == 1) |
           select(.channel == $channel) |
@@ -60,6 +62,9 @@ manifest_code() {
               "packageName", "releaseNotesUrl", "schemaVersion",
               "signingCertificateSha256Digests", "versionCode", "versionName"
             ]) |
+            select(.apkSize |
+              type == "number" and . > 0 and . <= $maximum_apk_size and floor == .
+            ) |
             select(.apkUrl | startswith(
               "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
             ))
@@ -199,6 +204,7 @@ for name in "${!candidates[@]}"; do
                 jq -er \
                     --arg channel "$expected_channel" \
                     --argjson candidate "${candidate_codes[$name]}" \
+                    --argjson maximum_apk_size "$max_android_apk_bytes" \
                     '
                       select(keys == [
                         "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
@@ -207,6 +213,9 @@ for name in "${!candidates[@]}"; do
                       ]) |
                       select(.schemaVersion == 1 and .channel == $channel) |
                       select(.versionCode | type == "number" and . > 0 and floor == .) |
+                      select(.apkSize |
+                        type == "number" and . > 0 and . <= $maximum_apk_size and floor == .
+                      ) |
                       [
                         (if .versionCode >= $candidate then "keep" else "replace" end),
                         (.versionCode | tostring)

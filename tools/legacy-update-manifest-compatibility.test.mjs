@@ -17,6 +17,7 @@ const packageVersion = "1.0.3822";
 const releasePrefix = `https://github.com/${repository}/releases/download/${tag}/`;
 const releaseNotesUrl = `https://github.com/${repository}/releases/tag/${tag}`;
 const sha256Pattern = /^[a-f0-9]{64}$/;
+const maximumAndroidApkBytes = 256 * 1024 * 1024;
 
 const androidKeys = [
   "apkSha256",
@@ -64,7 +65,7 @@ function assertLegacyAndroidManifest(raw) {
   assert.equal(manifest.versionCode, versionCode, "Android versionCode changed type or value");
   assert.equal(manifest.packageName, "dev.obiente.nextcloudnative");
   assert.equal(manifest.minimumAndroidSdk, 26);
-  assertPositiveInteger(manifest.apkSize, "Android APK size", 536_870_912);
+  assertPositiveInteger(manifest.apkSize, "Android APK size", maximumAndroidApkBytes);
   assert.match(manifest.apkSha256, sha256Pattern);
   assert.equal(
     manifest.apkUrl,
@@ -171,6 +172,17 @@ test("generated core manifests satisfy the oldest shipped strict schema", async 
     const android = assertLegacyAndroidManifest(await readFile(androidManifest, "utf8"));
     const desktop = assertLegacyDesktopManifest(await readFile(desktopManifest, "utf8"));
 
+    assert.doesNotThrow(() => assertLegacyAndroidManifest(JSON.stringify({
+      ...android,
+      apkSize: maximumAndroidApkBytes,
+    })));
+    assert.throws(
+      () => assertLegacyAndroidManifest(JSON.stringify({
+        ...android,
+        apkSize: maximumAndroidApkBytes + 1,
+      })),
+      /Android APK size/,
+    );
     assert.throws(
       () => assertLegacyAndroidManifest(JSON.stringify({ ...android, versionCode: String(versionCode) })),
       /versionCode/,
