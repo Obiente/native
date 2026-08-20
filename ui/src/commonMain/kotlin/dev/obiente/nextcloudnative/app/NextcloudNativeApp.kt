@@ -13166,13 +13166,13 @@ private fun AppUpdateSettingsCard(
                 installing = false
                 return@launch
             }
-            if (latest.versionCode != release.versionCode) {
+            if (latest != release) {
                 installMessage =
-                    "A newer release is available. Review its changes before installing."
+                    "The available release changed. Review its details before installing."
                 installing = false
                 return@launch
             }
-            installMessage = when (val install = services.beginAppUpdate(release)) {
+            installMessage = when (val install = services.beginAppUpdate(latest)) {
                 AppUpdateInstallResult.ConfirmationOpened ->
                     "The system installer opened the update confirmation."
                 AppUpdateInstallResult.Installed ->
@@ -13430,7 +13430,7 @@ private fun AppUpdateSettingsCard(
                         Text("Changes since your version", style = MaterialTheme.typography.titleSmall)
                         changes.forEach { change ->
                             Text(
-                                "• ${change.summary}",
+                                "- ${change.summary}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -14391,8 +14391,8 @@ private fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) 
     var showPreview by rememberSaveable { mutableStateOf(false) }
     var reportPageIndex by rememberSaveable { mutableStateOf(0) }
     var reportDeletionTarget by remember { mutableStateOf<SupportDiagnosticsSubmissionState.SubmittedReport?>(null) }
-    var reportReplyTarget by rememberSaveable { mutableStateOf<String?>(null) }
-    var reportReplyDraft by rememberSaveable { mutableStateOf("") }
+    var reportReplyTarget by remember { mutableStateOf<String?>(null) }
+    var reportReplyDraft by remember { mutableStateOf("") }
     val submissionState by remember(services) {
         services.supportDiagnosticsSubmissionStates()
     }.collectAsState(SupportDiagnosticsSubmissionState.Initializing)
