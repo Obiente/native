@@ -5,6 +5,10 @@ prerenders the homepage and every selected repository Markdown document to
 plain HTML, then emits a sitemap and a small client bundle for search and
 interactive previews.
 
+**Last reviewed: 2026-08-20.** Published routes, platform availability, and
+deployment configuration may have changed. The production site and current
+build configuration are the source of truth.
+
 Project updates live in `content/news/`. Each Markdown file has strict
 frontmatter and becomes a prerendered article, search result, sitemap entry,
 structured-data article, and RSS item.
@@ -111,8 +115,7 @@ npm run --prefix website verify:captures:fresh
 If the freshness command reports stale inputs, run the capture wrapper with
 JDK 21 and review the updated synthetic images. The `/visual-qa/` route lists
 scenario, feature, surface, state, platform, viewport, and pixel metadata.
-Future scenario entries may also identify the pull request they review. This
-contributor-only catalog is prerendered for direct access but intentionally
+This contributor-only catalog is prerendered for direct access but intentionally
 excluded from the public sitemap and search index.
 
 For same-repository pull requests, the refresh workflow prepares an untrusted

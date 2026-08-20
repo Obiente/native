@@ -24,5 +24,9 @@ coordinate a fix, and credit reporters who want attribution.
 
 ## Supported versions
 
-The project is currently pre-release. Security fixes target the latest default
-branch until versioned releases begin.
+**Last reviewed: 2026-08-20.** Release and security-support status may have
+changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+and their notes for current published limitations.
+
+The project is pre-release at this review date. Security fixes target the
+latest default branch; no older release line is declared supported here.

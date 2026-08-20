@@ -6,6 +6,10 @@ native presentation and HTTP execution. Its canonical Rust model is
 `ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptor.kt`.
 Both serialize camel-case JSON with `descriptorVersion: "1.0"`.
 
+**Last reviewed: 2026-08-20.** Discovery limits may have changed. The canonical
+Rust and Kotlin models named above, their validators, and their tests are the
+current source of truth.
+
 ## Contract
 
 The top-level document contains:
@@ -58,7 +62,7 @@ are marked destructive.
 Fixtures under `tests/fixtures/` cover an advertised OCS/OpenAPI app and an
 unknown app learned from a successful JSON list response.
 
-## Current limits
+## Reviewed limits
 
 - OpenAPI 2/Swagger, remote `$ref` values, templated server URLs and ambiguous
   multiple server bases are rejected.

@@ -1,9 +1,12 @@
 # Platform strategy
 
-Nextcloud Native already shares product rules, typed domain models, schema
-compilation, and many semantic Compose components. Transport and protocol code
-is still duplicated in places, metadata is mostly in memory, and the durable
-repository/cache/sync foundation is next-phase work.
+This document defines the platform boundary for Nextcloud Native. It separates
+portable product behavior from operating-system integration so shared code does
+not erase native security, lifecycle, accessibility, or filesystem semantics.
+
+**Last reviewed: 2026-08-20.** Implementation and release availability may
+have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+for published artifacts and [ROADMAP.md](ROADMAP.md) for planned work.
 
 The target architecture has three portable layers and thin platform products:
 
@@ -14,7 +17,11 @@ The target architecture has three portable layers and thin platform products:
 4. Platform launchers own lifecycle, layout adaptation, secure storage,
    background work, files, notifications, media, sharing, and packaging.
 
-## Current status
+## Reviewed implementation snapshot
+
+This table describes the repository state at the review date. It is not a
+support guarantee. A packaged artifact is not supported for a workflow until
+its platform acceptance criteria pass and its limitations are documented.
 
 | Platform | Runtime | Current state | Platform-specific direction |
 | --- | --- | --- | --- |
@@ -36,9 +43,8 @@ recorded in [COMPATIBILITY.md](COMPATIBILITY.md).
   account identity belong in shared code. Existing duplication should move
   toward that boundary rather than becoming a new platform-specific design.
 - Secure credentials remain inside the platform credential store.
-- Filesystem providers and sync roots will expose the same shared file and
-  transfer state once the durable repository/sync foundation exists, while
-  using each operating system's native provider model.
+- Filesystem providers and sync roots expose shared file and transfer semantics
+  while retaining each operating system's native provider model.
 - Shared Compose components contain behavior and semantics. Platform layouts
   may arrange them differently.
 

@@ -1,5 +1,10 @@
 # Prerelease policy
 
+**Last reviewed: 2026-08-20.** The active version and release policy may have
+changed. The `ncVersion*` values in `gradle.properties`, the release workflow,
+and the [latest releases](https://github.com/Obiente/nc-native/releases) are the
+current sources of truth.
+
 Nextcloud Native remains on the `0.x.y` release line until the full pre-release
 sprint is complete. Every GitHub release must be marked as a prerelease. The
 release workflow rejects stable versions and all `1.0.0` or higher tags.

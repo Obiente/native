@@ -1,5 +1,12 @@
 # Linux package repositories
 
+This is a maintainer guide for producing signed APT and RPM repository
+snapshots. It does not claim that a public repository is currently available.
+
+**Last reviewed: 2026-08-20.** Distribution endpoints and release channels may
+have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+before publishing or configuring a client.
+
 GitHub release attachments remain useful as immutable source artifacts, but
 they are not an APT or RPM repository. Native package-manager distribution
 requires indexed repository trees, an HTTPS origin, and a dedicated OpenPGP
@@ -18,12 +25,9 @@ a directory containing the complete retained set of `.deb` and `.rpm` files:
 - an exported public certificate, fingerprint, checksums, and example
   `nextcloud-native.sources` and `nextcloud-native.repo` client configuration.
 
-The input may contain more than the UI package. A future native
-`nextcloud-native-vfs` host-service package should be built separately, declare
-its systemd or D-Bus lifecycle in native package metadata, and be placed beside
-the UI packages before the repository indexes are generated. This keeps the
-privileged filesystem integration out of the UI process and lets APT or DNF
-install, update, and remove both components transactionally.
+The input may contain more than one package. Each package must declare its own
+lifecycle and dependencies in native package metadata before it is added to a
+repository snapshot.
 
 ## Signing identity
 

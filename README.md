@@ -43,8 +43,53 @@ feel like one operating-system service:
 > prereleases are for testing and contribution, not yet a replacement for every
 > production workflow or the only copy of important data.
 
+> **Status snapshot:** Product and platform statements in this README were last
+> reviewed on **2026-08-20**. Implementation, compatibility, packaging, and
+> release availability may have changed since then. Use the
+> [latest release notes](https://github.com/Obiente/nc-native/releases),
+> [compatibility matrix](COMPATIBILITY.md), and
+> [public Project](https://github.com/orgs/Obiente/projects/4) for current
+> evidence.
+
 Nextcloud Native is unofficial and is not affiliated with, sponsored by, or
 endorsed by Nextcloud GmbH.
+
+## Product showcase
+
+These captures come from the real Compose application using deterministic
+synthetic fixtures. They demonstrate implemented interface behavior and
+responsive layout; they are not evidence that every pictured workflow is
+complete on every platform or server version.
+
+<table>
+  <tr>
+    <td width="68%">
+      <img src="website/public/screenshots/homepage-overview-desktop-light.png" alt="Nextcloud Native desktop overview with files, activity, events, storage, photo backup, mail, and conversations">
+    </td>
+    <td width="32%">
+      <img src="website/public/screenshots/homepage-overview-mobile-light.png" alt="Nextcloud Native mobile overview with quick actions, recent files, and photo backup">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Desktop workspace</strong></td>
+    <td align="center"><strong>Mobile workspace</strong></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="website/public/screenshots/homepage-files-desktop-light.png" alt="Desktop Files workspace with navigation, file list, filters, search, actions, and details inspector">
+    </td>
+    <td width="50%">
+      <img src="website/public/screenshots/homepage-planning-desktop-light.png" alt="Native planning board with planned, in-progress, and completed card lanes">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Files and details</strong></td>
+    <td align="center"><strong>Semantic board surface</strong></td>
+  </tr>
+</table>
 
 ## Quick downloads
 
@@ -78,25 +123,7 @@ platform behavior. Semantic components supply the workflow.
 
 ## How adaptive native apps work
 
-```text
-connected Nextcloud account
-    |
-    +-- capabilities and installed-app versions
-    +-- official OCS, DAV, OpenAPI, and app contracts
-    +-- exact signed App Store packages and verified source fallbacks
-    +-- approved successful read observations
-    |
-    v
-validated typed resources, relationships, permissions, and actions
-    |
-    v
-reusable semantic models
-    |
-    +-- files, media, people, mail, calendar, board, table, recipe ...
-    |
-    v
-platform-adapted native UI for Android and desktop
-```
+![Nextcloud Native architecture from verified evidence through typed resources and semantic models to platform-adapted native UI](docs/assets/adaptive-native-architecture.svg)
 
 Discovery is deterministic before it is heuristic. The runtime can infer field
 roles, relationships, component families, labels, and useful entry points, but
@@ -112,7 +139,12 @@ See [DYNAMIC_APP_DESCRIPTOR.md](DYNAMIC_APP_DESCRIPTOR.md),
 [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md) for the trust and execution
 boundaries.
 
-## What works in the current alpha
+## Implemented alpha surfaces
+
+The following repository state was reviewed on **2026-08-20** and may have
+changed. A listed surface can still have platform, version, action, or lifecycle
+limitations; consult the compatibility matrix and current release notes before
+depending on it.
 
 The repository already contains runnable Android and Linux desktop
 applications with:
@@ -143,9 +175,9 @@ surfaces remain read-heavy, some actions still need stronger context binding,
 contract discovery and persistent caching need further work, and native UX
 quality varies by workflow. The public Project tracks those gaps.
 
-## The next phase
+## Planned work
 
-The project is moving from a broad native prototype to a dependable daily
+The project is strengthening the foundations required for a dependable daily
 client.
 
 | Workstream | What this phase delivers |
@@ -165,6 +197,9 @@ The dependency gates and data-safety criteria are in
 [GitHub Project](https://github.com/orgs/Obiente/projects/4).
 
 ## Platform status
+
+This table was last reviewed on **2026-08-20** and may have changed. It
+describes repository and prerelease status, not a stable-support guarantee.
 
 | Platform | Current state |
 | --- | --- |

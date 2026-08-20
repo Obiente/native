@@ -1,10 +1,18 @@
-# Compatibility families
+# Compatibility and product-completeness contract
 
-This matrix comes from the first real Nextcloud instance selected for testing.
-It is intentionally organized by reusable capability instead of app-specific
-screens.
+This document separates a dated implementation snapshot from the target
+completeness contract. It is organized by reusable capability instead of
+assuming that opening an app proves compatibility.
 
-## Live implementation status
+**Last reviewed: 2026-08-20.** Implementation, server APIs, and app behavior
+may have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+for published limitations, [PLATFORMS.md](PLATFORMS.md) for platform status, and
+[ROADMAP.md](ROADMAP.md) for planned work.
+
+## Reviewed implementation snapshot
+
+These entries summarize implemented native paths at the review date. They are
+not a promise of complete compatibility with every server or app version.
 
 | Experience | Current native support |
 | --- | --- |
@@ -17,9 +25,10 @@ screens.
 | Chores and similar task apps | Verified household hierarchy, native task cards, recurrence, assignment, points and completion-history rendering through reusable semantics |
 | Other installed apps | Discovered and mapped to a typed native family while their verified adapters are implemented |
 
-All agent-run live tests are read-only. No Talk message, file save, Notes save,
-delete, app-management action or administrator action is issued during automated
-testing.
+Repository live-server audits are opt-in and read-only by default. They do not
+send Talk messages, save files or notes, delete content, manage apps, or perform
+administrator actions. A passing audit is evidence for the tested server and
+app versions, not a general compatibility guarantee.
 
 ## Whole-app parity contract
 
@@ -65,36 +74,5 @@ forking the workflow:
   are required for behavior such as Talk calls and Office collaborative editing that cannot be
   represented safely by reusable schema semantics alone.
 
-| Installed app | Primary native family | Important secondary capabilities |
-| --- | --- | --- |
-| Dashboard | Dashboard | Widgets, activity and shortcuts |
-| Talk | Conversation list + chat thread | Attachments, realtime events and calls |
-| Files | File browser | Preview, upload, sharing, versions and offline state |
-| Photos | Media grid | Albums, timeline, selection and sharing |
-| Activity | Timeline | Filters, actors and deep links |
-| Mail | Mailbox | Threads, composer, attachments and folders |
-| Contacts | Contact list | Groups, details, editing and device contacts |
-| Calendar | Calendar | Agenda, events, recurrence and attendees |
-| Cospend | Collection + form | Projects, members, currency and settlement |
-| GitHub | Dashboard + timeline | Repositories, issues, pull requests and links |
-| Notes | Document editor | Lists, categories and offline editing |
-| Music | Media library | Artists, albums, playlists and playback |
-| Deck | Board | Stacks, cards, ordering and assignment |
-| Budget | Data table | Categories, totals, charts and editing |
-| Tasks | Task list | Lists, recurrence, completion and priorities |
-| Tables | Data table | Typed columns, sorting, filtering and forms |
-| Cookbook | Recipe list | Ingredients, steps, timers and images |
-| Office | Document editor | File locking, collaboration and rich editing |
-| Memories | Media grid | Date groups, maps, albums and RAW previews |
-| Chores | Task list | Assignment, recurrence and completion |
-
-## First implementation order
-
-1. Collection list, detail and form establish the generic data contract.
-2. File browser and media grid cover Files, Photos and Memories.
-3. Task list, data table and board cover Tasks, Chores, Tables, Budget and Deck.
-4. Conversation list, chat thread and mailbox cover communication data.
-5. Calendar, media library, recipe and document editing add specialized
-   interaction models.
-6. Talk calls and Office collaborative editing require verified adapters rather
-   than unconstrained inference.
+Implementation order and acceptance gates belong in [ROADMAP.md](ROADMAP.md),
+not in this compatibility contract.

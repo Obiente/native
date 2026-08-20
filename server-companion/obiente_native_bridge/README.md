@@ -8,6 +8,10 @@ API.
 It does not proxy files, query Recognize's private database tables, bypass DAV
 permissions, store account passwords, or add an administrator endpoint.
 
+**Last reviewed: 2026-08-20.** Server and Recognize compatibility may have
+changed. The checked-in [`appinfo/info.xml`](appinfo/info.xml), capability
+response, and automated checks are the current source of truth.
+
 ## Compatibility boundary
 
 - Nextcloud 33 through 35
