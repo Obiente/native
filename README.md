@@ -64,10 +64,18 @@ complete on every platform or server version.
 <table>
   <tr>
     <td width="68%">
-      <img src="website/public/screenshots/homepage-overview-desktop-light.png" alt="Nextcloud Native desktop overview with files, activity, events, storage, photo backup, mail, and conversations">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-overview-desktop-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-overview-desktop-light.png">
+        <img src="website/public/screenshots/homepage-overview-desktop-light.png" alt="Nextcloud Native desktop overview with files, activity, events, storage, photo backup, mail, and conversations">
+      </picture>
     </td>
     <td width="32%">
-      <img src="website/public/screenshots/homepage-overview-mobile-light.png" alt="Nextcloud Native mobile overview with quick actions, recent files, and photo backup">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-overview-mobile-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-overview-mobile-light.png">
+        <img src="website/public/screenshots/homepage-overview-mobile-light.png" alt="Nextcloud Native mobile overview with quick actions, recent files, and photo backup">
+      </picture>
     </td>
   </tr>
   <tr>
@@ -79,10 +87,18 @@ complete on every platform or server version.
 <table>
   <tr>
     <td width="50%">
-      <img src="website/public/screenshots/homepage-files-desktop-light.png" alt="Desktop Files workspace with navigation, file list, filters, search, actions, and details inspector">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-files-desktop-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-files-desktop-light.png">
+        <img src="website/public/screenshots/homepage-files-desktop-light.png" alt="Desktop Files workspace with navigation, file list, filters, search, actions, and details inspector">
+      </picture>
     </td>
     <td width="50%">
-      <img src="website/public/screenshots/homepage-planning-desktop-light.png" alt="Native planning board with planned, in-progress, and completed card lanes">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="website/public/screenshots/homepage-planning-desktop-dark.png">
+        <source media="(prefers-color-scheme: light)" srcset="website/public/screenshots/homepage-planning-desktop-light.png">
+        <img src="website/public/screenshots/homepage-planning-desktop-light.png" alt="Native planning board with planned, in-progress, and completed card lanes">
+      </picture>
     </td>
   </tr>
   <tr>
@@ -123,7 +139,11 @@ platform behavior. Semantic components supply the workflow.
 
 ## How adaptive native apps work
 
-![Nextcloud Native architecture from verified evidence through typed resources and semantic models to platform-adapted native UI](docs/assets/adaptive-native-architecture.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/adaptive-native-architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/adaptive-native-architecture-light.svg">
+  <img src="docs/assets/adaptive-native-architecture-light.svg" alt="Nextcloud Native architecture from verified evidence through typed resources and semantic models to platform-adapted native UI">
+</picture>
 
 Discovery is deterministic before it is heuristic. The runtime can infer field
 roles, relationships, component families, labels, and useful entry points, but

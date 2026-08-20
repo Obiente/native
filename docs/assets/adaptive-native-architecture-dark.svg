@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img">
+  <title>Nextcloud Native adaptive architecture</title>
+  <desc>Verified server evidence is validated into typed resources, expressed as semantic models, and rendered as native Android and desktop interfaces.</desc>
+  <style>
+    .title { font: 700 24px sans-serif; fill: #f7f5fa; }
+    .heading { font: 700 18px sans-serif; fill: #f7f5fa; }
+    .body { font: 15px sans-serif; fill: #a8a6b0; }
+    .label { font: 700 13px sans-serif; fill: #cbb3fd; letter-spacing: 0.7px; }
+  </style>
+
+  <rect width="1200" height="420" rx="20" fill="#0d0f13"/>
+  <text class="title" x="40" y="48">How adaptive native apps work</text>
+  <text class="body" x="40" y="76">Each layer narrows what the client may infer, display, and execute.</text>
+
+  <g transform="translate(40 112)">
+    <rect width="250" height="222" rx="16" fill="#1a1c22" stroke="#292b31" stroke-width="2"/>
+    <rect width="250" height="8" rx="4" fill="#cbb3fd"/>
+    <text class="label" x="22" y="42">1. VERIFIED EVIDENCE</text>
+    <text class="heading" x="22" y="74">Server truth</text>
+    <text class="body" x="22" y="110">Capabilities and versions</text>
+    <text class="body" x="22" y="138">OCS, DAV, and OpenAPI</text>
+    <text class="body" x="22" y="166">Signed app packages</text>
+    <text class="body" x="22" y="194">Approved read observations</text>
+  </g>
+
+  <path d="M302 223h26" stroke="#92929b" stroke-width="2"/>
+  <path d="m328 217 10 6-10 6z" fill="#92929b"/>
+
+  <g transform="translate(350 112)">
+    <rect width="250" height="222" rx="16" fill="#1a1c22" stroke="#292b31" stroke-width="2"/>
+    <text class="label" x="22" y="42">2. VALIDATED CONTRACT</text>
+    <text class="heading" x="22" y="74">Typed resources</text>
+    <text class="body" x="22" y="110">Identity and relationships</text>
+    <text class="body" x="22" y="138">Permissions and actions</text>
+    <text class="body" x="22" y="166">Version and provenance</text>
+    <text class="body" x="22" y="194">Failure and retry policy</text>
+  </g>
+
+  <path d="M612 223h26" stroke="#92929b" stroke-width="2"/>
+  <path d="m638 217 10 6-10 6z" fill="#92929b"/>
+
+  <g transform="translate(660 112)">
+    <rect width="250" height="222" rx="16" fill="#1a1c22" stroke="#292b31" stroke-width="2"/>
+    <text class="label" x="22" y="42">3. SEMANTIC MODEL</text>
+    <text class="heading" x="22" y="74">Useful workflows</text>
+    <text class="body" x="22" y="110">Files and media</text>
+    <text class="body" x="22" y="138">Mail and calendar</text>
+    <text class="body" x="22" y="166">Boards and tables</text>
+    <text class="body" x="22" y="194">Forms and inspectors</text>
+  </g>
+
+  <path d="M922 223h26" stroke="#92929b" stroke-width="2"/>
+  <path d="m948 217 10 6-10 6z" fill="#92929b"/>
+
+  <g transform="translate(970 112)">
+    <rect width="190" height="222" rx="16" fill="#373044" stroke="#cbb3fd" stroke-width="2"/>
+    <text class="label" x="22" y="42">4. NATIVE UI</text>
+    <text class="heading" x="22" y="74">Platform behavior</text>
+    <rect x="22" y="104" width="146" height="38" rx="12" fill="#24232e"/>
+    <text class="body" x="42" y="129">Android</text>
+    <rect x="22" y="154" width="146" height="38" rx="12" fill="#24232e"/>
+    <text class="body" x="42" y="179">Desktop</text>
+  </g>
+
+  <circle cx="48" cy="376" r="5" fill="#6fd5c3"/>
+  <text class="body" x="64" y="381">No endpoint, permission, payload, identity, or retry guarantee is invented between layers.</text>
+</svg>
