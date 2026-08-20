@@ -5,6 +5,7 @@ import {
   normalizeGithubRepositoryResponse,
   normalizeGithubRepositorySnapshot,
   resolveGithubRepositoryData,
+  shouldRefreshGithubRepository,
 } from "./github-repository-data.mjs";
 
 const snapshot = Object.freeze({
@@ -68,6 +69,23 @@ test("the runtime refresh uses the cached same-origin endpoint", async () => {
       },
     },
   ]);
+});
+
+test("runtime refresh only uses the endpoint on its deployed origin", () => {
+  assert.equal(
+    shouldRefreshGithubRepository({ origin: "https://nc-native.obiente.dev" }),
+    true,
+  );
+  for (const origin of [
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "file://",
+    "https://preview.example.invalid",
+    "https://nc-native.obiente.dev.example.invalid",
+  ]) {
+    assert.equal(shouldRefreshGithubRepository({ origin }), false, origin);
+  }
+  assert.equal(shouldRefreshGithubRepository(null), false);
 });
 
 test("the runtime refresh rejects upstream and response failures", async () => {

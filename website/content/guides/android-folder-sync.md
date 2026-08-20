@@ -8,12 +8,16 @@ device: Mobile
 platforms: Android
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-android-folder-sync-locations, guide-android-folder-sync-rules, guide-android-folder-sync-status
 prerequisites: A connected Android account, A device folder you can safely test, Enough local and server storage for the first scan
 ---
 
 # Sync an Android device folder with Nextcloud
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Android folder sync connects a folder chosen through the system document-tree picker to one Nextcloud folder. It is different from opening Nextcloud through Android's Files provider and different from pinning a cloud file offline. Start with disposable or independently backed-up data until you have reviewed direction, deletion, and conflict behavior.
 

@@ -1,5 +1,14 @@
 # Nextcloud Native repository instructions
 
+**Last reviewed: 2026-08-20.** Architecture, toolchains, checks, and release
+state may have changed. [`AGENTS.md`](../AGENTS.md) is the authoritative
+repository maintenance contract. Also check [`CONTRIBUTING.md`](../CONTRIBUTING.md)
+and the [Build and test workflow](workflows/ci.yml) before changing code.
+
+This file is a concise assistant-facing summary. When it conflicts with an
+owning source file, manifest, workflow, or `AGENTS.md`, follow the owning source
+and update this summary in the same change.
+
 ## Product and architecture
 
 Nextcloud Native is an independent, adaptive native client for Nextcloud. It
@@ -69,7 +78,8 @@ cargo test --locked <test-name>
 ```
 
 Add regression tests for bug fixes and contract tests for protocol behavior.
-Before declaring application changes ready, run:
+Before declaring cross-platform application changes ready, run the baseline
+suite:
 
 ```bash
 cargo test --locked
@@ -78,9 +88,14 @@ cargo test --locked
   :ui:desktopTest \
   :androidApp:testDebugUnitTest \
   :ui:createDistributable \
+  :androidApp:verifyReleaseLintGate \
   :androidApp:assembleDebug
 bash tools/check-repository.sh
 ```
+
+Run every additional check owned by the changed platform, package, companion,
+or website. A focused change may mark unrelated targets as not applicable, but
+must not claim they passed.
 
 For website changes, use the lockfile and verify the complete prerender:
 
@@ -90,6 +105,9 @@ npm run build --prefix website
 bash tools/check-repository.sh
 ```
 
-Do not make validation depend on a live Nextcloud account, network service,
-Android device, emulator, or developer-specific state. Use synthetic fixtures
-and the repository's isolated preview/capture paths instead.
+Default unit, contract, and repository checks must not depend on a live
+Nextcloud account, network service, Android device, emulator, or
+developer-specific state. Use synthetic fixtures and the repository's isolated
+preview and capture paths. Keep explicitly opt-in interoperability, emulator,
+and packaging checks separate, document their prerequisites, and use only
+disposable synthetic accounts and data.

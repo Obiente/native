@@ -32,6 +32,13 @@ import okhttp3.OkHttpClient
 
 class JvmSupportIntakeTest {
     @Test
+    fun supportConversationMessageBodiesCannotBeReplayed() {
+        val body = OneShotSupportMessageRequestBody("private reply".encodeToByteArray())
+
+        assertTrue(body.isOneShot())
+    }
+
+    @Test
     fun refreshesPrivateConversationAndPersistsReadPosition() = runBlocking {
         testFixture().use { fixture ->
             val maintainerMessageId = UUID.randomUUID().toString()

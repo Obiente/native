@@ -3,6 +3,10 @@
 Nextcloud Native welcomes responsible use of AI-assisted development tools.
 The project does not accept autonomous AI contributions.
 
+**Last reviewed: 2026-08-20.** Project governance may have changed. The
+[default-branch policy](https://github.com/Obiente/nc-native/blob/main/AI_POLICY.md)
+is the source of truth for contribution requirements.
+
 The idea, purpose, judgment, passion, and responsibility behind a contribution
 must come from a human. AI can help a person express or implement their work,
 but it cannot replace the contributor.
@@ -44,31 +48,15 @@ formatting, or release mechanics under maintainer-controlled configuration is
 not treated as an autonomous contribution. A human still reviews and accepts
 the resulting change.
 
-## Human authorship and sign-off
+## Human responsibility and truthful attribution
 
 The human contributor is the author of the contribution, including when an AI
 tool helped prepare it.
 
 - AI tools must not be listed in `Co-authored-by` trailers.
-- Every submitted commit must carry the human contributor's
-  `Signed-off-by` trailer under the
-  [Developer Certificate of Origin](https://developercertificate.org/).
-- Only the human contributor may authorize that sign-off after reviewing the
-  commit. An AI tool must never fabricate or independently add a human
-  sign-off.
-- Cryptographic commit signing is separate from DCO sign-off. Contributors
-  should follow the repository's configured signing policy as well.
+- An AI tool must never fabricate or independently add a person's authorship,
+  approval, signature, or certification trailer.
 - Existing authorship from other contributors must be preserved.
-
-For a reviewed commit, the human contributor can add the DCO sign-off with:
-
-```bash
-git commit --signoff
-```
-
-For an existing local commit, rewriting it to add a sign-off must be a conscious
-human decision. Never rewrite shared history or force-push merely to apply this
-policy without the required maintainer approval.
 
 ## Optional disclosure
 
@@ -86,10 +74,9 @@ reviewed and revised the implementation and ran the listed validation myself.
 For commit-level traceability, an optional trailer may be used:
 
 ```text
-Assisted-by: Codex:gpt-5.6-sol
+Assisted-by: Codex
 ```
 
-The tool or agent name is enough when a precise model version is unavailable.
 Do not disclose prompts, private account data, credentials, unpublished
 security information, or other sensitive context.
 

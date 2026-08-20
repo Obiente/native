@@ -8,12 +8,16 @@ device: Desktop
 platforms: Windows
 durationMinutes: 9
 difficulty: Advanced
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-windows-cloud-files-settings, guide-windows-cloud-files-storage, guide-windows-cloud-files-recovery
 prerequisites: A connected Windows x86-64 alpha installation, A disposable test folder in Nextcloud, Enough local storage to hydrate the files you open
 ---
 
 # Use Nextcloud files in Windows File Explorer
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 On Windows, Nextcloud Native integrates with the Cloud Files API so remote content can appear as placeholders in File Explorer and download when opened. This is not the same workflow as a conventional folder pair. Cloud Files is still under prerelease qualification, so begin with disposable synthetic data and keep another copy of anything important.
 

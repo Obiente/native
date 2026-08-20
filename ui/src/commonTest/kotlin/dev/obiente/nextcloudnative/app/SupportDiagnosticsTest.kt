@@ -329,6 +329,63 @@ class SupportDiagnosticsTest {
     }
 
     @Test
+    fun rawStackFrameMappingReplacesBlankNames() {
+        val frame = boundedSupportDiagnosticFrame(
+            declaringClass = " ",
+            methodName = "",
+            fileName = "\t",
+            lineNumber = -1,
+        )
+
+        assertEquals("Unknown", frame.declaringClass)
+        assertEquals("Unknown", frame.methodName)
+        assertEquals("Unknown", frame.fileName)
+        assertEquals(null, frame.lineNumber)
+    }
+
+    @Test
+    fun rawStackFrameMappingTruncatesOversizedNames() {
+        val frame = boundedSupportDiagnosticFrame(
+            declaringClass = "C".repeat(MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH + 1),
+            methodName = "m".repeat(MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH + 1),
+            fileName = "F".repeat(MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH + 1),
+            lineNumber = 1,
+        )
+
+        assertEquals(MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH, frame.declaringClass.length)
+        assertEquals(MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH, frame.methodName.length)
+        assertEquals(MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH, requireNotNull(frame.fileName).length)
+    }
+
+    @Test
+    fun rawStackFrameMappingRemovesControlCharacters() {
+        val frame = boundedSupportDiagnosticFrame(
+            declaringClass = "example.\u0000Client",
+            methodName = "run\nTask",
+            fileName = "Client\r.kt",
+            lineNumber = 12,
+        )
+
+        assertEquals("example.Client", frame.declaringClass)
+        assertEquals("runTask", frame.methodName)
+        assertEquals("Client.kt", frame.fileName)
+    }
+
+    @Test
+    fun malformedRawStackFrameMappingDoesNotThrow() {
+        val result = runCatching {
+            boundedSupportDiagnosticFrame(
+                declaringClass = "\u0000".repeat(MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH + 1),
+                methodName = "\n".repeat(MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH + 1),
+                fileName = "\r".repeat(MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH + 1),
+                lineNumber = Int.MIN_VALUE,
+            )
+        }
+
+        assertTrue(result.isSuccess, result.exceptionOrNull()?.message)
+    }
+
+    @Test
     fun userDescriptionUsesTheSamePrivacyBoundaryAndLengthLimit() {
         val privateValue = "person@example.test"
         val description = sanitizer.sanitizeUserDescription(
@@ -338,6 +395,47 @@ class SupportDiagnosticsTest {
         assertFalse(privateValue in description)
         assertFalse("cloud.example.test" in description)
         assertTrue(description.length <= MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
+    }
+
+    @Test
+    fun externalEnvironmentValuesDropControlsBeforeStrictConstruction() {
+        val environment = boundedSupportDiagnosticsEnvironment(
+            appVersion = "nightly\u0000build",
+            packageVersion = "1.0\nprivate",
+            platform = "Desk\rtop",
+            operatingSystemVersion = "test\tversion",
+            architecture = "amd64\u001fprivate",
+        )
+
+        listOf(
+            environment.appVersion,
+            environment.packageVersion,
+            environment.platform,
+            environment.operatingSystemVersion,
+            environment.architecture,
+        ).forEach { value -> assertTrue(value.none(Char::isISOControl), value) }
+    }
+
+    @Test
+    fun externalEnvironmentValuesAreBoundedBeforeStrictConstruction() {
+        val oversized = "x".repeat(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH + 1)
+        val environment = boundedSupportDiagnosticsEnvironment(
+            appVersion = oversized,
+            packageVersion = oversized,
+            platform = oversized,
+            operatingSystemVersion = oversized,
+            architecture = oversized,
+        )
+
+        listOf(
+            environment.appVersion,
+            environment.packageVersion,
+            environment.platform,
+            environment.operatingSystemVersion,
+            environment.architecture,
+        ).forEach { value ->
+            assertEquals(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH, value.length)
+        }
     }
 
     private fun fieldEvent(path: String) = SupportDiagnosticEventDraft(

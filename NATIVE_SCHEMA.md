@@ -4,6 +4,10 @@ The schema is the trust boundary between discovery and presentation. Discovery
 may use deterministic inspection, verified adapters or local AI, but a renderer
 only accepts this typed document.
 
+**Last reviewed: 2026-08-20.** The schema contract may have changed. The
+[canonical Rust model](src/schema.rs) is the source of truth for its current
+fields, validation, and serialized form.
+
 ## Top-level document
 
 - `schemaVersion` identifies the contract version.
@@ -52,7 +56,7 @@ the generic component library.
 
 ## Version invalidation
 
-A compiled schema is cached against all of the following:
+A stored compiled schema must be keyed against all of the following:
 
 - Server URL and Nextcloud version.
 - App ID and app version.
@@ -60,4 +64,3 @@ A compiled schema is cached against all of the following:
 - Adapter ID and adapter version, when present.
 
 Any change causes revalidation before write actions are available.
-

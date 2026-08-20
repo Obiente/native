@@ -5,6 +5,10 @@ prerenders the homepage and every selected repository Markdown document to
 plain HTML, then emits a sitemap and a small client bundle for search and
 interactive previews.
 
+**Last reviewed: 2026-08-20.** Published routes, platform availability, and
+deployment configuration may have changed. The production site and current
+build configuration are the source of truth.
+
 Project updates live in `content/news/`. Each Markdown file has strict
 frontmatter and becomes a prerendered article, search result, sitemap entry,
 structured-data article, and RSS item.
@@ -57,10 +61,12 @@ routes such as `/roadmap/` resolve to their prerendered `index.html`.
 
 These surfaces intentionally serve different readers:
 
-- `content/news/*.md` contains long, visual product stories for people who use
-  Nextcloud and contributors who want the implementation context. News is
-  living documentation: keep its `lastUpdated` date, screenshots, capability
-  boundaries, and UI wording current when the product changes.
+- `content/news/*.md` contains dated product and design stories. Preserve the
+  publication date and treat `lastUpdated` as the date of the last correction,
+  not a promise that the article tracks every later release. If an audit finds
+  that current-tense text described a plan rather than working software,
+  correct the claim and add a dated historical note. Link readers to current
+  releases and compatibility information for support decisions.
 - per-version release notes are short installer-facing summaries and
   limitations under `/releases/`.
 - `changes/unreleased/*.md` provides the live user-facing entries contributed
@@ -91,6 +97,10 @@ filename list. Each scenario uses production Compose components and
 deterministic synthetic models. The workflow does not use adb, an emulator, a
 phone, a Nextcloud account, or network-backed application services.
 
+A capture proves that the real Compose interface rendered the named synthetic
+state at the captured revision. It does not prove that a published package
+completed the workflow against a live server or device.
+
 Production and pull request deployments validate the committed manifest, fully
 decode each PNG, and check its dimensions and hash without requiring unrelated
 UI source changes to regenerate the catalog:
@@ -111,8 +121,7 @@ npm run --prefix website verify:captures:fresh
 If the freshness command reports stale inputs, run the capture wrapper with
 JDK 21 and review the updated synthetic images. The `/visual-qa/` route lists
 scenario, feature, surface, state, platform, viewport, and pixel metadata.
-Future scenario entries may also identify the pull request they review. This
-contributor-only catalog is prerendered for direct access but intentionally
+This contributor-only catalog is prerendered for direct access but intentionally
 excluded from the public sitemap and search index.
 
 For same-repository pull requests, the refresh workflow prepares an untrusted

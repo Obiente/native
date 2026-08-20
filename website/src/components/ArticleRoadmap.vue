@@ -27,6 +27,11 @@ const scopes = {
     epic: "EPIC-SYNC",
     areas: ["Files and sync"],
   },
+  "native-folder-sync": {
+    title: "Files and folder sync",
+    epic: "EPIC-SYNC",
+    areas: ["Files and sync"],
+  },
   "media-sync-foundations": {
     title: "Safe photo backup and Memories",
     epic: "EPIC-MEDIA",

@@ -1,12 +1,19 @@
 # Windows MSI release qualification
 
-Nextcloud Native produces one per-user x86-64 MSI for Windows. The MSI is the
-only supported Windows package format while native Credential Manager and Cloud
-Files integration are being qualified.
+This document defines the qualification and integrity requirements for the
+per-user x86-64 Windows MSI.
+
+**Last reviewed: 2026-08-20.** Package availability, signing, and qualification
+state may have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+and their release notes before installing or publishing an MSI. The
+[Publish prerelease workflow](../.github/workflows/prerelease.yml) and
+[`tools/verify-windows-package.ps1`](../tools/verify-windows-package.ps1) define
+the current automated release checks.
 
 ## Current trust state
 
-Windows MSIs are currently published without an Authenticode signature. A
+At the review date, Windows MSIs are published without an Authenticode
+signature. A
 self-signed certificate is not used because it would not be trusted by normal
 Windows installations and asking users to install a custom root certificate
 would weaken their security boundary.
@@ -110,7 +117,7 @@ to `microsoft/winget-pkgs` only for a published release that installs and
 uninstalls silently and has completed the Windows acceptance checks. WinGet may
 reject an unsigned installer during automated or manual validation.
 
-## Future signing
+## Signing evolution
 
 Free SignPath Foundation signing can be added later if the project is accepted.
 A paid or exportable PFX workflow is intentionally not configured. When a

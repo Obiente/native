@@ -8,12 +8,16 @@ device: Mobile
 platforms: Android
 durationMinutes: 9
 difficulty: Everyday
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-android-photo-backup-folders, guide-android-photo-backup-queue, guide-android-photo-backup-library
 prerequisites: Android photo and video permission, Enough Nextcloud storage for selected media, An independent backup for irreplaceable originals
 ---
 
 # Back up Android photos and videos to Nextcloud
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Android photo backup is built as an upload-only folder mapping with a separate durable media ledger. It records pending, uploading, failed, backed-up, changed-after-backup, and cloud-only states. The current UI tracks whether exact local bytes have a verified remote receipt; it does not yet provide a complete end-user camera-roll cleanup workflow, so do not delete originals based only on this guide.
 

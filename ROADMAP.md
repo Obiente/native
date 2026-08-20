@@ -1,6 +1,8 @@
 # Nextcloud Native product and engineering roadmap
 
-Status: working roadmap, 2026-07-23
+**Last reviewed: 2026-08-20.** Planned scope, ordering, and priorities may have
+changed. The [public GitHub Project](https://github.com/orgs/Obiente/projects/4)
+is the source of truth for active work and priority.
 
 Nextcloud Native is an independent Obiente project. It is not affiliated with Nextcloud GmbH. The goal is not merely to collect many Nextcloud apps behind one launcher. The goal is to become the most trustworthy, coherent, and useful Nextcloud client on every supported platform.
 
@@ -45,56 +47,19 @@ Nextcloud Native should make a self-hosted cloud feel like one operating-system 
 
 These rules extend the boundaries in [ADAPTER_ARCHITECTURE.md](ADAPTER_ARCHITECTURE.md), [NATIVE_SCHEMA.md](NATIVE_SCHEMA.md), and [PLATFORMS.md](PLATFORMS.md).
 
-## 3. Current baseline
+## 3. Roadmap scope
 
-The repository already provides a meaningful prototype:
+The roadmap must deliver these foundations in dependency order:
 
-- Login Flow v2 and platform credential storage on Android and Linux desktop;
-- authenticated native Files, Photos/Memories, People, Activity, Talk messaging, Notes, file preview, text editing, and media viewing;
-- ETag-aware text/Notes writes;
-- conditional, metadata-first Notes reads with cached ETags, stale-while-revalidate detail loading,
-  and a bounded native Markdown edit/preview flow;
-- typed Talk rich messages, files, calls, and system events with cursor-paged, read-state-safe
-  history requests and preview-only enforcement for hide-download attachments;
-- a Rust OpenAPI-to-native-schema compiler plus a Compose adaptive renderer;
-- automatic acquisition and local verification of exact-version signed App
-  Store packages and exact App Store-linked source tags, with packaged OpenAPI compilation,
-  bounded app-local controller inheritance, verified static-route CRUD, and guarded write forms;
-- reusable callable-route planning that rejects unresolved detail paths, binds documented API
-  versions without guessing, and preserves view/navigation state across Android recreation;
-- a live generic Cospend proof: canonical project list/detail reads and
-  generated declared actions without a Cospend-specific runtime adapter;
-- shape-driven native tables, nested kanban lanes/cards, financial summaries, and chart
-  surfaces shared by Tables, Deck, Cospend, Budget, and future similar apps;
-- native semantic Mail, Music, and Cookbook flows with mailbox/message bodies, artist/album/track
-  hierarchy, artwork, sparse recipe detail, and type-preserving editable settings;
-- a native Dashboard with adaptive widget cards, incremental item cursors, safe app deep links,
-  and an editable capability-gated User Status surface with rotation-persisted drafts and explicit
-  confirmation for every presence or message change;
-- reusable household/task semantics proven against Chores 0.1.0, including parent-scoped list
-  inference, named-array worklog flattening, recurrence, assignment, points, and completion history;
-- null-safe, cursor-paged Activity with refresh preservation and typed notification plans;
-- shared CardDAV/CalDAV discovery, sync-token paging, contact/event/task semantics, and
-  conflict-safe request planning;
-- permission-aware Office document metadata, conditional capability/template discovery, raster
-  preview, and explicit same-origin direct-editing handoff without an embedded web surface;
-- exact-MIME integration planning for Whiteboard and Draw.io, canonical Office-to-richdocuments
-  capability mapping, and honest authentication-required states for external integrations;
-- bounded, same-file DAV version-history discovery and ranged historical reads with inventory plus
-  reachability fallback when optional Files capability blocks are absent;
-- provider-driven global Nextcloud search with per-provider filtering,
-  pagination, partial failures, and automatic Mail discovery;
-- native Memories album and system-tag collection contracts with paged media
-  grids, cover previews, favorites, RAW/JPEG stacking, signature-checked source fallback, and
-  explicit zoom-gated full-quality selection;
-- verified native Memories routes acquired from its exact tagged source when the signed package
-  does not contain OpenAPI, while retaining a metadata-only, zero-action final fallback;
-- a native administrator app catalog with read-only inventory/update discovery, capability-gated
-  lifecycle plans, destructive uninstall warnings, and strict primary-password/session boundaries;
-- Android and desktop builds from shared Compose code;
-- official-source research for Files, Activity, Talk, Photos, Memories, Recognize, Notes, Deck, Tasks, Tables, Office, Cookbook, Cospend, Contacts, Calendar, Mail, Music, GitHub integration, and app administration.
-
-The prototype is not yet a sync client. Network and protocol code is duplicated between Android and desktop, metadata is mostly in memory, background work is not durable, Files actions are incomplete, and Talk calling is not implemented. Those gaps determine the milestone order.
+- one shared, bounded transport and typed protocol layer;
+- durable account metadata, caches, operation journals, and conflict state;
+- complete Files actions, selective offline storage, and crash-safe two-way sync;
+- dependable messaging, notifications, media, groupware, and separately gated
+  Talk calling;
+- verified dynamic-app contracts that cannot invent operations or permissions;
+- native operating-system integration with explicit platform acceptance gates;
+- repeatable compatibility, accessibility, security, migration, and release
+  evidence before stable support is declared.
 
 ## 4. Target architecture
 
@@ -140,7 +105,11 @@ The intended repository split is:
 | `ui` | Shared screens/components and accessibility semantics | Endpoint construction |
 | platform apps/extensions | Keychain, filesystem provider, workers, notifications, WebRTC, signing | Domain policy duplication |
 
-Near-term runtime repositories, transport, storage, and sync should be Kotlin Multiplatform because the application and platform integrations already use that boundary. The Rust compiler remains the deterministic automatic-adapter engine and exchanges versioned `NativeAppSchema` documents. A later UniFFI/FFI embedding spike is allowed, but production must not maintain two independent semantic compilers.
+Runtime repositories, transport, storage, and sync are planned as Kotlin
+Multiplatform boundaries. The Rust compiler remains the deterministic
+automatic-adapter engine and exchanges versioned `NativeAppSchema` documents.
+A later UniFFI/FFI embedding spike is allowed, but production must not maintain
+two independent semantic compilers.
 
 ### 4.2 Account-scoped identity
 
@@ -234,7 +203,7 @@ Work may proceed in parallel only when dependencies are satisfied. For example, 
 
 ### Principal risks
 
-- A rushed transport migration can regress working prototype screens. Move one adapter at a time behind contract tests.
+- A rushed transport migration can regress working product paths. Move one adapter at a time behind contract tests.
 - SQLDelight support and encryption choices vary by target. Store secrets separately regardless of database encryption, and define an explicit threat model before promising encrypted offline files.
 
 ## 8. M1: best-in-class online Files
@@ -502,7 +471,9 @@ Photos/Files DAV is the universal fallback; Memories is an optimized, version-ga
 - RAW+JPEG/stack awareness, clear derivative/original labels, server RAW previews, and safe original export.
 - Album create/rename/delete, add/remove membership, collaborators, location/filter/cover with explicit source-delete distinction.
 - Memories day/cluster APIs with describe/version gate, cache headers, transcode/live-photo, map, archive, tags, EXIF, and non-destructive image edit policy.
-- People through Memories first; direct Recognize DAV remains disabled when the current separate API-key gate cannot be satisfied through an official external-client flow.
+- Use Memories for people workflows first. Keep direct Recognize DAV disabled
+  whenever its API-key gate cannot be satisfied through an official
+  external-client flow.
 - Background camera auto-upload reuses M4 rather than a separate transfer stack.
 
 ### Acceptance criteria
@@ -761,12 +732,12 @@ No sync/file-write beta ships until:
 
 - `main` stays buildable and migration-tested.
 - Small focused pull requests with tests and protocol evidence are preferred.
-- Nightly: automated artifacts, developer data only.
+- Nightly: automated test artifacts for disposable or independently backed-up data.
 - Alpha: migrations supported, debug export, known gaps visible, no data-loss-critical feature without its gate.
 - Beta: compatibility matrix and upgrade path published, release signing active, privacy/security review complete for enabled features.
 - Stable: rollback/recovery docs, migration support window, reproducible release process, no open critical security/data-loss issue.
 
-### CI/CD
+### Required CI/CD
 
 - Rust format/lint/test, Kotlin format/static analysis/test, schema golden compatibility, Android unit/instrumented, desktop tests, and platform builds.
 - Containerized Nextcloud integration matrix with cached official app fixtures and nightly live-main compatibility jobs that do not block stable releases without triage.
@@ -796,7 +767,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 ### Developer preview checkpoint
 
 - Shared builds remain reproducible.
-- Current native browsing/editing/talk/media prototype stays usable.
+- Native browsing, editing, messaging, and media paths remain usable throughout migration.
 - Generic unsupported-app screen is schema-driven and zero-action.
 - Research and compatibility docs are linked from contributor onboarding.
 

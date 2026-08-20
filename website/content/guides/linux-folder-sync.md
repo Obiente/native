@@ -8,12 +8,16 @@ device: Desktop
 platforms: Linux
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-linux-folder-sync-workspace, guide-linux-folder-sync-locations, guide-linux-folder-sync-rules
 prerequisites: A connected Linux account, A local directory you can safely test, Enough local and Nextcloud storage for the first scan
 ---
 
 # Sync a Linux folder with Nextcloud Native
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Linux folder sync keeps a normal local directory connected to one Nextcloud directory while the desktop process is running. It is intended for files used by ordinary desktop applications. It is separate from the Linux virtual filesystem mount, which represents remote placeholders and hydrates content on demand.
 

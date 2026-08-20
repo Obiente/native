@@ -1,8 +1,13 @@
 # Design assets
 
-This directory contains the checked-in source for Nextcloud Native's application
-icon. Generated concepts, screenshots, and visual QA artifacts remain outside
-the public repository.
+This directory contains the checked-in source for Nextcloud Native's
+application icon. Maintained synthetic product captures live under
+`website/public/screenshots/`. Temporary comparisons, review exports, and
+visual QA output are local artifacts and must not be committed.
+
+**Last reviewed: 2026-08-20.** Asset ownership may have changed. The
+[checked-in SVG](app-icon/cloud.svg) is the source of truth for the application
+icon artwork.
 
 The production glyph is `NextcloudIcons.Cloud`, the existing outlined Material
 cloud used beside "Nextcloud Native" in the desktop workspace. The matching

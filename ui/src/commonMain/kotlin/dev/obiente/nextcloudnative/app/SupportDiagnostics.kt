@@ -86,7 +86,13 @@ data class SupportDiagnosticEventDraft(
 data class SupportDiagnosticField(
     val name: String,
     val value: String,
-)
+) {
+    init {
+        require(SUPPORT_DIAGNOSTIC_FIELD_NAME.matches(name))
+        require(value.length <= MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH)
+        require(value.none(Char::isISOControl))
+    }
+}
 
 @Serializable
 data class SupportDiagnosticFrame(
@@ -94,7 +100,19 @@ data class SupportDiagnosticFrame(
     val methodName: String,
     val fileName: String?,
     val lineNumber: Int?,
-)
+) {
+    init {
+        require(declaringClass.isNotBlank())
+        require(declaringClass.length <= MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH)
+        require(declaringClass.none(Char::isISOControl))
+        require(methodName.isNotBlank())
+        require(methodName.length <= MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH)
+        require(methodName.none(Char::isISOControl))
+        require(fileName == null || fileName.length <= MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH)
+        require(fileName == null || fileName.none(Char::isISOControl))
+        require(lineNumber == null || lineNumber >= 0)
+    }
+}
 
 @Serializable
 data class SupportDiagnosticException(
@@ -104,7 +122,9 @@ data class SupportDiagnosticException(
     val cause: SupportDiagnosticException? = null,
 ) {
     init {
+        require(type.isNotBlank())
         require(type.length <= MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH)
+        require(type.none(Char::isISOControl))
         require(messageFingerprint == null || SUPPORT_DIAGNOSTIC_ALIAS.matches(messageFingerprint))
         require(frames.size <= MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES)
     }
@@ -133,7 +153,7 @@ data class SupportDiagnosticEvent(
         require(occurredAtEpochMillis >= 0L)
         require(SUPPORT_DIAGNOSTIC_OPERATION.matches(operation))
         require(SUPPORT_DIAGNOSTIC_OPERATION.matches(outcome))
-        require(code == null || code.length <= MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH && code.none(Char::isISOControl))
+        require(code == null || SUPPORT_DIAGNOSTIC_CODE.matches(code))
         require(accountScope == null || SUPPORT_DIAGNOSTIC_ALIAS.matches(accountScope))
         require(messageFingerprint == null || SUPPORT_DIAGNOSTIC_ALIAS.matches(messageFingerprint))
         require(fields.size <= MAX_SUPPORT_DIAGNOSTIC_FIELDS)
@@ -152,7 +172,35 @@ data class SupportDiagnosticsEnvironment(
     val platform: String,
     val operatingSystemVersion: String,
     val architecture: String,
+) {
+    init {
+        listOf(appVersion, packageVersion, platform, operatingSystemVersion, architecture).forEach { value ->
+            require(value.length <= MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH)
+            require(value.none(Char::isISOControl))
+        }
+    }
+}
+
+fun boundedSupportDiagnosticsEnvironment(
+    appVersion: String,
+    packageVersion: String,
+    platform: String,
+    operatingSystemVersion: String,
+    architecture: String,
+): SupportDiagnosticsEnvironment = SupportDiagnosticsEnvironment(
+    appVersion = appVersion.boundedSupportDiagnosticsEnvironmentValue(),
+    packageVersion = packageVersion.boundedSupportDiagnosticsEnvironmentValue(),
+    platform = platform.boundedSupportDiagnosticsEnvironmentValue(),
+    operatingSystemVersion = operatingSystemVersion.boundedSupportDiagnosticsEnvironmentValue(),
+    architecture = architecture.boundedSupportDiagnosticsEnvironmentValue(),
 )
+
+private fun String.boundedSupportDiagnosticsEnvironmentValue(): String =
+    filterNot(Char::isISOControl)
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .ifBlank { "Unknown" }
+        .take(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH)
 
 data class SupportDiagnosticsSummary(
     val available: Boolean,
@@ -355,7 +403,7 @@ internal class SupportDiagnosticSanitizer(
         depth: Int,
     ): SupportDiagnosticException {
         val boundedFrames = draft.frames.take(MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES).map { frame ->
-            SupportDiagnosticFrame(
+            boundedSupportDiagnosticFrame(
                 declaringClass = sanitizeCodeToken(frame.declaringClass, MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH),
                 methodName = sanitizeCodeToken(frame.methodName, MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH),
                 fileName = frame.fileName
@@ -462,6 +510,28 @@ internal class SupportDiagnosticSanitizer(
     }
 }
 
+internal fun boundedSupportDiagnosticFrame(
+    declaringClass: String,
+    methodName: String,
+    fileName: String?,
+    lineNumber: Int?,
+): SupportDiagnosticFrame = SupportDiagnosticFrame(
+    declaringClass = declaringClass.sanitizeSupportDiagnosticCodeToken(MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH),
+    methodName = methodName.sanitizeSupportDiagnosticCodeToken(MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH),
+    fileName = fileName
+        ?.substringAfterLast('/')
+        ?.substringAfterLast('\\')
+        ?.sanitizeSupportDiagnosticCodeToken(MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH),
+    lineNumber = lineNumber?.takeIf { it >= 0 },
+)
+
+private fun String.sanitizeSupportDiagnosticCodeToken(maximumLength: Int): String =
+    filter { character ->
+        character.isLetterOrDigit() || character in setOf('.', '_', '-', '$')
+    }
+        .ifBlank { "Unknown" }
+        .take(maximumLength)
+
 internal const val SUPPORT_DIAGNOSTIC_EVENT_SCHEMA_VERSION = 1
 internal const val MAX_SUPPORT_DIAGNOSTIC_FIELDS = 24
 internal const val MAX_SUPPORT_DIAGNOSTIC_EVENTS = 1_000
@@ -483,9 +553,10 @@ internal const val MAX_SUPPORT_DIAGNOSTIC_FIELD_VALUE_LENGTH = 512
 private const val MAX_SUPPORT_DIAGNOSTIC_CODE_LENGTH = 96
 private const val MAX_SUPPORT_DIAGNOSTIC_EXCEPTION_FRAMES = 16
 private const val MAX_SUPPORT_DIAGNOSTIC_CAUSE_DEPTH = 4
-private const val MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH = 180
-private const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
-private const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
+internal const val MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH = 180
+internal const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
+internal const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
+internal const val MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH = 160
 internal const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
 
 internal val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")

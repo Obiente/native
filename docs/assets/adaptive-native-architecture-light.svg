@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img">
+  <title>Nextcloud Native adaptive architecture</title>
+  <desc>Nextcloud Native checks what a server offers, understands it safely, chooses a useful view, and presents it as a native Android or desktop app.</desc>
+  <style>
+    .title { font: 700 24px sans-serif; fill: #1b191f; }
+    .heading { font: 700 18px sans-serif; fill: #1b191f; }
+    .body { font: 15px sans-serif; fill: #65616b; }
+    .label { font: 700 13px sans-serif; fill: #684a9e; letter-spacing: 0.7px; }
+  </style>
+
+  <rect width="1200" height="420" rx="20" fill="#f7f6fa"/>
+  <text class="title" x="40" y="48">How adaptive native apps work</text>
+  <text class="body" x="40" y="76">The app checks what your cloud offers, understands it safely, and presents a familiar workspace.</text>
+
+  <g transform="translate(40 112)">
+    <rect width="250" height="222" rx="16" fill="#ffffff" stroke="#e5e1e9" stroke-width="2"/>
+    <rect width="250" height="8" rx="4" fill="#684a9e"/>
+    <text class="label" x="22" y="42">1. CHECK YOUR CLOUD</text>
+    <text class="heading" x="22" y="74">See what is available</text>
+    <text class="body" x="22" y="110">Installed apps and versions</text>
+    <text class="body" x="22" y="138">Supported features</text>
+    <text class="body" x="22" y="166">Official app descriptions</text>
+    <text class="body" x="22" y="194">Safe read-only discovery</text>
+  </g>
+
+  <path d="M302 223h26" stroke="#71808a" stroke-width="2"/>
+  <path d="m328 217 10 6-10 6z" fill="#71808a"/>
+
+  <g transform="translate(350 112)">
+    <rect width="250" height="222" rx="16" fill="#ffffff" stroke="#e5e1e9" stroke-width="2"/>
+    <text class="label" x="22" y="42">2. UNDERSTAND IT</text>
+    <text class="heading" x="22" y="74">Build a clear picture</text>
+    <text class="body" x="22" y="110">What each item is</text>
+    <text class="body" x="22" y="138">How items are connected</text>
+    <text class="body" x="22" y="166">Which actions are allowed</text>
+    <text class="body" x="22" y="194">What can go wrong</text>
+  </g>
+
+  <path d="M612 223h26" stroke="#71808a" stroke-width="2"/>
+  <path d="m638 217 10 6-10 6z" fill="#71808a"/>
+
+  <g transform="translate(660 112)">
+    <rect width="250" height="222" rx="16" fill="#ffffff" stroke="#e5e1e9" stroke-width="2"/>
+    <text class="label" x="22" y="42">3. CHOOSE A VIEW</text>
+    <text class="heading" x="22" y="74">Match the task</text>
+    <text class="body" x="22" y="110">Files and media</text>
+    <text class="body" x="22" y="138">Mail and calendar</text>
+    <text class="body" x="22" y="166">Boards and tables</text>
+    <text class="body" x="22" y="194">Forms and inspectors</text>
+  </g>
+
+  <path d="M922 223h26" stroke="#71808a" stroke-width="2"/>
+  <path d="m948 217 10 6-10 6z" fill="#71808a"/>
+
+  <g transform="translate(970 112)">
+    <rect width="190" height="222" rx="16" fill="#ebddff" stroke="#684a9e" stroke-width="2"/>
+    <text class="label" x="22" y="42">4. NATIVE APP</text>
+    <text class="heading" x="22" y="74">Feels at home</text>
+    <rect x="22" y="104" width="146" height="38" rx="12" fill="#ffffff"/>
+    <text class="body" x="42" y="129">Android</text>
+    <rect x="22" y="154" width="146" height="38" rx="12" fill="#ffffff"/>
+    <text class="body" x="42" y="179">Desktop</text>
+  </g>
+
+  <circle cx="48" cy="376" r="5" fill="#176b5c"/>
+  <text class="body" x="64" y="381">Only actions confirmed by your server are shown as available.</text>
+</svg>

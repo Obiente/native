@@ -56,6 +56,60 @@ Do not copy issue status into a second local tracker. When the assigned task
 includes GitHub publication, update the issue and Project as work advances.
 Otherwise report the required status change to the coordinating maintainer.
 
+### Documentation synchronization
+
+Documentation is part of the implementation contract. A code change is
+incomplete while any maintained document, guide, screenshot, compatibility
+entry, example, or command describes the previous behavior.
+
+- Before editing code, identify the maintained Markdown and public assets that
+  describe the affected workflow, platform, protocol, setting, limitation,
+  build command, or release behavior. Keep that inventory in the working scope.
+- Update affected documentation as the implementation changes, not as a final
+  optional cleanup. A follow-up issue is not a substitute for correcting text
+  made false by the current change.
+- Update all affected sources in the same branch and pull request: README and
+  getting-started material, architecture contracts, roadmap dependencies,
+  platform and compatibility status, contributor commands, user guides,
+  support and diagnostics instructions, screenshots, changelog fragments, and
+  release documentation as applicable.
+- Distinguish these states explicitly: present in source, covered by a
+  deterministic test, validated on a platform, available in a published
+  artifact, compatible with a verified server/app version, and supported for
+  normal use. Evidence for one state does not prove the others.
+- Planned work belongs in `ROADMAP.md` and the public Project. Implemented
+  behavior belongs in code-linked architecture or product documentation.
+  Released behavior belongs in immutable release notes and the changelog. Do
+  not copy one status into several documents that will drift independently.
+- Stateful claims use an exact `Last reviewed: YYYY-MM-DD` date, say that the
+  state may have changed, and link to the current source of truth. Avoid vague
+  words such as "currently," "recently," "soon," and "latest" without a date or
+  live link.
+- Stable architecture, safety, and contribution rules do not need decorative
+  dates. Date only claims whose truth can change with implementation, releases,
+  compatibility, infrastructure, or external services.
+- Never turn an unmerged implementation, skipped test, nightly artifact,
+  screenshot scenario, mock fixture, or roadmap item into a shipped or
+  supported claim. State the exact evidence and its boundary.
+- When behavior is removed, renamed, or moved, remove or update obsolete text,
+  anchors, examples, commands, screenshots, and cross-links in the same change.
+- Commands in maintained documentation must use repository-supported tools,
+  paths, task names, and safety constraints. Do not publish personal paths,
+  internal hostnames, credential-transfer procedures, or transient build output.
+- Product screenshots and diagrams must remain editable or reproducible,
+  privacy-safe, and tied to real application UI or stable architecture. Remove
+  superseded review exports and unreferenced comparison artifacts.
+- Historical changelogs and release notes remain immutable records. Do not
+  rewrite them to match present behavior; correct only a dangerous instruction,
+  privacy exposure, broken target, or wording that falsely presents historical
+  text as current policy.
+- If a claim cannot be verified from code, manifests, workflows, tests,
+  published artifacts, or authoritative upstream documentation, qualify or
+  remove it instead of guessing. Record the missing evidence for the maintainer.
+- Review documentation diffs with the same rigor as code. Check factual scope,
+  links, asset paths, commands, dates, privacy, accessibility text, and the
+  separation between implemented, validated, released, and planned behavior.
+
 ## 3. What "native" means
 
 A finished feature must help a person complete the workflow for which the
@@ -148,6 +202,159 @@ Nextcloud server and installed apps
 - Do not introduce `Any`, unchecked casts, or untyped maps as protocol or domain
   models. Boundary parsing may be flexible, but it must validate into typed
   values before entering repositories or UI.
+
+### Code ownership and file boundaries
+
+- Organize code by behavior and owner, not by technical suffix. Prefer names
+  such as `FileSyncPlanner`, `SupportReportRedactor`, or `DeckCardEditor` over
+  `Utils`, `Helpers`, `Common`, `Manager`, or `Misc`.
+- A production file owns one cohesive concept. Split it when unrelated state
+  machines, protocols, screens, or persistence policies can change
+  independently. Do not split a file only to move line count elsewhere.
+- New production Kotlin files must remain at or below 800 lines and new test
+  files at or below 1,200 lines. Existing larger files are recorded in
+  `tools/kotlin-file-size-baseline.txt`; they may shrink but must not grow.
+- Never raise or add a size-baseline entry to make a check pass without explicit
+  maintainer approval. When an oversized file shrinks, lower or remove its
+  baseline in the same change so the improvement cannot regress.
+- A screen file may contain its route, immutable UI state, events, and small
+  private presentation components. Move domain decisions, protocol mapping,
+  persistence, and reusable controls to their actual owners.
+- Keep feature-specific code with the feature. Promote code to a shared package
+  only after at least two callers need the same semantics, not merely similar
+  syntax.
+- `commonMain` owns platform-neutral models, policies, repositories, and
+  Compose UI. `jvmMain` owns behavior that is genuinely identical across JVM
+  targets. Android and desktop source sets own their lifecycle and operating
+  system integration.
+- Platform service implementations are adapters, not alternate application
+  architectures. Shared request classification, validation, retry policy,
+  response parsing, and domain mapping belong behind shared typed contracts.
+- Byte-identical Android and desktop source files are forbidden. Move the
+  implementation to the shared JVM source set or document and test the actual
+  platform difference.
+
+### Compose implementation rules
+
+- Composables render immutable state and emit typed events. They do not perform
+  transport calls, parse protocol payloads, read or write files, or decide
+  retry and conflict policy.
+- Hoist durable and business state to a state holder, repository, or use case.
+  Use local Compose state only for ephemeral presentation such as expansion,
+  focus, an open menu, or an in-progress pointer gesture.
+- Use `rememberSaveable` only for small, non-secret values that are safe and
+  useful after recreation. Never save credentials, capability URLs, private
+  report bodies, unbounded content, transport objects, or mutation recovery
+  state. Use an explicit `Saver` for nontrivial types.
+- A draft that must survive process death belongs in a scoped draft store. A
+  draft that does not need that guarantee may remain ordinary remembered UI
+  state. Make the choice explicit instead of relying on accidental saveability.
+- Every `remember`, `rememberSaveable`, `LaunchedEffect`, `DisposableEffect`,
+  and `produceState` key must represent the values whose change invalidates the
+  work. Use `rememberUpdatedState` for changing callbacks captured by a
+  long-lived effect.
+- Never launch work directly during composition. Event-triggered, screen-local
+  UI work may use `rememberCoroutineScope`; durable, retryable, background, or
+  cross-screen work must be owned outside the composable lifecycle.
+- Effects must be restart-safe and cancellation-safe. `DisposableEffect` must
+  release every listener, observer, callback, handle, and resource it acquires.
+- Lazy collections use stable domain keys. Do not use an item index as identity
+  when items can be inserted, removed, filtered, paged, or reordered.
+- Derive values during composition when the calculation is cheap. Use
+  `derivedStateOf` only when it prevents repeated work caused by frequently
+  changing observable state, not as a default wrapper around expressions.
+- Do not pass a complete service container through the UI tree. Pass the
+  narrow state and event interfaces required by that feature boundary.
+- Reusable composables accept state, callbacks, modifiers, and semantic
+  configuration. They do not reach into global navigation, account, or service
+  state.
+
+### Errors, cancellation, and recovery
+
+- `CancellationException` is control flow. Rethrow it before broad failure
+  handling, or use the repository cancellation-preserving result helper.
+  Never convert cancellation into a user-visible error or retry.
+- Catch the narrowest expected exception at the layer that can add policy or
+  recovery. A broad `Throwable` or `Exception` catch is allowed only at a
+  process, plugin, parser, worker, or UI fault boundary and must preserve
+  cancellation.
+- Do not use `runCatching`, `getOrNull`, `getOrDefault`, or an empty catch when
+  callers must distinguish offline, unauthorized, forbidden, missing,
+  malformed, conflict, throttled, cancelled, and ambiguous outcomes.
+- Translate transport and platform exceptions once into a typed domain failure.
+  UI copy derives from that failure; UI code does not classify exception text.
+- Preserve the original cause for local diagnostics while exposing bounded,
+  non-secret context. Do not use a stack trace, exception message, or class name
+  as a stable API or analytics identifier.
+- Recovery instructions must match mutation semantics. Never offer a blind
+  retry after an ambiguous non-idempotent request. Refresh or verify the
+  authoritative postcondition first.
+- Partial success is a first-class result. Report which items completed, which
+  failed, and whether retrying a failed item is safe.
+
+### Diagnostics and support reports
+
+- Diagnostics use stable event codes, stages, typed fields, and bounded values.
+  Human-readable messages supplement those fields and are not parsed by code.
+- Collect the minimum evidence needed to diagnose the failure. Redact
+  credentials, cookies, authorization headers, capability tokens, sensitive
+  query parameters, private response bodies, local paths, and account content
+  before data crosses a component boundary.
+- Support reports distinguish rejected, confirmed, unknown, and locally failed
+  delivery. An unknown result must not be presented as unsent.
+- Diagnostic collection must not trigger writes, refresh private content, make
+  a second failing request, or block the primary workflow.
+- Bound entry count, value length, cause depth, attachment size, and collection
+  time. Truncation is explicit so a report never looks complete when it is not.
+- Report builders take immutable snapshots. Do not retain live service,
+  activity, context, view, composable, or credential references.
+- Redaction, truncation, malformed input, cancellation, unknown delivery, and
+  nested-cause behavior require deterministic tests. Fixtures use synthetic
+  hosts, identities, paths, and content.
+- Treat every support bundle as private even after redaction. Never print it to
+  CI logs or attach it to a public issue automatically.
+
+### Test architecture
+
+- Test observable behavior and invariants, not private call order or a copied
+  implementation. A refactor that preserves behavior should not require broad
+  test rewrites.
+- Keep pure domain tests in `commonTest`, shared JVM implementation tests in the
+  shared JVM test path when available, and operating-system behavior in the
+  owning platform test source set.
+- Every parser and protocol boundary covers valid, missing, malformed,
+  oversized, unsupported-version, and adversarial input as applicable.
+- Every coroutine state machine covers cancellation and stale completion.
+  Durable mutation paths also cover restart, conflict, ambiguous delivery, and
+  safe retry behavior.
+- Compose tests assert semantics, state transitions, stable identity,
+  accessibility, restoration choice, and effect cleanup. Do not rely only on
+  pixel output or private node-tree structure.
+- Test doubles implement the narrow typed boundary under test. Do not build a
+  second application inside a universal fake service.
+- Large test files split by production owner or scenario. Shared fixture
+  builders must validate their defaults and must not hide the condition a test
+  claims to exercise.
+- A skipped live-server audit is not CI coverage. It may supplement, but never
+  replace, deterministic contract, integration, lifecycle, and failure tests.
+
+### Safe refactoring workflow
+
+- Inventory the affected owners, state, side effects, and public contracts
+  before editing. State the intended dependency direction before moving code.
+- Separate behavior changes from mechanical moves when practical. Preserve
+  history with moves first, then make the smallest semantic change.
+- Add characterization tests before changing unclear behavior. Do not encode a
+  suspected bug as the expected result merely to preserve current output.
+- Do not perform repository-wide exception, coroutine, Compose-state, or naming
+  replacements based only on pattern counts. Inspect each semantic boundary.
+- Prefer a sequence of reviewable extractions over a new umbrella abstraction.
+  A shared abstraction must reduce ownership ambiguity, not only line count.
+- Run `bash tools/check-kotlin-architecture.sh` for Kotlin structure changes and
+  keep `bash tools/check-repository.sh` passing before review.
+- Agents and humans follow the same architecture rules. An agent must not raise
+  baselines, weaken checks, add suppressions, or label work complete because a
+  generated patch is large or superficially deduplicated.
 
 ## 6. Resource identity and navigation context
 

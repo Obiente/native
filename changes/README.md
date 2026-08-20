@@ -1,5 +1,11 @@
 # Changelog fragments
 
+**Last reviewed: 2026-08-20.** Fragment fields, release preparation, and CI
+enforcement may have changed. The
+[`tools/changelog-fragments.mjs`](../tools/changelog-fragments.mjs) validator,
+[Build and test workflow](../.github/workflows/ci.yml), and
+[prerelease policy](../docs/releases.md) are the current sources of truth.
+
 Every pull request that changes the repository adds one small fragment under
 `changes/unreleased/`. Separate files let concurrent changes record release
 history without editing the same `Unreleased` section in `CHANGELOG.md`.
@@ -28,14 +34,16 @@ Allowed categories are `feature`, `fix`, `security`, `platform`, `docs`, and
 authentication, signing, or other security boundaries. Allowed platforms are
 `all`, `android`, `desktop`, `ios`, `linux`, `macos`, `website`, and `windows`.
 Use `none` when either the issue or pull request does not exist, but always
-provide at least one positive reference.
+provide at least one positive reference for release-facing `feature`, `fix`,
+`security`, `platform`, and `docs` fragments. Only an `internal` fragment with
+`user-facing: no` may use `none` for both references.
 
 Internal maintenance still needs a fragment so automation does not have to
 guess whether a missing entry was intentional:
 
 ```text
 category: internal
-issue: 103
+issue: none
 pull: none
 platforms: all
 user-facing: no
@@ -62,4 +70,5 @@ node tools/changelog-fragments.mjs prepare-release \
 Review and curate the generated draft, especially its known limitations. Then
 move the included fragments to `changes/archive/<version>/` and copy the
 rendered categories into the new version section of `CHANGELOG.md`. The
-published changelog remains immutable; only unreleased fragments are live.
+published changelog and archived fragments remain immutable; only unreleased
+fragments are edited as work progresses.

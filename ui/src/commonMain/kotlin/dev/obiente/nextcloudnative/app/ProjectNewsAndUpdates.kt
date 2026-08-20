@@ -204,8 +204,19 @@ fun appUpdateChangesSince(
     val currentSequence = appUpdateSourceSequence(currentVersionCode) ?: return emptyList()
     val targetSequence = appUpdateSourceSequence(release.versionCode) ?: return emptyList()
     return release.changes
-        .filter { change -> change.introducedSourceSequence in (currentSequence + 1)..targetSequence }
+        .filter { change ->
+            change.introducedSourceSequence in (currentSequence + 1)..targetSequence &&
+                change.appliesTo(release)
+        }
         .distinctBy(AppUpdateChange::id)
+}
+
+private fun AppUpdateChange.appliesTo(release: AppUpdateRelease): Boolean {
+    val applicablePlatforms = when (release) {
+        is AndroidDirectRelease -> setOf("all", "android")
+        is DesktopDirectRelease -> setOf("all", "desktop", release.asset.platform)
+    }
+    return platforms.any(applicablePlatforms::contains)
 }
 
 private fun appUpdateSourceSequence(versionCode: Long): Long? =

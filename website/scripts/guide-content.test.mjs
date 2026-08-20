@@ -100,7 +100,7 @@ test("guide routes expose task navigation and responsive step captures", async (
   assert.match(app, /Real Compose UI/u);
   assert.match(styles, /\.guide-layout\s*\{[^}]*grid-template-columns:/su);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.guide-layout\s*\{[^}]*grid-template-columns:\s*1fr;/su);
-  assert.match(server, /"@type": "TechArticle"/u);
+  assert.match(server, /"@type": \["TechArticle", "HowTo"\]/u);
   assert.match(server, /"@type": "HowToStep"/u);
   assert.match(server, /"\/guides\/"/u);
 });

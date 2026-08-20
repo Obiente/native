@@ -200,19 +200,6 @@ internal class AndroidExternalFileHandoffStore(
     private fun DataInputStream.readNullableBoundedString(maximumBytes: Int): String? =
         if (readBoolean()) readBoundedString(maximumBytes) else null
 
-    private fun publishAtomically(temporary: File, target: File) {
-        try {
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        }
-    }
-
     private fun requireStored(condition: Boolean, message: () -> String) {
         if (!condition) throw AndroidExternalFileHandoffStoreException(message())
     }

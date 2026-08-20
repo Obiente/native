@@ -550,10 +550,12 @@ class JvmSupportIntake(
         val capability = runCatching { capabilityFor(completed) }.getOrElse {
             return@withContext failConversation(completed, "The private report capability is invalid.")
         }
-        val requestBody = json.encodeToString(
-            SupportConversationMessageInput.serializer(),
-            SupportConversationMessageInput(normalizedMessage),
-        ).toRequestBody(SUPPORT_METADATA_MEDIA_TYPE)
+        val requestBody = OneShotSupportMessageRequestBody(
+            json.encodeToString(
+                SupportConversationMessageInput.serializer(),
+                SupportConversationMessageInput(normalizedMessage),
+            ).encodeToByteArray(),
+        )
         val request = Request.Builder()
             .url(
                 baseUrl.newBuilder().addPathSegments("api/v1/reports").addPathSegment(capability)
@@ -661,7 +663,14 @@ class JvmSupportIntake(
                 SupportDiagnosticsConversationResult.Updated
             }
         } catch (_: IOException) {
-            failConversation(completed, "Could not reach Obiente Support. Check your connection and try again.")
+            failConversation(
+                completed,
+                if (request.method == "POST") {
+                    "Reply delivery could not be confirmed. Refresh the conversation before sending another reply."
+                } else {
+                    "Could not reach Obiente Support. Check your connection and try again."
+                },
+            )
         } catch (_: SerializationException) {
             failConversation(completed, "Obiente Support returned an invalid private conversation.")
         } catch (_: DateTimeException) {
@@ -2407,6 +2416,15 @@ private class ProgressRequestBody(
         delegate.writeTo(buffered)
         buffered.flush()
     }
+}
+
+internal class OneShotSupportMessageRequestBody(
+    private val content: ByteArray,
+) : RequestBody() {
+    override fun contentType() = SUPPORT_METADATA_MEDIA_TYPE
+    override fun contentLength(): Long = content.size.toLong()
+    override fun isOneShot(): Boolean = true
+    override fun writeTo(sink: BufferedSink) { sink.write(content) }
 }
 
 private fun secureIdempotencyKey(): String {

@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.runCatchingPreservingCancellation
 import android.app.Activity
 import android.content.ClipData
 import android.content.Context
@@ -13,7 +14,9 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsEnvironment
 import dev.obiente.nextcloudnative.app.SupportDiagnosticsExportResult
+import dev.obiente.nextcloudnative.app.boundedSupportDiagnosticsEnvironment
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
+import dev.obiente.nextcloudnative.app.runWithCleanupBeforeHandoff
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -98,7 +101,7 @@ internal object AndroidSupportIntakeCoordinator {
 }
 
 internal fun androidSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =
-    SupportDiagnosticsEnvironment(
+    boundedSupportDiagnosticsEnvironment(
         appVersion = BuildConfig.VERSION_NAME,
         packageVersion = BuildConfig.VERSION_CODE.toString(),
         platform = "Android",
@@ -118,7 +121,7 @@ internal class AndroidSupportBundleExporter(
         val host = activity ?: return SupportDiagnosticsExportResult.Unsupported(
             "Open Nextcloud Native before exporting a diagnostic report.",
         )
-        val archive = runCatching {
+        val archive = runCatchingPreservingCancellation {
             withContext(Dispatchers.IO) {
                 val exportDirectory = File(context.cacheDir, SUPPORT_BUNDLE_CACHE_DIRECTORY)
                 require(exportDirectory.isDirectory || exportDirectory.mkdirs()) {
@@ -136,28 +139,30 @@ internal class AndroidSupportBundleExporter(
                 failure.message?.take(240) ?: "Could not create the diagnostic report.",
             )
         }
-        return runCatching {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.sharedfiles",
-                archive,
-            )
-            withContext(Dispatchers.Main.immediate) {
-                host.startActivity(
-                    Intent.createChooser(
-                        Intent(Intent.ACTION_SEND).apply {
-                            type = SUPPORT_BUNDLE_MIME_TYPE
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            clipData = ClipData.newRawUri("Anonymized support report", uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        },
-                        "Save or share diagnostic report",
-                    ),
+        return runCatchingPreservingCancellation {
+            runWithCleanupBeforeHandoff(cleanup = { archive.delete() }) { markHandedOff ->
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.sharedfiles",
+                    archive,
                 )
+                withContext(Dispatchers.Main.immediate) {
+                    host.startActivity(
+                        Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = SUPPORT_BUNDLE_MIME_TYPE
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                clipData = ClipData.newRawUri("Anonymized support report", uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            },
+                            "Save or share diagnostic report",
+                        ),
+                    )
+                    markHandedOff()
+                }
+                SupportDiagnosticsExportResult.Exported("Android share sheet")
             }
-            SupportDiagnosticsExportResult.Exported("Android share sheet")
         }.getOrElse { failure ->
-            archive.delete()
             SupportDiagnosticsExportResult.Failed(
                 failure.message?.take(240) ?: "Could not open the Android share sheet.",
             )

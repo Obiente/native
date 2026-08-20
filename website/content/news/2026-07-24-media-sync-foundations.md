@@ -2,8 +2,8 @@
 title: Backing up your phone photos should feel trustworthy
 slug: media-sync-foundations
 date: 2026-07-24
-lastUpdated: 2026-08-01
-description: Verified backup distinguishes safe Nextcloud copies, files that need attention, and storage that can be reviewed for cleanup.
+lastUpdated: 2026-08-20
+description: Exact-version Android backup receipts distinguish backed-up files from files needing attention; general camera-roll cleanup remains planned.
 tags: phone photo backup, Nextcloud Photos, Android, free phone storage
 captureScenario: media-backup-queue
 imageAlt: Nextcloud Native showing detected Camera and Screenshots folders plus pending and completed photo backup counts on mobile
@@ -11,6 +11,12 @@ imageCaption: Production media-folder and sync-pair components show detected fol
 ---
 
 # Backing up your phone photos should feel trustworthy
+
+**Historical article, reviewed 2026-08-20.** This post mixes implemented Android
+backup-state foundations with planned cleanup and sharing work. Check the
+[current releases](https://github.com/Obiente/nc-native/releases),
+[compatibility notes](/compatibility/), and current [Android photo-backup guide](/guides/android/photo-backup/)
+before relying on it.
 
 Phone photo backup has one job that matters more than every animation and gallery
 layout: tell the truth about whether a photo is safe. A green check should mean the
@@ -73,44 +79,42 @@ You edit a JPEG on the phone after it was uploaded. Its local revision no longer
 matches the verification record, so it returns to **Changed**. The older server copy
 still exists, but the app does not pretend that the new edit is protected.
 
-When storage runs low, you choose **Review space that can be freed**. Only exact
-versions that were verified on the selected server are candidates. The review shows
-what will remain available in Nextcloud, then Android presents the final deletion
-confirmation. The app never silently removes the only local original.
+The domain model can identify exact local versions that have a matching remote
+receipt. The current product does not expose a complete general camera-roll cleanup
+action based on that evidence. Do not delete local originals because a screenshot or
+ledger state says **Backed up**. Keep an independent backup.
 
-## Sharing after local cleanup
+## Cloud-only sharing is planned
 
-Cloud-only does not mean trapped. A cleaned-up photograph remains visible in the
-native gallery with an honest cloud indicator. Selecting Share downloads a temporary
-verified copy, hands it to Android's share sheet, and manages that temporary storage
-without restoring the entire camera folder.
-
-This preserves the storage benefit while keeping ordinary sharing with messaging and
-social apps practical. It also avoids pretending that a cloud-only item is instantly
-available when the phone is offline.
+The intended cleanup design keeps a cloud-only photograph visible and downloads a
+temporary verified copy when another Android app needs it. That complete
+cleanup-and-share workflow is not a supported end-to-end product feature yet. A
+cloud-only ledger state by itself is not permission to remove a local original.
 
 ## Formats and devices keep their meaning
 
 RAW originals remain distinct from JPEG fallbacks, while matching RAW/JPEG pairs can
-appear as one stack without hiding either file. Android and iOS Live Photos remain
-paired still-image and motion-video assets. Edited derivatives, bursts, videos, HEIC,
-and broader image formats use explicit format metadata instead of being treated as
+appear as one stack without hiding either file. Live Photo and Motion Photo models
+keep still-image and motion-video assets distinct where the current Android media
+pipeline can identify them. Edited derivatives, bursts, videos, HEIC, and broader
+image formats need explicit format evidence rather than being treated as
 interchangeable JPEG files.
 
 Android vendors impose different background and battery rules, so folder status also
 explains when the operating system paused work. Recovery and retry are visible
 without turning every completed upload into a live card.
 
-## A complete storage cleanup path
+## What a complete storage cleanup path still needs
 
 Folder discovery and preview connect to a durable, account-scoped transfer store.
 Native local and remote destination pickers feed compact pending, failed, and
 completed views, while account identity belongs in every queue and verification
 record.
 
-The storage review derives candidates from exact verification evidence. Temporary
-cloud-only sharing, RAW/JPEG grouping, and bounded history stay part of the same model
-instead of hiding several safety decisions behind one "photo backup" checkbox.
+A future storage review must derive candidates from exact verification evidence.
+Temporary cloud-only sharing, RAW/JPEG grouping, and bounded history belong in the
+same model instead of hiding several safety decisions behind one "photo backup"
+checkbox.
 
 ## Proof belongs outside the queue
 

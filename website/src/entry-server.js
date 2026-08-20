@@ -81,6 +81,7 @@ export async function render(pathname) {
     offers: {
       "@type": "Offer",
       price: 0,
+      priceCurrency: "EUR",
     },
     inLanguage: "en",
     downloadUrl: "https://github.com/Obiente/nc-native/releases",
@@ -149,7 +150,7 @@ export async function render(pathname) {
         {
           "@type": "ListItem",
           position: guide ? 4 : metadata.published || guideHub ? 3 : 2,
-          name: metadata.title.replace(" · Nextcloud Native", ""),
+          name: metadata.title.replace(" | Nextcloud Native", ""),
           item: metadata.canonical,
         },
       ],
@@ -159,7 +160,8 @@ export async function render(pathname) {
   if (currentGuide) {
     structuredData.push({
       "@context": "https://schema.org",
-      "@type": "TechArticle",
+      "@type": ["TechArticle", "HowTo"],
+      name: currentGuide.title,
       headline: currentGuide.title,
       description: currentGuide.description,
       dateModified: currentGuide.lastUpdated,
@@ -175,8 +177,17 @@ export async function render(pathname) {
         { "@type": "Thing", name: currentGuide.platform },
       ],
       timeRequired: `PT${currentGuide.durationMinutes}M`,
+      totalTime: `PT${currentGuide.durationMinutes}M`,
       dependencies: currentGuide.prerequisites.join("; "),
       hasPart: currentGuide.steps.map((step) => ({
+        "@type": "HowToStep",
+        position: step.number,
+        name: step.title,
+        text: step.text,
+        url: `${siteUrl}${currentGuide.path}#step-${step.number}`,
+        image: `${siteUrl}${step.imageDark}`,
+      })),
+      step: currentGuide.steps.map((step) => ({
         "@type": "HowToStep",
         position: step.number,
         name: step.title,
@@ -193,7 +204,7 @@ export async function render(pathname) {
     structuredData.push({
       "@context": "https://schema.org",
       "@type": "Article",
-      headline: metadata.title.replace(" · Nextcloud Native", ""),
+      headline: metadata.title.replace(" | Nextcloud Native", ""),
       description: metadata.description,
       datePublished: metadata.published,
       dateModified: metadata.modified,
@@ -254,6 +265,7 @@ const latestModification = (entries) => entries
 export const sitemapEntries = [
   ...news,
   ...guides,
+  ...docs.map((doc) => ({ path: doc.path, lastUpdated: "2026-08-20" })),
   { path: "/news/", lastUpdated: latestModification(news) },
   { path: "/guides/", lastUpdated: latestModification(guides) },
   ...guidePlatformHubs.map((hub) => ({

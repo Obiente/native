@@ -345,7 +345,7 @@ private suspend fun discoverInstalledAppVersion(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     appId: String,
-): String? = runCatching {
+): String? = runCatchingPreservingCancellation {
     val response = services.executeNextcloudApi(
         session,
         NextcloudApiRequest(
@@ -355,7 +355,7 @@ private suspend fun discoverInstalledAppVersion(
             ocsApiRequest = true,
         ),
     )
-    if (response.status !in 200..299) return@runCatching null
+    if (response.status !in 200..299) return@runCatchingPreservingCancellation null
     val root = dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonObject
     val ocs = root?.get("ocs") as? JsonObject
     val data = ocs?.get("data") as? JsonObject
