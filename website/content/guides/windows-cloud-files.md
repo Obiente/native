@@ -28,7 +28,7 @@ On Windows, Nextcloud Native integrates with the Cloud Files API so remote conte
 
 Open **Settings**, choose **Sync & storage**, then open **Virtual files**. Activate the system provider if it is not already active. When registration succeeds, the location is reported as **Nextcloud Native in File Explorer**. The root is account-scoped, and signing out disconnects the provider for that account.
 
-If activation fails, keep the failure message and retry only after checking that the app is the current installed version. Do not manually delete a registered sync root or copy provider metadata between accounts. Recovery handles stale registrations, legacy roots, and damaged Cloud Files metadata while preserving the existing local root and its data.
+If activation fails, keep the failure message and retry only after checking that the app is the current installed version. The app keeps a failed automatic activation visible instead of retrying it on every settings refresh. Use the explicit activation action when you are ready to retry. Do not manually delete a registered sync root or copy provider metadata between accounts. Recovery handles stale registrations, legacy roots, and damaged Cloud Files metadata while preserving the existing local root and its data.
 
 ## 2. Open placeholders, keep content local, or free eligible space
 

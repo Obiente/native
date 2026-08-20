@@ -1761,7 +1761,7 @@ class DesktopNextcloudServices(
             (isLinuxDesktop() || isWindowsDesktop()) &&
             preferences.getBoolean(providerPreferenceKey, false) &&
             synchronized(virtualFileProviderLock) {
-                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId
+                linuxVirtualFileMountIdentity != accountId && windowsCloudFilesIdentity != accountId && windowsCloudFilesAutomaticActivationAllowed(isWindowsDesktop(), windowsCloudFilesFailure)
             }
         ) {
             runCatching { activateVirtualFileProvider(session, userId) }
