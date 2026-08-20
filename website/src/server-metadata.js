@@ -6,12 +6,23 @@ import { guidePlatformHubForPath } from "./guide-platforms.js";
 
 export const siteUrl = "https://nc-native.obiente.dev";
 
+function brandedTitle(title) {
+  const suffix = " | Nextcloud Native";
+  return title.length + suffix.length <= 60 ? `${title}${suffix}` : title;
+}
+
+function metadataDescription(description) {
+  if (description.length <= 160) return description;
+  const shortened = description.slice(0, 157).replace(/\s+\S*$/u, "").trimEnd();
+  return `${shortened}.`;
+}
+
 export function metadataFor(path) {
   const guide = guides.find((entry) => entry.path === path);
   if (guide) {
     return {
-      title: `${guide.title} · Nextcloud Native`,
-      description: guide.description,
+      title: brandedTitle(guide.title),
+      description: metadataDescription(guide.description),
       canonical: `${siteUrl}${guide.path}`,
       type: "article",
       modified: guide.lastUpdated,
@@ -24,15 +35,15 @@ export function metadataFor(path) {
   const guideHub = guidePlatformHubForPath(path);
   if (guideHub) {
     return {
-      title: `${guideHub.title} · Nextcloud Native`,
-      description: guideHub.description,
+      title: brandedTitle(guideHub.title),
+      description: metadataDescription(guideHub.description),
       canonical: `${siteUrl}/guides/${guideHub.slug}/`,
       type: "website",
     };
   }
   if (path === "/guides/") {
     return {
-      title: "Android, Linux and Windows guides · Nextcloud Native",
+      title: "Android, Linux and Windows guides | Nextcloud Native",
       description:
         "Choose Android, Linux, or Windows instructions for Nextcloud Native setup, offline files, folder sync, photo backup, Calendar, and desktop integration.",
       canonical: `${siteUrl}/guides/`,
@@ -42,8 +53,8 @@ export function metadataFor(path) {
   const post = news.find((entry) => entry.path === path);
   if (post) {
     return {
-      title: `${post.title} · Nextcloud Native`,
-      description: post.description,
+      title: brandedTitle(post.title),
+      description: metadataDescription(post.description),
       canonical: `${siteUrl}${post.path}`,
       type: "article",
       published: post.date,
@@ -57,16 +68,16 @@ export function metadataFor(path) {
   }
   if (path === "/news/") {
     return {
-      title: "Project news · Nextcloud Native",
+      title: "Project journal | Nextcloud Native",
       description:
-        "Guides to Nextcloud Native photo backup, WebDAV file sync, Obsidian notes, Talk, Photos, offline access, and adaptive native Nextcloud apps.",
+        "Dated product and design notes about Nextcloud Native app rendering, folder sync, Obsidian workflows, Android media backup, and platform integration.",
       canonical: `${siteUrl}/news/`,
       type: "website",
     };
   }
   if (path === "/visual-qa/") {
     return {
-      title: "Visual QA catalog - Nextcloud Native",
+      title: "Visual QA catalog | Nextcloud Native",
       description:
         "Browse synthetic desktop and mobile screenshots rendered directly from the Nextcloud Native Compose UI.",
       canonical: `${siteUrl}/visual-qa/`,
@@ -76,8 +87,8 @@ export function metadataFor(path) {
   }
   if (path === changelog.path) {
     return {
-      title: "Changelog · Nextcloud Native",
-      description: changelog.description,
+      title: "Changelog | Nextcloud Native",
+      description: metadataDescription(changelog.description),
       canonical: `${siteUrl}${changelog.path}`,
       type: "website",
     };
@@ -85,17 +96,18 @@ export function metadataFor(path) {
   const doc = docs.find((entry) => entry.path === path);
   if (doc) {
     return {
-      title: `${doc.title} · Nextcloud Native`,
-      description: doc.description,
+      title: brandedTitle(doc.title),
+      description: metadataDescription(doc.description),
       canonical: `${siteUrl}${doc.path}`,
       type: "article",
+      modified: "2026-08-20",
     };
   }
 
   return {
-    title: "Nextcloud Native · Obiente",
+    title: "Nextcloud Native for Android, Linux and Windows | Obiente",
     description:
-      "Test the open-source Nextcloud Native alpha on Android, Linux, and Windows with native Files, Photos, Talk history, Calendar, offline, and sync foundations.",
+      "Open-source native Nextcloud alpha for Android, Linux, and Windows. Test Files, Photos, Talk history, Calendar, offline files, sync, and installed-app views.",
     canonical: `${siteUrl}/`,
     type: "website",
   };
@@ -148,12 +160,14 @@ export function sharingHeadFor(metadata) {
     `<meta name="twitter:description" content="${escapeAttribute(metadata.description)}">`,
     `<meta name="twitter:image" content="${escapeAttribute(image.url)}">`,
     `<meta name="twitter:image:alt" content="${escapeAttribute(image.alt)}">`,
-    ...(metadata.published
+    ...(metadata.type === "article" && metadata.modified
       ? [
-          `<meta property="article:published_time" content="${escapeAttribute(metadata.published)}">`,
+          ...(metadata.published
+            ? [`<meta property="article:published_time" content="${escapeAttribute(metadata.published)}">`]
+            : []),
           `<meta property="article:modified_time" content="${escapeAttribute(metadata.modified)}">`,
           `<meta property="article:author" content="https://obiente.org">`,
-          ...metadata.tags.map(
+          ...(metadata.tags ?? []).map(
             (tag) => `<meta property="article:tag" content="${escapeAttribute(tag)}">`,
           ),
         ]

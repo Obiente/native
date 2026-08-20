@@ -2,9 +2,9 @@
 title: Folder sync that feels at home on every system
 slug: native-folder-sync
 date: 2026-08-01
-lastUpdated: 2026-08-01
-description: Nextcloud Native connects ordinary device folders to Nextcloud with two-way sync, visible conflicts, selective rules, and system file integration.
-tags: Nextcloud folder sync, two-way sync, virtual files, Android, iOS, Linux, macOS, Windows
+lastUpdated: 2026-08-20
+description: Android, Linux, and Windows folder pairs connect ordinary folders to Nextcloud with explicit direction, conflicts, rules, and durable state.
+tags: Nextcloud folder sync, two-way sync, virtual files, Android, Linux, Windows
 captureScenario: file-sync-status-desktop
 imageAlt: Nextcloud Native desktop folder sync center showing several synthetic folder pairs, live progress, a conflict, and a detailed inspector
 imageCaption: The native folder sync center keeps folder mappings, transfer health, priority work, and conflicts visible in one desktop workspace.
@@ -12,16 +12,23 @@ imageCaption: The native folder sync center keeps folder mappings, transfer heal
 
 # Folder sync that feels at home on every system
 
+**Historical article, reviewed 2026-08-20.** This post records the cross-platform
+design, not equal support on every operating system. Android, Linux, and Windows have
+folder pairs in the current repository. Windows also has separate Cloud Files integration.
+Authenticated iPhone, iPad, and macOS products are not supported. Check the
+[current releases](https://github.com/Obiente/nc-native/releases) and
+[compatibility notes](/compatibility/) before using important data.
+
 A synchronized folder should still feel like a folder. A photo editor should be able
 to open it. A notes app should be able to write into it. A terminal, file manager, or
 system picker should see normal names and normal files without requiring a special
 export step. Nextcloud should remain the server that connects those devices, not a
 reason to replace the tools already used on them.
 
-Nextcloud Native builds folder sync around that idea. You choose a local folder and a
-folder in Nextcloud, decide which direction changes may travel, and keep the result
-visible in the operating system. The same safety rules apply on Android, iOS, Linux,
-macOS, and Windows, while each system gets the integration that belongs there.
+Nextcloud Native builds folder sync around that idea. On Android, Linux, and Windows,
+you choose a local folder and a folder in Nextcloud, then decide which direction
+changes may travel. Windows also uses Cloud Files placeholders for operating-system
+file integration. Apple platform integrations remain planned.
 
 ## A folder pair starts with two real locations
 
@@ -108,12 +115,11 @@ selected tree available offline. Other workflows are better served by virtual fi
 the hierarchy appears in the system file browser while content is downloaded when an
 application opens it.
 
-Nextcloud Native supports both models. Android exposes Nextcloud content through the
-system document provider. Windows uses Cloud Files integration, Linux provides a
-filesystem mount, and Apple platforms use their native file-provider model. Hydrated
-content is cached with its account, remote identity, revision, and byte range. Pinned
-files are protected for offline use, while unpinned content can be released under a
-visible storage policy without deleting the server copy.
+Current builds implement parts of both models. Android exposes Nextcloud content
+through the system document provider. Windows uses Cloud Files integration, and
+Linux has a filesystem mount. Apple file-provider integration is a plan, not a
+shipped client. Hydrated content is associated with its account, remote identity,
+revision, and cache policy where the platform integration supports it.
 
 Writable virtual files use the same revision rules as synchronized folders. A local
 write is staged, checked, and reconciled against the remote version. Temporary or

@@ -33,7 +33,11 @@ import { news } from "./generated/news.js";
 import { changelog } from "./generated/changelog.js";
 import { marketingCaptures } from "./generated/captures.js";
 import { githubRepository } from "./generated/github-repository.js";
-import { fetchGithubRepository } from "../scripts/github-repository-data.mjs";
+import {
+  fetchGithubRepository,
+  shouldRefreshGithubRepository,
+} from "../scripts/github-repository-data.mjs";
+import { hydrationTheme } from "./hydration-state.js";
 import {
   guidePlatformHubForPath,
   guidePlatformHubs,
@@ -112,9 +116,7 @@ const downloadPlatforms = [
 const captureByScenario = new Map(
   marketingCaptures.map((capture) => [capture.scenario, capture]),
 );
-const initialTheme = typeof window === "undefined"
-  ? { preference: "system", system: "dark" }
-  : window.__NEXTCLOUD_NATIVE_THEME__ ?? { preference: "system", system: "dark" };
+const initialTheme = hydrationTheme;
 const themePreference = ref(initialTheme.preference);
 const systemTheme = ref(initialTheme.system);
 const resolvedTheme = computed(() =>
@@ -161,12 +163,18 @@ function cycleTheme() {
 }
 
 onMounted(() => {
-  void refreshGithubRepository();
-  repositoryRefreshTimer = window.setInterval(refreshGithubRepository, 5 * 60 * 1000);
-  document.addEventListener("visibilitychange", refreshGithubRepositoryWhenVisible);
+  if (shouldRefreshGithubRepository(window.location)) {
+    void refreshGithubRepository();
+    repositoryRefreshTimer = window.setInterval(refreshGithubRepository, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", refreshGithubRepositoryWhenVisible);
+  }
 
-  const savedTheme = window.localStorage.getItem("nextcloud-native-theme");
-  if (themeOptions.includes(savedTheme)) themePreference.value = savedTheme;
+  try {
+    const savedTheme = window.localStorage.getItem("nextcloud-native-theme");
+    if (themeOptions.includes(savedTheme)) themePreference.value = savedTheme;
+  } catch {
+    themePreference.value = "system";
+  }
   themeMediaQuery = window.matchMedia("(prefers-color-scheme: light)");
   themeMediaListener = (event) => {
     systemTheme.value = event.matches ? "light" : "dark";
@@ -205,7 +213,11 @@ onBeforeUnmount(() => {
 
 watch(themePreference, (preference) => {
   if (typeof window !== "undefined") {
-    window.localStorage.setItem("nextcloud-native-theme", preference);
+    try {
+      window.localStorage.setItem("nextcloud-native-theme", preference);
+    } catch {
+      // Theme selection remains active for this page when storage is unavailable.
+    }
   }
 });
 watch(resolvedTheme, applyDocumentTheme);
@@ -338,9 +350,13 @@ const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchDocuments = ref(docs);
 const searchLoaded = ref(false);
+const searchInput = ref(null);
+const searchTrigger = ref(null);
 
 async function openSearch() {
   searchOpen.value = true;
+  await nextTick();
+  searchInput.value?.focus();
   if (searchLoaded.value || typeof window === "undefined") return;
 
   try {
@@ -350,6 +366,33 @@ async function openSearch() {
     }
   } finally {
     searchLoaded.value = true;
+  }
+}
+
+function closeSearch() {
+  searchOpen.value = false;
+  nextTick(() => searchTrigger.value?.focus());
+}
+
+function trapSearchFocus(event) {
+  const focusable = [...event.currentTarget.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+  if (focusable.length === 0) {
+    event.preventDefault();
+    searchInput.value?.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !event.currentTarget.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
   }
 }
 
@@ -395,7 +438,7 @@ const nativePromises = [
   {
     icon: ShieldCheck,
     title: "It stops before it guesses",
-    body: "Originals are kept, conflicts are shown, and a write is withheld when the server contract is unclear.",
+    body: "The client avoids destructive writes, shows known conflicts, and withholds an action when the server contract is unclear.",
   },
 ];
 
@@ -532,7 +575,7 @@ const frequentlyAsked = [
   >
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <header class="site-header">
+    <header class="site-header" @keydown.esc="mobileNavOpen = false">
       <a class="brand" href="/" aria-label="Nextcloud Native home">
         <span class="brand-mark">
           <img src="/cloud.svg" alt="" width="28" height="28" />
@@ -562,6 +605,7 @@ const frequentlyAsked = [
           <span>{{ themeLabel }}</span>
         </button>
         <button
+          ref="searchTrigger"
           class="header-search"
           type="button"
           aria-label="Search guides and project documentation"
@@ -573,7 +617,7 @@ const frequentlyAsked = [
         <button
           class="mobile-menu-button"
           type="button"
-          aria-label="Toggle primary navigation"
+          :aria-label="mobileNavOpen ? 'Close primary navigation' : 'Open primary navigation'"
           aria-controls="mobile-site-navigation"
           :aria-expanded="mobileNavOpen"
           @click="mobileNavOpen = !mobileNavOpen"
@@ -624,9 +668,9 @@ const frequentlyAsked = [
     <div
       v-if="searchOpen"
       class="search-overlay"
-      role="presentation"
-      @click.self="searchOpen = false"
-      @keydown.esc="searchOpen = false"
+      @click.self="closeSearch"
+      @keydown.esc.stop.prevent="closeSearch"
+      @keydown.tab="trapSearchFocus"
     >
       <section class="search-panel" role="dialog" aria-modal="true" aria-labelledby="search-title">
         <div class="search-panel-header">
@@ -634,13 +678,15 @@ const frequentlyAsked = [
             <p class="eyebrow">Project knowledge</p>
             <h2 id="search-title">Search guides and documentation</h2>
           </div>
-          <button class="icon-button" type="button" aria-label="Close search" @click="searchOpen = false">
+          <button class="icon-button" type="button" aria-label="Close search" @click="closeSearch">
             <X :size="21" weight="bold" aria-hidden="true" />
           </button>
         </div>
         <label class="search-input">
+          <span class="sr-only">Search guides and project documentation</span>
           <MagnifyingGlass :size="21" weight="bold" aria-hidden="true" />
           <input
+            ref="searchInput"
             v-model="searchQuery"
             type="search"
             name="documentation-search"
@@ -905,9 +951,9 @@ const frequentlyAsked = [
               <p class="eyebrow">Every device</p>
               <h2>Built for each device, not merely resized.</h2>
               <p>
-                Your data follows the same safety and sync rules everywhere. Each
-                platform still gets the layout, controls, lifecycle, and system
-                integration that belong there.
+                Supported builds apply the same core safety rules while each
+                platform keeps its own layout, controls, lifecycle, and available
+                system integration.
               </p>
             </div>
             <div class="platform-story-content">
@@ -960,7 +1006,7 @@ const frequentlyAsked = [
                 <h2>Follow the whole task, not a list of controls.</h2>
                 <p>Every guide uses current synthetic captures from the real app and explains the safe result you should expect.</p>
               </div>
-              <a class="text-link" href="/guides/">All guides <ArrowRight :size="18" weight="bold" /></a>
+              <a class="text-link" href="/guides/">All guides <ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             </div>
             <div class="guide-home-grid">
               <a v-for="guide in guides" :key="guide.path" class="guide-home-card" :href="guide.path">
@@ -1010,7 +1056,7 @@ const frequentlyAsked = [
                 <p class="eyebrow">Journal</p>
                 <h2>Notes from building the client.</h2>
               </div>
-              <a class="text-link" href="/news/">All project news <ArrowRight :size="18" weight="bold" /></a>
+              <a class="text-link" href="/news/">All project stories <ArrowRight :size="18" weight="bold" aria-hidden="true" /></a>
             </div>
 
             <div class="journal-layout">
@@ -1097,7 +1143,7 @@ const frequentlyAsked = [
           <div class="guides-index-summary" aria-label="Guide library summary">
             <span><strong>{{ visibleGuideLibrary.length }}</strong> maintained guides</span>
             <span><strong>{{ visibleGuideLibrary.reduce((total, guide) => total + guide.steps.length, 0) }}</strong> illustrated steps</span>
-            <span><ShieldCheck :size="16" weight="fill" aria-hidden="true" /> Real Compose UI</span>
+            <span><ShieldCheck :size="16" weight="fill" aria-hidden="true" /> Synthetic data in real Compose UI</span>
           </div>
         </header>
 
@@ -1404,7 +1450,7 @@ const frequentlyAsked = [
                   </a>
                   <figcaption>
                     <span>{{ step.imageCaption }}</span>
-                    <span class="capture-provenance"><ShieldCheck :size="15" weight="fill" aria-hidden="true" /> Real Compose UI</span>
+                    <span class="capture-provenance"><ShieldCheck :size="15" weight="fill" aria-hidden="true" /> Synthetic data in real Compose UI</span>
                   </figcaption>
                 </figure>
                 <div class="markdown-body guide-step-body" v-html="step.html"></div>
@@ -1447,7 +1493,7 @@ const frequentlyAsked = [
         <article class="news-article">
           <a class="doc-back" href="/news/">Project news</a>
           <header class="doc-heading" data-reveal>
-            <p class="eyebrow">Product story</p>
+            <p class="eyebrow">Dated product story</p>
             <h1>{{ currentPost.title }}</h1>
             <p>{{ currentPost.description }}</p>
             <div class="page-record">
@@ -1487,7 +1533,7 @@ const frequentlyAsked = [
           <aside class="article-related" aria-labelledby="article-related-title">
             <div>
               <p class="eyebrow">Continue exploring</p>
-              <h2 id="article-related-title">Related Nextcloud Native guides</h2>
+              <h2 id="article-related-title">Related product stories</h2>
             </div>
             <a v-for="post in relatedPosts" :key="post.path" :href="post.path">
               <span>{{ post.title }}</span>
@@ -1509,9 +1555,9 @@ const frequentlyAsked = [
         <header class="doc-heading" data-reveal>
           <p class="eyebrow">Nextcloud Native news</p>
           <h1>What your Nextcloud can do in one native client.</h1>
-          <p>Practical guides explain everyday workflows, the technology behind them, and the public roadmap for each area.</p>
+          <p>Dated product and design notes explain decisions made while building the client. Use current guides, compatibility notes, and release notes for support decisions.</p>
           <div class="page-record">
-            <span><strong>Stories</strong> {{ news.length }} maintained guides</span>
+            <span><strong>Stories</strong> {{ news.length }} dated articles</span>
             <span><strong>Latest review</strong> {{ news[0]?.lastUpdated }}</span>
             <a :href="`${githubUrl}/tree/main/website/content/news`" target="_blank" rel="noreferrer">
               Browse article sources
@@ -1554,7 +1600,7 @@ const frequentlyAsked = [
             <div class="page-record">
               <span><strong>Source</strong> {{ changelog.file }}</span>
               <span v-if="!changelog.available"><strong>Status</strong> Awaiting the first public release</span>
-              <a :href="`${githubUrl}/blob/main/${changelog.file}`" target="_blank" rel="noreferrer">
+              <a :href="`${githubUrl}/blob/main/CHANGELOG.md`" target="_blank" rel="noreferrer">
                 View source history
                 <GithubLogo :size="14" weight="fill" aria-hidden="true" />
               </a>

@@ -2,7 +2,7 @@
   "source": "github-snapshot",
   "syncState": "snapshot",
   "projectUrl": "https://github.com/orgs/Obiente/projects/4",
-  "updatedAt": "2026-08-09T14:24:22Z",
+  "updatedAt": "2026-08-20T10:03:52Z",
   "epics": [
     {
       "number": 10,
@@ -36,9 +36,9 @@
       "status": "In Progress",
       "milestone": "0.2 Safe sync and media",
       "progress": {
-        "total": 30,
-        "completed": 14,
-        "percent_completed": 46
+        "total": 41,
+        "completed": 18,
+        "percent_completed": 43
       },
       "labels": [
         "priority:P0",
@@ -124,9 +124,9 @@
       "status": "In Progress",
       "milestone": "0.5 Adaptive apps",
       "progress": {
-        "total": 24,
-        "completed": 1,
-        "percent_completed": 4
+        "total": 25,
+        "completed": 2,
+        "percent_completed": 8
       },
       "labels": [
         "priority:P0",
@@ -146,9 +146,9 @@
       "status": "In Progress",
       "milestone": "0.6 Platform polish",
       "progress": {
-        "total": 52,
-        "completed": 26,
-        "percent_completed": 50
+        "total": 62,
+        "completed": 34,
+        "percent_completed": 54
       },
       "labels": [
         "priority:P0",
@@ -190,9 +190,340 @@
   ],
   "shipped": [
     {
+      "number": 344,
+      "taskId": null,
+      "title": "feat(android): support explicitly trusted self-signed certificates",
+      "url": "https://github.com/Obiente/nc-native/issues/344",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:platform",
+        "type:feature",
+        "type:security",
+        "platform:android",
+        "needs-design"
+      ],
+      "updatedAt": "2026-08-16T15:24:19Z",
+      "closedAt": "2026-08-16T15:24:19Z"
+    },
+    {
+      "number": 360,
+      "taskId": null,
+      "title": "fix(android): honor user-installed certificate authorities",
+      "url": "https://github.com/Obiente/nc-native/issues/360",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "bug",
+        "priority:P1",
+        "area:platform",
+        "type:reliability",
+        "type:security",
+        "platform:android",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-16T14:46:48Z",
+      "closedAt": "2026-08-16T14:46:48Z"
+    },
+    {
+      "number": 368,
+      "taskId": null,
+      "title": "feat(android): stream large remote files to external apps",
+      "url": "https://github.com/Obiente/nc-native/issues/368",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "area:platform",
+        "type:feature",
+        "type:reliability",
+        "platform:android",
+        "needs-design",
+        "in-progress"
+      ],
+      "updatedAt": "2026-08-14T23:10:50Z",
+      "closedAt": "2026-08-14T23:10:50Z"
+    },
+    {
+      "number": 369,
+      "taskId": null,
+      "title": "fix(website): keep the repository star count current",
+      "url": "https://github.com/Obiente/nc-native/issues/369",
+      "priority": "P1",
+      "area": "UX",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:ux",
+        "type:reliability",
+        "area:website",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T20:05:45Z",
+      "closedAt": "2026-08-13T20:05:45Z"
+    },
+    {
+      "number": 337,
+      "taskId": null,
+      "title": "fix(linux): handle unavailable desktop keyring integration",
+      "url": "https://github.com/Obiente/nc-native/issues/337",
+      "priority": "P0",
+      "area": "Platform",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "bug",
+        "priority:P0",
+        "area:platform",
+        "area:release",
+        "type:reliability",
+        "type:security",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T17:41:45Z",
+      "closedAt": "2026-08-13T17:41:45Z"
+    },
+    {
+      "number": 354,
+      "taskId": null,
+      "title": "fix(linux): handle missing secret-tool after login",
+      "url": "https://github.com/Obiente/nc-native/issues/354",
+      "priority": "P0",
+      "area": "Platform",
+      "status": "Done",
+      "milestone": null,
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "bug",
+        "duplicate",
+        "priority:P0",
+        "area:platform",
+        "area:release",
+        "type:reliability",
+        "type:security",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T16:17:27Z",
+      "closedAt": "2026-08-13T16:04:05Z"
+    },
+    {
+      "number": 356,
+      "taskId": null,
+      "title": "fix(auth): open Linux browser login",
+      "url": "https://github.com/Obiente/nc-native/issues/356",
+      "priority": "P0",
+      "area": "Platform",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:ux",
+        "area:platform",
+        "type:reliability",
+        "platform:desktop",
+        "in-progress",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T15:38:48Z",
+      "closedAt": "2026-08-13T15:38:48Z"
+    },
+    {
+      "number": 352,
+      "taskId": null,
+      "title": "fix(home): load versioned Dashboard widget items",
+      "url": "https://github.com/Obiente/nc-native/issues/352",
+      "priority": "P1",
+      "area": "Adaptive apps",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:dynamic-apps",
+        "area:ux",
+        "type:reliability",
+        "platform:android",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T15:33:20Z",
+      "closedAt": "2026-08-13T15:33:20Z"
+    },
+    {
+      "number": 341,
+      "taskId": null,
+      "title": "Windows Cloud Files corrupt recovery rejects equivalent registered roots",
+      "url": "https://github.com/Obiente/nc-native/issues/341",
+      "priority": "P0",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:files-sync",
+        "area:platform",
+        "type:reliability",
+        "platform:desktop",
+        "in-progress",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T07:23:17Z",
+      "closedAt": "2026-08-13T07:23:17Z"
+    },
+    {
+      "number": 51,
+      "taskId": "DYN-011",
+      "title": "Tables presentation",
+      "url": "https://github.com/Obiente/nc-native/issues/51",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Done",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "platform:android",
+        "platform:desktop",
+        "needs-design"
+      ],
+      "updatedAt": "2026-08-13T03:08:56Z",
+      "closedAt": "2026-08-13T03:08:56Z"
+    },
+    {
+      "number": 331,
+      "taskId": null,
+      "title": "Files global search sends an unsupported WebDAV SEARCH property",
+      "url": "https://github.com/Obiente/nc-native/issues/331",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "platform:android",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-16T18:28:21Z",
+      "closedAt": "2026-08-12T17:54:03Z"
+    },
+    {
+      "number": 327,
+      "taskId": null,
+      "title": "Allow development desktop builds to install remote releases",
+      "url": "https://github.com/Obiente/nc-native/issues/327",
+      "priority": "P1",
+      "area": "Release",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:platform",
+        "area:release",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-12T16:32:30Z",
+      "closedAt": "2026-08-12T16:32:30Z"
+    },
+    {
+      "number": 321,
+      "taskId": null,
+      "title": "Tiered virtual-file cache storage",
+      "url": "https://github.com/Obiente/nc-native/issues/321",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "type:feature"
+      ],
+      "updatedAt": "2026-08-12T09:16:29Z",
+      "closedAt": "2026-08-12T09:16:29Z"
+    },
+    {
       "number": 315,
       "taskId": null,
-      "title": "fix(windows): recover Cloud Files placeholder creation collisions",
+      "title": "fix(windows): recover Cloud Files placeholder collisions and corrupt metadata",
       "url": "https://github.com/Obiente/nc-native/issues/315",
       "priority": "P0",
       "area": "Files and sync",
@@ -209,10 +540,37 @@
         "area:platform",
         "type:reliability",
         "platform:desktop",
+        "in-progress",
         "type:bug"
       ],
-      "updatedAt": "2026-08-09T13:51:16Z",
-      "closedAt": "2026-08-09T13:50:53Z"
+      "updatedAt": "2026-08-10T17:04:18Z",
+      "closedAt": "2026-08-10T17:04:18Z"
+    },
+    {
+      "number": 317,
+      "taskId": null,
+      "title": "feat(platform): export anonymized app diagnostics",
+      "url": "https://github.com/Obiente/nc-native/issues/317",
+      "priority": "P1",
+      "area": "Platform",
+      "status": "Done",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:ux",
+        "area:platform",
+        "type:feature",
+        "type:reliability",
+        "platform:android",
+        "platform:desktop"
+      ],
+      "updatedAt": "2026-08-09T21:30:55Z",
+      "closedAt": "2026-08-09T21:30:55Z"
     },
     {
       "number": 312,
@@ -1399,6 +1757,30 @@
       ],
       "updatedAt": "2026-07-24T16:12:04Z",
       "closedAt": "2026-07-24T16:12:04Z"
+    },
+    {
+      "number": 378,
+      "taskId": null,
+      "title": ": conflict can not be solved",
+      "url": "https://github.com/Obiente/nc-native/issues/378",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "Done",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "bug",
+        "priority:P1",
+        "area:files-sync",
+        "type:reliability",
+        "platform:desktop"
+      ],
+      "updatedAt": "2026-08-15T12:45:00Z",
+      "closedAt": null
     }
   ],
   "priorities": [
@@ -1425,6 +1807,32 @@
         "needs-design"
       ],
       "updatedAt": "2026-07-29T12:22:20Z",
+      "closedAt": null
+    },
+    {
+      "number": 335,
+      "taskId": null,
+      "title": "fix(macos): store account secrets in Keychain",
+      "url": "https://github.com/Obiente/nc-native/issues/335",
+      "priority": "P0",
+      "area": "Platform",
+      "status": "Todo",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "bug",
+        "priority:P0",
+        "area:platform",
+        "type:reliability",
+        "type:security",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T16:03:45Z",
       "closedAt": null
     },
     {
@@ -1995,31 +2403,6 @@
       "closedAt": null
     },
     {
-      "number": 51,
-      "taskId": "DYN-011",
-      "title": "Tables presentation",
-      "url": "https://github.com/Obiente/nc-native/issues/51",
-      "priority": "P0",
-      "area": "Adaptive apps",
-      "status": "In Progress",
-      "milestone": "0.5 Adaptive apps",
-      "progress": {
-        "total": 0,
-        "completed": 0,
-        "percent_completed": 0
-      },
-      "labels": [
-        "priority:P0",
-        "area:dynamic-apps",
-        "type:feature",
-        "platform:android",
-        "platform:desktop",
-        "needs-design"
-      ],
-      "updatedAt": "2026-07-29T11:35:23Z",
-      "closedAt": null
-    },
-    {
       "number": 52,
       "taskId": "DYN-012",
       "title": "Deck presentation",
@@ -2135,6 +2518,30 @@
         "needs-design"
       ],
       "updatedAt": "2026-07-24T16:05:40Z",
+      "closedAt": null
+    },
+    {
+      "number": 381,
+      "taskId": "DYN-024",
+      "title": "Durable adaptive workspace data and offline sync",
+      "url": "https://github.com/Obiente/nc-native/issues/381",
+      "priority": "P0",
+      "area": "Adaptive apps",
+      "status": "Todo",
+      "milestone": "0.5 Adaptive apps",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P0",
+        "area:dynamic-apps",
+        "type:feature",
+        "platform:android",
+        "platform:desktop"
+      ],
+      "updatedAt": "2026-08-14T16:01:24Z",
       "closedAt": null
     },
     {
@@ -2397,7 +2804,7 @@
       "status": "In Progress",
       "milestone": "0.6 Platform polish",
       "progress": {
-        "total": 0,
+        "total": 1,
         "completed": 0,
         "percent_completed": 0
       },
@@ -2909,7 +3316,7 @@
       "url": "https://github.com/Obiente/nc-native/issues/125",
       "priority": "P0",
       "area": "Files and sync",
-      "status": "Todo",
+      "status": "In Progress",
       "milestone": "0.2 Safe sync and media",
       "progress": {
         "total": 0,
@@ -2920,9 +3327,10 @@
         "priority:P0",
         "area:files-sync",
         "type:feature",
-        "platform:android"
+        "platform:android",
+        "in-progress"
       ],
-      "updatedAt": "2026-07-24T16:08:16Z",
+      "updatedAt": "2026-08-14T19:49:24Z",
       "closedAt": null
     },
     {
@@ -3468,12 +3876,12 @@
       "url": "https://github.com/Obiente/nc-native/issues/183",
       "priority": "P1",
       "area": "UX",
-      "status": "Todo",
+      "status": "In Progress",
       "milestone": "0.6 Platform polish",
       "progress": {
-        "total": 0,
-        "completed": 0,
-        "percent_completed": 0
+        "total": 2,
+        "completed": 1,
+        "percent_completed": 50
       },
       "labels": [
         "enhancement",
@@ -3789,12 +4197,12 @@
       "closedAt": null
     },
     {
-      "number": 317,
+      "number": 364,
       "taskId": null,
-      "title": "feat(platform): export anonymized app diagnostics",
-      "url": "https://github.com/Obiente/nc-native/issues/317",
+      "title": "fix(home): support servers without the Dashboard app",
+      "url": "https://github.com/Obiente/nc-native/issues/364",
       "priority": "P1",
-      "area": "Platform",
+      "area": "UX",
       "status": "In Progress",
       "milestone": "0.6 Platform polish",
       "progress": {
@@ -3804,14 +4212,170 @@
       },
       "labels": [
         "priority:P1",
+        "area:dynamic-apps",
+        "area:ux",
+        "type:reliability",
+        "platform:android",
+        "platform:desktop",
+        "type:bug"
+      ],
+      "updatedAt": "2026-08-13T18:51:00Z",
+      "closedAt": null
+    },
+    {
+      "number": 365,
+      "taskId": null,
+      "title": "feat(sync): add include and metadata-based sync rules",
+      "url": "https://github.com/Obiente/nc-native/issues/365",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "area:ux",
+        "type:feature",
+        "needs-design",
+        "in-progress"
+      ],
+      "updatedAt": "2026-08-14T19:49:25Z",
+      "closedAt": null
+    },
+    {
+      "number": 366,
+      "taskId": null,
+      "title": "feat(sync): add per-file mobile-data transfer policies",
+      "url": "https://github.com/Obiente/nc-native/issues/366",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "area:ux",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "in-progress"
+      ],
+      "updatedAt": "2026-08-14T19:49:27Z",
+      "closedAt": null
+    },
+    {
+      "number": 367,
+      "taskId": null,
+      "title": "feat(media): add immersive full-screen video playback",
+      "url": "https://github.com/Obiente/nc-native/issues/367",
+      "priority": "P1",
+      "area": "Photos and Memories",
+      "status": "In Progress",
+      "milestone": "0.6 Platform polish",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:photos",
+        "area:ux",
+        "type:feature",
+        "platform:android",
+        "needs-design",
+        "in-progress"
+      ],
+      "updatedAt": "2026-08-14T19:49:28Z",
+      "closedAt": null
+    },
+    {
+      "number": 373,
+      "taskId": null,
+      "title": ": More details for conflict solving",
+      "url": "https://github.com/Obiente/nc-native/issues/373",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "enhancement",
+        "priority:P1",
+        "area:files-sync",
+        "type:feature",
+        "platform:desktop"
+      ],
+      "updatedAt": "2026-08-14T14:13:04Z",
+      "closedAt": null
+    },
+    {
+      "number": 383,
+      "taskId": null,
+      "title": "feat(files): allow large manual downloads and offline files",
+      "url": "https://github.com/Obiente/nc-native/issues/383",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
+        "area:ux",
+        "type:feature",
+        "type:reliability",
+        "platform:android",
+        "needs-design",
+        "in-progress"
+      ],
+      "updatedAt": "2026-08-14T19:49:00Z",
+      "closedAt": null
+    },
+    {
+      "number": 384,
+      "taskId": null,
+      "title": "feat(android): accept shared files as Nextcloud uploads",
+      "url": "https://github.com/Obiente/nc-native/issues/384",
+      "priority": "P1",
+      "area": "Files and sync",
+      "status": "In Progress",
+      "milestone": "0.2 Safe sync and media",
+      "progress": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "labels": [
+        "priority:P1",
+        "area:files-sync",
         "area:ux",
         "area:platform",
         "type:feature",
         "type:reliability",
         "platform:android",
-        "platform:desktop"
+        "needs-design",
+        "in-progress"
       ],
-      "updatedAt": "2026-08-09T14:24:22Z",
+      "updatedAt": "2026-08-14T19:49:07Z",
       "closedAt": null
     },
     {
@@ -4211,7 +4775,7 @@
         "type:feature",
         "platform:android"
       ],
-      "updatedAt": "2026-07-24T16:06:22Z",
+      "updatedAt": "2026-08-13T09:07:26Z",
       "closedAt": null
     },
     {
@@ -4429,7 +4993,7 @@
       "url": "https://github.com/Obiente/nc-native/issues/109",
       "priority": "P1",
       "area": "Files and sync",
-      "status": "Todo",
+      "status": "In Progress",
       "milestone": "0.2 Safe sync and media",
       "progress": {
         "total": 0,
@@ -4439,9 +5003,10 @@
       "labels": [
         "priority:P1",
         "area:files-sync",
-        "type:feature"
+        "type:feature",
+        "in-progress"
       ],
-      "updatedAt": "2026-07-24T16:07:44Z",
+      "updatedAt": "2026-08-14T19:49:22Z",
       "closedAt": null
     },
     {
@@ -4539,7 +5104,7 @@
       "url": "https://github.com/Obiente/nc-native/issues/126",
       "priority": "P1",
       "area": "Files and sync",
-      "status": "Todo",
+      "status": "In Progress",
       "milestone": "0.2 Safe sync and media",
       "progress": {
         "total": 0,
@@ -4774,9 +5339,9 @@
       "description": "Trustworthy Android media backup, storage reclaim foundation, and advanced files synchronization.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-09T13:50:53Z",
-      "open": 36,
-      "closed": 41
+      "updatedAt": "2026-08-16T16:34:10Z",
+      "open": 42,
+      "closed": 59
     },
     {
       "number": 2,
@@ -4807,9 +5372,9 @@
       "description": "Fast contract acquisition and useful semantic interfaces for arbitrary Nextcloud apps.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-02T11:46:15Z",
+      "updatedAt": "2026-08-14T21:37:21Z",
       "open": 29,
-      "closed": 8
+      "closed": 11
     },
     {
       "number": 5,
@@ -4818,9 +5383,9 @@
       "description": "Responsive mobile and desktop UX, reliability, accessibility, performance, and platform integration.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-09T14:23:52Z",
-      "open": 36,
-      "closed": 44
+      "updatedAt": "2026-08-16T18:58:02Z",
+      "open": 40,
+      "closed": 83
     },
     {
       "number": 6,
@@ -4829,9 +5394,9 @@
       "description": "Security, CI, signed packages, documentation, and contributor-ready stable release work.",
       "state": "open",
       "dueOn": null,
-      "updatedAt": "2026-08-01T23:34:28Z",
+      "updatedAt": "2026-08-13T09:35:27Z",
       "open": 12,
-      "closed": 22
+      "closed": 23
     }
   ]
 }

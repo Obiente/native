@@ -8,12 +8,16 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 5
 difficulty: Getting started
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-desktop-switch-apps-catalog, guide-desktop-switch-apps-sidebar, guide-desktop-switch-apps-nested
 prerequisites: A connected Linux or Windows account with more than one installed Nextcloud app
 ---
 
 # Move between Nextcloud apps without losing your place
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Nextcloud Native is designed as one workspace for the apps it can currently discover and render from a connected account. On Linux and Windows, the desktop sidebar stays useful inside apps, and each app remembers supported route and saveable interface state so comparing work across tools does not require starting over. macOS authenticated use is not supported yet.
 

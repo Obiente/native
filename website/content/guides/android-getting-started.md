@@ -8,12 +8,16 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Getting started
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-android-getting-started-home, guide-android-getting-started-files, guide-android-getting-started-calendar
 prerequisites: Android 8.0 or newer, Your Nextcloud server address and sign-in details, A current signed APK from the GitHub Releases page
 ---
 
 # Get started with Nextcloud Native on Android
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 This guide covers the Android application that is available today. Nextcloud Native is alpha software, so keep another copy of important data and read the known limitations for the exact release before relying on sync or backup. iPhone and iPad builds are not available yet.
 
@@ -22,7 +26,11 @@ This guide covers the Android application that is available today. Nextcloud Nat
 @capture-alt: Nextcloud Native Android Home screen showing the connected account status, quick actions, recent files, upcoming events, photo backup, and conversations
 @capture-caption: The Android Home screen confirms that Login Flow completed and summarizes real work from the connected Nextcloud account.
 
-Install the signed APK from the project's GitHub Releases page. Android 8.0 or newer is required. Open the app, enter the full `https://` address of your Nextcloud server, and continue to the server's trusted Login Flow page. Sign in there and approve the app-password request; do not paste your primary password into Nextcloud Native itself.
+Install the APK attached to the current GitHub prerelease and verify the published
+checksum or GitHub attestation. Android 8.0 or newer is required. Open the app,
+enter the full `https://` address of your Nextcloud server, and continue to the
+server's trusted Login Flow page. Sign in there and approve the app-password
+request; do not paste your primary password into Nextcloud Native itself.
 
 After the browser returns to the app, Home should show your account and an online or offline status. An offline status can be temporary, but it means new server data cannot be confirmed. If connection fails, check the complete server address, open the server in a browser to confirm its certificate is trusted, and retry. Do not work around certificate warnings.
 

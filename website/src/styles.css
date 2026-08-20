@@ -90,7 +90,7 @@ html {
 
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
   background: var(--background);
   -webkit-font-smoothing: antialiased;
@@ -121,6 +121,7 @@ img {
 }
 
 .site-shell {
+  min-width: 0;
   min-height: 100vh;
   overflow-x: clip;
   background: var(--background);
@@ -1768,6 +1769,7 @@ h1 span {
 .footer-links {
   justify-self: end;
   display: flex;
+  flex-wrap: wrap;
   gap: 20px;
 }
 
@@ -2308,6 +2310,16 @@ h1 span {
   margin-block: 16px;
 }
 
+.markdown-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body iframe,
+.markdown-body video {
+  max-width: 100%;
+}
+
 .markdown-body img {
   max-width: 100%;
   height: auto;
@@ -2375,6 +2387,7 @@ h1 span {
 }
 
 .markdown-body pre {
+  max-width: 100%;
   overflow-x: auto;
   padding: 18px;
   border: 1px solid var(--outline);
@@ -2386,6 +2399,8 @@ h1 span {
   padding: 0;
   border: 0;
   background: transparent;
+  overflow-wrap: normal;
+  white-space: pre;
 }
 
 .markdown-body blockquote {
@@ -2396,6 +2411,7 @@ h1 span {
 }
 
 .markdown-body table {
+  max-width: 100%;
   width: 100%;
   display: block;
   overflow-x: auto;
@@ -2461,6 +2477,7 @@ h1 span {
 
 .page-record span,
 .page-record a {
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -5769,6 +5786,25 @@ h1 span {
 
   .mobile-nav-tools {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 320px) {
+  .site-header {
+    padding-inline: 10px;
+  }
+
+  .brand-copy {
+    display: none;
+  }
+
+  .mobile-nav {
+    margin-inline: -10px;
+    padding-inline: 10px;
+  }
+
+  .hero-availability li {
+    width: calc(50% - 8px);
   }
 }
 

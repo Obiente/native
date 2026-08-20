@@ -43,6 +43,32 @@ function captureMetadataPlugin() {
 
 export default defineConfig({
   plugins: [vue(), captureMetadataPlugin()],
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: "vue",
+              test: /node_modules[\\/](@vue|vue)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: "icons",
+              test: /node_modules[\\/]@phosphor-icons[\\/]/,
+              priority: 20,
+            },
+            {
+              name: "vendor",
+              test: /node_modules[\\/]/,
+              maxSize: 250 * 1024,
+              priority: 10,
+            },
+          ],
+        },
+      },
+    },
+  },
   server: {
     host: "0.0.0.0",
   },

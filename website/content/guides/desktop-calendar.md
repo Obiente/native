@@ -8,12 +8,16 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-desktop-calendar-month, guide-desktop-calendar-sources, guide-desktop-calendar-edit
 prerequisites: A connected Linux or Windows account, Calendar installed on Nextcloud, At least one CalDAV calendar
 ---
 
 # Use Nextcloud Calendar on Linux and Windows
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 The desktop Calendar workspace uses the available window for calendar sources, month or week navigation, event lists, and a persistent inspector. Linux and Windows share the same CalDAV behavior here; this guide does not apply to the unsupported authenticated macOS target.
 

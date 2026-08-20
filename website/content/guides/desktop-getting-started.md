@@ -8,12 +8,16 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 9
 difficulty: Getting started
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-desktop-getting-started-home, guide-desktop-getting-started-apps, guide-desktop-getting-started-settings
 prerequisites: A supported x86-64 Linux or Windows computer, Your Nextcloud server address and sign-in details, The package and release notes for the current alpha
 ---
 
 # Get started with Nextcloud Native on Linux or Windows
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 The supported authenticated desktop targets in the current alpha are Linux and Windows. macOS DMG artifacts only prove early packaging and do not yet provide supported Keychain-backed login, so this guide must not be used to treat macOS as ready. Keep another copy of important files while testing any prerelease.
 

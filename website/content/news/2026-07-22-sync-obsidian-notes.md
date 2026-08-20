@@ -2,7 +2,7 @@
 title: Syncing an Obsidian folder with Nextcloud
 slug: sync-obsidian-notes
 date: 2026-07-22
-lastUpdated: 2026-08-01
+lastUpdated: 2026-08-20
 description: Reliable two-way Nextcloud folder sync keeps Markdown notes visible to Obsidian, preserves conflicting edits, and avoids hidden app folders.
 tags: Obsidian Nextcloud sync, Markdown notes, Android folder sync, offline files
 captureScenario: obsidian-vault-sync
@@ -11,6 +11,12 @@ imageCaption: The production folder-pair UI shows the synthetic vault direction,
 ---
 
 # Syncing an Obsidian folder with Nextcloud
+
+**Historical article, reviewed 2026-08-20.** This post explains the folder-sync
+design recorded at publication, not a guarantee for every release or vault. Check
+the [current releases](https://github.com/Obiente/nc-native/releases),
+[compatibility notes](/compatibility/), and the current [Android folder-sync guide](/guides/android/folder-sync/)
+before testing it with real notes.
 
 Many people keep years of writing in an Obsidian vault: Markdown notes, attachments,
 canvases, and small configuration files that are valuable precisely because they are
@@ -56,7 +62,7 @@ making the user find the same folder a second time.
 
 ## Pairing a vault from start to finish
 
-You open My stuff, choose **Add folder sync**, and select the existing Obsidian vault
+You open **Folder sync**, choose **Add sync**, and select the existing Obsidian vault
 with Android's own folder picker. Next, you browse your Nextcloud folders and choose
 `Notes/Obsidian` as the destination. The app previews representative files from the
 local folder, shows the account that will receive them, and explains the difference
@@ -86,8 +92,9 @@ when a narrower system grant can safely cover the selected tree.
 ## Safe defaults for real Obsidian vaults
 
 Obsidian creates app-specific files and plugins with behavior that differs between
-devices. Sync rules make exclusions visible and handle renames, deletes, case
-differences, rapid edit bursts, and large nested vaults deliberately. Network,
+devices. Sync rules expose exclusions, and conflict and deletion policies remain
+explicit. Case-only renames, rapid edit bursts, plugin state, and large nested vaults
+still deserve testing with disposable data before a real vault is trusted. Network,
 charging, and battery preferences stay attached to each folder pair instead of hiding
 inside one global switch.
 

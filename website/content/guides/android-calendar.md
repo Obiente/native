@@ -8,12 +8,16 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-android-calendar-month, guide-android-calendar-agenda, guide-android-calendar-edit
 prerequisites: Calendar installed on the connected Nextcloud server, At least one CalDAV calendar, Write permission for creating or changing events
 ---
 
 # Use Nextcloud Calendar on Android
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 The Android Calendar workspace reads and writes events through CalDAV. It offers touch-first month and agenda views, preserves useful cached content during refresh, and enables mutation controls only when the selected calendar and event provide the required write evidence.
 

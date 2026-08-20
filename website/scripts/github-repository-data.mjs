@@ -16,6 +16,16 @@ function normalizedRepository(stargazersCount, updatedAt, source) {
   return Object.freeze({ stargazersCount, updatedAt });
 }
 
+const canonicalWebsiteOrigin = "https://nc-native.obiente.dev";
+
+/**
+ * The cached repository endpoint is an Nginx route, not a static website file.
+ * Do not request it from Vite preview, file URLs, or other static hosts.
+ */
+export function shouldRefreshGithubRepository(location) {
+  return location?.origin === canonicalWebsiteOrigin;
+}
+
 export function normalizeGithubRepositoryResponse(response) {
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new TypeError("The GitHub repository response is not an object.");

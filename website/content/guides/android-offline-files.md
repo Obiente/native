@@ -8,12 +8,16 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-12
+lastUpdated: 2026-08-20
 captureScenarios: guide-android-offline-files-browse, guide-android-offline-files-storage, guide-android-offline-files-transfers
 prerequisites: A connected Android account, Files already stored in Nextcloud, Enough free device storage for the originals you select
 ---
 
 # Keep Nextcloud files available offline on Android
+
+**Last reviewed: 2026-08-20.** The software and published packages may have
+changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Nextcloud Native distinguishes a server listing, a cached preview, an original stored offline, and a synchronized folder. This guide is for individual files and folders you explicitly keep on the Android device. Use the separate Android folder-sync guide when a normal device folder must exchange changes in both directions.
 
