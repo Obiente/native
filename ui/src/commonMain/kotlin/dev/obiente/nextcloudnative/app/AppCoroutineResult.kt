@@ -10,3 +10,18 @@ suspend fun <T> runCatchingPreservingCancellation(block: suspend () -> T): Resul
     } catch (failure: Exception) {
         Result.failure(failure)
     }
+
+suspend fun <T> runWithCleanupBeforeHandoff(
+    cleanup: () -> Unit,
+    block: suspend (markHandedOff: () -> Unit) -> T,
+): T {
+    var handedOff = false
+    return try {
+        block { handedOff = true }
+    } catch (failure: Throwable) {
+        if (!handedOff) {
+            runCatching(cleanup).exceptionOrNull()?.let(failure::addSuppressed)
+        }
+        throw failure
+    }
+}

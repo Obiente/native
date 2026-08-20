@@ -34,14 +34,16 @@ Allowed categories are `feature`, `fix`, `security`, `platform`, `docs`, and
 authentication, signing, or other security boundaries. Allowed platforms are
 `all`, `android`, `desktop`, `ios`, `linux`, `macos`, `website`, and `windows`.
 Use `none` when either the issue or pull request does not exist, but always
-provide at least one positive reference.
+provide at least one positive reference for release-facing `feature`, `fix`,
+`security`, `platform`, and `docs` fragments. Only an `internal` fragment with
+`user-facing: no` may use `none` for both references.
 
 Internal maintenance still needs a fragment so automation does not have to
 guess whether a missing entry was intentional:
 
 ```text
 category: internal
-issue: 103
+issue: none
 pull: none
 platforms: all
 user-facing: no

@@ -397,6 +397,47 @@ class SupportDiagnosticsTest {
         assertTrue(description.length <= MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
     }
 
+    @Test
+    fun externalEnvironmentValuesDropControlsBeforeStrictConstruction() {
+        val environment = boundedSupportDiagnosticsEnvironment(
+            appVersion = "nightly\u0000build",
+            packageVersion = "1.0\nprivate",
+            platform = "Desk\rtop",
+            operatingSystemVersion = "test\tversion",
+            architecture = "amd64\u001fprivate",
+        )
+
+        listOf(
+            environment.appVersion,
+            environment.packageVersion,
+            environment.platform,
+            environment.operatingSystemVersion,
+            environment.architecture,
+        ).forEach { value -> assertTrue(value.none(Char::isISOControl), value) }
+    }
+
+    @Test
+    fun externalEnvironmentValuesAreBoundedBeforeStrictConstruction() {
+        val oversized = "x".repeat(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH + 1)
+        val environment = boundedSupportDiagnosticsEnvironment(
+            appVersion = oversized,
+            packageVersion = oversized,
+            platform = oversized,
+            operatingSystemVersion = oversized,
+            architecture = oversized,
+        )
+
+        listOf(
+            environment.appVersion,
+            environment.packageVersion,
+            environment.platform,
+            environment.operatingSystemVersion,
+            environment.architecture,
+        ).forEach { value ->
+            assertEquals(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH, value.length)
+        }
+    }
+
     private fun fieldEvent(path: String) = SupportDiagnosticEventDraft(
         severity = SupportDiagnosticSeverity.Warning,
         component = SupportDiagnosticComponent.Sync,

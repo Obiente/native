@@ -181,6 +181,27 @@ data class SupportDiagnosticsEnvironment(
     }
 }
 
+fun boundedSupportDiagnosticsEnvironment(
+    appVersion: String,
+    packageVersion: String,
+    platform: String,
+    operatingSystemVersion: String,
+    architecture: String,
+): SupportDiagnosticsEnvironment = SupportDiagnosticsEnvironment(
+    appVersion = appVersion.boundedSupportDiagnosticsEnvironmentValue(),
+    packageVersion = packageVersion.boundedSupportDiagnosticsEnvironmentValue(),
+    platform = platform.boundedSupportDiagnosticsEnvironmentValue(),
+    operatingSystemVersion = operatingSystemVersion.boundedSupportDiagnosticsEnvironmentValue(),
+    architecture = architecture.boundedSupportDiagnosticsEnvironmentValue(),
+)
+
+private fun String.boundedSupportDiagnosticsEnvironmentValue(): String =
+    filterNot(Char::isISOControl)
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .ifBlank { "Unknown" }
+        .take(MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH)
+
 data class SupportDiagnosticsSummary(
     val available: Boolean,
     val eventCount: Int,
@@ -535,7 +556,7 @@ private const val MAX_SUPPORT_DIAGNOSTIC_CAUSE_DEPTH = 4
 internal const val MAX_SUPPORT_DIAGNOSTIC_CLASS_LENGTH = 180
 internal const val MAX_SUPPORT_DIAGNOSTIC_METHOD_LENGTH = 120
 internal const val MAX_SUPPORT_DIAGNOSTIC_FILE_NAME_LENGTH = 120
-private const val MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH = 160
+internal const val MAX_SUPPORT_DIAGNOSTIC_ENVIRONMENT_VALUE_LENGTH = 160
 internal const val SUPPORT_DIAGNOSTIC_ALIAS_LENGTH = 16
 
 internal val SUPPORT_DIAGNOSTIC_FIELD_NAME = Regex("^[a-z][a-z0-9_.-]{0,63}$")

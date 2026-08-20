@@ -79,13 +79,19 @@ internal fun createDesktopSupportDiagnostics(
     workerName = "nextcloud-support-diagnostics",
 )
 
-internal fun desktopSupportDiagnosticsEnvironment(): SupportDiagnosticsEnvironment =
-    SupportDiagnosticsEnvironment(
-        appVersion = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
-        packageVersion = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
-        platform = desktopSupportPlatformName(),
-        operatingSystemVersion = System.getProperty("os.version", "Unknown"),
-        architecture = System.getProperty("os.arch", "Unknown"),
+internal fun desktopSupportDiagnosticsEnvironment(
+    appVersion: String = System.getProperty(DESKTOP_VERSION_NAME_PROPERTY, "development"),
+    packageVersion: String = System.getProperty(DESKTOP_PACKAGE_VERSION_PROPERTY, "development"),
+    platform: String = desktopSupportPlatformName(),
+    operatingSystemVersion: String = System.getProperty("os.version", "Unknown"),
+    architecture: String = System.getProperty("os.arch", "Unknown"),
+): SupportDiagnosticsEnvironment =
+    boundedSupportDiagnosticsEnvironment(
+        appVersion = appVersion,
+        packageVersion = packageVersion,
+        platform = platform,
+        operatingSystemVersion = operatingSystemVersion,
+        architecture = architecture,
     )
 
 internal fun installDesktopUncaughtDiagnosticHandler(diagnostics: AsyncJvmSupportDiagnostics) {
