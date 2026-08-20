@@ -261,6 +261,25 @@ internal class NextcloudDocumentWebDav(
         )
     }
 
+    fun replaceFile(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        source: File,
+        expectedEtag: String,
+    ): DocumentMutationResult {
+        require(expectedEtag.isNotBlank()) { "An ETag is required for conflict-protected replacement." }
+        val checksum = source.sha256ChecksumForDav()
+        return execute(
+            request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))
+                .header("If-Match", expectedEtag)
+                .apply { checksum?.let { header("OC-Checksum", it) } }
+                .put(source.asRequestBody(OCTET_STREAM))
+                .build(),
+            operation = "replace file",
+        )
+    }
+
     fun createFolder(session: NextcloudSession, userId: String, path: String) {
         execute(
             request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))

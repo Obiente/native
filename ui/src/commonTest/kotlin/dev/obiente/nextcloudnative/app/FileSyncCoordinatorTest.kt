@@ -55,6 +55,16 @@ class FileSyncCoordinatorTest {
 
         assertEquals(listOf(verified), state.pair().baselines)
         assertEquals(emptyList(), state.pair().workItems)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(local("Vault/today.md", "local-2")),
+            listOf(remote("Vault/today.md", "remote-3")),
+            nowEpochMillis = 30,
+        )
+        assertEquals(listOf(verified), state.pair().baselines)
+        assertEquals(emptyList(), state.pair().workItems)
     }
 
     @Test
