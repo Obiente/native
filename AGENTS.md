@@ -56,6 +56,60 @@ Do not copy issue status into a second local tracker. When the assigned task
 includes GitHub publication, update the issue and Project as work advances.
 Otherwise report the required status change to the coordinating maintainer.
 
+### Documentation synchronization
+
+Documentation is part of the implementation contract. A code change is
+incomplete while any maintained document, guide, screenshot, compatibility
+entry, example, or command describes the previous behavior.
+
+- Before editing code, identify the maintained Markdown and public assets that
+  describe the affected workflow, platform, protocol, setting, limitation,
+  build command, or release behavior. Keep that inventory in the working scope.
+- Update affected documentation as the implementation changes, not as a final
+  optional cleanup. A follow-up issue is not a substitute for correcting text
+  made false by the current change.
+- Update all affected sources in the same branch and pull request: README and
+  getting-started material, architecture contracts, roadmap dependencies,
+  platform and compatibility status, contributor commands, user guides,
+  support and diagnostics instructions, screenshots, changelog fragments, and
+  release documentation as applicable.
+- Distinguish these states explicitly: present in source, covered by a
+  deterministic test, validated on a platform, available in a published
+  artifact, compatible with a verified server/app version, and supported for
+  normal use. Evidence for one state does not prove the others.
+- Planned work belongs in `ROADMAP.md` and the public Project. Implemented
+  behavior belongs in code-linked architecture or product documentation.
+  Released behavior belongs in immutable release notes and the changelog. Do
+  not copy one status into several documents that will drift independently.
+- Stateful claims use an exact `Last reviewed: YYYY-MM-DD` date, say that the
+  state may have changed, and link to the current source of truth. Avoid vague
+  words such as "currently," "recently," "soon," and "latest" without a date or
+  live link.
+- Stable architecture, safety, and contribution rules do not need decorative
+  dates. Date only claims whose truth can change with implementation, releases,
+  compatibility, infrastructure, or external services.
+- Never turn an unmerged implementation, skipped test, nightly artifact,
+  screenshot scenario, mock fixture, or roadmap item into a shipped or
+  supported claim. State the exact evidence and its boundary.
+- When behavior is removed, renamed, or moved, remove or update obsolete text,
+  anchors, examples, commands, screenshots, and cross-links in the same change.
+- Commands in maintained documentation must use repository-supported tools,
+  paths, task names, and safety constraints. Do not publish personal paths,
+  internal hostnames, credential-transfer procedures, or transient build output.
+- Product screenshots and diagrams must remain editable or reproducible,
+  privacy-safe, and tied to real application UI or stable architecture. Remove
+  superseded review exports and unreferenced comparison artifacts.
+- Historical changelogs and release notes remain immutable records. Do not
+  rewrite them to match present behavior; correct only a dangerous instruction,
+  privacy exposure, broken target, or wording that falsely presents historical
+  text as current policy.
+- If a claim cannot be verified from code, manifests, workflows, tests,
+  published artifacts, or authoritative upstream documentation, qualify or
+  remove it instead of guessing. Record the missing evidence for the maintainer.
+- Review documentation diffs with the same rigor as code. Check factual scope,
+  links, asset paths, commands, dates, privacy, accessibility text, and the
+  separation between implemented, validated, released, and planned behavior.
+
 ## 3. What "native" means
 
 A finished feature must help a person complete the workflow for which the

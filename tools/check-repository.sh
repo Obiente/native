@@ -56,6 +56,8 @@ done
 bash tools/test-apksigner-certificate-parser.sh
 bash tools/test-build-jvm-criteria.sh
 node tools/changelog-fragments.mjs validate
+node tools/check-markdown-links.mjs
+node --test tools/check-markdown-links.test.mjs
 node --test tools/changelog-fragments.test.mjs
 node --test tools/update-changelog.test.mjs
 node --test tools/nightly-release-notes.test.mjs

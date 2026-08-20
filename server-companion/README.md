@@ -2,6 +2,9 @@
 
 **Last reviewed: 2026-08-20.** Available companions and compatibility may have
 changed. Each companion README and manifest are the current source of truth.
+For the current bridge, check its
+[`appinfo/info.xml`](obiente_native_bridge/appinfo/info.xml) compatibility
+manifest and [`openapi.json`](obiente_native_bridge/openapi.json) interface.
 
 This directory contains independently installable server apps that add a
 narrow capability where an upstream app does not expose a complete native

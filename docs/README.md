@@ -3,6 +3,10 @@
 Use this index to find the maintained document for a question instead of
 copying status or policy into another file.
 
+**Last reviewed: 2026-08-20.** The documentation set may have changed. The
+[default-branch index](https://github.com/Obiente/nc-native/blob/main/docs/README.md)
+is the source of truth for maintained public documents.
+
 ## Product direction and compatibility
 
 - [Platform strategy](../PLATFORMS.md): shared and platform-specific ownership,
@@ -24,6 +28,9 @@ copying status or policy into another file.
 
 - [Contributing](../CONTRIBUTING.md): setup, verification, test-account safety,
   pull requests, and authorship requirements.
+- [Repository maintenance guide](../AGENTS.md): code ownership, documentation,
+  Compose, diagnostics, testing, and safe refactoring requirements for humans
+  and agents.
 - [AI policy](../AI_POLICY.md): allowed assistance and human responsibility.
 - [Security policy](../SECURITY.md): private vulnerability reporting and the
   dated support statement.
@@ -32,6 +39,8 @@ copying status or policy into another file.
 
 - [Prerelease policy](releases.md): versions, changelog fragments, tags, and
   protected release builds.
+- [Changelog fragments](../changes/README.md): required metadata, validation,
+  release preparation, and archive ownership.
 - [Prerelease checklist](prerelease-checklist.md): release-blocking safety and
   packaging checks.
 - [Windows MSI qualification](windows-release.md): unsigned-package disclosure,

@@ -1,5 +1,12 @@
 # Prerelease checklist
 
+**Last reviewed: 2026-08-20.** Release gates, supported packages, signing state,
+and published availability may have changed. Check the
+[prerelease policy](releases.md), the
+[Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
+[latest releases](https://github.com/Obiente/nc-native/releases) before using
+this checklist.
+
 Use this checklist before approving the protected `prerelease` environment.
 Every incomplete item must be documented as a known limitation in the release
 notes. Data-loss, authentication, privacy, signing, or upgrade failures block a

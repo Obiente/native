@@ -110,6 +110,20 @@ test("internal work requires an explicit no-user-facing marker", () => {
   assert.equal(parsed.userFacing, false);
 });
 
+test("internal work may omit issue and pull request references", () => {
+  const parsed = parseFragment(
+    fragment({
+      category: "internal",
+      issue: "none",
+      pull: "none",
+      userFacing: "no",
+      summary: "Repository maintenance remains valid before a pull request exists.",
+    }),
+  );
+  assert.equal(parsed.issue, null);
+  assert.equal(parsed.pull, null);
+});
+
 test("security fragments retain their release category", () => {
   const parsed = parseFragment(
     fragment({

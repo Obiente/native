@@ -7,8 +7,8 @@ native presentation and HTTP execution. Its canonical Rust model is
 Both serialize camel-case JSON with `descriptorVersion: "1.0"`.
 
 **Last reviewed: 2026-08-20.** Discovery limits may have changed. The canonical
-Rust and Kotlin models named above, their validators, and their tests are the
-current source of truth.
+[Rust model](src/dynamic.rs), its validator, and its tests are the source of
+truth; the Kotlin model is its runtime mirror.
 
 ## Contract
 

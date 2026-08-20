@@ -43,13 +43,10 @@ feel like one operating-system service:
 > prereleases are for testing and contribution, not yet a replacement for every
 > production workflow or the only copy of important data.
 
-> **Status snapshot:** Product and platform statements in this README were last
-> reviewed on **2026-08-20**. Implementation, compatibility, packaging, and
-> release availability may have changed since then. Use the
-> [latest release notes](https://github.com/Obiente/nc-native/releases),
-> [compatibility matrix](COMPATIBILITY.md), and
-> [public Project](https://github.com/orgs/Obiente/projects/4) for current
-> evidence.
+> **Status snapshot:** Last reviewed: **2026-08-20**. Implementation,
+> compatibility, packaging, and release availability may have changed. The
+> [GitHub Releases page](https://github.com/Obiente/nc-native/releases) is the
+> source of truth for published builds and their known limitations.
 
 Nextcloud Native is unofficial and is not affiliated with, sponsored by, or
 endorsed by Nextcloud GmbH.
@@ -109,7 +106,8 @@ complete on every platform or server version.
 
 ## Quick downloads
 
-Nightly is currently the default and only selectable update track.
+At the review date, Nightly is the default and only selectable in-app update
+track for direct installations.
 
 | Platform | Latest build | Explicit Nightly |
 | --- | --- | --- |
@@ -161,10 +159,10 @@ boundaries.
 
 ## Implemented alpha surfaces
 
-The following repository state was reviewed on **2026-08-20** and may have
-changed. A listed surface can still have platform, version, action, or lifecycle
-limitations; consult the compatibility matrix and current release notes before
-depending on it.
+**Last reviewed: 2026-08-20.** Repository implementation may have changed. The
+[default branch](https://github.com/Obiente/nc-native/tree/main) is the source of
+truth for current code. A listed surface can still have platform, version,
+action, or lifecycle limitations and is not a shipped-support guarantee.
 
 The repository already contains runnable Android and Linux desktop
 applications with:
@@ -218,12 +216,14 @@ The dependency gates and data-safety criteria are in
 
 ## Platform status
 
-This table was last reviewed on **2026-08-20** and may have changed. It
-describes repository and prerelease status, not a stable-support guarantee.
+**Last reviewed: 2026-08-20.** Platform availability may have changed. The
+[GitHub Releases page](https://github.com/Obiente/nc-native/releases) is the
+source of truth for published artifacts and limitations. This table is not a
+stable-support guarantee.
 
 | Platform | Current state |
 | --- | --- |
-| Android | Active application target, routine emulator and physical-device QA, signed APK/AAB prereleases |
+| Android | Active application target with signed APK/AAB prereleases; hosted CI covers unit tests and packaging, while connected-device instrumentation remains separate |
 | Linux | Primary interactive desktop development target, distributable plus RPM/DEB prereleases |
 | Windows | x86-64 MSI, native Credential Manager login storage, and Cloud Files sync under active prerelease qualification |
 | macOS | Early DMG packaging artifact; native Keychain login storage and supported authenticated use are not implemented yet |

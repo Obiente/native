@@ -5,6 +5,13 @@ especially protocol research, reusable semantic components, accessibility
 improvements, compatibility fixtures, and tests against different Nextcloud
 versions.
 
+**Last reviewed: 2026-08-20.** Toolchain versions, checks, release state, and
+contribution requirements may have changed. Check [`gradle.properties`](gradle.properties),
+the [version catalog](gradle/libs.versions.toml), the
+[Build and test workflow](.github/workflows/ci.yml), [`AGENTS.md`](AGENTS.md),
+and the [latest releases](https://github.com/Obiente/nc-native/releases) before
+starting work.
+
 ## Before you start
 
 - Discuss large architectural changes in an issue before investing heavily.
@@ -18,27 +25,18 @@ versions.
 - Read [AI_POLICY.md](AI_POLICY.md) before using AI assistance. Contributions
   must be human-led; autonomous agent submissions are not accepted.
 
-## Human authorship and DCO sign-off
+## Human responsibility and attribution
 
 The human contributor is responsible for every line they submit, including
 code, documentation, and tests prepared with AI assistance. You must understand
 the change well enough to explain, defend, debug, and modify it.
 
-Every submitted commit must include your human `Signed-off-by` trailer under
-the [Developer Certificate of Origin](https://developercertificate.org/):
-
-```bash
-git commit --signoff
-```
-
-Cryptographic commit signing and DCO sign-off are separate. Follow the
-repository's configured signing policy in addition to using `--signoff`.
-
 AI tools are assistants, not co-authors:
 
 - Do not add an AI tool through a `Co-authored-by` trailer.
-- An AI tool must not add or fabricate your `Signed-off-by` trailer. Add it only
-  after you have reviewed and accepted the complete commit.
+- Do not add or fabricate a person's authorship, approval, signature, or
+  certification trailer. Only that person can provide such an attribution.
+- Preserve existing attribution from other contributors.
 - AI use may be disclosed in the PR description or with an optional
   `Assisted-by: Tool[:model]` trailer. Disclosure is appreciated but not
   required.
@@ -67,7 +65,8 @@ Install JDK 21, Rust stable, Node.js `^20.19.0 || >=22.12.0`, and Android SDK
 Platform 36 with Build Tools 35.0.0. Set `ANDROID_HOME` or `ANDROID_SDK_ROOT`
 to your local SDK directory. Do not add local SDK paths to project files.
 
-Run the complete local verification suite:
+Run the baseline local verification suite for changes that affect all build
+targets:
 
 ```bash
 cargo test --locked
@@ -76,12 +75,16 @@ cargo test --locked
   :ui:desktopTest \
   :androidApp:testDebugUnitTest \
   :ui:createDistributable \
+  :androidApp:verifyReleaseLintGate \
   :androidApp:assembleDebug
 bash tools/check-repository.sh
 ```
 
-Focused tests are useful while iterating, but the full suite must pass before a
-pull request is ready for review.
+Focused tests are useful while iterating. Before a pull request is ready for
+review, run every check relevant to the changed platforms and verify that the
+[Build and test workflow](.github/workflows/ci.yml) passes. Platform packaging,
+emulator, server-companion, website, and release changes have additional checks
+described in their owning files and workflows.
 
 Repository-authored text uses ordinary ASCII punctuation while allowing normal
 UTF-8 letters and translations. Run

@@ -28,5 +28,5 @@ coordinate a fix, and credit reporters who want attribution.
 changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
 and their notes for current published limitations.
 
-The project is pre-release at this review date. Security fixes target the
-latest default branch; no older release line is declared supported here.
+The project is pre-release at this review date. Reports are assessed against
+the latest default branch; no older release line is declared supported here.

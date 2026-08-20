@@ -5,7 +5,10 @@ per-user x86-64 Windows MSI.
 
 **Last reviewed: 2026-08-20.** Package availability, signing, and qualification
 state may have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
-and their release notes before installing or publishing an MSI.
+and their release notes before installing or publishing an MSI. The
+[Publish prerelease workflow](../.github/workflows/prerelease.yml) and
+[`tools/verify-windows-package.ps1`](../tools/verify-windows-package.ps1) define
+the current automated release checks.
 
 ## Current trust state
 

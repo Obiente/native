@@ -109,6 +109,8 @@ generated configuration references that local certificate. Both package and
 repository-metadata signature checking are enabled.
 
 The public origin must serve files byte-for-byte over HTTPS and preserve the
-repository paths. Do not use GitHub Pages for the package payloads: the current
-site-size and bandwidth limits are too small for retaining multiple native
-desktop package versions.
+repository paths. Hosting selection, retention, and publication are operational
+decisions; this guide does not designate a currently supported public package
+origin. The checked-in
+[`tools/build-linux-package-repositories.sh`](../tools/build-linux-package-repositories.sh)
+is the source of truth for the generated repository layout.

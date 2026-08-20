@@ -5,8 +5,8 @@ portable product behavior from operating-system integration so shared code does
 not erase native security, lifecycle, accessibility, or filesystem semantics.
 
 **Last reviewed: 2026-08-20.** Implementation and release availability may
-have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
-for published artifacts and [ROADMAP.md](ROADMAP.md) for planned work.
+have changed. The [GitHub Releases page](https://github.com/Obiente/nc-native/releases)
+is the source of truth for published artifacts and their limitations.
 
 The target architecture has three portable layers and thin platform products:
 
@@ -34,6 +34,10 @@ its platform acceptance criteria pass and its limitations are documented.
 Packaging is not feature parity. A platform becomes supported for a workflow
 only after its platform-specific acceptance tests pass and the limitation is
 recorded in [COMPATIBILITY.md](COMPATIBILITY.md).
+
+Standard CI builds Android packages and runs Android unit tests, but it does not
+run connected-device instrumentation. A package or passing unit-test job is not
+evidence that device-specific acceptance criteria have passed.
 
 ## Shared boundaries
 

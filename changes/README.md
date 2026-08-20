@@ -1,5 +1,11 @@
 # Changelog fragments
 
+**Last reviewed: 2026-08-20.** Fragment fields, release preparation, and CI
+enforcement may have changed. The
+[`tools/changelog-fragments.mjs`](../tools/changelog-fragments.mjs) validator,
+[Build and test workflow](../.github/workflows/ci.yml), and
+[prerelease policy](../docs/releases.md) are the current sources of truth.
+
 Every pull request that changes the repository adds one small fragment under
 `changes/unreleased/`. Separate files let concurrent changes record release
 history without editing the same `Unreleased` section in `CHANGELOG.md`.
@@ -62,4 +68,5 @@ node tools/changelog-fragments.mjs prepare-release \
 Review and curate the generated draft, especially its known limitations. Then
 move the included fragments to `changes/archive/<version>/` and copy the
 rendered categories into the new version section of `CHANGELOG.md`. The
-published changelog remains immutable; only unreleased fragments are live.
+published changelog and archived fragments remain immutable; only unreleased
+fragments are edited as work progresses.

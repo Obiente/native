@@ -5,9 +5,8 @@ completeness contract. It is organized by reusable capability instead of
 assuming that opening an app proves compatibility.
 
 **Last reviewed: 2026-08-20.** Implementation, server APIs, and app behavior
-may have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
-for published limitations, [PLATFORMS.md](PLATFORMS.md) for platform status, and
-[ROADMAP.md](ROADMAP.md) for planned work.
+may have changed. The [GitHub Releases page](https://github.com/Obiente/nc-native/releases)
+is the source of truth for published compatibility limitations.
 
 ## Reviewed implementation snapshot
 
@@ -29,6 +28,11 @@ Repository live-server audits are opt-in and read-only by default. They do not
 send Talk messages, save files or notes, delete content, manage apps, or perform
 administrator actions. A passing audit is evidence for the tested server and
 app versions, not a general compatibility guarantee.
+
+Standard CI does not provision a real Nextcloud server or run connected Android
+instrumentation. Deterministic tests, opt-in live audits, device tests, and
+release qualification provide different evidence and must not be presented as
+interchangeable.
 
 ## Whole-app parity contract
 
