@@ -492,7 +492,7 @@ private fun File.isDesktopUpdatePartial(): Boolean {
 internal val DESKTOP_APP_UPDATE_CHECK_INTERVAL_MILLIS: Long = TimeUnit.HOURS.toMillis(6)
 
 private val DESKTOP_UPDATE_PACKAGE_EXTENSIONS = setOf("deb", "rpm", "msi", "dmg", "pkg")
-private val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
+internal val DESKTOP_LINUX_PACKAGE_FORMATS = setOf("deb", "rpm")
 private const val DESKTOP_PACKAGE_NAME = "nextcloudnative"
 private const val DESKTOP_PACKAGE_QUERY_TIMEOUT_MILLIS = 500L
 private const val DESKTOP_PACKAGE_QUERY_MAX_OUTPUT_CHARACTERS = 64
@@ -885,46 +885,6 @@ private fun writeWindowsInstallerHandoffScript(directory: File): File {
         Files.deleteIfExists(temporary)
     }
     return target
-}
-
-internal fun runLinuxNativePackageInstaller(
-    packageFile: File,
-    commandResolver: (File) -> List<String>? = ::linuxNativePackageInstallerCommand,
-    commandRunner: (List<String>) -> Int = ::runNativePackageInstallerCommand,
-): Boolean {
-    val command = commandResolver(packageFile) ?: return false
-    check(Files.isRegularFile(packageFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-        "The verified Linux update package is no longer a regular file."
-    }
-    val exitCode = commandRunner(command)
-    check(exitCode == 0) { "The system package transaction failed with exit code $exitCode." }
-    return true
-}
-
-private fun runNativePackageInstallerCommand(command: List<String>): Int {
-    val process = ProcessBuilder(command).inheritIO().start()
-    return try {
-        process.waitFor()
-    } catch (interrupted: InterruptedException) {
-        process.destroy()
-        Thread.currentThread().interrupt()
-        throw IOException("The system package transaction was interrupted.", interrupted)
-    }
-}
-
-internal fun linuxNativePackageInstallerCommand(
-    packageFile: File,
-    executableAvailable: (File) -> Boolean = { executable -> executable.isFile && executable.canExecute() },
-): List<String>? {
-    if (packageFile.extension.lowercase() !in DESKTOP_LINUX_PACKAGE_FORMATS) return null
-    val packageKitClient = File("/usr/bin/pkcon")
-    if (!executableAvailable(packageKitClient)) return null
-    return listOf(
-        packageKitClient.absolutePath,
-        "--noninteractive",
-        "install-local",
-        packageFile.toPath().toAbsolutePath().normalize().toString(),
-    )
 }
 
 private fun File.sha256(): String {
