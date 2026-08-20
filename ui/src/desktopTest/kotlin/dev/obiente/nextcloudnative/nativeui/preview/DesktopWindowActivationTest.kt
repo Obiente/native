@@ -9,6 +9,19 @@ import kotlin.test.assertEquals
 
 class DesktopWindowActivationTest {
     @Test
+    fun `compose platform is configured before desktop bootstrap`() {
+        val events = mutableListOf<String>()
+
+        runDesktopEntryPoint(
+            arguments = arrayOf("--background"),
+            configureComposePlatform = { events += "configure" },
+            launch = { arguments -> events += "launch:${arguments.single()}" },
+        )
+
+        assertEquals(listOf("configure", "launch:--background"), events)
+    }
+
+    @Test
     fun `restore leaves a normal window unchanged`() {
         assertEquals(Frame.NORMAL, restoredDesktopFrameState(Frame.NORMAL))
     }

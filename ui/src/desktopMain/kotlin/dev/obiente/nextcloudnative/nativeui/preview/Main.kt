@@ -13,7 +13,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.configureSwingGlobalsForCompose
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
@@ -56,7 +58,19 @@ import javax.swing.SwingUtilities
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-fun main(arguments: Array<String>) {
+fun main(arguments: Array<String>) = runDesktopEntryPoint(arguments)
+
+@OptIn(ExperimentalComposeUiApi::class)
+internal fun runDesktopEntryPoint(
+    arguments: Array<String>,
+    configureComposePlatform: () -> Unit = { configureSwingGlobalsForCompose() },
+    launch: (Array<String>) -> Unit = ::launchDesktopProcess,
+) {
+    configureComposePlatform()
+    launch(arguments)
+}
+
+private fun launchDesktopProcess(arguments: Array<String>) {
     val supportDiagnosticsRoot = desktopSupportDiagnosticsDirectory()
     installDesktopBootstrapUncaughtDiagnosticHandler(supportDiagnosticsRoot)
     if (arguments.contentEquals(arrayOf("--unregister-windows-sync-root"))) {
