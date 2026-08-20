@@ -43,11 +43,6 @@ jq -e '
   length == (unique | length) and
   all(.[]; type == "string" and test("^[a-f0-9]{64}$"))
 ' <<<"$signer_digests_json" >/dev/null
-changes='[]'
-if (( version_code > 20000000 )); then
-    changes="$(node "$(dirname "$0")/update-changelog.mjs" "$version_code")"
-fi
-
 mkdir -p "$(dirname "$output")"
 jq -n \
   --argjson schemaVersion 1 \
@@ -61,7 +56,6 @@ jq -n \
   --arg apkSha256 "$apk_sha256" \
   --argjson signingCertificateSha256Digests "$signer_digests_json" \
   --arg releaseNotesUrl "https://github.com/${repository}/releases/tag/${tag}" \
-  --argjson changes "$changes" \
   '{
     schemaVersion: $schemaVersion,
     channel: $channel,
@@ -73,6 +67,5 @@ jq -n \
     apkSize: $apkSize,
     apkSha256: $apkSha256,
     signingCertificateSha256Digests: $signingCertificateSha256Digests,
-    releaseNotesUrl: $releaseNotesUrl,
-    changes: $changes
+    releaseNotesUrl: $releaseNotesUrl
   }' >"$output"

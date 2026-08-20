@@ -37,6 +37,11 @@ jq -e \
     --arg apk_sha256 "$apk_sha256" \
     --arg release_notes_url "$release_notes_url" \
     '
+      keys == [
+        "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+        "packageName", "releaseNotesUrl", "schemaVersion",
+        "signingCertificateSha256Digests", "versionCode", "versionName"
+      ] and
       .schemaVersion == 1 and
       .channel == $channel and
       .versionName == $version_name and
@@ -47,7 +52,6 @@ jq -e \
       .apkSize == $apk_size and
       .apkSha256 == $apk_sha256 and
       .releaseNotesUrl == $release_notes_url and
-      (.changes | type == "array" and length <= 1000) and
       (.signingCertificateSha256Digests | type == "array" and length > 0) and
       all(
         .signingCertificateSha256Digests[];

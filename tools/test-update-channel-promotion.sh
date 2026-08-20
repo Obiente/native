@@ -49,8 +49,13 @@ jq -n \
     '{
       schemaVersion: 1,
       channel: "nightly-v1",
+      versionName: $tag,
       versionCode: 2,
-      changes: [],
+      packageName: "dev.obiente.nextcloudnative",
+      minimumAndroidSdk: 26,
+      apkSize: 1234,
+      apkSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      signingCertificateSha256Digests: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
       releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $tag),
       apkUrl: ("https://github.com/Obiente/nc-native/releases/download/" + $tag + "/app.apk")
     }' >"$candidate"
@@ -79,6 +84,22 @@ if [[ -e "$execution_marker" ]]; then
     exit 1
 fi
 
+expanded="$temporary_directory/expanded.json"
+uploaded_android="$temporary_directory/uploaded-android.json"
+jq '.versionCode = 3 | .changes = []' "$candidate" >"$expanded"
+PATH="$fake_bin:$PATH" \
+    FAKE_POINTER_MANIFEST="$expanded" \
+    FAKE_UPLOADED_MANIFEST="$uploaded_android" \
+    "$project_root/tools/promote-app-update-channel.sh" \
+    Obiente/nc-native \
+    channel-nightly \
+    "$immutable_tag" \
+    0123456789abcdef0123456789abcdef01234567 \
+    "$candidate" \
+    - \
+    1 >/dev/null
+cmp "$candidate" "$uploaded_android"
+
 desktop_candidate="$temporary_directory/desktop-candidate.json"
 jq -n \
     --arg tag "$immutable_tag" \
@@ -89,7 +110,6 @@ jq -n \
       versionCode: 2,
       packageVersion: "2.0.0",
       releaseNotesUrl: ("https://github.com/Obiente/nc-native/releases/tag/" + $tag),
-      changes: [],
       assets: [{
         platform: "linux",
         format: "deb",

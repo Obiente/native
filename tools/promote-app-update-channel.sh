@@ -51,15 +51,23 @@ manifest_code() {
           select(.schemaVersion == 1) |
           select(.channel == $channel) |
           select(.versionCode | type == "number" and . > 0 and floor == .) |
-          select(.changes | type == "array" and length <= 1000) |
           select(.releaseNotesUrl ==
             "https://github.com/Obiente/nc-native/releases/tag/" + $tag
           ) |
           if $expected_name == "update-manifest.json" then
+            select(keys == [
+              "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+              "packageName", "releaseNotesUrl", "schemaVersion",
+              "signingCertificateSha256Digests", "versionCode", "versionName"
+            ]) |
             select(.apkUrl | startswith(
               "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
             ))
           else
+            select(keys == [
+              "assets", "channel", "packageVersion", "releaseNotesUrl",
+              "schemaVersion", "versionCode", "versionName"
+            ]) |
             select(.assets | type == "array" and length > 0) |
             select(all(.assets[]; .url | startswith(
               "https://github.com/Obiente/nc-native/releases/download/" + $tag + "/"
@@ -78,8 +86,8 @@ desktop_pointer_state() {
         '
           . as $manifest |
           select(keys == [
-            "assets", "changes", "channel", "packageVersion", "releaseNotesUrl",
-            "schemaVersion", "versionCode", "versionName"
+            "assets", "channel", "packageVersion", "releaseNotesUrl", "schemaVersion",
+            "versionCode", "versionName"
           ]) |
           select(.schemaVersion == 1 and .channel == $channel) |
           select(.versionName | type == "string" and length > 0) |
@@ -184,11 +192,16 @@ for name in "${!candidates[@]}"; do
                 current_state=$'replace\tinvalid'
             fi
         else
-            current_state="$(
+            if ! current_state="$(
                 jq -er \
                     --arg channel "$expected_channel" \
                     --argjson candidate "${candidate_codes[$name]}" \
                     '
+                      select(keys == [
+                        "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+                        "packageName", "releaseNotesUrl", "schemaVersion",
+                        "signingCertificateSha256Digests", "versionCode", "versionName"
+                      ]) |
                       select(.schemaVersion == 1 and .channel == $channel) |
                       select(.versionCode | type == "number" and . > 0 and floor == .) |
                       [
@@ -198,7 +211,9 @@ for name in "${!candidates[@]}"; do
                       @tsv
                     ' \
                     "$current"
-            )"
+            )"; then
+                current_state=$'replace\tinvalid'
+            fi
         fi
         IFS=$'\t' read -r promotion_action current_code <<<"$current_state"
         if [[ "$promotion_action" == "keep" ]]; then

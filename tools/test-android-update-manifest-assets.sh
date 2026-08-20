@@ -34,6 +34,12 @@ GITHUB_REPOSITORY="Obiente/nc-native" \
     "$tag" \
     "$version_code"
 
+jq -e 'keys == [
+  "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+  "packageName", "releaseNotesUrl", "schemaVersion",
+  "signingCertificateSha256Digests", "versionCode", "versionName"
+]' "$manifest" >/dev/null
+
 printf 'changed APK bytes\n' >>"$apk"
 if "$project_root/tools/verify-android-update-manifest-assets.sh" \
     "$manifest" \

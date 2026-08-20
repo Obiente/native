@@ -634,6 +634,13 @@ maintainability, or correctness.
   and integrity rules.
 - Android release artifacts use the protected signing environment and verified
   certificate fingerprint. Never place signing secrets in the repository.
+- Treat every published update-channel manifest key set as frozen for installed
+  clients. Do not add, remove, or rename fields in an existing schema or mutable
+  channel pointer. Extensible release data belongs in a separately versioned
+  sidecar that supporting clients fetch independently.
+- Test update metadata against the oldest supported strict parser and the
+  current parser before promotion. A mutable pointer repair must remain
+  readable by every client version that could still request it.
 - Release notes explain product changes and known limitations concisely.
   Internal workflow mechanics belong in CI logs, not user-facing notes.
 - Update [CHANGELOG.md](CHANGELOG.md), compatibility data, and public roadmap

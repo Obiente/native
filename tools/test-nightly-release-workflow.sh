@@ -273,6 +273,11 @@ GITHUB_REPOSITORY="Obiente/nc-native" \
     '["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]'
 
 jq -e --arg tag "$tag" --argjson code "$version_code" '
+  keys == [
+    "apkSha256", "apkSize", "apkUrl", "channel", "minimumAndroidSdk",
+    "packageName", "releaseNotesUrl", "schemaVersion",
+    "signingCertificateSha256Digests", "versionCode", "versionName"
+  ] and
   .schemaVersion == 1 and
   .channel == "nightly-v1" and
   .versionName == $tag and

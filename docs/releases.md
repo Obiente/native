@@ -44,6 +44,12 @@ tools/derive-android-version-code.sh "$source_sequence" alpha
 tools/derive-desktop-package-version.sh "$source_sequence" alpha
 ```
 
+The schema-1 Android and desktop update manifests keep their original top-level
+key sets because installed clients parse them strictly. Do not add optional
+fields to these documents. Publish future cumulative changelogs or other
+extensible metadata as separately versioned sidecars, and test mutable channel
+pointers against every supported client parser before promotion.
+
 ## Creating a prerelease
 
 1. Update the three `ncVersion*` development defaults in `gradle.properties`.
