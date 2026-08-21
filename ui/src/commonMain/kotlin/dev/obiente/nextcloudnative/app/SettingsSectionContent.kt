@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -175,7 +174,6 @@ internal fun SettingsAccountSectionContent(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SettingsAppearanceSectionContent(
     selectedTheme: ThemePreference,

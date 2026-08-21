@@ -37,7 +37,6 @@ class JvmSupportIntakeTest {
     @Test
     fun supportConversationMessageBodiesCannotBeReplayed() {
         val body = OneShotSupportMessageRequestBody("private reply".encodeToByteArray())
-
         assertTrue(body.isOneShot())
     }
 
@@ -50,7 +49,6 @@ class JvmSupportIntakeTest {
             fixture.server.enqueue(privateStatusResponse(
                 "needs_information", listOf(maintainerMessageId to "Which installation stage failed?"),
             ))
-
             assertEquals(SupportDiagnosticsConversationResult.Updated, fixture.intake.refreshCompletedReports())
 
             val refreshed = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)

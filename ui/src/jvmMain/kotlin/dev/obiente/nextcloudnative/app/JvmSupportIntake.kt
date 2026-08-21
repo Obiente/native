@@ -489,11 +489,9 @@ class JvmSupportIntake(
                     completed.conversationError = null
                 }
             }
-            if (reports.isEmpty()) {
-                return@withContext SupportDiagnosticsConversationResult.Failed(
-                    "No submitted support reports are available on this device.",
-                )
-            }
+            if (reports.isEmpty()) return@withContext SupportDiagnosticsConversationResult.Failed(
+                "No submitted support reports are available on this device.",
+            )
             publishState(submittedStateFor(accountIdentity), accountIdentity)
             var failure: String? = null
             reports.forEach { completed ->
@@ -505,8 +503,7 @@ class JvmSupportIntake(
                 }
                 publishState(submittedStateFor(accountIdentity), accountIdentity)
             }
-            failure?.let { message -> SupportDiagnosticsConversationResult.Failed(message) }
-                ?: SupportDiagnosticsConversationResult.Updated
+            failure?.let { message -> SupportDiagnosticsConversationResult.Failed(message) } ?: SupportDiagnosticsConversationResult.Updated
         } finally {
             endOperation()
         }

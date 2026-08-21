@@ -923,8 +923,7 @@ private fun MarketingDesktopStartupSettingsScenario(
         selected = NextcloudDestination.Settings,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
-    ) {
-        DesktopSettingsWorkspace(
+    ) { DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
                 displayName = fixture.displayName,
                 cloudName = fixture.cloudName,
@@ -934,7 +933,8 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            initialSection = SettingsWorkspaceSection.DesktopApp,
+            visibleSections = SettingsWorkspaceSection.entries,
+            selectedSection = SettingsWorkspaceSection.DesktopApp, onSectionSelected = {},
         ) { section ->
             when (section) {
                 SettingsWorkspaceSection.DesktopApp -> {
