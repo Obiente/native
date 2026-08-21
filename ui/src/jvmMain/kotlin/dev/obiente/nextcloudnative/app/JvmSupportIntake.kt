@@ -508,7 +508,6 @@ class JvmSupportIntake(
             endOperation()
         }
     }
-
     suspend fun sendCompletedReportMessage(
         recordId: String,
         message: String,
