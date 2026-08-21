@@ -37,4 +37,18 @@ class SupportSettingsDraftStateTest {
         assertEquals("New report details", drafts.reportDraft)
         assertEquals("Existing request reply", drafts.replyDraft("report-a"))
     }
+
+    @Test
+    fun `unknown reply delivery remains blocked until refresh`() {
+        val drafts = SupportSettingsDraftState()
+        drafts.updateReplyDraft("report-a", "Do not resend blindly")
+        drafts.updateReplyRefreshRequirement("report-a", true)
+
+        assertEquals(true, drafts.replyRequiresRefresh("report-a"))
+
+        drafts.clearReplyRefreshRequirements()
+
+        assertEquals(false, drafts.replyRequiresRefresh("report-a"))
+        assertEquals("Do not resend blindly", drafts.replyDraft("report-a"))
+    }
 }

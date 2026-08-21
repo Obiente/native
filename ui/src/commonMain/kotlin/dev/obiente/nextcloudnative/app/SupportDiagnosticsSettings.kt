@@ -60,7 +60,6 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: Su
     var notice by remember { mutableStateOf<String?>(null) }
     var page by rememberSaveable { mutableStateOf(0) }
     var replyId by remember { mutableStateOf<String?>(null) }
-    var replyNeedsRefresh by remember { mutableStateOf<String?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     var sendDialog by remember { mutableStateOf(false) }
     var discardDialog by remember { mutableStateOf(false) }
@@ -75,13 +74,14 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: Su
     LaunchedEffect(services, diagnosticsRevision, summaryRefresh) {
         summary = services.loadSupportDiagnosticsSummary()
     }
-    LaunchedEffect(reports.map { it.recordId }) {
-        drafts.retainReplyDrafts(reports.mapTo(mutableSetOf()) { it.recordId })
-        if (replyId != null && reports.none { it.recordId == replyId }) {
+    LaunchedEffect(submission) {
+        val submittedReports = (submission as? SupportDiagnosticsSubmissionState.Submitted)?.reports
+            ?: return@LaunchedEffect
+        drafts.retainReplyDrafts(submittedReports.mapTo(mutableSetOf()) { it.recordId })
+        if (replyId != null && submittedReports.none { it.recordId == replyId }) {
             replyId = null
-            replyNeedsRefresh = null
         }
-        if (deleteId != null && reports.none { it.recordId == deleteId }) deleteId = null
+        if (deleteId != null && submittedReports.none { it.recordId == deleteId }) deleteId = null
     }
     SupportDialogs(
         services = services,
@@ -123,7 +123,6 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: Su
             SupportTab.Requests -> RequestsTab(
                 services, submission, reports, page, { page = it },
                 replyId, { replyId = it }, drafts,
-                replyNeedsRefresh, { replyNeedsRefresh = it },
                 { deleteId = it }, { notice = it },
             )
             SupportTab.NewReport -> NewReportTab(
@@ -149,8 +148,6 @@ private fun RequestsTab(
     replyId: String?,
     onReplyId: (String?) -> Unit,
     drafts: SupportSettingsDraftState,
-    refreshRequiredId: String?,
-    onRefreshRequiredId: (String?) -> Unit,
     onDelete: (String) -> Unit,
     onNotice: (String) -> Unit,
 ) {
@@ -174,7 +171,7 @@ private fun RequestsTab(
                     scope.launch {
                         when (val result = services.refreshSubmittedSupportDiagnosticsReports()) {
                             SupportDiagnosticsConversationResult.Updated -> {
-                                onRefreshRequiredId(null)
+                                drafts.clearReplyRefreshRequirements()
                                 onNotice("Support requests refreshed.")
                             }
                             is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> onNotice(result.message)
@@ -197,10 +194,8 @@ private fun RequestsTab(
                     },
                     replyDraft = drafts.replyDraft(report.recordId),
                     onReplyDraft = { drafts.updateReplyDraft(report.recordId, it) },
-                    refreshRequired = refreshRequiredId == report.recordId,
-                    onRefreshRequired = { required ->
-                        onRefreshRequiredId(report.recordId.takeIf { required })
-                    },
+                    refreshRequired = drafts.replyRequiresRefresh(report.recordId),
+                    onRefreshRequired = { drafts.updateReplyRefreshRequirement(report.recordId, it) },
                     onDelete = { onDelete(report.recordId) },
                     onNotice = onNotice,
                 )
@@ -567,6 +562,10 @@ private fun PrivacyTab(
                 "A support code cannot rediscover a lost receipt.",
         )
         PrivacyPoint(
+            "Reports include a stable pseudonymous account scope so maintainers can connect reports from the same " +
+                "account on this installation. It does not contain the account address or login name.",
+        )
+        PrivacyPoint(
             "Deleting revokes the live request and removes diagnostics. Backups have separate retention, " +
                 "so immediate deletion from every backup is not guaranteed.",
         )
@@ -670,6 +669,7 @@ private fun SupportDialogs(
         text = {
             Text(
                 "Obiente Support receives the text you reviewed, sanitized diagnostics, and release details. " +
+                    "A stable pseudonymous account scope links reports from the same account on this installation. " +
                     "Authorized maintainers can read it. Retention is 30 days unless you delete it first.",
             )
         },
