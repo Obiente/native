@@ -453,7 +453,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SettingsSectionContent.kt": "61b6fdee889e2d64e4a56833a0c1c98a9b4a792264deeccc668474f270b885c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SettingsWorkspace.kt": "512645588e17ea9d87bd371cf9583259d089e7a5c7ff2d17646179a28d26c1de",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnostics.kt": "676c1ebfc7200d08e909d129366f19b7baf6a07fb63ac3af16e6fc1d9d291207",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnosticsSettings.kt": "025b24f4968f2b2f6d25bb0633e725c150701424f12fc30d955f2e249156c711",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnosticsSettings.kt": "51e821342a25f1fb2ff657880f4c39c5ea5009bf4a644b0f022167ea7e9563c2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SystemTags.kt": "452abd9589c627dc7ae9dae03265a3bfdb837809ba0ca82da0698ef73db64332",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkAttachmentReader.kt": "f444161c7c719880f3a44108255ef781148baac083c88148509ad023f27a43e9",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/TalkMessageCards.kt": "baeba1dff08ab4be69cf4b39daad45b6450bfda9464dc8a60de2e1555c73267b",
