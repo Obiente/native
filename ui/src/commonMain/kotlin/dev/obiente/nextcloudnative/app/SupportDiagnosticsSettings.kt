@@ -16,7 +16,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -105,7 +105,7 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices) {
             "Send a private report, follow replies, or review what the app can include.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
+        PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
             SupportTab.entries.forEachIndexed { index, item ->
                 Tab(selected = tab == index, onClick = { tab = index }, text = { Text(item.label) })
             }
