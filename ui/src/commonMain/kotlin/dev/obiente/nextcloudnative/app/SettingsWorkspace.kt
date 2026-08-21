@@ -1,22 +1,27 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -27,14 +32,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,9 +57,35 @@ internal enum class SettingsWorkspaceSection(
     NotificationsAndDevice("Notifications & device", "Permissions and background features", NextcloudIcons.Activity),
     DesktopApp("Desktop app", "Startup and local integration", NextcloudIcons.Settings),
     Updates("Updates", "Release channel and installation", NextcloudIcons.Refresh),
-    Diagnostics("Diagnostics", "Anonymized local support reports", NextcloudIcons.Activity),
+    Support("Support", "Create reports, review diagnostics, and follow up", NextcloudIcons.Activity),
     HelpAndGuides("Help & guides", "Learn workflows and find project help", NextcloudIcons.Info),
     Administration("Administration", "Server apps and capabilities", NextcloudIcons.Apps),
+}
+
+internal fun visibleSettingsSections(
+    isDesktop: Boolean,
+    hasDeviceSettings: Boolean,
+    hasDesktopAppSettings: Boolean = isDesktop,
+): List<SettingsWorkspaceSection> = SettingsWorkspaceSection.entries.filter { section ->
+    when (section) {
+        SettingsWorkspaceSection.DesktopApp -> isDesktop && hasDesktopAppSettings
+        SettingsWorkspaceSection.NotificationsAndDevice -> hasDeviceSettings
+        else -> true
+    }
+}
+
+internal fun resolveSettingsWorkspaceSection(
+    restoredSectionName: String?,
+    visibleSections: List<SettingsWorkspaceSection>,
+): SettingsWorkspaceSection {
+    val compatibleName = when (restoredSectionName) {
+        "Diagnostics" -> SettingsWorkspaceSection.Support.name
+        else -> restoredSectionName
+    }
+    val restoredSection = SettingsWorkspaceSection.entries.firstOrNull { it.name == compatibleName }
+    return restoredSection?.takeIf(visibleSections::contains)
+        ?: visibleSections.firstOrNull()
+        ?: SettingsWorkspaceSection.Account
 }
 
 internal data class SettingsWorkspaceSummary(
@@ -70,28 +99,42 @@ internal data class SettingsWorkspaceSummary(
     val storageLabel: String? = null,
 )
 
+internal enum class SettingsWorkspaceMode {
+    Compact,
+    TwoPane,
+    ThreePane,
+}
+
 internal data class SettingsWorkspaceLayout(
     val categoryWidthDp: Int,
     val showSummaryPane: Boolean,
+    val mode: SettingsWorkspaceMode,
 )
 
-internal fun resolveSettingsWorkspaceLayout(availableWidthDp: Int): SettingsWorkspaceLayout =
-    SettingsWorkspaceLayout(
+internal fun resolveSettingsWorkspaceLayout(availableWidthDp: Int): SettingsWorkspaceLayout {
+    require(availableWidthDp >= 0) { "availableWidthDp must not be negative" }
+    val mode = when {
+        availableWidthDp < 600 -> SettingsWorkspaceMode.Compact
+        availableWidthDp < 1_020 -> SettingsWorkspaceMode.TwoPane
+        else -> SettingsWorkspaceMode.ThreePane
+    }
+    return SettingsWorkspaceLayout(
         categoryWidthDp = if (availableWidthDp < 820) 206 else 246,
-        showSummaryPane = availableWidthDp >= 1_020,
+        showSummaryPane = mode == SettingsWorkspaceMode.ThreePane,
+        mode = mode,
     )
+}
 
 @Composable
 internal fun DesktopSettingsWorkspace(
     summary: SettingsWorkspaceSummary,
-    initialSection: SettingsWorkspaceSection = SettingsWorkspaceSection.Account,
+    visibleSections: List<SettingsWorkspaceSection>,
+    selectedSection: SettingsWorkspaceSection?,
+    onSectionSelected: (SettingsWorkspaceSection?) -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit,
 ) {
-    var selectedName by rememberSaveable { mutableStateOf(initialSection.name) }
-    val selected = SettingsWorkspaceSection.entries.firstOrNull { it.name == selectedName }
-        ?: SettingsWorkspaceSection.Account
-
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.Large),
             verticalAlignment = Alignment.CenterVertically,
@@ -119,10 +162,25 @@ internal fun DesktopSettingsWorkspace(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val layout = resolveSettingsWorkspaceLayout(maxWidth.value.toInt())
+            if (layout.mode == SettingsWorkspaceMode.Compact) {
+                MobileSettingsWorkspace(
+                    visibleSections = visibleSections,
+                    selectedSection = selectedSection,
+                    onSectionSelected = onSectionSelected,
+                    modifier = Modifier.fillMaxSize(),
+                    showOverviewHeader = false,
+                    content = content,
+                )
+                return@BoxWithConstraints
+            }
+            val selected = selectedSection?.takeIf(visibleSections::contains)
+                ?: visibleSections.firstOrNull()
+                ?: SettingsWorkspaceSection.Account
             Row(modifier = Modifier.fillMaxSize()) {
                 Column(
                     modifier = Modifier.width(layout.categoryWidthDp.dp).fillMaxHeight()
-                        .verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Medium),
+                        .selectableGroup().verticalScroll(rememberScrollState())
+                        .padding(NextcloudSpacing.Medium),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     Text(
@@ -131,11 +189,11 @@ internal fun DesktopSettingsWorkspace(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    SettingsWorkspaceSection.entries.forEach { section ->
+                    visibleSections.forEach { section ->
                         SettingsSectionRow(
                             section = section,
                             selected = section == selected,
-                            onClick = { selectedName = section.name },
+                            onClick = { onSectionSelected(section) },
                         )
                     }
                 }
@@ -165,6 +223,60 @@ internal fun DesktopSettingsWorkspace(
 }
 
 @Composable
+internal fun MobileSettingsWorkspace(
+    visibleSections: List<SettingsWorkspaceSection>,
+    selectedSection: SettingsWorkspaceSection?,
+    onSectionSelected: (SettingsWorkspaceSection?) -> Unit,
+    modifier: Modifier = Modifier,
+    showOverviewHeader: Boolean = true,
+    content: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit,
+) {
+    val selected = selectedSection?.takeIf(visibleSections::contains)
+    PlatformBackHandler(
+        enabled = selected != null,
+        onBack = { onSectionSelected(null) },
+    )
+    if (selected == null) {
+        Column(modifier = modifier.fillMaxSize()) {
+            if (showOverviewHeader) {
+                ProductHeader("Settings")
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(NextcloudSpacing.Medium),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                items(visibleSections, key = SettingsWorkspaceSection::name) { section ->
+                    SettingsActionCard(
+                        title = section.title,
+                        description = section.description,
+                        icon = section.icon,
+                        onClick = { onSectionSelected(section) },
+                        modifier = Modifier.testTag("settings-overview-section-${section.name}"),
+                    )
+                }
+            }
+        }
+    } else {
+        Column(modifier = modifier.fillMaxSize()) {
+            ScreenHeader(
+                selected.title,
+                selected.description,
+                { onSectionSelected(null) },
+            )
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    .padding(NextcloudSpacing.Large),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            ) {
+                content(selected)
+                Spacer(Modifier.height(NextcloudSpacing.Large))
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsSectionRow(
     section: SettingsWorkspaceSection,
     selected: Boolean,
@@ -176,7 +288,14 @@ private fun SettingsSectionRow(
                 if (selected) MaterialTheme.colorScheme.primaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent,
             )
-            .clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 10.dp),
+            .heightIn(min = 48.dp)
+            .testTag("settings-desktop-section-${section.name}")
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                role = Role.Tab,
+            )
+            .padding(horizontal = 11.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -209,7 +328,7 @@ private fun SettingsSectionRow(
 @Composable
 private fun SettingsSummaryPane(summary: SettingsWorkspaceSummary, modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier.padding(NextcloudSpacing.Medium),
+        modifier = modifier.verticalScroll(rememberScrollState()).padding(NextcloudSpacing.Medium),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
         Text("This account", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -280,9 +399,10 @@ internal fun SettingsActionCard(
     icon: ImageVector,
     onClick: () -> Unit,
     trailing: String? = null,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp),
         onClick = onClick,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(NextcloudRadii.Card),

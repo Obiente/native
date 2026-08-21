@@ -737,19 +737,19 @@ internal class AndroidNextcloudServices(
     override suspend fun cancelSupportDiagnosticsSubmission(): Boolean = supportIntake.cancel()
 
     override suspend fun deleteSubmittedSupportDiagnosticsReport(
-        deletionUrl: String,
-    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(deletionUrl)
+        recordId: String,
+    ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(recordId)
 
     override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
         supportIntake.refreshCompletedReports()
 
     override suspend fun sendSubmittedSupportDiagnosticsMessage(
-        statusUrl: String,
+        recordId: String,
         message: String,
-    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(statusUrl, message)
+    ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(recordId, message)
 
-    override suspend fun markSubmittedSupportDiagnosticsReportRead(statusUrl: String): Boolean =
-        supportIntake.markCompletedReportRead(statusUrl)
+    override suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean =
+        supportIntake.markCompletedReportRead(recordId)
 
     private fun supportDiagnosticFeatureState(): List<SupportDiagnosticFieldDraft> =
         listOf(

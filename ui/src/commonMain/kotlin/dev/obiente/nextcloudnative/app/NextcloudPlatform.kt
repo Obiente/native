@@ -572,7 +572,7 @@ interface NextcloudPlatformServices {
     suspend fun cancelSupportDiagnosticsSubmission(): Boolean = false
 
     /** Deletes one retained submitted report after an explicit user confirmation. */
-    suspend fun deleteSubmittedSupportDiagnosticsReport(deletionUrl: String): SupportDiagnosticsDeletionResult =
+    suspend fun deleteSubmittedSupportDiagnosticsReport(recordId: String): SupportDiagnosticsDeletionResult =
         SupportDiagnosticsDeletionResult.Unsupported(
             "Deleting submitted support reports is unavailable on this platform.",
         )
@@ -585,14 +585,14 @@ interface NextcloudPlatformServices {
 
     /** Sends one reporter reply through the retained private report capability. */
     suspend fun sendSubmittedSupportDiagnosticsMessage(
-        statusUrl: String,
+        recordId: String,
         message: String,
     ): SupportDiagnosticsConversationResult = SupportDiagnosticsConversationResult.Unsupported(
         "Private support conversations are unavailable on this platform.",
     )
 
     /** Acknowledges the currently visible status and maintainer messages on this device. */
-    suspend fun markSubmittedSupportDiagnosticsReportRead(statusUrl: String): Boolean = false
+    suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean = false
 
     /** Clears only diagnostic history. The private alias key remains stable across reports. */
     suspend fun clearSupportDiagnostics(): Boolean = false

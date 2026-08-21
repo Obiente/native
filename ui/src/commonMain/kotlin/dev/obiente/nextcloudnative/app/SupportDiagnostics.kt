@@ -250,9 +250,9 @@ sealed interface SupportDiagnosticsSubmissionState {
     data class Rejected(val message: String) : SupportDiagnosticsSubmissionState
     data object Cancelled : SupportDiagnosticsSubmissionState
     data class SubmittedReport(
+        val recordId: String,
         val supportCode: String,
-        val statusUrl: String,
-        val deletionUrl: String,
+        val createdAt: String,
         val retentionUntil: String,
         val status: String,
         val updatedAt: String? = null,
@@ -268,7 +268,7 @@ sealed interface SupportDiagnosticsSubmissionState {
         }
 
         val supportCode: String get() = reports.first().supportCode
-        val statusUrl: String get() = reports.first().statusUrl
+        val recordId: String get() = reports.first().recordId
         val retentionUntil: String get() = reports.first().retentionUntil
     }
     data class Unsupported(val reason: String) : SupportDiagnosticsSubmissionState
@@ -288,6 +288,7 @@ data class SupportDiagnosticsMessage(
 
 sealed interface SupportDiagnosticsConversationResult {
     data object Updated : SupportDiagnosticsConversationResult
+    data class ReplyDeliveryUnknown(val message: String) : SupportDiagnosticsConversationResult
     data class Failed(val message: String) : SupportDiagnosticsConversationResult
     data class Unsupported(val reason: String) : SupportDiagnosticsConversationResult
 }

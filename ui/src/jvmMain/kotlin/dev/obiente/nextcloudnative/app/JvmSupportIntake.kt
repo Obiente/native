@@ -436,7 +436,7 @@ class JvmSupportIntake(
         }
     }
 
-    suspend fun deleteCompletedReport(deletionUrl: String): SupportDiagnosticsDeletionResult =
+    suspend fun deleteCompletedReport(recordId: String): SupportDiagnosticsDeletionResult =
         withContext(Dispatchers.IO) {
             awaitInitialization()
             synchronized(lock) { storageUnavailableMessage }?.let { message ->
@@ -454,7 +454,7 @@ class JvmSupportIntake(
                 val completed = synchronized(lock) {
                     completedSubmissions.firstOrNull { submission ->
                         submission.originAccountIdentity == activeAccountIdentity &&
-                            submission.receipt.deletionUrl == deletionUrl
+                            submission.recordId == recordId
                     }
                 } ?: return@withContext SupportDiagnosticsDeletionResult.Failed(
                     "This submitted support report is no longer available on this device.",
@@ -499,6 +499,7 @@ class JvmSupportIntake(
             reports.forEach { completed ->
                 when (val result = refreshCompletedReport(completed)) {
                     SupportDiagnosticsConversationResult.Updated -> Unit
+                    is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Failed -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Unsupported -> if (failure == null) failure = result.reason
                 }
@@ -512,7 +513,7 @@ class JvmSupportIntake(
     }
 
     suspend fun sendCompletedReportMessage(
-        statusUrl: String,
+        recordId: String,
         message: String,
     ): SupportDiagnosticsConversationResult = withContext(Dispatchers.IO) {
         awaitInitialization()
@@ -537,7 +538,7 @@ class JvmSupportIntake(
         val completed = synchronized(lock) {
             completedSubmissions.firstOrNull { submission ->
                 submission.originAccountIdentity == activeAccountIdentity &&
-                    submission.receipt.statusUrl == statusUrl &&
+                    submission.recordId == recordId &&
                     submission.isRetained(currentTimeMillis())
             }?.also { submission ->
                 submission.conversationLoading = true
@@ -572,14 +573,14 @@ class JvmSupportIntake(
         }
     }
 
-    suspend fun markCompletedReportRead(statusUrl: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun markCompletedReportRead(recordId: String): Boolean = withContext(Dispatchers.IO) {
         awaitInitialization()
         if (!beginOperation()) return@withContext false
         try {
         val completed = synchronized(lock) {
             completedSubmissions.firstOrNull { submission ->
                 submission.originAccountIdentity == activeAccountIdentity &&
-                    submission.receipt.statusUrl == statusUrl
+                    submission.recordId == recordId
             }
         } ?: return@withContext false
         val conversation = synchronized(lock) { completed.conversation } ?: return@withContext false
@@ -670,13 +671,14 @@ class JvmSupportIntake(
                 } else {
                     "Could not reach Obiente Support. Check your connection and try again."
                 },
+                replyDeliveryUnknown = request.method == "POST",
             )
         } catch (_: SerializationException) {
-            failConversation(completed, "Obiente Support returned an invalid private conversation.")
+            failConversation(completed, "Obiente Support returned an invalid private conversation.", request.method == "POST")
         } catch (_: DateTimeException) {
-            failConversation(completed, "Obiente Support returned an invalid private conversation.")
+            failConversation(completed, "Obiente Support returned an invalid private conversation.", request.method == "POST")
         } catch (_: IllegalArgumentException) {
-            failConversation(completed, "Obiente Support returned an invalid private conversation.")
+            failConversation(completed, "Obiente Support returned an invalid private conversation.", request.method == "POST")
         } finally {
             activeCall.compareAndSet(call, null)
         }
@@ -708,12 +710,14 @@ class JvmSupportIntake(
     private fun failConversation(
         completed: CompletedSubmission,
         message: String,
-    ): SupportDiagnosticsConversationResult.Failed {
+        replyDeliveryUnknown: Boolean = false,
+    ): SupportDiagnosticsConversationResult {
         synchronized(lock) {
             completed.conversationLoading = false
             completed.conversationError = message
         }
-        return SupportDiagnosticsConversationResult.Failed(message)
+        return if (replyDeliveryUnknown) SupportDiagnosticsConversationResult.ReplyDeliveryUnknown(message)
+        else SupportDiagnosticsConversationResult.Failed(message)
     }
 
     private fun cancelAfterIntentPublished(callAtIntent: Call?): Boolean {
@@ -2303,9 +2307,9 @@ class JvmSupportIntake(
                         maintainerMessages.indexOfFirst { message -> message.id == readId }
                     } ?: -1
                     SupportDiagnosticsSubmissionState.SubmittedReport(
+                        recordId = completed.recordId,
                         supportCode = completed.receipt.supportCode,
-                        statusUrl = completed.receipt.statusUrl,
-                        deletionUrl = completed.receipt.deletionUrl,
+                        createdAt = completed.receipt.createdAt,
                         retentionUntil = completed.receipt.retentionUntil,
                         status = conversation?.status ?: completed.receipt.status,
                         updatedAt = conversation?.updatedAt,
