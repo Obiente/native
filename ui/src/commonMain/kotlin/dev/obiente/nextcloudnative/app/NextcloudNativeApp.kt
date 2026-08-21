@@ -938,11 +938,9 @@ private fun MarketingDesktopStartupSettingsScenario(
         ) { section ->
             when (section) {
                 SettingsWorkspaceSection.DesktopApp -> {
-                    DesktopBackgroundSettingsCard(enabled = true, onEnabledChanged = {})
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = true,
-                        message = "Nextcloud Native will start in your desktop session and recover after a crash.",
-                        onEnabledChanged = {},
+                    SettingsDesktopAppSectionContent(
+                        preferences = settingsDesktopPreferences(true, true),
+                        onPreferenceChanged = { _, _ -> },
                     )
                 }
                 else -> SettingsActionCard(

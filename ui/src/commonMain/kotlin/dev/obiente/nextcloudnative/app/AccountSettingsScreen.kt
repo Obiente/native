@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -34,6 +35,7 @@ internal fun SettingsScreen(
     var selectedSectionName by rememberSaveable(session.serverUrl, session.loginName) {
         mutableStateOf<String?>(null)
     }
+    val supportDrafts = remember(session.serverUrl, session.loginName) { SupportSettingsDraftState() }
     var loggingOut by remember { mutableStateOf(false) }
     var logoutError by remember { mutableStateOf<String?>(null) }
     var capabilityRefresh by remember { mutableStateOf(0) }
@@ -116,30 +118,11 @@ internal fun SettingsScreen(
     val deviceFeaturesById = platformCapabilities.associateBy { status ->
         SettingsDeviceFeatureId(status.capability.toString())
     }
-    val desktopPreferences = buildList {
-        if (services.supportsKeepRunningInBackground) {
-            add(
-                SettingsDesktopPreferenceItem(
-                    id = SettingsDesktopPreferenceId.KeepRunningInBackground,
-                    title = "Keep running in background",
-                    description = "Keep sync and transfer work active after the window closes",
-                    enabled = keepRunningInBackground,
-                ),
-            )
-        }
-        if (services.supportsStartOnLogin) {
-            add(
-                SettingsDesktopPreferenceItem(
-                    id = SettingsDesktopPreferenceId.StartOnLogin,
-                    title = "Start on login",
-                    description = "Open Nextcloud Native when you sign in to this device",
-                    enabled = startOnLogin,
-                    message = startOnLoginMessage,
-                    messageIsError = startOnLoginMessage != null,
-                ),
-            )
-        }
-    }
+    val desktopPreferences = settingsDesktopPreferences(
+        keepRunningInBackground.takeIf { services.supportsKeepRunningInBackground },
+        startOnLogin.takeIf { services.supportsStartOnLogin },
+        startOnLoginMessage,
+    )
     val sectionContent: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit = { section ->
         when (section) {
             SettingsWorkspaceSection.Account -> SettingsAccountSectionContent(
@@ -233,7 +216,7 @@ internal fun SettingsScreen(
                 platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
             )
 
-            SettingsWorkspaceSection.Support -> SupportSettingsView(services)
+            SettingsWorkspaceSection.Support -> SupportSettingsView(services, supportDrafts)
 
             SettingsWorkspaceSection.HelpAndGuides -> SettingsHelpSectionContent(
                 state = SettingsHelpSectionState(
@@ -272,7 +255,8 @@ internal fun SettingsScreen(
         selectedSectionName = section?.name
     }
 
-    if (isDesktop) {
+    BoxWithConstraints {
+        if (useExpandedSettingsWorkspace(isDesktop, maxWidth.value.toInt())) {
         DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
                 displayName = serverInfo?.displayName ?: session.loginName,
@@ -290,13 +274,14 @@ internal fun SettingsScreen(
             selectedSection = selectedSection,
             onSectionSelected = onSectionSelected,
             content = sectionContent,
-        )
-    } else {
-        MobileSettingsWorkspace(
-            visibleSections = visibleSections,
-            selectedSection = selectedSection,
-            onSectionSelected = onSectionSelected,
-            content = sectionContent,
-        )
+            )
+        } else {
+            MobileSettingsWorkspace(
+                visibleSections = visibleSections,
+                selectedSection = selectedSection,
+                onSectionSelected = onSectionSelected,
+                content = sectionContent,
+            )
+        }
     }
 }

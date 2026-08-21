@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Getting started
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-21
 captureScenarios: guide-android-getting-started-home, guide-android-getting-started-files, guide-android-getting-started-calendar
 prerequisites: Android 8.0 or newer, Your Nextcloud server address and sign-in details, A current signed APK from the GitHub Releases page
 ---
 
 # Get started with Nextcloud Native on Android
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-21.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -48,8 +48,8 @@ Nextcloud Native also appears in Android's system Files app while the account is
 @capture-alt: Nextcloud Native Android Calendar screen with a compact month view, touch-sized navigation, an agenda, source labels, and an add-event action
 @capture-caption: Android workspaces use phone-specific navigation and controls; Calendar is one example of a native surface rather than an embedded server web page.
 
-Open **Settings** to see the settings overview, then open **Notifications & device**. Grant only permissions needed for the workflow you choose. Notifications, files and media, or media-library access can remain unavailable until a feature requests them. If Android reports a permission as blocked, use the Settings action to review it in the operating system. Android system Back returns from a settings section to the overview before leaving Settings.
+On a phone, open **Settings** to see the settings overview, then open **Notifications & device**. Android system Back returns from a section to the overview before leaving Settings. On a tablet or an unfolded large screen, the section list stays beside the selected settings. Grant only permissions needed for the workflow you choose. Notifications, files and media, or media-library access can remain unavailable until a feature requests them. If Android reports a permission as blocked, use the Settings action to review it in the operating system.
 
 Return to the app list and open a workspace such as Calendar, Photos, Talk, or Notes. Support varies by installed server app and version: some surfaces are complete, while adaptive or read-heavy views may expose fewer actions. The app should explain unsupported behavior rather than opening the server's web interface. Use Android system Back to leave nested content and return to the previous workspace state.
 
-If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account. **New report** lets you describe what happened and prepare a bounded diagnostic report, while **Privacy** explains what the report can contain. Preparing or previewing a report does not submit it. Review the report, then choose **Send** only when you intend to submit it to support.
+If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account. **New report** lets you describe what happened and prepare a bounded diagnostic report, while **Privacy** explains what the report can contain. Draft text stays only in memory while Settings is open. Preparing or previewing a report does not submit it. Review the report, then choose **Send** only when you intend to submit it to support.

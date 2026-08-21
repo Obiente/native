@@ -385,6 +385,35 @@ internal data class SettingsDesktopPreferenceItem(
     }
 }
 
+internal fun settingsDesktopPreferences(
+    keepRunningInBackground: Boolean?,
+    startOnLogin: Boolean?,
+    startOnLoginMessage: String? = null,
+): List<SettingsDesktopPreferenceItem> = buildList {
+    keepRunningInBackground?.let { enabled ->
+        add(
+            SettingsDesktopPreferenceItem(
+                SettingsDesktopPreferenceId.KeepRunningInBackground,
+                "Keep running in background",
+                "Keep sync and transfer work active after the window closes",
+                enabled,
+            ),
+        )
+    }
+    startOnLogin?.let { enabled ->
+        add(
+            SettingsDesktopPreferenceItem(
+                SettingsDesktopPreferenceId.StartOnLogin,
+                "Start on login",
+                "Open Nextcloud Native when you sign in to this device",
+                enabled,
+                startOnLoginMessage,
+                startOnLoginMessage != null,
+            ),
+        )
+    }
+}
+
 @Composable
 internal fun SettingsDesktopAppSectionContent(
     preferences: List<SettingsDesktopPreferenceItem>,

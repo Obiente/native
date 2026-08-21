@@ -8,14 +8,14 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 9
 difficulty: Getting started
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-21
 captureScenarios: guide-desktop-getting-started-home, guide-desktop-getting-started-apps, guide-desktop-getting-started-settings
 prerequisites: A supported x86-64 Linux or Windows computer, Your Nextcloud server address and sign-in details, The package and release notes for the current alpha
 ---
 
 # Get started with Nextcloud Native on Linux or Windows
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-21.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -48,4 +48,4 @@ Open **Settings** to choose the theme, review the connected server, configure st
 
 **Keep running when the window closes** is enabled by default. Closing the window therefore keeps sync and virtual files active in the tray; use **Open Nextcloud Native** to restore the window, **Show sync activity** to inspect work, or **Quit** to stop the app cleanly. Start-on-login is a separate setting and is disabled until you enable it. Background folder-pair checks run while the desktop process is active.
 
-Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account. **New report** lets you add reproduction steps and prepare a bounded diagnostic report, while **Privacy** explains what it can contain. Preparing, previewing, or exporting a report does not submit it. Review the report and choose **Send** only when you intend to submit it to support.
+Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account. **New report** lets you add reproduction steps and prepare a bounded diagnostic report, while **Privacy** explains what it can contain. Draft text stays only in memory while Settings is open. Preparing, previewing, or exporting a report does not submit it. Review the report and choose **Send** only when you intend to submit it to support.

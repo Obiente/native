@@ -51,6 +51,21 @@ class SettingsWorkspaceTest {
     }
 
     @Test
+    fun `android phone keeps the overview and detail flow`() {
+        assertFalse(useExpandedSettingsWorkspace(isDesktop = false, availableWidthDp = 599))
+    }
+
+    @Test
+    fun `android tablet uses the persistent section list`() {
+        assertTrue(useExpandedSettingsWorkspace(isDesktop = false, availableWidthDp = 600))
+    }
+
+    @Test
+    fun `compact desktop window still delegates to the adaptive workspace`() {
+        assertTrue(useExpandedSettingsWorkspace(isDesktop = true, availableWidthDp = 480))
+    }
+
+    @Test
     fun `mobile hides desktop integration and an empty device section`() {
         val sections = visibleSettingsSections(
             isDesktop = false,

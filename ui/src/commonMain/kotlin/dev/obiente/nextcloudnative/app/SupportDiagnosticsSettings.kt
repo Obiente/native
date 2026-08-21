@@ -44,10 +44,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) = SupportSettingsView(services)
+internal fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
+    val drafts = remember { SupportSettingsDraftState() }
+    SupportSettingsView(services, drafts)
+}
 
 @Composable
-internal fun SupportSettingsView(services: NextcloudPlatformServices) {
+internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: SupportSettingsDraftState) {
     var tab by rememberSaveable { mutableStateOf(0) }
     var summaryRefresh by remember { mutableStateOf(0) }
     val diagnosticsRevision by remember(services) { services.supportDiagnosticsRevisions() }.collectAsState(0L)
@@ -57,13 +60,11 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices) {
     var notice by remember { mutableStateOf<String?>(null) }
     var page by rememberSaveable { mutableStateOf(0) }
     var replyId by remember { mutableStateOf<String?>(null) }
-    var replyDraft by remember { mutableStateOf("") }
     var replyNeedsRefresh by remember { mutableStateOf<String?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     var sendDialog by remember { mutableStateOf(false) }
     var discardDialog by remember { mutableStateOf(false) }
     var clearDialog by remember { mutableStateOf(false) }
-    var draft by remember { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf(false) }
     val reports = (submission as? SupportDiagnosticsSubmissionState.Submitted)?.reports.orEmpty()
@@ -75,9 +76,9 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices) {
         summary = services.loadSupportDiagnosticsSummary()
     }
     LaunchedEffect(reports.map { it.recordId }) {
+        drafts.retainReplyDrafts(reports.mapTo(mutableSetOf()) { it.recordId })
         if (replyId != null && reports.none { it.recordId == replyId }) {
             replyId = null
-            replyDraft = ""
             replyNeedsRefresh = null
         }
         if (deleteId != null && reports.none { it.recordId == deleteId }) deleteId = null
@@ -94,7 +95,7 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices) {
         onClear = { clearDialog = it },
         deleteId = deleteId,
         onDeleteId = { deleteId = it },
-        draft = draft,
+        draft = drafts.reportDraft,
         onNotice = { notice = it },
         onHistoryCleared = { summaryRefresh += 1 },
     )
@@ -121,12 +122,12 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices) {
         when (SupportTab.entries[tab]) {
             SupportTab.Requests -> RequestsTab(
                 services, submission, reports, page, { page = it },
-                replyId, { replyId = it }, replyDraft, { replyDraft = it },
+                replyId, { replyId = it }, drafts,
                 replyNeedsRefresh, { replyNeedsRefresh = it },
                 { deleteId = it }, { notice = it },
             )
             SupportTab.NewReport -> NewReportTab(
-                services, summary, submission, draft, { draft = it },
+                services, summary, submission, drafts.reportDraft, drafts::updateReportDraft,
                 exporting, { exporting = it }, { sendDialog = true }, { discardDialog = true },
                 { notice = it }, { summaryRefresh += 1 },
             )
@@ -147,8 +148,7 @@ private fun RequestsTab(
     onPage: (Int) -> Unit,
     replyId: String?,
     onReplyId: (String?) -> Unit,
-    replyDraft: String,
-    onReplyDraft: (String) -> Unit,
+    drafts: SupportSettingsDraftState,
     refreshRequiredId: String?,
     onRefreshRequiredId: (String?) -> Unit,
     onDelete: (String) -> Unit,
@@ -194,10 +194,9 @@ private fun RequestsTab(
                     replyOpen = replyId == report.recordId,
                     onReplyOpen = { open ->
                         onReplyId(report.recordId.takeIf { open })
-                        if (!open) onReplyDraft("")
                     },
-                    replyDraft = replyDraft,
-                    onReplyDraft = onReplyDraft,
+                    replyDraft = drafts.replyDraft(report.recordId),
+                    onReplyDraft = { drafts.updateReplyDraft(report.recordId, it) },
                     refreshRequired = refreshRequiredId == report.recordId,
                     onRefreshRequired = { required ->
                         onRefreshRequiredId(report.recordId.takeIf { required })
@@ -431,7 +430,7 @@ private fun NewReportTab(
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
         Text("New private report", style = MaterialTheme.typography.titleLarge)
         Text(
-            "The draft stays in memory and is not restored after leaving the app.",
+            "The draft stays in memory while Settings is open. It is not saved when Settings closes.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -787,5 +786,5 @@ private fun loadingSummary() = SupportDiagnosticsSummary(
 
 private const val SUPPORT_REPORT_PAGE_SIZE = 5
 private const val MAX_VISIBLE_SUPPORT_MESSAGES = 20
-private const val MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH = 8_192
+internal const val MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH = 8_192
 internal const val SUPPORT_CONVERSATION_BACKGROUND_REFRESH_MILLIS = 5L * 60L * 1_000L
