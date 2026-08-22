@@ -4,14 +4,19 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 
 @Stable
-internal class SupportSettingsDraftState {
+internal class SupportSettingsDraftState(
+    refreshRequiredRecordIds: Collection<String> = emptyList(),
+) {
     var reportDraft by mutableStateOf("")
         private set
     private val replyDrafts = mutableStateMapOf<String, String>()
-    private val repliesRequiringRefresh = mutableStateMapOf<String, Boolean>()
+    private val repliesRequiringRefresh = mutableStateMapOf<String, Boolean>().apply {
+        refreshRequiredRecordIds.forEach { recordId -> put(recordId, true) }
+    }
 
     fun updateReportDraft(value: String) {
         reportDraft = value.take(MAX_SUPPORT_REPRODUCTION_STEPS_LENGTH)
@@ -35,5 +40,12 @@ internal class SupportSettingsDraftState {
     fun retainReplyDrafts(recordIds: Set<String>) {
         replyDrafts.keys.toList().filterNot(recordIds::contains).forEach(replyDrafts::remove)
         repliesRequiringRefresh.keys.toList().filterNot(recordIds::contains).forEach(repliesRequiringRefresh::remove)
+    }
+
+    companion object {
+        val Saver = listSaver(
+            save = { state -> state.repliesRequiringRefresh.keys.toList() },
+            restore = ::SupportSettingsDraftState,
+        )
     }
 }

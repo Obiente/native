@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import androidx.compose.runtime.saveable.SaverScope
 
 class SupportSettingsDraftStateTest {
     @Test
@@ -50,5 +51,22 @@ class SupportSettingsDraftStateTest {
 
         assertEquals(false, drafts.replyRequiresRefresh("report-a"))
         assertEquals("Do not resend blindly", drafts.replyDraft("report-a"))
+    }
+
+    @Test
+    fun `restoration keeps recovery guard but not private drafts`() {
+        val drafts = SupportSettingsDraftState()
+        drafts.updateReportDraft("Private report text")
+        drafts.updateReplyDraft("report-a", "Private reply text")
+        drafts.updateReplyRefreshRequirement("report-a", true)
+
+        val saved = with(SupportSettingsDraftState.Saver) {
+            with(SaverScope { true }) { save(drafts) }
+        }
+        val restored = requireNotNull(saved?.let(SupportSettingsDraftState.Saver::restore))
+
+        assertEquals(true, restored.replyRequiresRefresh("report-a"))
+        assertEquals("", restored.reportDraft)
+        assertEquals("", restored.replyDraft("report-a"))
     }
 }
