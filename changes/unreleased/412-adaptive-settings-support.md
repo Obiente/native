@@ -4,4 +4,4 @@ pull: 412
 platforms: android, desktop
 user-facing: yes
 
-Settings now uses focused navigation with two panes on larger Android screens. Support separates requests, reports, and privacy, preserves reply recovery across restarts, and confirms uncertain delivery before allowing another reply.
+Settings now has focused navigation on Android and desktop. Support separates requests, new reports, and privacy, and preserves reply recovery across restarts with explicit acknowledgement for uncertain delivery.
