@@ -8,14 +8,14 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 9
 difficulty: Getting started
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-23
 captureScenarios: guide-desktop-getting-started-home, guide-desktop-getting-started-apps, guide-desktop-getting-started-settings
 prerequisites: A supported x86-64 Linux or Windows computer, Your Nextcloud server address and sign-in details, The package and release notes for the current alpha
 ---
 
 # Get started with Nextcloud Native on Linux or Windows
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-23.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -48,4 +48,6 @@ Open **Settings** to choose the theme, review the connected server, configure st
 
 **Keep running when the window closes** is enabled by default. Closing the window therefore keeps sync and virtual files active in the tray; use **Open Nextcloud Native** to restore the window, **Show sync activity** to inspect work, or **Quit** to stop the app cleanly. Start-on-login is a separate setting and is disabled until you enable it. Background folder-pair checks run while the desktop process is active.
 
-Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Diagnostics** to add reproduction steps and export a bounded, anonymized report. Nothing is uploaded automatically, so review the saved report before sharing it.
+When the **Folder sync** workspace is available, one ordinary desktop folder pair can include at most 100,000 selected files and folders. The client checks this limit before hashing file content. Automatic checks wait longer after repeated item failures and leave an item failed after five attempts. Use the pair action or the tray's **Sync now** action only after reviewing the failure. These rules apply to ordinary folder pairs, not to Windows Cloud Files placeholders in File Explorer.
+
+Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Diagnostics** to add reproduction steps and export a bounded, anonymized report. The report includes a one-time heap, non-heap, direct-buffer, mapped-buffer, uptime, thread, garbage-collection, and event-history snapshot where the JVM exposes those counters. It excludes server URLs, account names, file names, paths, credentials, response bodies, and file contents. Nothing is uploaded automatically, so review the saved report before sharing it.

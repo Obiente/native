@@ -202,9 +202,10 @@ internal class DesktopFileSyncEngine(
         onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
         resetExhaustedFailures: Boolean = false,
+        onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit = {},
     ): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess {
-            runPairLocked(session, userId, pairId, onProgress, shouldContinue, resetExhaustedFailures)
+            runPairLocked(session, userId, pairId, onProgress, onDiagnostic, shouldContinue, resetExhaustedFailures)
         }
     }
 
@@ -216,6 +217,7 @@ internal class DesktopFileSyncEngine(
         choice: FileSyncDecisionChoice,
         onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
+        onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit = {},
     ): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess transaction@ {
             val current = store.loadPair(pairId)
@@ -244,6 +246,7 @@ internal class DesktopFileSyncEngine(
                 userId,
                 pairId,
                 onProgress,
+                onDiagnostic,
                 shouldContinue,
                 resetExhaustedFailures = true,
                 expectedResolvedWorkId = workId,
@@ -256,6 +259,7 @@ internal class DesktopFileSyncEngine(
         userId: String,
         pairId: String,
         onProgress: (DesktopFileSyncProgressEvent) -> Unit,
+        onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit,
         shouldContinue: () -> Boolean,
         resetExhaustedFailures: Boolean,
         expectedResolvedWorkId: Long? = null,
@@ -279,14 +283,20 @@ internal class DesktopFileSyncEngine(
                 runCatching { onRemoteMutationCommitted(session, userId, path) }
             },
         )
-        val includes: (String, SyncEntryKind) -> Boolean = { path, kind ->
-            initialPair.configuration.includesSyncPath(path, kind)
-        }
+        val includes = { path: String, kind: SyncEntryKind -> initialPair.configuration.includesSyncPath(path, kind) }
         val cachedLocalRevisions = initialPair.baselines.mapNotNull { baseline ->
             baseline.localRevision?.let { revision -> baseline.relativePath to revision }
         }.toMap()
-        val localEntries = local.scan(cachedLocalRevisions, includes).map(DesktopLocalSyncDocument::entry)
+        val localEntries = try {
+            local.scan(cachedLocalRevisions, includes, shouldContinue).map(DesktopLocalSyncDocument::entry)
+        } catch (_: DesktopFileSyncScanStoppedException) {
+            return FileSyncCenterActionResult.Completed("The folder scan stopped before making changes.")
+        } catch (failure: DesktopFileSyncScanLimitException) {
+            onDiagnostic(failure.toDesktopFileSyncRunDiagnosticEvent(DesktopFileSyncScanStage.Local))
+            throw failure
+        }
         val remoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
+        val snapshotDiagnostics = desktopFileSyncSnapshotDiagnostics(localEntries, remoteEntries)
         persisted = persisted.copy(
             coordinator = scanFileSyncPair(
                 persisted.coordinator,
@@ -305,7 +315,10 @@ internal class DesktopFileSyncEngine(
                     "Nextcloud details before choosing again.",
             )
         }
-        val plannedPair = scannedPair.prepareForDesktopExecution(resetExhaustedFailures)
+        val plannedPair = scannedPair.prepareForDesktopExecution(
+            resetExhaustedFailures,
+            nowEpochMillis = System.currentTimeMillis(),
+        )
         persisted = persisted.copy(coordinator = FileSyncCoordinatorState(listOf(plannedPair)))
         store.savePair(persisted, pairId)
 
@@ -335,6 +348,8 @@ internal class DesktopFileSyncEngine(
                     completedOperations = completed,
                     totalOperations = totalOperations,
                     sizeBytes = sizeBytes,
+                    attemptCount = runningWork.attemptCount,
+                    snapshot = snapshotDiagnostics,
                     stage = DesktopFileSyncProgressStage.Started,
                 ),
             )
@@ -370,6 +385,8 @@ internal class DesktopFileSyncEngine(
                         completedOperations = completed,
                         totalOperations = totalOperations,
                         sizeBytes = sizeBytes,
+                        attemptCount = runningWork.attemptCount,
+                        snapshot = snapshotDiagnostics,
                         stage = DesktopFileSyncProgressStage.Completed,
                     ),
                 )
@@ -398,8 +415,11 @@ internal class DesktopFileSyncEngine(
                         completedOperations = completed,
                         totalOperations = totalOperations,
                         sizeBytes = sizeBytes,
+                        attemptCount = runningWork.attemptCount,
+                        snapshot = snapshotDiagnostics,
                         stage = DesktopFileSyncProgressStage.Failed,
                         failureMessage = safeMessage,
+                        failureKind = desktopFileSyncFailureKind(failure),
                     ),
                 )
             }
@@ -735,26 +755,6 @@ internal fun FileSyncPair.retainsResolvedFileSyncDecision(workId: Long): Boolean
                 else -> false
             }
     }
-
-internal fun FileSyncPair.prepareForDesktopExecution(resetExhaustedFailures: Boolean): FileSyncPair =
-    copy(
-        workItems = workItems.map { work ->
-            if (work.state != FileSyncExecutionState.Failed) {
-                work
-            } else if (work.attemptCount < MAX_FILE_SYNC_ATTEMPTS) {
-                work.copy(state = FileSyncExecutionState.Ready, failureMessage = null)
-            } else if (resetExhaustedFailures) {
-                work.copy(
-                    state = FileSyncExecutionState.Ready,
-                    attemptCount = 0,
-                    lastAttemptEpochMillis = null,
-                    failureMessage = null,
-                )
-            } else {
-                work
-            }
-        },
-    )
 
 private fun DesktopFileSyncPersistedState.scopedToDesktopWork(
     pair: FileSyncPair,

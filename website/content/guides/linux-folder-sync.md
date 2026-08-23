@@ -8,14 +8,14 @@ device: Desktop
 platforms: Linux
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-23
 captureScenarios: guide-linux-folder-sync-workspace, guide-linux-folder-sync-locations, guide-linux-folder-sync-rules
 prerequisites: A connected Linux account, A local directory you can safely test, Enough local and Nextcloud storage for the first scan
 ---
 
 # Sync a Linux folder with Nextcloud Native
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-23.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -49,3 +49,7 @@ Choose **Two-way**, **Device to Nextcloud**, or **Nextcloud to device** accordin
 Start with **Ask before changing either copy** or **Keep both copies** for conflicts. Treat deletion policy separately: propagating a deletion can remove the counterpart even when there is no content conflict. Add ignores for generated output, lock files, or temporary application data, and review the estimated file count and size before continuing.
 
 Watch the first scan and queued operations. If a conflict or ambiguous interrupted operation appears, compare both versions and preserve both when uncertain. A successful scan is evidence for that generation only. Keep independent backups of important data while the product remains an alpha, and do not treat bidirectional synchronization as backup history.
+
+One desktop sync pair can include at most 100,000 selected files and folders. If a pair exceeds that limit, choose narrower folders or add ignore rules. The capacity check stops before the client hashes file content, so an oversized tree should fail quickly instead of consuming memory and disk time for a scan it cannot finish.
+
+Automatic checks wait longer after each repeated item failure. After five failed attempts, the item stays in the visible failed state until you use **Sync now** to request another attempt. Review the failure first. Repeatedly requesting a retry cannot repair a permissions error, an unsupported name, or a file that another application keeps changing.

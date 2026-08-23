@@ -2752,6 +2752,7 @@ class DesktopNextcloudServices(
                         userId,
                         pairId,
                         onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() },
                         resetExhaustedFailures = true,
                     )
@@ -2955,6 +2956,7 @@ class DesktopNextcloudServices(
                                 userId,
                                 pair.id,
                                 onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                                onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
                                 shouldContinue = { !isFileSyncPaused() && runtimeAllowsPair() },
                                 resetExhaustedFailures = source == DesktopFileSyncRunSource.Tray,
                             )
@@ -3073,33 +3075,8 @@ class DesktopNextcloudServices(
     }
 
     private fun publishFileSyncProgress(accountId: String, event: DesktopFileSyncProgressEvent) {
-        if (event.stage == DesktopFileSyncProgressStage.Failed) {
-            supportDiagnostics.recordForAccountIdentity(
-                accountId,
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Sync,
-                    operation = "sync.item",
-                    outcome = "failed",
-                    message = event.failureMessage,
-                    fields = listOf(
-                        SupportDiagnosticFieldDraft("pair", event.pairId, SupportDiagnosticValuePrivacy.Identifier),
-                        SupportDiagnosticFieldDraft(
-                            "work",
-                            event.workId.toString(),
-                            SupportDiagnosticValuePrivacy.Identifier,
-                        ),
-                        SupportDiagnosticFieldDraft(
-                            "relative_path",
-                            event.relativePath,
-                            SupportDiagnosticValuePrivacy.RemotePath,
-                        ),
-                        SupportDiagnosticFieldDraft("operation_type", event.operation::class.simpleName.orEmpty()),
-                        SupportDiagnosticFieldDraft("completed_operations", event.completedOperations.toString()),
-                        SupportDiagnosticFieldDraft("total_operations", event.totalOperations.toString()),
-                    ),
-                ),
-            )
+        event.toSupportDiagnosticEventDraft()?.let { diagnostic ->
+            supportDiagnostics.recordForAccountIdentity(accountId, diagnostic)
         }
         val current = mutableFileSyncTraySnapshot.value
         val phase = when (event.stage) {
@@ -3137,6 +3114,10 @@ class DesktopNextcloudServices(
             activities = (listOf(activity) + current.activities.filterNot { it.stableId == activity.stableId })
                 .take(MAX_TRAY_ACTIVITY_ITEMS),
         )
+    }
+
+    private fun publishFileSyncRunDiagnostic(accountId: String, event: DesktopFileSyncRunDiagnosticEvent) {
+        supportDiagnostics.recordForAccountIdentity(accountId, event.toSupportDiagnosticEventDraft())
     }
 
     private fun publishFileSyncRunFailure(
