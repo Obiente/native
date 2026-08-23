@@ -1,11 +1,13 @@
 package dev.obiente.nextcloudnative
 
+import android.Manifest
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.Cursor
 import android.net.Uri
@@ -15,6 +17,7 @@ import android.util.AtomicFile
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.Data
@@ -462,6 +465,11 @@ internal class AndroidIncomingShareUploadWorker(
         error is ForegroundServiceStartNotAllowedException
 
     private fun publishTerminalNotification(request: AndroidIncomingShareRequest) {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         val completed = request.state == AndroidIncomingShareState.Completed
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_TRANSFERS)
@@ -481,9 +489,11 @@ internal class AndroidIncomingShareUploadWorker(
             .setOnlyAlertOnce(true)
             .setContentIntent(incomingShareRecoveryPendingIntent(applicationContext, request.id))
             .build()
-        runCatching {
+        try {
             NotificationManagerCompat.from(applicationContext)
                 .notify(incomingShareNotificationId(request.id), notification)
+        } catch (_: SecurityException) {
+            // The permission can still be revoked between the explicit check and delivery.
         }
     }
 
