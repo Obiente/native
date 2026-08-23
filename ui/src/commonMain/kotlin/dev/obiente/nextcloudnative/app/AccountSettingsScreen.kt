@@ -155,6 +155,7 @@ internal fun SettingsScreen(
                     scope.launch {
                         runCatchingPreservingCancellation { services.revokeSession(session) }
                         runCatchingPreservingCancellation { onLoggedOut() }
+                            .onSuccess { supportDrafts.clearDrafts() }
                             .onFailure { failure ->
                                 logoutError = logoutCleanupFailureMessage(failure)
                                 loggingOut = false
@@ -261,7 +262,7 @@ internal fun SettingsScreen(
     }
 
     BoxWithConstraints {
-        val expanded = useExpandedSettingsWorkspace(isDesktop, maxWidth.value.toInt())
+        val expanded = useExpandedSettingsWorkspace(maxWidth.value.toInt())
         val displayedSection = if (expanded) expandedSettingsSection(selectedSection, visibleSections) else selectedSection
         LaunchedEffect(expanded, displayedSection) {
             if (expanded && displayedSection != null && selectedSectionName != displayedSection.name) {

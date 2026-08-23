@@ -52,17 +52,17 @@ class SettingsWorkspaceTest {
 
     @Test
     fun `android phone keeps the overview and detail flow`() {
-        assertFalse(useExpandedSettingsWorkspace(isDesktop = false, availableWidthDp = 599))
+        assertFalse(useExpandedSettingsWorkspace(availableWidthDp = 599))
     }
 
     @Test
     fun `android tablet uses the persistent section list`() {
-        assertTrue(useExpandedSettingsWorkspace(isDesktop = false, availableWidthDp = 600))
+        assertTrue(useExpandedSettingsWorkspace(availableWidthDp = 600))
     }
 
     @Test
-    fun `compact desktop window still delegates to the adaptive workspace`() {
-        assertTrue(useExpandedSettingsWorkspace(isDesktop = true, availableWidthDp = 480))
+    fun `compact desktop window keeps the overview and detail flow`() {
+        assertFalse(useExpandedSettingsWorkspace(availableWidthDp = 480))
     }
 
     @Test

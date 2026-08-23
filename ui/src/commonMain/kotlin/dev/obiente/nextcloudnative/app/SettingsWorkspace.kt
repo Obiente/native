@@ -125,9 +125,9 @@ internal fun resolveSettingsWorkspaceLayout(availableWidthDp: Int): SettingsWork
     )
 }
 
-internal fun useExpandedSettingsWorkspace(isDesktop: Boolean, availableWidthDp: Int): Boolean {
+internal fun useExpandedSettingsWorkspace(availableWidthDp: Int): Boolean {
     val layout = resolveSettingsWorkspaceLayout(availableWidthDp)
-    return isDesktop || layout.mode != SettingsWorkspaceMode.Compact
+    return layout.mode != SettingsWorkspaceMode.Compact
 }
 
 @Composable

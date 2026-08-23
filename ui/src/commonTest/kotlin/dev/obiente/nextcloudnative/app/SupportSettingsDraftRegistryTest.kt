@@ -48,6 +48,16 @@ class SupportSettingsDraftRegistryTest {
     }
 
     @Test
+    fun `account draft can be cleared after logout`() {
+        val account = "3".repeat(64)
+        SupportSettingsDraftRegistry.stateFor(account).updateReportDraft("Previous user's private report")
+
+        SupportSettingsDraftRegistry.stateFor(account).clearDrafts()
+
+        assertFalse(SupportSettingsDraftRegistry.stateFor(account).hasDraftContent())
+    }
+
+    @Test
     fun `draft holders remain separated by account digest`() {
         val first = SupportSettingsDraftRegistry.stateFor("b".repeat(64))
         val second = SupportSettingsDraftRegistry.stateFor("c".repeat(64))
