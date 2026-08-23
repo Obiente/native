@@ -240,6 +240,7 @@ internal fun MobileSettingsWorkspace(
     content: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit,
 ) {
     val selected = selectedSection?.takeIf(visibleSections::contains)
+    val overviewListState = androidx.compose.foundation.lazy.rememberLazyListState()
     PlatformBackHandler(
         enabled = selected != null,
         onBack = { onSectionSelected(null) },
@@ -251,6 +252,7 @@ internal fun MobileSettingsWorkspace(
             }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
+                state = overviewListState,
                 contentPadding = PaddingValues(NextcloudSpacing.Medium),
                 verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
             ) {

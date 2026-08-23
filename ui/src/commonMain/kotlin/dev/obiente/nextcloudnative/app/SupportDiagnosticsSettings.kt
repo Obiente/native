@@ -530,7 +530,7 @@ private fun PrivacyTab(
         PrivacyPoint("Nothing is uploaded automatically. Sending always requires your explicit confirmation.")
         PrivacyPoint("Nextcloud Native reports are retained by Obiente Support for 30 days unless deleted first.")
         PrivacyPoint(
-            "Authorized maintainers can read reports and replies. Server storage is encrypted, but this is not end-to-end encryption.",
+            "Reports and replies are not end-to-end encrypted. Authorized maintainers can read them.",
         )
         PrivacyPoint(
             "This device stores a private receipt only for the account that created it. " +
