@@ -7,6 +7,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -260,7 +261,14 @@ internal fun SettingsScreen(
     }
 
     BoxWithConstraints {
-        if (useExpandedSettingsWorkspace(isDesktop, maxWidth.value.toInt())) {
+        val expanded = useExpandedSettingsWorkspace(isDesktop, maxWidth.value.toInt())
+        val displayedSection = if (expanded) expandedSettingsSection(selectedSection, visibleSections) else selectedSection
+        LaunchedEffect(expanded, displayedSection) {
+            if (expanded && displayedSection != null && selectedSectionName != displayedSection.name) {
+                selectedSectionName = displayedSection.name
+            }
+        }
+        if (expanded) {
         DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
                 displayName = serverInfo?.displayName ?: session.loginName,
@@ -275,7 +283,7 @@ internal fun SettingsScreen(
                 },
             ),
             visibleSections = visibleSections,
-            selectedSection = selectedSection,
+            selectedSection = displayedSection,
             onSectionSelected = onSectionSelected,
             detailStateHolder = detailStateHolder,
             content = sectionContent,
@@ -291,3 +299,8 @@ internal fun SettingsScreen(
         }
     }
 }
+
+internal fun expandedSettingsSection(
+    selectedSection: SettingsWorkspaceSection?,
+    visibleSections: List<SettingsWorkspaceSection>,
+): SettingsWorkspaceSection? = selectedSection ?: visibleSections.firstOrNull()
