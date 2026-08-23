@@ -27,4 +27,17 @@ class SupportSettingsDraftRegistryTest {
 
         assertNotSame(first, second)
     }
+
+    @Test
+    fun `opening more accounts never evicts a non-empty draft`() {
+        val retainedAccount = "d".repeat(64)
+        val retained = SupportSettingsDraftRegistry.stateFor(retainedAccount)
+        retained.updateReportDraft("Unsaved private report")
+        listOf('e', 'f', '0', '1', '2').forEach { marker ->
+            SupportSettingsDraftRegistry.stateFor(marker.toString().repeat(64))
+        }
+
+        assertSame(retained, SupportSettingsDraftRegistry.stateFor(retainedAccount))
+        assertEquals("Unsaved private report", retained.reportDraft)
+    }
 }

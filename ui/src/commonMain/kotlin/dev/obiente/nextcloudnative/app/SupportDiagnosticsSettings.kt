@@ -44,8 +44,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun SupportDiagnosticsSettingsCard(services: NextcloudPlatformServices) {
-    val drafts = remember { SupportSettingsDraftState() }
+internal fun SupportDiagnosticsSettingsCard(
+    services: NextcloudPlatformServices,
+    drafts: SupportSettingsDraftState,
+) {
     SupportSettingsView(services, drafts)
 }
 

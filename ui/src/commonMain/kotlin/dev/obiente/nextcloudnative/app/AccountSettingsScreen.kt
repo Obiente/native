@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import kotlinx.coroutines.launch
@@ -38,6 +39,7 @@ internal fun SettingsScreen(
     val supportDrafts = remember(session.serverUrl, session.loginName) {
         SupportSettingsDraftRegistry.stateFor(session)
     }
+    val detailStateHolder = rememberSaveableStateHolder()
     var loggingOut by remember { mutableStateOf(false) }
     var logoutError by remember { mutableStateOf<String?>(null) }
     var capabilityRefresh by remember { mutableStateOf(0) }
@@ -275,6 +277,7 @@ internal fun SettingsScreen(
             visibleSections = visibleSections,
             selectedSection = selectedSection,
             onSectionSelected = onSectionSelected,
+            detailStateHolder = detailStateHolder,
             content = sectionContent,
             )
         } else {
@@ -282,6 +285,7 @@ internal fun SettingsScreen(
                 visibleSections = visibleSections,
                 selectedSection = selectedSection,
                 onSectionSelected = onSectionSelected,
+                detailStateHolder = detailStateHolder,
                 content = sectionContent,
             )
         }

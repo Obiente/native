@@ -26,4 +26,6 @@ internal class SupportSettingsDraftState {
     fun retainReplyDrafts(recordIds: Set<String>) {
         replyDrafts.keys.toList().filterNot(recordIds::contains).forEach(replyDrafts::remove)
     }
+
+    fun hasDraftContent(): Boolean = reportDraft.isNotEmpty() || replyDrafts.isNotEmpty()
 }

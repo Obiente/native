@@ -968,6 +968,7 @@ private fun LoginScreen(
     var trustingCertificate by remember { mutableStateOf(false) }
     var confirmPlainHttp by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    val supportDrafts = remember { SupportSettingsDraftState() }
     val scope = rememberCoroutineScope()
 
     fun startLogin(
@@ -1122,7 +1123,7 @@ private fun LoginScreen(
                         .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    SupportDiagnosticsSettingsCard(services)
+                    SupportDiagnosticsSettingsCard(services, supportDrafts)
                 }
             },
             confirmButton = {

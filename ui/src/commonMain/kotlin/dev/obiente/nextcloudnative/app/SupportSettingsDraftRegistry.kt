@@ -13,7 +13,12 @@ internal object SupportSettingsDraftRegistry {
         }
         return SupportSettingsDraftState().also { created ->
             states[accountScopeDigest] = created
-            if (states.size > MAX_RETAINED_SUPPORT_DRAFT_ACCOUNTS) states.remove(states.keys.first())
+            while (states.size > MAX_RETAINED_SUPPORT_DRAFT_ACCOUNTS) {
+                val evictable = states.entries.firstOrNull { (digest, state) ->
+                    digest != accountScopeDigest && !state.hasDraftContent()
+                }?.key ?: break
+                states.remove(evictable)
+            }
         }
     }
 }

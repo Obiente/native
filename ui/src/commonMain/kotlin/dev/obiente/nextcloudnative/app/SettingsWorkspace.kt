@@ -137,6 +137,8 @@ internal fun DesktopSettingsWorkspace(
     selectedSection: SettingsWorkspaceSection?,
     onSectionSelected: (SettingsWorkspaceSection?) -> Unit,
     modifier: Modifier = Modifier,
+    detailStateHolder: androidx.compose.runtime.saveable.SaveableStateHolder =
+        androidx.compose.runtime.saveable.rememberSaveableStateHolder(),
     content: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
@@ -166,7 +168,6 @@ internal fun DesktopSettingsWorkspace(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val detailStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             val layout = resolveSettingsWorkspaceLayout(maxWidth.value.toInt())
             if (layout.mode == SettingsWorkspaceMode.Compact) {
                 MobileSettingsWorkspace(
