@@ -3511,7 +3511,7 @@ class DesktopNextcloudServices(
         recordId: String,
         message: String,
     ): SupportDiagnosticsConversationResult = supportIntake.sendCompletedReportMessage(recordId, message)
-
+    override suspend fun acknowledgeSubmittedSupportDiagnosticsReplyDelivery(recordId: String) = supportIntake.acknowledgeCompletedReportReplyDelivery(recordId)
     override suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean =
         supportIntake.markCompletedReportRead(recordId)
 

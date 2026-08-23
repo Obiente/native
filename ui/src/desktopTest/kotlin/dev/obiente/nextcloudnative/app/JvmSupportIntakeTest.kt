@@ -76,37 +76,36 @@ class JvmSupportIntakeTest {
             }
         }
     }
-
     @Test
-    fun sendsReporterReplyThroughPrivateCapabilityWithoutExposingItInStateErrors() = runBlocking {
+    fun persistsAndReconcilesReplyRecoveryWithoutStoringThePrivateDraft() = runBlocking {
+        val failWrites = AtomicBoolean(false)
+        testFixture(directorySync = { if (failWrites.get()) throw IOException("Synthetic descriptor sync failure.") }).use { fixture ->
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl)); fixture.intake.submit("The updater failed.", "nightly", emptyList()); fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); fixture.intake.refreshCompletedReports()
+            failWrites.set(true); assertIs<SupportDiagnosticsConversationResult.Failed>(fixture.intake.sendCompletedReportMessage(fixture.intake.submittedRecordId(), "Never sent.")); assertEquals(2, fixture.server.requestCount)
+        }
         testFixture().use { fixture ->
-            fixture.server.enqueue(receiptResponse(fixture.statusUrl))
-            fixture.intake.submit("The updater failed.", "nightly", emptyList())
-            fixture.server.enqueue(privateStatusResponse("needs_information", emptyList(),
-                reporterMessage = "It failed after the download completed."))
-            val recordId = fixture.intake.submittedRecordId()
-            assertEquals(SupportDiagnosticsConversationResult.Updated, fixture.intake.sendCompletedReportMessage(
-                recordId, "It failed after the download completed."))
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            val reply = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
-            assertTrue(reply.url.encodedPath.matches(Regex("/api/v1/reports/[A-Za-z0-9_-]{43}/messages")))
-            assertTrue(reply.body?.utf8().orEmpty().contains("It failed after the download completed."))
-            fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
-            val uncertain = fixture.intake.sendCompletedReportMessage(recordId, "Do not resend without refreshing.")
-            assertIs<SupportDiagnosticsConversationResult.ReplyDeliveryUnknown>(uncertain)
-            assertFalse(uncertain.message.contains(fixture.statusUrl))
-            val descriptor = fixture.completedDescriptors().single().also { assertTrue(it.readText().contains("\"replyDeliveryUnknown\":true")) }
+            fixture.server.enqueue(receiptResponse(fixture.statusUrl)); fixture.intake.submit("The updater failed.", "nightly", emptyList()); fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); fixture.intake.refreshCompletedReports()
+            val recordId = fixture.intake.submittedRecordId().also { fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()) }
+            assertIs<SupportDiagnosticsConversationResult.ReplyDeliveryUnknown>(fixture.intake.sendCompletedReportMessage(recordId, "Private retained draft."))
+            val descriptor = fixture.completedDescriptors().single().also { assertTrue(it.readText().contains("\"replyRecovery\"")); assertFalse(it.readText().contains("Private retained draft.")) }
             fixture.intake.close()
             fixture.newIntake().use { restored ->
-                assertTrue(assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyDeliveryUnknown)
+                assertEquals(SupportDiagnosticsReplyRecoveryState.RefreshRequired, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()); assertIs<SupportDiagnosticsConversationResult.Failed>(restored.refreshCompletedReports())
+                assertEquals(SupportDiagnosticsReplyRecoveryState.RefreshRequired, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
+                assertEquals(SupportDiagnosticsReplyRecoveryState.None, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
                 fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
-                assertIs<SupportDiagnosticsConversationResult.Failed>(restored.refreshCompletedReports())
-                assertTrue(assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyDeliveryUnknown)
-                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList()))
+                assertIs<SupportDiagnosticsConversationResult.ReplyDeliveryUnknown>(restored.sendCompletedReportMessage(recordId, "Private delivered draft."))
+                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList(), "Private delivered draft.", 200))
                 assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
-                assertFalse(assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyDeliveryUnknown)
+                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
             }
-            fixture.newIntake().use { restored -> assertFalse(assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyDeliveryUnknown) }
+            fixture.newIntake().use { restored ->
+                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                assertTrue(restored.acknowledgeCompletedReportReplyDelivery(recordId))
+                assertEquals(SupportDiagnosticsReplyRecoveryState.None, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+            }
         }
     }
     @Test
@@ -2771,6 +2770,7 @@ class JvmSupportIntakeTest {
         status: String,
         messages: List<Pair<String, String>>,
         reporterMessage: String? = null,
+        responseCode: Int = if (reporterMessage == null) 200 else 201,
     ): MockResponse {
         val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
         val encodedMessages = buildList {
@@ -2783,7 +2783,7 @@ class JvmSupportIntakeTest {
                 )
             }
         }.joinToString(",")
-        return MockResponse.Builder().code(if (reporterMessage == null) 200 else 201).body(
+        return MockResponse.Builder().code(responseCode).body(
             """
                 {
                   "contractVersion": 1,

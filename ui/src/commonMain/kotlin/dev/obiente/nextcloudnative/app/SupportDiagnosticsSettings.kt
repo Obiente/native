@@ -194,7 +194,7 @@ private fun RequestsTab(
                     },
                     replyDraft = drafts.replyDraft(report.recordId),
                     onReplyDraft = { drafts.updateReplyDraft(report.recordId, it) },
-                    refreshRequired = report.replyDeliveryUnknown,
+                    replyRecoveryState = report.replyRecoveryState,
                     onDelete = { onDelete(report.recordId) },
                     onNotice = onNotice,
                 )
@@ -224,11 +224,12 @@ private fun RequestCard(
     onReplyOpen: (Boolean) -> Unit,
     replyDraft: String,
     onReplyDraft: (String) -> Unit,
-    refreshRequired: Boolean,
+    replyRecoveryState: SupportDiagnosticsReplyRecoveryState,
     onDelete: () -> Unit,
     onNotice: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val replyBlocked = replyRecoveryState != SupportDiagnosticsReplyRecoveryState.None
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = NextcloudTheme.colors.appTile,
@@ -310,21 +311,39 @@ private fun RequestCard(
                     value = replyDraft,
                     onValueChange = { onReplyDraft(it.take(MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH)) },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !refreshRequired && !report.conversationLoading,
+                    enabled = !replyBlocked && !report.conversationLoading,
                     label = { Text("Reply privately") },
                     minLines = 2,
                     maxLines = 6,
                     supportingText = {
-                        Text(if (refreshRequired) {
-                            "Delivery was uncertain. Refresh requests before sending again."
-                        } else {
-                            replyDraft.length.toString() + " / " + MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH
+                        Text(when (replyRecoveryState) {
+                            SupportDiagnosticsReplyRecoveryState.None ->
+                                replyDraft.length.toString() + " / " + MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH
+                            SupportDiagnosticsReplyRecoveryState.RefreshRequired ->
+                                "Delivery was uncertain. Refresh requests before sending again."
+                            SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement ->
+                                "Support received this reply. Clear the retained draft before writing another."
                         })
                     },
                 )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    Button(
-                        enabled = replyDraft.isNotBlank() && !refreshRequired && !report.conversationLoading,
+                    if (replyRecoveryState == SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement) {
+                        Button(
+                            enabled = !report.conversationLoading,
+                            onClick = {
+                                scope.launch {
+                                    if (services.acknowledgeSubmittedSupportDiagnosticsReplyDelivery(report.recordId)) {
+                                        onReplyDraft("")
+                                        onReplyOpen(false)
+                                        onNotice("Delivered reply confirmed and retained draft cleared.")
+                                    } else {
+                                        onNotice("The delivered reply could not be acknowledged on this device.")
+                                    }
+                                }
+                            },
+                        ) { Text("Clear delivered draft") }
+                    } else Button(
+                        enabled = replyDraft.isNotBlank() && !replyBlocked && !report.conversationLoading,
                         onClick = {
                             scope.launch {
                                 when (val result = services.sendSubmittedSupportDiagnosticsMessage(
@@ -332,9 +351,16 @@ private fun RequestCard(
                                     replyDraft,
                                 )) {
                                     SupportDiagnosticsConversationResult.Updated -> {
-                                        onReplyDraft("")
-                                        onReplyOpen(false)
-                                        onNotice("Private reply sent.")
+                                        if (services.acknowledgeSubmittedSupportDiagnosticsReplyDelivery(
+                                                report.recordId,
+                                            )) {
+                                            onReplyDraft("")
+                                            onReplyOpen(false)
+                                            onNotice("Private reply sent.")
+                                        } else onNotice(
+                                            "The reply was sent, but its recovery marker could not be cleared. " +
+                                                "Keep the draft until the app confirms delivery.",
+                                        )
                                     }
                                     is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> {
                                         onNotice(result.message)
@@ -481,7 +507,12 @@ private fun SubmissionProgress(
             SupportDiagnosticsSubmissionState.Idle -> Unit
             is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> {
                 Text(state.message)
-                TextButton(onClick = onDiscard) { Text("Discard pending report") }
+                Text(
+                    "Switch to the account that started this report to retry or discard it. " +
+                        "The active account cannot change another account's pending report.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             SupportDiagnosticsSubmissionState.Packaging -> ProgressMessage("Preparing the private report...")
             SupportDiagnosticsSubmissionState.Cancelling -> ProgressMessage("Finishing report cancellation...")

@@ -590,7 +590,7 @@ interface NextcloudPlatformServices {
     ): SupportDiagnosticsConversationResult = SupportDiagnosticsConversationResult.Unsupported(
         "Private support conversations are unavailable on this platform.",
     )
-
+    suspend fun acknowledgeSubmittedSupportDiagnosticsReplyDelivery(recordId: String): Boolean = false
     /** Acknowledges the currently visible status and maintainer messages on this device. */
     suspend fun markSubmittedSupportDiagnosticsReportRead(recordId: String): Boolean = false
 
