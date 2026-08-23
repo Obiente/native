@@ -13,4 +13,18 @@ class DesktopFileSyncDiagnosticsTest {
         assertEquals("10gib-99gib", desktopFileSyncByteBucket(17L * 1_024L * 1_024L * 1_024L))
     }
 
+    @Test
+    fun `scan limit diagnostics retain private pair identity`() {
+        val event = DesktopFileSyncScanLimitException(
+            maximumEntries = 100_000,
+            observedEntries = 100_001,
+            observedFiles = 80_000,
+            observedFileBytes = 17L * 1_024L * 1_024L * 1_024L,
+        ).toDesktopFileSyncRunDiagnosticEvent("pair-private", DesktopFileSyncScanStage.Local)
+            .toSupportDiagnosticEventDraft()
+
+        val pair = event.fields.single { it.name == "pair" }
+        assertEquals("pair-private", pair.value)
+        assertEquals(SupportDiagnosticValuePrivacy.Identifier, pair.privacy)
+    }
 }

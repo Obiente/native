@@ -17,11 +17,22 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class AsyncJvmSupportDiagnostics(
+class AsyncJvmSupportDiagnostics private constructor(
     root: File,
     private val environment: SupportDiagnosticsEnvironment,
     workerName: String,
+    private val beforeInitialization: () -> Unit,
 ) : AutoCloseable {
+    constructor(root: File, environment: SupportDiagnosticsEnvironment, workerName: String) :
+        this(root, environment, workerName, {})
+
+    internal constructor(
+        root: File,
+        environment: SupportDiagnosticsEnvironment,
+        workerName: String,
+        initializationGate: CountDownLatch,
+    ) : this(root, environment, workerName, initializationGate::await)
+
     private val root = root.absoluteFile.normalize()
     private val lock = Any()
     private val executor = Executors.newSingleThreadExecutor { task ->
@@ -44,10 +55,12 @@ class AsyncJvmSupportDiagnostics(
     private var activeAccountIdentity: String? = null
     private var drainScheduled = false
     private var closing = false
+    private var pendingCapacityTruncationObserved = false
 
     init {
         scope.launch {
             runCatching {
+                beforeInitialization()
                 JvmSupportDiagnostics(root = this@AsyncJvmSupportDiagnostics.root, environment = environment)
                     .also(::finishInitialization)
             }.onSuccess(ready::complete)
@@ -228,15 +241,15 @@ class AsyncJvmSupportDiagnostics(
                 outcome = "started",
             ),
         )
-        val queued = synchronized(lock) {
+        val (queued, capacityTruncationObserved) = synchronized(lock) {
             val operations = pending.toList()
             pending.clear()
             delegate = created
             drainScheduled = true
-            operations
+            operations to takePendingCapacityTruncationObserved()
         }
         val pendingHadCrash = queued.any(PendingOperation::isUncaughtException)
-        queued.applyTo(created)
+        queued.applyTo(created, capacityTruncationObserved)
         when {
             pendingHadCrash -> {
                 if (created.isStorageAvailable()) coldCrashMarker.delete()
@@ -279,32 +292,37 @@ class AsyncJvmSupportDiagnostics(
     }
 
     private fun drainPendingBatch(current: JvmSupportDiagnostics) {
-        val batch = synchronized(lock) {
-            buildList {
+        val (batch, capacityTruncationObserved) = synchronized(lock) {
+            val operations = buildList {
                 repeat(minOf(MAX_DRAIN_BATCH_SIZE, pending.size)) {
                     add(pending.removeFirst())
                 }
             }
+            operations to takePendingCapacityTruncationObserved()
         }
-        if (batch.isNotEmpty()) {
-            batch.applyTo(current)
+        if (batch.isNotEmpty() || capacityTruncationObserved) {
+            batch.applyTo(current, capacityTruncationObserved)
             publishRevision()
         }
         scheduleQueuedDrain(current)
     }
 
     private fun drainPendingSnapshot(current: JvmSupportDiagnostics) {
-        val snapshot = synchronized(lock) {
-            pending.toList().also { pending.clear() }
+        val (snapshot, capacityTruncationObserved) = synchronized(lock) {
+            pending.toList().also { pending.clear() } to takePendingCapacityTruncationObserved()
         }
-        if (snapshot.isNotEmpty()) {
-            snapshot.applyTo(current)
+        if (snapshot.isNotEmpty() || capacityTruncationObserved) {
+            snapshot.applyTo(current, capacityTruncationObserved)
             publishRevision()
         }
     }
 
-    private fun List<PendingOperation>.applyTo(current: JvmSupportDiagnostics) {
+    private fun List<PendingOperation>.applyTo(
+        current: JvmSupportDiagnostics,
+        capacityTruncationObserved: Boolean = false,
+    ) {
         current.applyBatch {
+            if (capacityTruncationObserved) markCapacityTruncationObserved()
             this@applyTo.forEach { operation -> operation.apply(this) }
         }
     }
@@ -329,10 +347,14 @@ class AsyncJvmSupportDiagnostics(
         }
         while (pending.size >= MAX_PENDING_OPERATIONS) {
             val oldestRecord = pending.indexOfFirst { it is PendingOperation.Record }
-            if (oldestRecord >= 0) pending.removeAt(oldestRecord) else pending.removeFirst()
+            val removed = if (oldestRecord >= 0) pending.removeAt(oldestRecord) else pending.removeFirst()
+            if (removed is PendingOperation.Record) pendingCapacityTruncationObserved = true
         }
         pending.addLast(operation)
     }
+
+    private fun takePendingCapacityTruncationObserved(): Boolean =
+        pendingCapacityTruncationObserved.also { pendingCapacityTruncationObserved = false }
 
     private fun persistColdCrashMarker() {
         persistJvmSupportDiagnosticsColdCrashMarker(root)

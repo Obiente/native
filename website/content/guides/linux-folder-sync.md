@@ -50,6 +50,6 @@ Start with **Ask before changing either copy** or **Keep both copies** for confl
 
 Watch the first scan and queued operations. If a conflict or ambiguous interrupted operation appears, compare both versions and preserve both when uncertain. A successful scan is evidence for that generation only. Keep independent backups of important data while the product remains an alpha, and do not treat bidirectional synchronization as backup history.
 
-One desktop sync pair can include at most 100,000 selected files and folders. If a pair exceeds that limit, choose narrower folders or add ignore rules. The capacity check stops before the client hashes file content, so an oversized tree should fail quickly instead of consuming memory and disk time for a scan it cannot finish.
+A desktop sync pair supports no more than 100,000 selected entries or planned operations. The early check covers the local selection only and runs before the client hashes local file content. A larger remote tree or combined change plan can reach the limit later, so choose narrower roots or add ignore rules.
 
 Automatic checks wait longer after each repeated item failure. After five failed attempts, the item stays in the visible failed state until you use **Sync now** to request another attempt. Review the failure first. Repeatedly requesting a retry cannot repair a permissions error, an unsupported name, or a file that another application keeps changing.

@@ -292,7 +292,7 @@ internal class DesktopFileSyncEngine(
         } catch (_: DesktopFileSyncScanStoppedException) {
             return FileSyncCenterActionResult.Completed("The folder scan stopped before making changes.")
         } catch (failure: DesktopFileSyncScanLimitException) {
-            onDiagnostic(failure.toDesktopFileSyncRunDiagnosticEvent(DesktopFileSyncScanStage.Local))
+            onDiagnostic(failure.toDesktopFileSyncRunDiagnosticEvent(pairId, DesktopFileSyncScanStage.Local))
             throw failure
         }
         val remoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)

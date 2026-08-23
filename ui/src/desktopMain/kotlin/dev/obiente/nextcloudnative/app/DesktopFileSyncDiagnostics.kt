@@ -27,6 +27,7 @@ internal enum class DesktopFileSyncScanStage(val diagnosticValue: String) {
 }
 
 internal data class DesktopFileSyncRunDiagnosticEvent(
+    val pairId: String,
     val stage: DesktopFileSyncScanStage,
     val outcome: String,
     val entryCountBucket: String,
@@ -46,8 +47,10 @@ internal data class DesktopFileSyncSnapshotDiagnostics(
 }
 
 internal fun DesktopFileSyncScanLimitException.toDesktopFileSyncRunDiagnosticEvent(
+    pairId: String,
     stage: DesktopFileSyncScanStage,
 ) = DesktopFileSyncRunDiagnosticEvent(
+    pairId = pairId,
     stage = stage,
     outcome = "limit_exceeded",
     entryCountBucket = desktopFileSyncCountBucket(observedEntries),
@@ -72,6 +75,7 @@ internal fun DesktopFileSyncRunDiagnosticEvent.toSupportDiagnosticEventDraft() =
     outcome = outcome,
     message = "A desktop folder sync scan exceeded its selected-entry limit.",
     fields = listOf(
+        SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         SupportDiagnosticFieldDraft("stage", stage.diagnosticValue),
         SupportDiagnosticFieldDraft("entry_count_bucket", entryCountBucket),
         SupportDiagnosticFieldDraft("file_count_bucket", fileCountBucket),

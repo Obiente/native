@@ -94,6 +94,10 @@ internal class JvmSupportDiagnostics(
 
     fun isStorageAvailable(): Boolean = synchronized(lock) { storageAvailable }
 
+    internal fun markCapacityTruncationObserved() = synchronized(lock) {
+        capacityTruncationObserved = true
+    }
+
     fun record(draft: SupportDiagnosticEventDraft) = recordWithScope(draft) { activeAccountScope }
 
     fun recordForAccountIdentity(accountIdentity: String?, draft: SupportDiagnosticEventDraft) =
