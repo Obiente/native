@@ -578,10 +578,10 @@ interface NextcloudPlatformServices {
         )
 
     /** Refreshes private report statuses and conversations using their retained capabilities. */
-    suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsReportsRefreshResult =
-        SupportDiagnosticsReportsRefreshResult(emptySet(), SupportDiagnosticsConversationResult.Unsupported(
+    suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+        SupportDiagnosticsConversationResult.Unsupported(
             "Private support conversations are unavailable on this platform.",
-        ))
+        )
 
     /** Sends one reporter reply through the retained private report capability. */
     suspend fun sendSubmittedSupportDiagnosticsMessage(

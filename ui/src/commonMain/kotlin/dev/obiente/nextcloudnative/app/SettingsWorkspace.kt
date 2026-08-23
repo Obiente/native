@@ -166,6 +166,7 @@ internal fun DesktopSettingsWorkspace(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val detailStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             val layout = resolveSettingsWorkspaceLayout(maxWidth.value.toInt())
             if (layout.mode == SettingsWorkspaceMode.Compact) {
                 MobileSettingsWorkspace(
@@ -174,6 +175,7 @@ internal fun DesktopSettingsWorkspace(
                     onSectionSelected = onSectionSelected,
                     modifier = Modifier.fillMaxSize(),
                     showOverviewHeader = false,
+                    detailStateHolder = detailStateHolder,
                     content = content,
                 )
                 return@BoxWithConstraints
@@ -181,7 +183,6 @@ internal fun DesktopSettingsWorkspace(
             val selected = selectedSection?.takeIf(visibleSections::contains)
                 ?: visibleSections.firstOrNull()
                 ?: SettingsWorkspaceSection.Account
-            val detailStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             Row(modifier = Modifier.fillMaxSize()) {
                 Column(
                     modifier = Modifier.width(layout.categoryWidthDp.dp).fillMaxHeight()
@@ -237,6 +238,8 @@ internal fun MobileSettingsWorkspace(
     onSectionSelected: (SettingsWorkspaceSection?) -> Unit,
     modifier: Modifier = Modifier,
     showOverviewHeader: Boolean = true,
+    detailStateHolder: androidx.compose.runtime.saveable.SaveableStateHolder =
+        androidx.compose.runtime.saveable.rememberSaveableStateHolder(),
     content: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit,
 ) {
     val selected = selectedSection?.takeIf(visibleSections::contains)
@@ -274,13 +277,15 @@ internal fun MobileSettingsWorkspace(
                 selected.description,
                 { onSectionSelected(null) },
             )
-            Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                    .padding(NextcloudSpacing.Large),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            ) {
-                content(selected)
-                Spacer(Modifier.height(NextcloudSpacing.Large))
+            detailStateHolder.SaveableStateProvider(selected.name) {
+                Column(
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                        .padding(NextcloudSpacing.Large),
+                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                ) {
+                    content(selected)
+                    Spacer(Modifier.height(NextcloudSpacing.Large))
+                }
             }
         }
     }

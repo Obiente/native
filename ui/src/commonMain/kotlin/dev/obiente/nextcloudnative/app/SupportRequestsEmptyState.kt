@@ -37,6 +37,12 @@ internal fun SupportRequestsEmptyState(
                     Text("A previous report still needs a safe retry or discard decision.")
                     Button(onClick = onOpenRecovery) { Text("Open report recovery") }
                 }
+                is SupportDiagnosticsSubmissionState.Rejected -> {
+                    Text("Report was not sent", style = MaterialTheme.typography.titleMedium)
+                    Text(state.message, color = MaterialTheme.colorScheme.error)
+                    Text("Review the report details before trying a new submission.")
+                    Button(onClick = onOpenRecovery) { Text("Review report") }
+                }
                 else -> {
                     Text("No support requests on this device", style = MaterialTheme.typography.titleMedium)
                     Text(

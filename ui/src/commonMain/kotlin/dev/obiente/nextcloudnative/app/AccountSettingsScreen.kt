@@ -35,11 +35,9 @@ internal fun SettingsScreen(
     var selectedSectionName by rememberSaveable(session.serverUrl, session.loginName) {
         mutableStateOf<String?>(null)
     }
-    val supportDrafts = rememberSaveable(
-        session.serverUrl,
-        session.loginName,
-        saver = SupportSettingsDraftState.Saver,
-    ) { SupportSettingsDraftState() }
+    val supportDrafts = remember(session.serverUrl, session.loginName) {
+        SupportSettingsDraftRegistry.stateFor(session)
+    }
     var loggingOut by remember { mutableStateOf(false) }
     var logoutError by remember { mutableStateOf<String?>(null) }
     var capabilityRefresh by remember { mutableStateOf(0) }

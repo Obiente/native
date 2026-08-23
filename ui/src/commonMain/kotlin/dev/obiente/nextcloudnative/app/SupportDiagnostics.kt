@@ -259,6 +259,7 @@ sealed interface SupportDiagnosticsSubmissionState {
         val messages: List<SupportDiagnosticsMessage> = emptyList(),
         val unreadMaintainerMessages: Int = 0,
         val statusChanged: Boolean = false,
+        val replyDeliveryUnknown: Boolean = false,
         val conversationLoading: Boolean = false,
         val conversationError: String? = null,
     )

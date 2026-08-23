@@ -170,9 +170,7 @@ private fun RequestsTab(
                 enabled = reports.none { it.conversationLoading },
                 onClick = {
                     scope.launch {
-                        val refresh = services.refreshSubmittedSupportDiagnosticsReports()
-                        drafts.clearReplyRefreshRequirements(refresh.refreshedRecordIds)
-                        when (val result = refresh.result) {
+                        when (val result = services.refreshSubmittedSupportDiagnosticsReports()) {
                             SupportDiagnosticsConversationResult.Updated -> {
                                 onNotice("Support requests refreshed.")
                             }
@@ -196,8 +194,7 @@ private fun RequestsTab(
                     },
                     replyDraft = drafts.replyDraft(report.recordId),
                     onReplyDraft = { drafts.updateReplyDraft(report.recordId, it) },
-                    refreshRequired = drafts.replyRequiresRefresh(report.recordId),
-                    onRefreshRequired = { drafts.updateReplyRefreshRequirement(report.recordId, it) },
+                    refreshRequired = report.replyDeliveryUnknown,
                     onDelete = { onDelete(report.recordId) },
                     onNotice = onNotice,
                 )
@@ -228,7 +225,6 @@ private fun RequestCard(
     replyDraft: String,
     onReplyDraft: (String) -> Unit,
     refreshRequired: Boolean,
-    onRefreshRequired: (Boolean) -> Unit,
     onDelete: () -> Unit,
     onNotice: (String) -> Unit,
 ) {
@@ -341,7 +337,6 @@ private fun RequestCard(
                                         onNotice("Private reply sent.")
                                     }
                                     is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> {
-                                        onRefreshRequired(true)
                                         onNotice(result.message)
                                     }
                                     is SupportDiagnosticsConversationResult.Failed -> onNotice(result.message)
@@ -397,7 +392,7 @@ private fun NewReportTab(
     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium)) {
         Text("New private report", style = MaterialTheme.typography.titleLarge)
         Text(
-            "The draft stays in memory while Settings is open. It is not saved when Settings closes.",
+            "The draft stays in memory until the app exits. It is not saved to disk.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )

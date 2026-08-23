@@ -469,16 +469,14 @@ class JvmSupportIntake(
             }
         }
 
-    suspend fun refreshCompletedReports(): SupportDiagnosticsReportsRefreshResult = withContext(Dispatchers.IO) {
+    suspend fun refreshCompletedReports(): SupportDiagnosticsConversationResult = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!beginOperation()) return@withContext SupportDiagnosticsReportsRefreshResult(
-            emptySet(), SupportDiagnosticsConversationResult.Failed("Another private support operation is still in progress."),
-        )
+        if (!beginOperation()) return@withContext SupportDiagnosticsConversationResult.Failed(
+            "Another private support operation is still in progress.")
         try {
             val accountIdentity = synchronized(lock) { activeAccountIdentity }
-                ?: return@withContext SupportDiagnosticsReportsRefreshResult(
-                    emptySet(), SupportDiagnosticsConversationResult.Failed("Sign in to refresh private support reports."),
-                )
+                ?: return@withContext SupportDiagnosticsConversationResult.Failed(
+                    "Sign in to refresh private support reports.")
             val reports = synchronized(lock) {
                 completedSubmissions.filter { completed ->
                     completed.originAccountIdentity == accountIdentity && completed.isRetained(currentTimeMillis())
@@ -487,22 +485,21 @@ class JvmSupportIntake(
                     completed.conversationError = null
                 }
             }
-            if (reports.isEmpty()) return@withContext SupportDiagnosticsReportsRefreshResult(
-                emptySet(), SupportDiagnosticsConversationResult.Failed("No submitted support reports are available on this device."),
-            )
+            if (reports.isEmpty()) return@withContext SupportDiagnosticsConversationResult.Failed(
+                "No submitted support reports are available on this device.")
             publishState(submittedStateFor(accountIdentity), accountIdentity)
             var failure: String? = null
-            val refreshedRecordIds = mutableSetOf<String>()
             reports.forEach { completed ->
                 when (val result = refreshCompletedReport(completed)) {
-                    SupportDiagnosticsConversationResult.Updated -> refreshedRecordIds += completed.recordId
+                    SupportDiagnosticsConversationResult.Updated -> Unit
                     is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Failed -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Unsupported -> if (failure == null) failure = result.reason
                 }
                 publishState(submittedStateFor(accountIdentity), accountIdentity)
             }
-            SupportDiagnosticsReportsRefreshResult(refreshedRecordIds, failure?.let { SupportDiagnosticsConversationResult.Failed(it) } ?: SupportDiagnosticsConversationResult.Updated)
+            if (failure == null) SupportDiagnosticsConversationResult.Updated
+            else SupportDiagnosticsConversationResult.Failed(failure)
         } finally {
             endOperation()
         }
@@ -512,23 +509,17 @@ class JvmSupportIntake(
         message: String,
     ): SupportDiagnosticsConversationResult = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!beginOperation()) {
-            return@withContext SupportDiagnosticsConversationResult.Failed(
-                "Another private support operation is still in progress.",
-            )
-        }
+        if (!beginOperation()) return@withContext SupportDiagnosticsConversationResult.Failed(
+            "Another private support operation is still in progress.")
         try {
-        if (!supportMutationsAreAllowed()) {
-            return@withContext SupportDiagnosticsConversationResult.Unsupported(READ_ONLY_SUPPORT_MESSAGE)
-        }
+        if (!supportMutationsAreAllowed()) return@withContext SupportDiagnosticsConversationResult.Unsupported(
+            READ_ONLY_SUPPORT_MESSAGE)
         val normalizedMessage = message.trim()
         if (
             normalizedMessage.isEmpty() ||
             normalizedMessage.toByteArray(StandardCharsets.UTF_8).size > MAX_SUPPORT_CONVERSATION_MESSAGE_BYTES
         ) {
-            return@withContext SupportDiagnosticsConversationResult.Failed(
-                "Enter a message no longer than 8 KiB.",
-            )
+            return@withContext SupportDiagnosticsConversationResult.Failed("Enter a message no longer than 8 KiB.")
         }
         val completed = synchronized(lock) {
             completedSubmissions.firstOrNull { submission ->
@@ -540,8 +531,7 @@ class JvmSupportIntake(
                 submission.conversationError = null
             }
         } ?: return@withContext SupportDiagnosticsConversationResult.Failed(
-            "This submitted support report is no longer available on this device.",
-        )
+            "This submitted support report is no longer available on this device.")
         publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
         val capability = runCatching { capabilityFor(completed) }.getOrElse {
             return@withContext failConversation(completed, "The private report capability is invalid.")
@@ -639,21 +629,25 @@ class JvmSupportIntake(
                     )
                 }
                 val conversation = decodeConversation(body, completed)
-                synchronized(lock) {
+                val clearedReplyDeliveryUnknown = synchronized(lock) {
+                    val shouldClearReplyDeliveryUnknown = request.method == "GET" && completed.replyDeliveryUnknown
                     completed.conversation = conversation
                     completed.conversationLoading = false
                     completed.conversationError = null
+                    if (shouldClearReplyDeliveryUnknown) completed.replyDeliveryUnknown = false
                     if (request.method == "POST") {
                         completed.acknowledgedStatus = conversation.status
                         completed.lastReadMaintainerMessageId = conversation.messages
                             .lastOrNull { message -> message.author == "maintainer" }
                             ?.id
                     }
+                    shouldClearReplyDeliveryUnknown
                 }
-                if (request.method == "POST" && !persistCompletedSafely(completed)) {
+                if ((request.method == "POST" || clearedReplyDeliveryUnknown) && !persistCompletedSafely(completed)) {
+                    if (clearedReplyDeliveryUnknown) synchronized(lock) { completed.replyDeliveryUnknown = true }
                     return@use failConversation(
                         completed,
-                        "Your reply was sent, but its read state could not be stored on this device.",
+                        if (clearedReplyDeliveryUnknown) "The conversation was refreshed, but its recovery state could not be stored on this device." else "Your reply was sent, but its read state could not be stored on this device.",
                     )
                 }
                 SupportDiagnosticsConversationResult.Updated
@@ -710,9 +704,10 @@ class JvmSupportIntake(
         synchronized(lock) {
             completed.conversationLoading = false
             completed.conversationError = message
+            if (replyDeliveryUnknown) completed.replyDeliveryUnknown = true
         }
-        return if (replyDeliveryUnknown) SupportDiagnosticsConversationResult.ReplyDeliveryUnknown(message)
-        else SupportDiagnosticsConversationResult.Failed(message)
+        if (replyDeliveryUnknown) persistCompletedSafely(completed)
+        return if (replyDeliveryUnknown) SupportDiagnosticsConversationResult.ReplyDeliveryUnknown(message) else SupportDiagnosticsConversationResult.Failed(message)
     }
 
     private fun cancelAfterIntentPublished(callAtIntent: Call?): Boolean {
@@ -1792,6 +1787,7 @@ class JvmSupportIntake(
                     receipt = submission.receipt,
                     acknowledgedStatus = submission.acknowledgedStatus,
                     lastReadMaintainerMessageId = submission.lastReadMaintainerMessageId,
+                    replyDeliveryUnknown = submission.replyDeliveryUnknown,
                 ),
             ).encodeToByteArray(),
             ".completed-",
@@ -2085,6 +2081,7 @@ class JvmSupportIntake(
             receipt = persisted.receipt,
             acknowledgedStatus = persisted.acknowledgedStatus,
             lastReadMaintainerMessageId = persisted.lastReadMaintainerMessageId,
+            replyDeliveryUnknown = persisted.replyDeliveryUnknown,
         )
     } catch (_: IOException) {
         completedDescriptorRestorePending.set(true)
@@ -2146,6 +2143,7 @@ class JvmSupportIntake(
         val receipt: SupportIntakeReceipt,
         var acknowledgedStatus: String = receipt.status,
         var lastReadMaintainerMessageId: String? = null,
+        var replyDeliveryUnknown: Boolean = false,
         var conversation: SupportPrivateStatus? = null,
         var conversationLoading: Boolean = false,
         var conversationError: String? = null,
@@ -2188,6 +2186,7 @@ class JvmSupportIntake(
         val receipt: SupportIntakeReceipt,
         val acknowledgedStatus: String = receipt.status,
         val lastReadMaintainerMessageId: String? = null,
+        val replyDeliveryUnknown: Boolean = false,
     )
 
     @Serializable
@@ -2330,6 +2329,7 @@ class JvmSupportIntake(
                         statusChanged = conversation?.status?.let { status ->
                             status != completed.acknowledgedStatus
                         } ?: false,
+                        replyDeliveryUnknown = completed.replyDeliveryUnknown,
                         conversationLoading = completed.conversationLoading,
                         conversationError = completed.conversationError,
                     )

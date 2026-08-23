@@ -740,7 +740,7 @@ internal class AndroidNextcloudServices(
         recordId: String,
     ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(recordId)
 
-    override suspend fun refreshSubmittedSupportDiagnosticsReports(): dev.obiente.nextcloudnative.app.SupportDiagnosticsReportsRefreshResult =
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): dev.obiente.nextcloudnative.app.SupportDiagnosticsConversationResult =
         supportIntake.refreshCompletedReports()
 
     override suspend fun sendSubmittedSupportDiagnosticsMessage(
