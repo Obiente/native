@@ -2805,6 +2805,7 @@ class DesktopNextcloudServices(
                         choice,
                         onProgress = { event -> publishFileSyncProgress(accountId, event) },
                         shouldContinue = { !isFileSyncPaused() },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
                     )
                 } finally {
                     runCatching {

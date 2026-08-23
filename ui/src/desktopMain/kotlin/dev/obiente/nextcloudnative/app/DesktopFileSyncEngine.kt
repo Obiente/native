@@ -217,7 +217,7 @@ internal class DesktopFileSyncEngine(
         choice: FileSyncDecisionChoice,
         onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
-        onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit = {},
+        onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit,
     ): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess transaction@ {
             val current = store.loadPair(pairId)
