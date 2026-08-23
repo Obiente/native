@@ -17,8 +17,7 @@ fun safeIncomingShareFileName(rawName: String, fallbackIndex: Int): String {
         .joinToString("")
         .trim()
         .trim { it == '.' || it == '_' }
-        .take(MAX_INCOMING_SHARE_FILE_NAME_LENGTH)
-        .takeUtf8Bytes(MAX_INCOMING_SHARE_FILE_NAME_BYTES)
+        .boundIncomingShareName()
     return cleaned.takeIf { it.isNotBlank() && it != "." && it != ".." }
         ?: "shared-file-${fallbackIndex + 1}"
 }
@@ -30,10 +29,7 @@ fun safeIncomingShareFileName(rawName: String, fallbackIndex: Int): String {
 fun incomingShareUploadNameCandidates(displayName: String, limit: Int = 100): List<String> {
     require(limit in 1..1000)
     val safeName = safeIncomingShareFileName(displayName, 0)
-    val extensionIndex = safeName.lastIndexOf('.').takeIf { index ->
-        index > 0 && index < safeName.lastIndex &&
-            safeName.substring(index).encodeToByteArray().size <= MAX_INCOMING_SHARE_EXTENSION_BYTES
-    }
+    val extensionIndex = safeName.incomingShareExtensionIndex()
     val stem = extensionIndex?.let { safeName.substring(0, it) } ?: safeName
     val extension = extensionIndex?.let { safeName.substring(it) }.orEmpty()
     return buildList(limit) {
@@ -70,6 +66,22 @@ private fun String.takeUtf8Bytes(maximumBytes: Int): String {
         if (candidate.encodeToByteArray().size <= maximumBytes) low = middle else high = middle - 1
     }
     return take(low).dropLastWhile(Char::isHighSurrogate)
+}
+
+private fun String.boundIncomingShareName(): String {
+    val extensionIndex = incomingShareExtensionIndex()
+    val extension = extensionIndex?.let { substring(it) }.orEmpty()
+    val stem = extensionIndex?.let { substring(0, it) } ?: this
+    val boundedStem = stem
+        .take((MAX_INCOMING_SHARE_FILE_NAME_LENGTH - extension.length).coerceAtLeast(1))
+        .takeUtf8Bytes((MAX_INCOMING_SHARE_FILE_NAME_BYTES - extension.encodeToByteArray().size).coerceAtLeast(1))
+    return boundedStem + extension
+}
+
+private fun String.incomingShareExtensionIndex(): Int? = lastIndexOf('.').takeIf { index ->
+    index > 0 && index < lastIndex &&
+        substring(index).length <= MAX_INCOMING_SHARE_FILE_NAME_LENGTH / 2 &&
+        substring(index).encodeToByteArray().size <= MAX_INCOMING_SHARE_EXTENSION_BYTES
 }
 
 private const val MAX_INCOMING_SHARE_EXTENSION_BYTES = 64
