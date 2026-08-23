@@ -548,18 +548,19 @@ internal class AndroidFileSyncEngine(context: Context) {
         remote: AndroidFileSyncRemoteTree,
     ): VerifiedFileSyncContent? {
         val expectedBytes = candidate.expectedSizeBytes ?: return null
+        val readCeiling = maxOf(1L, expectedBytes)
         val localHash = local.contentHash(
             path = candidate.relativePath,
             expectedLocalRevision = candidate.localRevision,
             expectedBytes = expectedBytes,
-            maximumBytes = expectedBytes,
+            maximumBytes = readCeiling,
         ) ?: return null
         return if (
             remote.verifyContentHash(
                 relativePath = candidate.relativePath,
                 expectedRemoteEtag = candidate.remoteEtag,
                 expectedContentHash = localHash,
-                maximumBytes = expectedBytes,
+                maximumBytes = readCeiling,
             )
         ) {
             VerifiedFileSyncContent(candidate, localHash)

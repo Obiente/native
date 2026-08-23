@@ -56,6 +56,8 @@ fun fileSyncContentVerificationCandidates(
             if (local.size != null && remote.size != null && local.size != remote.size) {
                 return@mapNotNull null
             }
+            val expectedSize = local.size?.takeIf { it == remote.size }
+                ?: return@mapNotNull null
             val baseline = baselineByPath[local.relativePath]
             if (
                 baseline != null &&
@@ -69,7 +71,7 @@ fun fileSyncContentVerificationCandidates(
                 relativePath = local.relativePath,
                 localRevision = local.revision,
                 remoteEtag = remote.etag,
-                expectedSizeBytes = local.size ?: remote.size,
+                expectedSizeBytes = expectedSize,
             )
         }
         .sortedBy(FileSyncContentVerificationCandidate::relativePath)

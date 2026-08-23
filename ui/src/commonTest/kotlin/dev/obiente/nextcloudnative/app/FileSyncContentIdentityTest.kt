@@ -40,6 +40,14 @@ class FileSyncContentIdentityTest {
         assertEquals(
             emptyList(),
             fileSyncContentVerificationCandidates(
+                listOf(LocalSyncEntry("Notes/unknown.md", SyncEntryKind.File, "local", size = null)),
+                listOf(fileOnServer("Notes/unknown.md", "remote", 42L)),
+                emptyList(),
+            ),
+        )
+        assertEquals(
+            emptyList(),
+            fileSyncContentVerificationCandidates(
                 listOf(unchangedLocal),
                 listOf(unchangedRemote.copy(size = 43L)),
                 emptyList(),
@@ -104,6 +112,11 @@ class FileSyncContentIdentityTest {
                 maximumFileBytes = 64L,
                 maximumTotalBytes = 80L,
             ),
+        )
+        assertEquals(
+            listOf(FileSyncContentVerificationCandidate("empty", "local", "remote", 0L)),
+            listOf(FileSyncContentVerificationCandidate("empty", "local", "remote", 0L))
+                .withinFileSyncContentVerificationBudget(maximumFileBytes = 0L, maximumTotalBytes = 0L),
         )
     }
 
