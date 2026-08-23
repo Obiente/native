@@ -118,6 +118,51 @@ class AndroidIncomingShareStateTest {
         )
     }
 
+    @Test
+    fun collisionResponsesAdvanceNamesWithoutBecomingUnknownOutcomes() {
+        assertTrue(
+            DocumentWebDavException(
+                DocumentWebDavError.AlreadyExists,
+                409,
+                "Already exists",
+            ).isIncomingShareNameCollision(),
+        )
+        assertTrue(
+            DocumentWebDavException(
+                DocumentWebDavError.Conflict,
+                412,
+                "Precondition failed",
+            ).isIncomingShareNameCollision(),
+        )
+        assertFalse(
+            DocumentWebDavException(
+                DocumentWebDavError.Permission,
+                403,
+                "Forbidden",
+            ).isIncomingShareNameCollision(),
+        )
+    }
+
+    @Test
+    fun failurePresentationKeepsCompletedAndFailedFileOutcomesVisible() {
+        val presentation = request(AndroidIncomingShareState.Failed).copy(
+            completedFiles = 1,
+            uploadedNames = listOf("first (1).txt"),
+            message = "Network unavailable",
+        ).toPresentation()
+
+        assertEquals(1, presentation.completedFiles)
+        assertEquals(
+            dev.obiente.nextcloudnative.app.IncomingShareUploadFileStatus.Uploaded,
+            presentation.files[0].status,
+        )
+        assertEquals("first (1).txt", presentation.files[0].uploadedName)
+        assertEquals(
+            dev.obiente.nextcloudnative.app.IncomingShareUploadFileStatus.Failed,
+            presentation.files[1].status,
+        )
+    }
+
     private fun request(state: AndroidIncomingShareState) = AndroidIncomingShareRequest(
         id = "01234567-89ab-cdef-0123-456789abcdef",
         files = listOf(

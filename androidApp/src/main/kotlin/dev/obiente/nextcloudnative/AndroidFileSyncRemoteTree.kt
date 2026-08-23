@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
+import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -12,6 +13,11 @@ import java.security.MessageDigest
 internal data class AndroidRemoteSyncDocument(
     val entry: RemoteSyncEntry,
     val isDirectory: Boolean,
+)
+
+internal data class AndroidRemoteChildNameSnapshot(
+    val names: Set<String>,
+    val complete: Boolean,
 )
 
 /** Recursive, bounded and revision-guarded view of one Nextcloud Files subtree. */
@@ -186,6 +192,33 @@ internal class AndroidFileSyncRemoteTree(
                 expectedRemoteEtag,
             )
         }
+    }
+
+    /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
+    fun rootChildNames(): AndroidRemoteChildNameSnapshot {
+        val listing = webDav.listDirectory(session, userId, fullPath(""), MAX_CHILDREN)
+        return AndroidRemoteChildNameSnapshot(
+            names = listing.files.mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
+            complete = !listing.limited,
+        )
+    }
+
+    /** Performs a conditional create without inferring absence from a directory listing. */
+    fun createFileIfAbsent(
+        relativePath: String,
+        source: File,
+        onRequestStarted: () -> Unit,
+    ) {
+        require(safeIncomingShareFileName(relativePath, 0) == relativePath) {
+            "The incoming share filename is invalid."
+        }
+        webDav.createFile(
+            session = session,
+            userId = userId,
+            path = fullPath(relativePath),
+            source = source,
+            onRequestStarted = onRequestStarted,
+        )
     }
 
     fun delete(relativePath: String, expectedRemoteEtag: String) {

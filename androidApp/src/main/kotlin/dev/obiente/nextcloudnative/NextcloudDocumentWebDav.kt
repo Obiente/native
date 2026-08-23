@@ -249,6 +249,7 @@ internal class NextcloudDocumentWebDav(
         userId: String,
         path: String,
         source: File,
+        onRequestStarted: () -> Unit = {},
     ): DocumentMutationResult {
         val checksum = source.sha256ChecksumForDav()
         return execute(
@@ -258,6 +259,7 @@ internal class NextcloudDocumentWebDav(
             .put(source.asRequestBody(OCTET_STREAM))
             .build(),
             operation = "create file",
+            onRequestStarted = onRequestStarted,
         )
     }
 
@@ -379,10 +381,15 @@ internal class NextcloudDocumentWebDav(
         execute(builder.delete().build(), "clean up staged upload")
     }
 
-    private fun execute(request: Request, operation: String): DocumentMutationResult {
+    private fun execute(
+        request: Request,
+        operation: String,
+        onRequestStarted: () -> Unit = {},
+    ): DocumentMutationResult {
         check(cloudMutationsAllowed()) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
+        onRequestStarted()
         return client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw response.toDocumentException(operation)
             DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))

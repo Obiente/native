@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,7 +42,16 @@ data class IncomingShareUploadFilePresentation(
     val id: String,
     val displayName: String,
     val sizeBytes: Long,
+    val status: IncomingShareUploadFileStatus = IncomingShareUploadFileStatus.Pending,
+    val uploadedName: String? = null,
 )
+
+enum class IncomingShareUploadFileStatus {
+    Pending,
+    Uploaded,
+    Failed,
+    OutcomeUnknown,
+}
 
 data class IncomingShareUploadPresentation(
     val id: String,
@@ -59,9 +69,7 @@ fun IncomingShareUploadScreen(
     loading: Boolean,
     queueing: Boolean,
     error: String?,
-    services: NextcloudPlatformServices,
-    session: NextcloudSession?,
-    userId: String?,
+    folderPickerOperations: RemoteFolderPickerOperations?,
     folderPickerVisible: Boolean,
     onChooseDestination: () -> Unit,
     onDestinationSelected: (String) -> Unit,
@@ -70,7 +78,7 @@ fun IncomingShareUploadScreen(
     onDone: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
     ) {
         Text("Upload to Nextcloud", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -116,6 +124,19 @@ fun IncomingShareUploadScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                Text(
+                                    file.incomingShareStatusLabel(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when (file.status) {
+                                        IncomingShareUploadFileStatus.Uploaded ->
+                                            MaterialTheme.colorScheme.primary
+                                        IncomingShareUploadFileStatus.Failed,
+                                        IncomingShareUploadFileStatus.OutcomeUnknown,
+                                        -> MaterialTheme.colorScheme.error
+                                        IncomingShareUploadFileStatus.Pending ->
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
                             }
                         }
                     }
@@ -126,11 +147,9 @@ fun IncomingShareUploadScreen(
             }
         }
     }
-    if (folderPickerVisible && session != null && userId != null) {
+    if (folderPickerVisible && folderPickerOperations != null) {
         RemoteFolderPickerDialog(
-            services = services,
-            session = session,
-            userId = userId,
+            operations = folderPickerOperations,
             initialPath = request?.destinationPath.orEmpty(),
             onDismiss = onFolderPickerDismissed,
             onSelected = onDestinationSelected,
@@ -146,9 +165,12 @@ private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
         IncomingShareUploadState.Queued -> "Waiting for a network connection."
         IncomingShareUploadState.Uploading -> "${request.completedFiles} of ${request.files.size} files uploaded."
         IncomingShareUploadState.Completed -> "All files were uploaded."
-        IncomingShareUploadState.Failed -> request.message ?: "The upload could not start."
+        IncomingShareUploadState.Failed ->
+            "${request.completedFiles} of ${request.files.size} files uploaded. " +
+                (request.message ?: "The remaining upload could not continue.")
         IncomingShareUploadState.OutcomeUnknown ->
-            request.message ?: "The server result is unknown. Check Files before trying again."
+            "${request.completedFiles} of ${request.files.size} files are confirmed uploaded. " +
+                (request.message ?: "The next file result is unknown. Check Files before trying again.")
         IncomingShareUploadState.Canceled -> "Upload canceled."
     }
     if (request.state in setOf(IncomingShareUploadState.Queued, IncomingShareUploadState.Uploading)) {
@@ -165,6 +187,14 @@ private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
     )
+}
+
+private fun IncomingShareUploadFilePresentation.incomingShareStatusLabel(): String = when (status) {
+    IncomingShareUploadFileStatus.Pending -> "Waiting to upload"
+    IncomingShareUploadFileStatus.Uploaded ->
+        uploadedName?.let { "Uploaded as $it" } ?: "Uploaded"
+    IncomingShareUploadFileStatus.Failed -> "Not uploaded; safe to retry"
+    IncomingShareUploadFileStatus.OutcomeUnknown -> "Result unknown; check Nextcloud Files"
 }
 
 @Composable

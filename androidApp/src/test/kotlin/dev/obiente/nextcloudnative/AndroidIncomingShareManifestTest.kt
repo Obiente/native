@@ -20,6 +20,8 @@ class AndroidIncomingShareManifestTest {
             }
         assertNotNull(shareActivity)
         assertEquals("true", shareActivity.attributes.getNamedItemNS(ANDROID_XML_NAMESPACE, "exported").nodeValue)
+        assertEquals("true", shareActivity.attributes.getNamedItemNS(ANDROID_XML_NAMESPACE, "excludeFromRecents").nodeValue)
+        assertEquals("singleTop", shareActivity.attributes.getNamedItemNS(ANDROID_XML_NAMESPACE, "launchMode").nodeValue)
         assertEquals("", shareActivity.attributes.getNamedItemNS(ANDROID_XML_NAMESPACE, "taskAffinity").nodeValue)
         val actions = shareActivity.childNodes.let { children ->
             buildList {

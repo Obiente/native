@@ -163,7 +163,15 @@ class NextcloudDocumentWebDavTest {
         val source = Files.createTempFile("ncn-create-", ".txt").toFile()
         try {
             source.writeText("hello")
-            val result = NextcloudDocumentWebDav().createFile(server.session, "alice", "Documents/report.txt", source)
+            var requestStarted = false
+            val result = NextcloudDocumentWebDav().createFile(
+                server.session,
+                "alice",
+                "Documents/report.txt",
+                source,
+                onRequestStarted = { requestStarted = true },
+            )
+            assertTrue(requestStarted)
             assertEquals("\"created-1\"", result.etag)
             val request = server.request(0)
             assertEquals("PUT", request.method)
@@ -175,6 +183,28 @@ class NextcloudDocumentWebDavTest {
             )
             assertEquals("hello", request.body?.utf8())
             assertTrue(request.header("Authorization").orEmpty().startsWith("Basic "))
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun createFileDoesNotMarkRequestStartedWhenMutationGateRejectsPreflight() = RecordingServer().use { server ->
+        val source = Files.createTempFile("ncn-create-gated-", ".txt").toFile()
+        try {
+            source.writeText("hello")
+            var requestStarted = false
+            assertFailsWith<IllegalStateException> {
+                NextcloudDocumentWebDav(cloudMutationsAllowed = { false }).createFile(
+                    server.session,
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                    onRequestStarted = { requestStarted = true },
+                )
+            }
+            assertTrue(!requestStarted)
+            assertEquals(0, server.requestCount)
         } finally {
             source.delete()
         }

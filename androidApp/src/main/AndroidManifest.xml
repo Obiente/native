@@ -82,6 +82,7 @@
             android:name=".AndroidShareUploadActivity"
             android:excludeFromRecents="true"
             android:exported="true"
+            android:launchMode="singleTop"
             android:taskAffinity=""
             android:theme="@style/Theme.NextcloudNative">
             <intent-filter>

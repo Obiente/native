@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
+import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
@@ -13,6 +14,7 @@ import android.provider.OpenableColumns
 import android.util.AtomicFile
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.Data
@@ -31,8 +33,11 @@ import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONArray
@@ -104,8 +109,10 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         var fileBytes = 0L
                         while (true) {
+                            currentCoroutineContext().ensureActive()
                             val count = input.read(buffer)
                             if (count < 0) break
+                            currentCoroutineContext().ensureActive()
                             fileBytes += count
                             totalBytes += count
                             require(fileBytes <= MAX_SHARE_FILE_BYTES && totalBytes <= MAX_SHARE_TOTAL_BYTES) {
@@ -257,13 +264,14 @@ internal class AndroidIncomingShareUploads(private val context: Context) {
     }
 
     fun cancel(requestId: String) {
-        store.transition(
+        val canceled = store.transition(
             id = requestId,
             expected = setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading),
             target = AndroidIncomingShareState.Canceled,
             message = "Upload canceled. An in-flight file may already have reached Nextcloud.",
         )
         WorkManager.getInstance(context).cancelUniqueWork(workName(requestId))
+        canceled?.let { scheduleIncomingShareCleanup(context, it.id) }
     }
 
     private fun workName(requestId: String) = "incoming-share-$requestId"
@@ -278,23 +286,31 @@ internal class AndroidIncomingShareUploadWorker(
         val store = AndroidIncomingShareStore(applicationContext)
         var request = store.load(requestId) ?: return@withContext Result.success()
         if (request.state == AndroidIncomingShareState.Uploading) {
-            store.transition(
+            val recovered = store.transition(
                 id = requestId,
                 expected = setOf(AndroidIncomingShareState.Uploading),
                 target = AndroidIncomingShareState.OutcomeUnknown,
                 message = "Android restarted during an upload. Check Files before trying again.",
             )
+            recovered?.let {
+                publishTerminalNotification(it)
+                scheduleIncomingShareCleanup(applicationContext, it.id)
+            }
             return@withContext Result.success()
         }
         if (request.state != AndroidIncomingShareState.Queued) return@withContext Result.success()
         val session = AndroidNextcloudServices(applicationContext).loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != request.accountId) {
-            store.transition(
+            val failed = store.transition(
                 id = requestId,
                 expected = setOf(AndroidIncomingShareState.Queued),
                 target = AndroidIncomingShareState.Failed,
                 message = "The upload account is not active.",
             )
+            failed?.let {
+                publishTerminalNotification(it)
+                scheduleIncomingShareCleanup(applicationContext, it.id)
+            }
             return@withContext Result.failure()
         }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
@@ -318,17 +334,37 @@ internal class AndroidIncomingShareUploadWorker(
                 cloudMutationsAllowed = applicationContext.cloudMutationGate(),
             ),
         )
+        val occupiedNames = remote.rootChildNames().names.toMutableSet().apply {
+            addAll(request.uploadedNames)
+        }
         var mutationInFlight = false
         try {
             for (index in request.completedFiles until request.files.size) {
                 ensureNotCanceled(requestId, store)
                 val source = request.files[index]
-                val targetName = incomingShareUploadNameCandidates(source.displayName)
-                    .firstOrNull { candidate -> remote.resolve(candidate) == null }
+                val stagedFile = store.stagedFile(requestId, source)
+                val targetName = incomingShareUploadNameCandidates(source.displayName, limit = 1_000)
+                    .firstNotNullOfOrNull { candidate ->
+                        if (candidate in occupiedNames) return@firstNotNullOfOrNull null
+                        mutationInFlight = false
+                        try {
+                            remote.createFileIfAbsent(candidate, stagedFile) {
+                                mutationInFlight = true
+                            }
+                            candidate
+                        } catch (failure: DocumentWebDavException) {
+                            if (failure.isIncomingShareNameCollision()) {
+                                mutationInFlight = false
+                                occupiedNames += candidate
+                                null
+                            } else {
+                                throw failure
+                            }
+                        }
+                    }
                     ?: error("No safe available name remains for ${source.displayName}.")
-                mutationInFlight = true
-                remote.writeFile(targetName, store.stagedFile(requestId, source), expectedRemoteEtag = null)
                 mutationInFlight = false
+                occupiedNames += targetName
                 request = store.recordUploadedFile(requestId, index, targetName)
                     ?: throw CancellationException("Incoming share upload canceled")
                 setForeground(foregroundInfo(request))
@@ -339,10 +375,12 @@ internal class AndroidIncomingShareUploadWorker(
                 target = AndroidIncomingShareState.Completed,
             ) ?: throw CancellationException("Incoming share upload canceled")
             store.removeStagedFiles(request)
+            publishTerminalNotification(request)
+            scheduleIncomingShareCleanup(applicationContext, request.id)
             Result.success()
         } catch (cancelled: CancellationException) {
             if (store.load(requestId)?.state != AndroidIncomingShareState.Canceled) {
-                store.transition(
+                val transitioned = store.transition(
                     id = requestId,
                     expected = setOf(AndroidIncomingShareState.Uploading),
                     target = if (mutationInFlight) {
@@ -356,6 +394,10 @@ internal class AndroidIncomingShareUploadWorker(
                         "Upload paused. It will continue when Android allows background work."
                     },
                 )
+                transitioned?.takeIf { it.state == AndroidIncomingShareState.OutcomeUnknown }?.let {
+                    publishTerminalNotification(it)
+                    scheduleIncomingShareCleanup(applicationContext, it.id)
+                }
             }
             throw cancelled
         } catch (failure: Throwable) {
@@ -367,7 +409,7 @@ internal class AndroidIncomingShareUploadWorker(
             } else {
                 AndroidIncomingShareState.Failed
             }
-            store.transition(
+            val transitioned = store.transition(
                 id = requestId,
                 expected = setOf(AndroidIncomingShareState.Uploading),
                 target = target,
@@ -377,6 +419,10 @@ internal class AndroidIncomingShareUploadWorker(
                     "The upload could not continue."
                 },
             )
+            transitioned?.let {
+                publishTerminalNotification(it)
+                scheduleIncomingShareCleanup(applicationContext, it.id)
+            }
             Result.failure()
         }
     }
@@ -398,6 +444,7 @@ internal class AndroidIncomingShareUploadWorker(
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setProgress(request.files.size, request.completedFiles, false)
+            .setContentIntent(incomingShareRecoveryPendingIntent(applicationContext, request.id))
             .build()
         val id = request.id.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
         return if (Build.VERSION.SDK_INT >= 29) {
@@ -414,10 +461,84 @@ internal class AndroidIncomingShareUploadWorker(
     private fun isForegroundStartUnavailableApi31(error: IllegalStateException): Boolean =
         error is ForegroundServiceStartNotAllowedException
 
+    private fun publishTerminalNotification(request: AndroidIncomingShareRequest) {
+        AndroidNotificationCoordinator(applicationContext).ensureChannels()
+        val completed = request.state == AndroidIncomingShareState.Completed
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_TRANSFERS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFF8F5EAD.toInt())
+            .setContentTitle(if (completed) "Shared files uploaded" else "Shared upload needs attention")
+            .setContentText(
+                if (completed) {
+                    "${request.completedFiles} files uploaded to Nextcloud"
+                } else {
+                    "${request.completedFiles} of ${request.files.size} uploaded. Tap to review."
+                },
+            )
+            .setCategory(if (completed) NotificationCompat.CATEGORY_STATUS else NotificationCompat.CATEGORY_ERROR)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(incomingShareRecoveryPendingIntent(applicationContext, request.id))
+            .build()
+        runCatching {
+            NotificationManagerCompat.from(applicationContext)
+                .notify(incomingShareNotificationId(request.id), notification)
+        }
+    }
+
     internal companion object {
         const val KEY_REQUEST_ID = "request_id"
     }
 }
+
+internal class AndroidIncomingShareCleanupWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val requestId = inputData.getString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID)
+            ?: return@withContext Result.failure()
+        val store = AndroidIncomingShareStore(applicationContext)
+        val request = store.load(requestId) ?: return@withContext Result.success()
+        if (request.state in TERMINAL_INCOMING_SHARE_STATES) store.remove(requestId)
+        Result.success()
+    }
+}
+
+internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        "incoming-share-cleanup-$requestId",
+        ExistingWorkPolicy.REPLACE,
+        OneTimeWorkRequestBuilder<AndroidIncomingShareCleanupWorker>()
+            .setInitialDelay(7, TimeUnit.DAYS)
+            .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
+            .build(),
+    )
+}
+
+internal fun incomingShareRecoveryPendingIntent(context: Context, requestId: String): PendingIntent =
+    PendingIntent.getActivity(
+        context,
+        incomingShareNotificationId(requestId),
+        Intent(context, AndroidShareUploadActivity::class.java)
+            .putExtra(AndroidShareUploadActivity.KEY_REQUEST_ID, requestId)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+internal fun incomingShareNotificationId(requestId: String): Int =
+    requestId.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
+
+internal fun DocumentWebDavException.isIncomingShareNameCollision(): Boolean =
+    error == DocumentWebDavError.AlreadyExists || error == DocumentWebDavError.Conflict
+
+internal val TERMINAL_INCOMING_SHARE_STATES = setOf(
+    AndroidIncomingShareState.Completed,
+    AndroidIncomingShareState.Failed,
+    AndroidIncomingShareState.OutcomeUnknown,
+    AndroidIncomingShareState.Canceled,
+)
 
 internal fun transitionIncomingShareRequest(
     current: AndroidIncomingShareRequest,
