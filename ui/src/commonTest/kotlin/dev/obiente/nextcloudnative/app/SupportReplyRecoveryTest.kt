@@ -15,6 +15,7 @@ class SupportReplyRecoveryTest {
         val baseline = reporterIds.map { SupportReplyRecoveryObservation(it, false) }
 
         assertNull(persisted.reporterMessageIdsBeforeAttempt)
+        assertNull(persisted.attemptedReplyIdentity)
         assertEquals(reporterIds.size, persisted.reporterMessageCountBeforeAttempt)
         assertEquals(reporterIds.last(), persisted.lastReporterMessageIdBeforeAttempt)
         assertNull(SupportReplyRecoveryMarker.restored(persisted).afterAuthoritativeGet(baseline))

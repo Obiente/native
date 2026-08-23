@@ -38,4 +38,10 @@ class SupportSettingsDraftStateTest {
         assertEquals("Existing request reply", drafts.replyDraft("report-a"))
     }
 
+    @Test
+    fun `reply limit counts UTF-8 bytes`() {
+        assertEquals(4, supportReplyMessageByteCount("\uD83D\uDE42"))
+        assertEquals(false, supportReplyMessageIsWithinLimit("\uD83D\uDE42".repeat(2_049)))
+    }
+
 }

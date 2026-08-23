@@ -77,7 +77,7 @@ class JvmSupportIntakeTest {
         }
     }
     @Test
-    fun persistsAndReconcilesReplyRecoveryWithoutStoringThePrivateDraft() = runBlocking {
+    fun persistsAndReconcilesReplyRecoveryWithoutStoringAPrivateReplyVerifier() = runBlocking {
         val failWrites = AtomicBoolean(false)
         testFixture(directorySync = { if (failWrites.get()) throw IOException("Synthetic descriptor sync failure.") }).use { fixture ->
             fixture.server.enqueue(receiptResponse(fixture.statusUrl)); fixture.intake.submit("The updater failed.", "nightly", emptyList()); fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); fixture.intake.refreshCompletedReports()
@@ -87,22 +87,17 @@ class JvmSupportIntakeTest {
             fixture.server.enqueue(receiptResponse(fixture.statusUrl)); fixture.intake.submit("The updater failed.", "nightly", emptyList()); fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); fixture.intake.refreshCompletedReports()
             val recordId = fixture.intake.submittedRecordId().also { fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()) }
             assertIs<SupportDiagnosticsConversationResult.ReplyDeliveryUnknown>(fixture.intake.sendCompletedReportMessage(recordId, "Private retained draft."))
-            val descriptor = fixture.completedDescriptors().single().also { assertTrue(it.readText().contains("\"replyRecovery\"")); assertFalse(it.readText().contains("Private retained draft.")) }
+            val descriptor = fixture.completedDescriptors().single().also { val text = it.readText(); assertTrue(text.contains("\"replyRecovery\"")); assertFalse(text.contains("Private retained draft.")); assertFalse(text.contains("\"salt\"")); assertFalse(text.contains("\"digest\"")) }
             fixture.intake.close()
             fixture.newIntake().use { restored ->
                 assertEquals(SupportDiagnosticsReplyRecoveryState.RefreshRequired, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
                 fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()); assertIs<SupportDiagnosticsConversationResult.Failed>(restored.refreshCompletedReports())
                 assertEquals(SupportDiagnosticsReplyRecoveryState.RefreshRequired, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
-                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList())); assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
-                assertEquals(SupportDiagnosticsReplyRecoveryState.None, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
-                fixture.server.enqueue(MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build())
-                assertIs<SupportDiagnosticsConversationResult.ReplyDeliveryUnknown>(restored.sendCompletedReportMessage(recordId, "Private delivered draft."))
-                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList(), "Private delivered draft.", 200))
-                assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
-                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                fixture.server.enqueue(privateStatusResponse("needs_information", emptyList(), "Private retained draft.", 200)); assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
+                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
             }
             fixture.newIntake().use { restored ->
-                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
+                assertEquals(SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
                 assertTrue(restored.acknowledgeCompletedReportReplyDelivery(recordId))
                 assertEquals(SupportDiagnosticsReplyRecoveryState.None, assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value).reports.single().replyRecoveryState)
             }

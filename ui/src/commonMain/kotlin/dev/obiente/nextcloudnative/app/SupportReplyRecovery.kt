@@ -65,7 +65,7 @@ internal data class SupportReplyRecoveryMarker private constructor(
         reporterMessageIdsBeforeAttempt = reporterMessageIdsBeforeAttempt?.sorted(),
         reporterMessageCountBeforeAttempt = reporterMessageCountBeforeAttempt,
         lastReporterMessageIdBeforeAttempt = lastReporterMessageIdBeforeAttempt,
-        attemptedReplyIdentity = attemptedReplyIdentity,
+        attemptedReplyIdentity = null,
         deliveryConfirmed = deliveryConfirmed,
         deliveryUnknownAfterRefresh = deliveryUnknownAfterRefresh,
     )
@@ -103,7 +103,7 @@ internal data class SupportReplyRecoveryMarker private constructor(
                 reporterMessageIdsBeforeAttempt = ids,
                 reporterMessageCountBeforeAttempt = cursor?.messageCount,
                 lastReporterMessageIdBeforeAttempt = cursor?.lastMessageId,
-                attemptedReplyIdentity = persisted.attemptedReplyIdentity,
+                attemptedReplyIdentity = null,
                 deliveryConfirmed = persisted.deliveryConfirmed,
                 deliveryUnknownAfterRefresh = persisted.deliveryUnknownAfterRefresh,
             )

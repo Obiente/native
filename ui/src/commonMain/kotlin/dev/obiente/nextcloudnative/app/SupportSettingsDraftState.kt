@@ -34,3 +34,8 @@ internal class SupportSettingsDraftState {
 
     fun hasDraftContent(): Boolean = reportDraft.isNotEmpty() || replyDrafts.isNotEmpty()
 }
+
+internal fun supportReplyMessageByteCount(value: String): Int = value.encodeToByteArray().size
+internal fun supportReplyMessageIsWithinLimit(value: String): Boolean =
+    supportReplyMessageByteCount(value) <= MAX_SUPPORT_REPLY_MESSAGE_BYTES
+internal const val MAX_SUPPORT_REPLY_MESSAGE_BYTES = 8 * 1_024

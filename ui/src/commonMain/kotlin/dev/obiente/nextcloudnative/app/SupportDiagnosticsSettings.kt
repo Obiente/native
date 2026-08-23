@@ -320,7 +320,7 @@ private fun RequestCard(
                     supportingText = {
                         Text(when (replyRecoveryState) {
                             SupportDiagnosticsReplyRecoveryState.None ->
-                                replyDraft.length.toString() + " / " + MAX_SUPPORT_CONVERSATION_MESSAGE_LENGTH
+                                supportReplyMessageByteCount(replyDraft).toString() + " / " + MAX_SUPPORT_REPLY_MESSAGE_BYTES + " bytes"
                             SupportDiagnosticsReplyRecoveryState.RefreshRequired ->
                                 "Delivery was uncertain. Refresh requests before sending again."
                             SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement ->
@@ -352,7 +352,7 @@ private fun RequestCard(
                             },
                         ) { Text(if (delivered) "Clear delivered draft" else "I reviewed this reply") }
                     } else Button(
-                        enabled = replyDraft.isNotBlank() && !replyBlocked && !report.conversationLoading,
+                        enabled = replyDraft.isNotBlank() && supportReplyMessageIsWithinLimit(replyDraft) && !replyBlocked && !report.conversationLoading,
                         onClick = {
                             scope.launch {
                                 when (val result = services.sendSubmittedSupportDiagnosticsMessage(
