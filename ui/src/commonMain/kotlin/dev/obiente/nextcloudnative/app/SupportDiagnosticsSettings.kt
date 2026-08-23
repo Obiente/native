@@ -123,7 +123,7 @@ internal fun SupportSettingsView(services: NextcloudPlatformServices, drafts: Su
             SupportTab.Requests -> RequestsTab(
                 services, submission, reports, page, { page = it },
                 replyId, { replyId = it }, drafts,
-                { deleteId = it }, { notice = it },
+                { deleteId = it }, { notice = it }, { tab = SupportTab.NewReport.ordinal },
             )
             SupportTab.NewReport -> NewReportTab(
                 services, summary, submission, drafts.reportDraft, drafts::updateReportDraft,
@@ -150,10 +150,11 @@ private fun RequestsTab(
     drafts: SupportSettingsDraftState,
     onDelete: (String) -> Unit,
     onNotice: (String) -> Unit,
+    onOpenRecovery: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     if (reports.isEmpty()) {
-        RequestsEmptyState(state)
+        SupportRequestsEmptyState(state, onOpenRecovery)
         return
     }
     val reportPage = supportReportPage(reports, requestedPage)
@@ -169,9 +170,10 @@ private fun RequestsTab(
                 enabled = reports.none { it.conversationLoading },
                 onClick = {
                     scope.launch {
-                        when (val result = services.refreshSubmittedSupportDiagnosticsReports()) {
+                        val refresh = services.refreshSubmittedSupportDiagnosticsReports()
+                        drafts.clearReplyRefreshRequirements(refresh.refreshedRecordIds)
+                        when (val result = refresh.result) {
                             SupportDiagnosticsConversationResult.Updated -> {
-                                drafts.clearReplyRefreshRequirements()
                                 onNotice("Support requests refreshed.")
                             }
                             is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> onNotice(result.message)
@@ -373,36 +375,6 @@ private fun RequestCard(
 }
 
 @Composable
-private fun RequestsEmptyState(state: SupportDiagnosticsSubmissionState) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium)) {
-            if (state is SupportDiagnosticsSubmissionState.Initializing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Text("Restoring support requests stored on this device...")
-            } else {
-                Text("No support requests on this device", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "This list contains private receipts created by this installation for the active account. " +
-                        "Requests from another device cannot be discovered from a support code.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                when (state) {
-                    SupportDiagnosticsSubmissionState.AccountRequired -> Text("Sign in to view account-scoped receipts.")
-                    is SupportDiagnosticsSubmissionState.Unsupported -> Text(state.reason)
-                    is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> Text(state.message)
-                    else -> Unit
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun NewReportTab(
     services: NextcloudPlatformServices,
     summary: SupportDiagnosticsSummary,
@@ -512,7 +484,10 @@ private fun SubmissionProgress(
             SupportDiagnosticsSubmissionState.Initializing -> ProgressMessage("Restoring private support state...")
             SupportDiagnosticsSubmissionState.AccountRequired -> Text("Sign in before sending a private report.")
             SupportDiagnosticsSubmissionState.Idle -> Unit
-            is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> Text(state.message)
+            is SupportDiagnosticsSubmissionState.BlockedByAnotherAccount -> {
+                Text(state.message)
+                TextButton(onClick = onDiscard) { Text("Discard pending report") }
+            }
             SupportDiagnosticsSubmissionState.Packaging -> ProgressMessage("Preparing the private report...")
             SupportDiagnosticsSubmissionState.Cancelling -> ProgressMessage("Finishing report cancellation...")
             SupportDiagnosticsSubmissionState.DeletingSubmittedReport -> ProgressMessage("Deleting the report...")

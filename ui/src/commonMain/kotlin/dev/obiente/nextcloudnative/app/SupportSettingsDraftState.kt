@@ -35,7 +35,9 @@ internal class SupportSettingsDraftState(
         if (required) repliesRequiringRefresh[recordId] = true else repliesRequiringRefresh.remove(recordId)
     }
 
-    fun clearReplyRefreshRequirements() = repliesRequiringRefresh.clear()
+    fun clearReplyRefreshRequirements(refreshedRecordIds: Set<String>) {
+        refreshedRecordIds.forEach(repliesRequiringRefresh::remove)
+    }
 
     fun retainReplyDrafts(recordIds: Set<String>) {
         replyDrafts.keys.toList().filterNot(recordIds::contains).forEach(replyDrafts::remove)

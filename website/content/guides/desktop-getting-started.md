@@ -8,14 +8,14 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 9
 difficulty: Getting started
-lastUpdated: 2026-08-21
+lastUpdated: 2026-08-23
 captureScenarios: guide-desktop-getting-started-home, guide-desktop-getting-started-apps, guide-desktop-getting-started-settings
 prerequisites: A supported x86-64 Linux or Windows computer, Your Nextcloud server address and sign-in details, The package and release notes for the current alpha
 ---
 
 # Get started with Nextcloud Native on Linux or Windows
 
-**Last reviewed: 2026-08-21.** The software and published packages may have
+**Last reviewed: 2026-08-23.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -41,11 +41,11 @@ Desktop layouts may use multiple panes, selection, context menus, and denser con
 
 ## 3. Review settings and choose the correct file integration
 
-@capture-alt: Nextcloud Native desktop Settings workspace with account, appearance, sync and storage, notifications, desktop app, updates, help, and administration sections
+@capture-alt: Nextcloud Native desktop Settings workspace with account, appearance, sync and storage, desktop app, updates, support, help, and administration sections
 @capture-caption: Desktop Settings separates account and app preferences from Linux and Windows integrations whose availability depends on the current operating system.
 
 Open **Settings** to choose the theme, review the connected server, configure start-on-login, inspect update options, and enter **Sync & storage**. At normal desktop widths, the section list remains visible beside the selected section. In a compact window, Settings uses an overview and one section at a time; Back returns to the overview. Linux supports normal folder pairs and a filesystem mount. Windows provides Cloud Files placeholders in File Explorer. These integrations share safety rules but are not interchangeable, so follow the Linux folder-sync or Windows Cloud Files guide for exact behavior.
 
 **Keep running when the window closes** is enabled by default. Closing the window therefore keeps sync and virtual files active in the tray; use **Open Nextcloud Native** to restore the window, **Show sync activity** to inspect work, or **Quit** to stop the app cleanly. Start-on-login is a separate setting and is disabled until you enable it. Background folder-pair checks run while the desktop process is active.
 
-Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account. **New report** lets you add reproduction steps and prepare a bounded diagnostic report, while **Privacy** explains what it can contain. Draft text stays only in memory while Settings is open. Preparing, previewing, or exporting a report does not submit it. Review the report and choose **Send** only when you intend to submit it to support.
+Before relying on any pair, review its direction, deletion policy, conflicts, and latest successful run. If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account and points to safe retry or discard actions when an earlier send still needs recovery. **New report** lets you add reproduction steps and prepare a bounded diagnostic report, while **Privacy** explains what it can contain. Draft text stays only in memory while Settings is open. Preparing, previewing, or exporting a report does not submit it. Review the report and choose **Send** only when you intend to submit it to support.

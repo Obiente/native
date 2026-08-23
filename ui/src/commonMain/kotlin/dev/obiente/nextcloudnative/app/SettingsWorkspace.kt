@@ -181,6 +181,7 @@ internal fun DesktopSettingsWorkspace(
             val selected = selectedSection?.takeIf(visibleSections::contains)
                 ?: visibleSections.firstOrNull()
                 ?: SettingsWorkspaceSection.Account
+            val detailStateHolder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             Row(modifier = Modifier.fillMaxSize()) {
                 Column(
                     modifier = Modifier.width(layout.categoryWidthDp.dp).fillMaxHeight()
@@ -203,20 +204,22 @@ internal fun DesktopSettingsWorkspace(
                     }
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())
-                        .padding(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                ) {
-                    Text(selected.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        selected.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    content(selected)
-                    Spacer(Modifier.height(NextcloudSpacing.Large))
+                detailStateHolder.SaveableStateProvider(selected.name) {
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())
+                            .padding(NextcloudSpacing.Large),
+                        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                    ) {
+                        Text(selected.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            selected.description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        content(selected)
+                        Spacer(Modifier.height(NextcloudSpacing.Large))
+                    }
                 }
                 if (layout.showSummaryPane) {
                     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)

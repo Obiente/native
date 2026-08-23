@@ -49,7 +49,7 @@ class JvmSupportIntakeTest {
             fixture.server.enqueue(privateStatusResponse(
                 "needs_information", listOf(maintainerMessageId to "Which installation stage failed?"),
             ))
-            assertEquals(SupportDiagnosticsConversationResult.Updated, fixture.intake.refreshCompletedReports())
+            assertEquals(SupportDiagnosticsConversationResult.Updated, fixture.intake.refreshCompletedReports().also { assertEquals(setOf(fixture.intake.submittedRecordId()), it.refreshedRecordIds) }.result)
 
             val refreshed = assertIs<SupportDiagnosticsSubmissionState.Submitted>(fixture.intake.states().value)
                 .reports.single()
@@ -68,7 +68,7 @@ class JvmSupportIntakeTest {
                 fixture.server.enqueue(privateStatusResponse(
                     "needs_information", listOf(maintainerMessageId to "Which installation stage failed?"),
                 ))
-                assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports())
+                assertEquals(SupportDiagnosticsConversationResult.Updated, restored.refreshCompletedReports().result)
                 val afterRestart = assertIs<SupportDiagnosticsSubmissionState.Submitted>(restored.states().value)
                     .reports.single()
                 assertFalse(afterRestart.statusChanged)

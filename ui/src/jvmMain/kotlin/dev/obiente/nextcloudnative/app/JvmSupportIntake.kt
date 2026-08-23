@@ -469,17 +469,15 @@ class JvmSupportIntake(
             }
         }
 
-    suspend fun refreshCompletedReports(): SupportDiagnosticsConversationResult = withContext(Dispatchers.IO) {
+    suspend fun refreshCompletedReports(): SupportDiagnosticsReportsRefreshResult = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!beginOperation()) {
-            return@withContext SupportDiagnosticsConversationResult.Failed(
-                "Another private support operation is still in progress.",
-            )
-        }
+        if (!beginOperation()) return@withContext SupportDiagnosticsReportsRefreshResult(
+            emptySet(), SupportDiagnosticsConversationResult.Failed("Another private support operation is still in progress."),
+        )
         try {
             val accountIdentity = synchronized(lock) { activeAccountIdentity }
-                ?: return@withContext SupportDiagnosticsConversationResult.Failed(
-                    "Sign in to refresh private support reports.",
+                ?: return@withContext SupportDiagnosticsReportsRefreshResult(
+                    emptySet(), SupportDiagnosticsConversationResult.Failed("Sign in to refresh private support reports."),
                 )
             val reports = synchronized(lock) {
                 completedSubmissions.filter { completed ->
@@ -489,21 +487,22 @@ class JvmSupportIntake(
                     completed.conversationError = null
                 }
             }
-            if (reports.isEmpty()) return@withContext SupportDiagnosticsConversationResult.Failed(
-                "No submitted support reports are available on this device.",
+            if (reports.isEmpty()) return@withContext SupportDiagnosticsReportsRefreshResult(
+                emptySet(), SupportDiagnosticsConversationResult.Failed("No submitted support reports are available on this device."),
             )
             publishState(submittedStateFor(accountIdentity), accountIdentity)
             var failure: String? = null
+            val refreshedRecordIds = mutableSetOf<String>()
             reports.forEach { completed ->
                 when (val result = refreshCompletedReport(completed)) {
-                    SupportDiagnosticsConversationResult.Updated -> Unit
+                    SupportDiagnosticsConversationResult.Updated -> refreshedRecordIds += completed.recordId
                     is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Failed -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Unsupported -> if (failure == null) failure = result.reason
                 }
                 publishState(submittedStateFor(accountIdentity), accountIdentity)
             }
-            failure?.let { message -> SupportDiagnosticsConversationResult.Failed(message) } ?: SupportDiagnosticsConversationResult.Updated
+            SupportDiagnosticsReportsRefreshResult(refreshedRecordIds, failure?.let { SupportDiagnosticsConversationResult.Failed(it) } ?: SupportDiagnosticsConversationResult.Updated)
         } finally {
             endOperation()
         }

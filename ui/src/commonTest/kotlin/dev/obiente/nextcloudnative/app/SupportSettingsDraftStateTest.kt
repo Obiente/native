@@ -47,7 +47,7 @@ class SupportSettingsDraftStateTest {
 
         assertEquals(true, drafts.replyRequiresRefresh("report-a"))
 
-        drafts.clearReplyRefreshRequirements()
+        drafts.clearReplyRefreshRequirements(setOf("report-a"))
 
         assertEquals(false, drafts.replyRequiresRefresh("report-a"))
         assertEquals("Do not resend blindly", drafts.replyDraft("report-a"))
@@ -68,5 +68,17 @@ class SupportSettingsDraftStateTest {
         assertEquals(true, restored.replyRequiresRefresh("report-a"))
         assertEquals("", restored.reportDraft)
         assertEquals("", restored.replyDraft("report-a"))
+    }
+
+    @Test
+    fun `partial refresh clears only reconciled reply guards`() {
+        val drafts = SupportSettingsDraftState()
+        drafts.updateReplyRefreshRequirement("report-a", true)
+        drafts.updateReplyRefreshRequirement("report-b", true)
+
+        drafts.clearReplyRefreshRequirements(setOf("report-a"))
+
+        assertEquals(false, drafts.replyRequiresRefresh("report-a"))
+        assertEquals(true, drafts.replyRequiresRefresh("report-b"))
     }
 }

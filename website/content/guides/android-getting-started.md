@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Getting started
-lastUpdated: 2026-08-21
+lastUpdated: 2026-08-23
 captureScenarios: guide-android-getting-started-home, guide-android-getting-started-files, guide-android-getting-started-calendar
 prerequisites: Android 8.0 or newer, Your Nextcloud server address and sign-in details, A current signed APK from the GitHub Releases page
 ---
 
 # Get started with Nextcloud Native on Android
 
-**Last reviewed: 2026-08-21.** The software and published packages may have
+**Last reviewed: 2026-08-23.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -52,4 +52,4 @@ On a phone, open **Settings** to see the settings overview, then open **Notifica
 
 Return to the app list and open a workspace such as Calendar, Photos, Talk, or Notes. Support varies by installed server app and version: some surfaces are complete, while adaptive or read-heavy views may expose fewer actions. The app should explain unsupported behavior rather than opening the server's web interface. Use Android system Back to leave nested content and return to the previous workspace state.
 
-If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account. **New report** lets you describe what happened and prepare a bounded diagnostic report, while **Privacy** explains what the report can contain. Draft text stays only in memory while Settings is open. Preparing or previewing a report does not submit it. Review the report, then choose **Send** only when you intend to submit it to support.
+If you need to report a failure, open **Settings**, then **Support**. **Requests** shows the support requests available to the signed-in account and points to safe retry or discard actions when an earlier send still needs recovery. **New report** lets you describe what happened and prepare a bounded diagnostic report, while **Privacy** explains what the report can contain. Draft text stays only in memory while Settings is open. Preparing or previewing a report does not submit it. Review the report, then choose **Send** only when you intend to submit it to support.

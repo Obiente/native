@@ -3504,7 +3504,7 @@ class DesktopNextcloudServices(
         recordId: String,
     ): SupportDiagnosticsDeletionResult = supportIntake.deleteCompletedReport(recordId)
 
-    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsConversationResult =
+    override suspend fun refreshSubmittedSupportDiagnosticsReports(): SupportDiagnosticsReportsRefreshResult =
         supportIntake.refreshCompletedReports()
 
     override suspend fun sendSubmittedSupportDiagnosticsMessage(

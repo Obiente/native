@@ -933,7 +933,7 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            visibleSections = SettingsWorkspaceSection.entries,
+            visibleSections = visibleSettingsSections(true, false, true),
             selectedSection = SettingsWorkspaceSection.DesktopApp, onSectionSelected = {},
         ) { section ->
             when (section) {

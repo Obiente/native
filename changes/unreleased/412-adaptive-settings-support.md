@@ -4,4 +4,4 @@ pull: 412
 platforms: android, desktop
 user-facing: yes
 
-Settings now uses focused navigation with two panes on larger Android screens. Support has request, report, and privacy views, keeps private drafts with the correct request, and blocks uncertain replies until refresh.
+Settings now uses focused navigation with two panes on larger Android screens. Support separates requests, reports, and privacy, preserves safe recovery state, and shows pending report recovery after restart.
