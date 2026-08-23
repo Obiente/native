@@ -298,17 +298,18 @@ fun RemoteFolderPickerDialog(
         runCatching { operations.listNetwork(currentPath) }
             .rethrowRemoteFolderCancellation()
             .onSuccess { listing ->
+                val selectionAccess = operations.confirmSelectionAccess(currentPath, listing.source)
                 files = listing.files
                 listingSource = listing.source
                 displayedPath = currentPath
                 networkConfirmedPath = currentPath.takeIf {
-                    listing.source == NextcloudFileListingSource.Network
+                    listing.source == NextcloudFileListingSource.Network &&
+                        selectionAccess == RemoteFolderSelectionAccess.Allowed
                 }
                 loading = false
                 refreshing = false
-                if (listing.source != NextcloudFileListingSource.Network) {
-                    error = "Connect to Nextcloud to confirm this destination."
-                } else {
+                error = (selectionAccess as? RemoteFolderSelectionAccess.Denied)?.message
+                if (selectionAccess == RemoteFolderSelectionAccess.Allowed) {
                     missingDestination = recoveryTarget?.let { intended ->
                         missingRemoteFolderDestination(intended, currentPath)
                     }

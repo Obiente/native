@@ -8,10 +8,38 @@ class RemoteFolderPickerOperations(
     val listCached: suspend (path: String) -> NextcloudFileListing?,
     val listNetwork: suspend (path: String) -> NextcloudFileListing,
     val createDirectoryIfAbsent: suspend (path: String) -> Unit,
+    val selectionAccess: suspend (path: String) -> RemoteFolderSelectionAccess = {
+        RemoteFolderSelectionAccess.Allowed
+    },
 ) {
     init {
         require(identity.isNotBlank() && identity.none(Char::isISOControl))
     }
+}
+
+sealed interface RemoteFolderSelectionAccess {
+    data object Allowed : RemoteFolderSelectionAccess
+    data class Denied(val message: String) : RemoteFolderSelectionAccess {
+        init {
+            require(message.isNotBlank() && message.none(Char::isISOControl))
+        }
+    }
+}
+
+internal suspend fun RemoteFolderPickerOperations.confirmSelectionAccess(
+    path: String,
+    source: NextcloudFileListingSource,
+): RemoteFolderSelectionAccess {
+    if (source != NextcloudFileListingSource.Network) {
+        return RemoteFolderSelectionAccess.Denied("Connect to Nextcloud to confirm this destination.")
+    }
+    return runCatching { selectionAccess(path) }
+        .rethrowRemoteFolderCancellation()
+        .getOrElse { failure ->
+            RemoteFolderSelectionAccess.Denied(
+                failure.message ?: "Could not verify permission to upload here.",
+            )
+        }
 }
 
 fun remoteFolderPickerOperations(

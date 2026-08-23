@@ -211,6 +211,109 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun createFileCancellationAbortsTheInflightPut() = RecordingServer().use { server ->
+        server.enqueue(MockResponse.Builder().code(201).headersDelay(30, TimeUnit.SECONDS).build())
+        val source = Files.createTempFile("ncn-cancel-put-", ".txt").toFile()
+        val cancellation = TestCancellation()
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            source.writeText("cancel me")
+            val future = executor.submit<Unit> {
+                NextcloudDocumentWebDav().createFile(
+                    server.session,
+                    "alice",
+                    "Documents/cancel.txt",
+                    source,
+                    cancellation = cancellation,
+                )
+            }
+            assertTrue(cancellation.attached.await(2, TimeUnit.SECONDS))
+            cancellation.cancel()
+            val failure = assertFailsWith<java.util.concurrent.ExecutionException> {
+                future.get(2, TimeUnit.SECONDS)
+            }
+            assertTrue(failure.cause is TestCancelledException)
+            assertTrue(cancellation.detached.await(2, TimeUnit.SECONDS))
+        } finally {
+            executor.shutdownNow()
+            source.delete()
+        }
+    }
+
+    @Test
+    fun chunkedUploadUsesOfficialV2HeadersAndNeverOverwritesDestination() = RecordingServer().use { server ->
+        server.enqueue(201)
+        server.enqueue(201)
+        server.enqueue(201)
+        val source = Files.createTempFile("ncn-chunk-", ".bin").toFile()
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        try {
+            source.writeText("0123456789")
+            val client = NextcloudDocumentWebDav()
+            client.createChunkUpload(server.session, "alice", uploadId, "Shared/archive.bin", TestCancellation())
+            client.uploadChunk(
+                server.session,
+                "alice",
+                uploadId,
+                "Shared/archive.bin",
+                source,
+                offset = 2,
+                length = 5,
+                totalLength = 10,
+                chunkNumber = 1,
+                cancellation = TestCancellation(),
+            )
+            client.commitChunkUpload(
+                server.session,
+                "alice",
+                uploadId,
+                "Shared/archive.bin",
+                totalLength = 10,
+                cancellation = TestCancellation(),
+                onRequestStarted = {},
+            )
+
+            val destination = server.baseUrl + "/remote.php/dav/files/alice/Shared/archive.bin"
+            assertEquals("MKCOL", server.request(0).method)
+            assertEquals(destination, server.request(0).header("Destination"))
+            assertEquals("PUT", server.request(1).method)
+            assertEquals("23456", server.request(1).body?.utf8())
+            assertEquals("10", server.request(1).header("OC-Total-Length"))
+            assertTrue(server.request(1).path.endsWith("/$uploadId/00001"))
+            assertEquals("MOVE", server.request(2).method)
+            assertEquals("F", server.request(2).header("Overwrite"))
+            assertEquals(destination, server.request(2).header("Destination"))
+            assertTrue(server.request(2).path.endsWith("/$uploadId/.file"))
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun directoryCreatePermissionAndRateLimitAreTyped() = RecordingServer().use { server ->
+        server.enqueue(
+            207,
+            body = """
+                <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response>
+                  <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype>
+                    <oc:permissions>RGDNVCK</oc:permissions>
+                  </d:prop></d:propstat>
+                </d:response></d:multistatus>
+            """.trimIndent(),
+        )
+        server.enqueue(429, headers = mapOf("Retry-After" to "17"))
+        val client = NextcloudDocumentWebDav()
+
+        assertTrue(client.inspectDirectoryAccess(server.session, "alice", "Shared").canCreateChildren)
+        assertEquals("0", server.request(0).header("Depth"))
+        val failure = assertFailsWith<DocumentWebDavException> {
+            client.createFolder(server.session, "alice", "Shared/New")
+        }
+        assertEquals(DocumentWebDavError.Throttled, failure.error)
+        assertEquals(17L, failure.retryAfterSeconds)
+    }
+
+    @Test
     fun replacementUsesDestinationGuardedPut() = RecordingServer().use { server ->
         server.enqueue(204, mapOf("ETag" to "\"saved-2\""))
         val source = Files.createTempFile("ncn-replace-put-", ".txt").toFile()

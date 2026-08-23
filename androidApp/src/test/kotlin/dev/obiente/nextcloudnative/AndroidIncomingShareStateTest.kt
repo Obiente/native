@@ -97,6 +97,17 @@ class AndroidIncomingShareStateTest {
         assertFalse(
             incomingShareMutationOutcomeUnknown(
                 DocumentWebDavException(
+                    DocumentWebDavError.Throttled,
+                    429,
+                    "Wait",
+                    retryAfterSeconds = 12,
+                ),
+                mutationInFlight = true,
+            ),
+        )
+        assertFalse(
+            incomingShareMutationOutcomeUnknown(
+                DocumentWebDavException(
                     DocumentWebDavError.InsufficientStorage,
                     507,
                     "The server is full.",
@@ -115,6 +126,20 @@ class AndroidIncomingShareStateTest {
                 IllegalStateException("Folder lookup failed"),
                 mutationInFlight = false,
             ),
+        )
+    }
+
+    @Test
+    fun largeFilesUseBoundedOfficialChunkSizes() {
+        assertEquals(3, incomingShareChunkCount(DIRECT_INCOMING_SHARE_UPLOAD_BYTES + INCOMING_SHARE_CHUNK_BYTES))
+        assertTrue(java.io.IOException("offline").isRetryableIncomingShareTransferFailure())
+        assertTrue(
+            DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
+                .isRetryableIncomingShareTransferFailure(),
+        )
+        assertFalse(
+            DocumentWebDavException(DocumentWebDavError.Permission, 403, "No")
+                .isRetryableIncomingShareTransferFailure(),
         )
     }
 

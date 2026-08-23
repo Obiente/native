@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -70,6 +71,48 @@ class AndroidIncomingShareStoreInstrumentedTest {
             )
         } finally {
             assertTrue(store.remove(multiple.id))
+        }
+    }
+
+    @Test
+    fun chunkProgressSurvivesRecreationAndCorruptManifestsRemainRecoverable() = runBlocking {
+        val store = AndroidIncomingShareStore(context)
+        val staged = store.stage(
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_STREAM, fixtureUri("one.txt"))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+        )
+        try {
+            val uploading = staged.copy(
+                state = AndroidIncomingShareState.Uploading,
+                chunkSession = AndroidIncomingShareChunkSession(
+                    fileIndex = 0,
+                    targetName = "one.txt",
+                    uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                    uploadedChunks = 3,
+                ),
+            )
+            store.save(uploading)
+            assertEquals(uploading, AndroidIncomingShareStore(context).requireAvailable(staged.id))
+        } finally {
+            assertTrue(store.remove(staged.id))
+        }
+
+        val corruptId = "11111111-2222-3333-4444-555555555555"
+        val directory = java.io.File(context.filesDir, "incoming-share/$corruptId")
+        assertTrue(directory.mkdirs())
+        java.io.File(directory, "request.json").writeText("{not-json")
+        try {
+            assertTrue(store.loadResult(corruptId) is AndroidIncomingShareLoadResult.Corrupt)
+            try {
+                store.requireAvailable(corruptId)
+                fail("Expected a typed corrupt-manifest failure")
+            } catch (failure: CorruptIncomingShareManifestException) {
+                assertEquals(corruptId, failure.requestId)
+            }
+        } finally {
+            assertTrue(store.remove(corruptId))
         }
     }
 

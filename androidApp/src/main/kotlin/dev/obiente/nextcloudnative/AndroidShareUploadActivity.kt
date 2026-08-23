@@ -19,6 +19,8 @@ import dev.obiente.nextcloudnative.app.IncomingShareUploadScreen
 import dev.obiente.nextcloudnative.app.IncomingShareUploadState
 import dev.obiente.nextcloudnative.app.NextcloudServerInfo
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.RemoteFolderPickerOperations
+import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
 import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.remoteFolderPickerOperations
@@ -26,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 
 /** Android share-sheet entry point. URI grants are staged before the user chooses a DAV folder. */
 class AndroidShareUploadActivity : ComponentActivity() {
@@ -39,6 +42,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private var queueing by mutableStateOf(false)
     private var folderPickerVisible by mutableStateOf(false)
     private var error by mutableStateOf<String?>(null)
+    private var recoveryRequestId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,7 +59,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                     val activeUserId = serverInfo?.userId
                     val folderOperations = remember(activeSession, activeUserId) {
                         if (activeSession != null && activeUserId != null) {
-                            remoteFolderPickerOperations(services, activeSession, activeUserId)
+                            incomingShareFolderPickerOperations(services, activeSession, activeUserId)
                         } else {
                             null
                         }
@@ -105,22 +109,22 @@ class AndroidShareUploadActivity : ComponentActivity() {
     }
 
     private fun restoreOrStage(restoredRequestId: String?) {
+        recoveryRequestId = restoredRequestId
         lifecycleScope.launch {
-            runCatching {
+            try {
                 val activeSession = services.loadSession()
                     ?: error("Sign in to Nextcloud Native before sharing files to it.")
                 val staged = withContext(Dispatchers.IO) {
                     restoredRequestId?.let { requestId ->
-                        requireNotNull(store.load(requestId)) { "This shared upload is no longer available." }
+                        store.requireAvailable(requestId)
                     } ?: store.stage(intent)
                 }
-                val info = services.loadServerInfo(activeSession)
-                Triple(activeSession, info, staged)
-            }.onSuccess { (activeSession, info, staged) ->
-                session = activeSession
-                serverInfo = info
                 request = staged
-            }.onFailure { failure ->
+                recoveryRequestId = staged.id
+                session = activeSession
+                val info = services.loadServerInfo(activeSession)
+                serverInfo = info
+            } catch (failure: Throwable) {
                 error = failure.message ?: "The shared files could not be prepared."
             }
             loading = false
@@ -155,9 +159,11 @@ class AndroidShareUploadActivity : ComponentActivity() {
     }
 
     private fun finishAndRelease() {
-        request?.takeIf { it.state !in ACTIVE_SHARE_STATES }?.let {
-            store.remove(it.id)
-            NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(it.id))
+        val current = request
+        val releaseId = current?.id ?: recoveryRequestId
+        if (releaseId != null && current?.state !in ACTIVE_SHARE_STATES) {
+            store.remove(releaseId)
+            NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(releaseId))
         }
         finish()
     }
@@ -169,6 +175,36 @@ class AndroidShareUploadActivity : ComponentActivity() {
             AndroidIncomingShareState.Uploading,
         )
     }
+}
+
+private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
+    services: AndroidNextcloudServices,
+    session: NextcloudSession,
+    userId: String,
+): RemoteFolderPickerOperations {
+    val base = remoteFolderPickerOperations(services, session, userId)
+    return RemoteFolderPickerOperations(
+        identity = base.identity + "|incoming-share",
+        listCached = base.listCached,
+        listNetwork = base.listNetwork,
+        createDirectoryIfAbsent = base.createDirectoryIfAbsent,
+        selectionAccess = { path ->
+            val remote = AndroidFileSyncRemoteTree(
+                session,
+                userId,
+                path,
+                NextcloudDocumentWebDav(
+                    OkHttpClient.Builder().useAndroidNextcloudCertificateTrust(applicationContext).build(),
+                    applicationContext.cloudMutationGate(),
+                ),
+            )
+            if (remote.canCreateChildren()) {
+                RemoteFolderSelectionAccess.Allowed
+            } else {
+                RemoteFolderSelectionAccess.Denied("This Nextcloud folder is read-only for this account.")
+            }
+        },
+    )
 }
 
 internal fun AndroidIncomingShareRequest.toPresentation(): IncomingShareUploadPresentation =

@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 const val MAX_INCOMING_SHARE_FILES = 100
 const val MAX_INCOMING_SHARE_FILE_NAME_LENGTH = 240
+const val MAX_INCOMING_SHARE_FILE_NAME_BYTES = 255
 
 /** Converts an untrusted provider display name into one safe Files path segment. */
 fun safeIncomingShareFileName(rawName: String, fallbackIndex: Int): String {
@@ -17,6 +18,7 @@ fun safeIncomingShareFileName(rawName: String, fallbackIndex: Int): String {
         .trim()
         .trim { it == '.' || it == '_' }
         .take(MAX_INCOMING_SHARE_FILE_NAME_LENGTH)
+        .takeUtf8Bytes(MAX_INCOMING_SHARE_FILE_NAME_BYTES)
     return cleaned.takeIf { it.isNotBlank() && it != "." && it != ".." }
         ?: "shared-file-${fallbackIndex + 1}"
 }
@@ -28,14 +30,19 @@ fun safeIncomingShareFileName(rawName: String, fallbackIndex: Int): String {
 fun incomingShareUploadNameCandidates(displayName: String, limit: Int = 100): List<String> {
     require(limit in 1..1000)
     val safeName = safeIncomingShareFileName(displayName, 0)
-    val extensionIndex = safeName.lastIndexOf('.').takeIf { it > 0 && it < safeName.lastIndex }
+    val extensionIndex = safeName.lastIndexOf('.').takeIf { index ->
+        index > 0 && index < safeName.lastIndex &&
+            safeName.substring(index).encodeToByteArray().size <= MAX_INCOMING_SHARE_EXTENSION_BYTES
+    }
     val stem = extensionIndex?.let { safeName.substring(0, it) } ?: safeName
     val extension = extensionIndex?.let { safeName.substring(it) }.orEmpty()
     return buildList(limit) {
         add(safeName)
         for (copyIndex in 1 until limit) {
             val suffix = " ($copyIndex)$extension"
-            val boundedStem = stem.take((MAX_INCOMING_SHARE_FILE_NAME_LENGTH - suffix.length).coerceAtLeast(1))
+            val boundedStem = stem.takeUtf8Bytes(
+                (MAX_INCOMING_SHARE_FILE_NAME_BYTES - suffix.encodeToByteArray().size).coerceAtLeast(1),
+            )
             add(boundedStem + suffix)
         }
     }
@@ -51,3 +58,18 @@ fun canonicalIncomingShareDestinationPath(destinationPath: String): String =
     requireNotNull(canonicalRemoteFolderPath(destinationPath)) {
         "The upload destination is invalid."
     }
+
+private fun String.takeUtf8Bytes(maximumBytes: Int): String {
+    require(maximumBytes > 0)
+    if (encodeToByteArray().size <= maximumBytes) return this
+    var low = 0
+    var high = length
+    while (low < high) {
+        val middle = (low + high + 1) / 2
+        val candidate = take(middle).dropLastWhile(Char::isHighSurrogate)
+        if (candidate.encodeToByteArray().size <= maximumBytes) low = middle else high = middle - 1
+    }
+    return take(low).dropLastWhile(Char::isHighSurrogate)
+}
+
+private const val MAX_INCOMING_SHARE_EXTENSION_BYTES = 64

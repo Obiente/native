@@ -208,6 +208,7 @@ internal class AndroidFileSyncRemoteTree(
         relativePath: String,
         source: File,
         onRequestStarted: () -> Unit,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
     ) {
         require(safeIncomingShareFileName(relativePath, 0) == relativePath) {
             "The incoming share filename is invalid."
@@ -218,8 +219,56 @@ internal class AndroidFileSyncRemoteTree(
             path = fullPath(relativePath),
             source = source,
             onRequestStarted = onRequestStarted,
+            cancellation = cancellation,
         )
     }
+
+    fun canCreateChildren(
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): Boolean = webDav.inspectDirectoryAccess(session, userId, fullPath(""), cancellation).canCreateChildren
+
+    fun createChunkUpload(
+        uploadId: String,
+        relativePath: String,
+        cancellation: DocumentRequestCancellation,
+    ) = webDav.createChunkUpload(session, userId, uploadId, fullPath(relativePath), cancellation)
+
+    fun uploadChunk(
+        uploadId: String,
+        relativePath: String,
+        source: File,
+        offset: Long,
+        length: Long,
+        chunkNumber: Int,
+        cancellation: DocumentRequestCancellation,
+    ) = webDav.uploadChunk(
+        session,
+        userId,
+        uploadId,
+        fullPath(relativePath),
+        source,
+        offset,
+        length,
+        source.length(),
+        chunkNumber,
+        cancellation,
+    )
+
+    fun commitChunkUpload(
+        uploadId: String,
+        relativePath: String,
+        sourceLength: Long,
+        cancellation: DocumentRequestCancellation,
+        onRequestStarted: () -> Unit,
+    ) = webDav.commitChunkUpload(
+        session,
+        userId,
+        uploadId,
+        fullPath(relativePath),
+        sourceLength,
+        cancellation,
+        onRequestStarted,
+    )
 
     fun delete(relativePath: String, expectedRemoteEtag: String) {
         val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }

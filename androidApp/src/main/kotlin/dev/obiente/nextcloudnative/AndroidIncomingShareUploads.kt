@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
+import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -41,6 +42,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONArray
@@ -64,6 +66,20 @@ internal data class AndroidIncomingShareFile(
     val stagedName: String,
 )
 
+internal data class AndroidIncomingShareChunkSession(
+    val fileIndex: Int,
+    val targetName: String,
+    val uploadId: String,
+    val uploadedChunks: Int = 0,
+    val commitInFlight: Boolean = false,
+) {
+    init {
+        require(fileIndex >= 0 && safeIncomingShareFileName(targetName, 0) == targetName)
+        require(runCatching { UUID.fromString(uploadId) }.isSuccess)
+        require(uploadedChunks >= 0)
+    }
+}
+
 internal data class AndroidIncomingShareRequest(
     val id: String,
     val files: List<AndroidIncomingShareFile>,
@@ -73,6 +89,7 @@ internal data class AndroidIncomingShareRequest(
     val destinationPath: String? = null,
     val completedFiles: Int = 0,
     val uploadedNames: List<String> = emptyList(),
+    val chunkSession: AndroidIncomingShareChunkSession? = null,
     val message: String? = null,
 ) {
     init {
@@ -81,8 +98,18 @@ internal data class AndroidIncomingShareRequest(
         require(files.map(AndroidIncomingShareFile::id).distinct().size == files.size)
         require(completedFiles in 0..files.size)
         require(uploadedNames.size == completedFiles)
+        require(chunkSession == null || chunkSession.fileIndex == completedFiles)
     }
 }
+
+internal sealed interface AndroidIncomingShareLoadResult {
+    data object Missing : AndroidIncomingShareLoadResult
+    data class Available(val request: AndroidIncomingShareRequest) : AndroidIncomingShareLoadResult
+    data class Corrupt(val requestId: String) : AndroidIncomingShareLoadResult
+}
+
+internal class CorruptIncomingShareManifestException(val requestId: String) :
+    Exception("This shared upload needs attention because its recovery record is damaged.")
 
 internal class AndroidIncomingShareStore(private val context: Context) {
     private val root = File(context.filesDir, "incoming-share")
@@ -149,11 +176,22 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         }
     }
 
-    fun load(id: String): AndroidIncomingShareRequest? = synchronized(LOCK) {
-        val manifest = manifest(id).takeIf(File::isFile) ?: return@synchronized null
+    fun loadResult(id: String): AndroidIncomingShareLoadResult = synchronized(LOCK) {
+        val manifest = manifest(id).takeIf(File::isFile) ?: return@synchronized AndroidIncomingShareLoadResult.Missing
         runCatching { JSONObject(AtomicFile(manifest).readFully().decodeToString()).toIncomingShareRequest() }
             .getOrNull()
             ?.takeIf { it.id == id }
+            ?.let(AndroidIncomingShareLoadResult::Available)
+            ?: AndroidIncomingShareLoadResult.Corrupt(id)
+    }
+
+    fun load(id: String): AndroidIncomingShareRequest? =
+        (loadResult(id) as? AndroidIncomingShareLoadResult.Available)?.request
+
+    fun requireAvailable(id: String): AndroidIncomingShareRequest = when (val loaded = loadResult(id)) {
+        is AndroidIncomingShareLoadResult.Available -> loaded.request
+        is AndroidIncomingShareLoadResult.Corrupt -> throw CorruptIncomingShareManifestException(id)
+        AndroidIncomingShareLoadResult.Missing -> error("This shared upload is no longer available.")
     }
 
     fun save(request: AndroidIncomingShareRequest) = synchronized(LOCK) {
@@ -199,7 +237,49 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val updated = current.copy(
             completedFiles = expectedCompletedFiles + 1,
             uploadedNames = current.uploadedNames + uploadedName,
+            chunkSession = null,
         )
+        save(updated)
+        updated
+    }
+
+    fun beginChunkSession(
+        id: String,
+        fileIndex: Int,
+        targetName: String,
+        uploadId: String,
+    ): AndroidIncomingShareRequest = synchronized(LOCK) {
+        val current = requireAvailable(id)
+        require(current.state == AndroidIncomingShareState.Uploading && current.completedFiles == fileIndex)
+        val updated = current.copy(
+            chunkSession = AndroidIncomingShareChunkSession(fileIndex, targetName, uploadId),
+        )
+        save(updated)
+        updated
+    }
+
+    fun recordUploadedChunk(id: String, expectedChunks: Int): AndroidIncomingShareRequest = synchronized(LOCK) {
+        val current = requireAvailable(id)
+        val session = requireNotNull(current.chunkSession)
+        require(current.state == AndroidIncomingShareState.Uploading && session.uploadedChunks == expectedChunks)
+        val updated = current.copy(chunkSession = session.copy(uploadedChunks = expectedChunks + 1))
+        save(updated)
+        updated
+    }
+
+    fun markChunkCommitInFlight(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
+        val current = requireAvailable(id)
+        val session = requireNotNull(current.chunkSession)
+        require(current.state == AndroidIncomingShareState.Uploading && !session.commitInFlight)
+        val updated = current.copy(chunkSession = session.copy(commitInFlight = true))
+        save(updated)
+        updated
+    }
+
+    fun clearChunkSession(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
+        val current = requireAvailable(id)
+        require(current.state == AndroidIncomingShareState.Uploading)
+        val updated = current.copy(chunkSession = null)
         save(updated)
         updated
     }
@@ -261,6 +341,7 @@ internal class AndroidIncomingShareUploads(private val context: Context) {
             OneTimeWorkRequestBuilder<AndroidIncomingShareUploadWorker>()
                 .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build(),
         )
         return queued
@@ -287,8 +368,25 @@ internal class AndroidIncomingShareUploadWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val requestId = inputData.getString(KEY_REQUEST_ID) ?: return@withContext Result.failure()
         val store = AndroidIncomingShareStore(applicationContext)
-        var request = store.load(requestId) ?: return@withContext Result.success()
+        var request = when (val loaded = store.loadResult(requestId)) {
+            is AndroidIncomingShareLoadResult.Available -> loaded.request
+            is AndroidIncomingShareLoadResult.Corrupt -> {
+                publishCorruptIncomingShareNotification(applicationContext, loaded.requestId)
+                scheduleIncomingShareCleanup(applicationContext, loaded.requestId)
+                return@withContext Result.failure()
+            }
+            AndroidIncomingShareLoadResult.Missing -> return@withContext Result.success()
+        }
         if (request.state == AndroidIncomingShareState.Uploading) {
+            val resumable = request.chunkSession?.takeIf { !it.commitInFlight }
+            if (resumable != null) {
+                request = store.transition(
+                    id = requestId,
+                    expected = setOf(AndroidIncomingShareState.Uploading),
+                    target = AndroidIncomingShareState.Queued,
+                    message = "Resuming the large file from its last saved chunk.",
+                ) ?: return@withContext Result.success()
+            } else {
             val recovered = store.transition(
                 id = requestId,
                 expected = setOf(AndroidIncomingShareState.Uploading),
@@ -300,6 +398,7 @@ internal class AndroidIncomingShareUploadWorker(
                 scheduleIncomingShareCleanup(applicationContext, it.id)
             }
             return@withContext Result.success()
+            }
         }
         if (request.state != AndroidIncomingShareState.Queued) return@withContext Result.success()
         val session = AndroidNextcloudServices(applicationContext).loadSession()
@@ -340,36 +439,15 @@ internal class AndroidIncomingShareUploadWorker(
         val occupiedNames = remote.rootChildNames().names.toMutableSet().apply {
             addAll(request.uploadedNames)
         }
+        val requestCancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
+        val transfer = AndroidIncomingShareFileTransfer(store, remote, requestCancellation)
         var mutationInFlight = false
         try {
             for (index in request.completedFiles until request.files.size) {
                 ensureNotCanceled(requestId, store)
-                val source = request.files[index]
-                val stagedFile = store.stagedFile(requestId, source)
-                val targetName = incomingShareUploadNameCandidates(source.displayName, limit = 1_000)
-                    .firstNotNullOfOrNull { candidate ->
-                        if (candidate in occupiedNames) return@firstNotNullOfOrNull null
-                        mutationInFlight = false
-                        try {
-                            remote.createFileIfAbsent(candidate, stagedFile) {
-                                mutationInFlight = true
-                            }
-                            candidate
-                        } catch (failure: DocumentWebDavException) {
-                            if (failure.isIncomingShareNameCollision()) {
-                                mutationInFlight = false
-                                occupiedNames += candidate
-                                null
-                            } else {
-                                throw failure
-                            }
-                        }
-                    }
-                    ?: error("No safe available name remains for ${source.displayName}.")
-                mutationInFlight = false
-                occupiedNames += targetName
-                request = store.recordUploadedFile(requestId, index, targetName)
-                    ?: throw CancellationException("Incoming share upload canceled")
+                request = transfer.upload(requestId, request, index, occupiedNames) { inFlight ->
+                    mutationInFlight = inFlight
+                }
                 setForeground(foregroundInfo(request))
             }
             request = store.transition(
@@ -404,6 +482,19 @@ internal class AndroidIncomingShareUploadWorker(
             }
             throw cancelled
         } catch (failure: Throwable) {
+            val resumableChunk = store.load(requestId)?.chunkSession?.takeIf { !it.commitInFlight }
+            val retryable = !mutationInFlight &&
+                failure.isRetryableIncomingShareTransferFailure() &&
+                runAttemptCount + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
+            if (retryable || resumableChunk != null && runAttemptCount + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS) {
+                store.transition(
+                    id = requestId,
+                    expected = setOf(AndroidIncomingShareState.Uploading),
+                    target = AndroidIncomingShareState.Queued,
+                    message = "Upload paused and will retry with backoff.",
+                )
+                return@withContext Result.retry()
+            }
             // A transport failure after a conditional PUT starts cannot prove whether the server
             // committed it. Do not replay automatically and risk a duplicate.
             val outcomeUnknown = incomingShareMutationOutcomeUnknown(failure, mutationInFlight)
@@ -502,53 +593,8 @@ internal class AndroidIncomingShareUploadWorker(
     }
 }
 
-internal class AndroidIncomingShareCleanupWorker(
-    appContext: Context,
-    params: WorkerParameters,
-) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val requestId = inputData.getString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID)
-            ?: return@withContext Result.failure()
-        val store = AndroidIncomingShareStore(applicationContext)
-        val request = store.load(requestId) ?: return@withContext Result.success()
-        if (request.state in TERMINAL_INCOMING_SHARE_STATES) store.remove(requestId)
-        Result.success()
-    }
-}
-
-internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
-    WorkManager.getInstance(context).enqueueUniqueWork(
-        "incoming-share-cleanup-$requestId",
-        ExistingWorkPolicy.REPLACE,
-        OneTimeWorkRequestBuilder<AndroidIncomingShareCleanupWorker>()
-            .setInitialDelay(7, TimeUnit.DAYS)
-            .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
-            .build(),
-    )
-}
-
-internal fun incomingShareRecoveryPendingIntent(context: Context, requestId: String): PendingIntent =
-    PendingIntent.getActivity(
-        context,
-        incomingShareNotificationId(requestId),
-        Intent(context, AndroidShareUploadActivity::class.java)
-            .putExtra(AndroidShareUploadActivity.KEY_REQUEST_ID, requestId)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
-
-internal fun incomingShareNotificationId(requestId: String): Int =
-    requestId.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
-
 internal fun DocumentWebDavException.isIncomingShareNameCollision(): Boolean =
     error == DocumentWebDavError.AlreadyExists || error == DocumentWebDavError.Conflict
-
-internal val TERMINAL_INCOMING_SHARE_STATES = setOf(
-    AndroidIncomingShareState.Completed,
-    AndroidIncomingShareState.Failed,
-    AndroidIncomingShareState.OutcomeUnknown,
-    AndroidIncomingShareState.Canceled,
-)
 
 internal fun transitionIncomingShareRequest(
     current: AndroidIncomingShareRequest,
@@ -570,7 +616,7 @@ internal fun prepareIncomingShareRequestForQueue(
     }
     require(accountId.isNotBlank() && userId.isNotBlank())
     val destination = canonicalIncomingShareDestinationPath(destinationPath)
-    require(current.completedFiles == 0 || current.destinationPath == destination) {
+    require((current.completedFiles == 0 && current.chunkSession == null) || current.destinationPath == destination) {
         "A partially completed upload must resume in its original Nextcloud folder."
     }
     return current.copy(
@@ -618,6 +664,7 @@ internal fun incomingShareMutationOutcomeUnknown(failure: Throwable, mutationInF
         DocumentWebDavError.Locked,
         DocumentWebDavError.InsufficientStorage,
         DocumentWebDavError.TooLarge,
+        DocumentWebDavError.Throttled,
     )
 }
 
@@ -644,6 +691,14 @@ private fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
     .put("destinationPath", destinationPath)
     .put("completedFiles", completedFiles)
     .put("uploadedNames", JSONArray(uploadedNames))
+    .put("chunkSession", chunkSession?.let { session ->
+        JSONObject()
+            .put("fileIndex", session.fileIndex)
+            .put("targetName", session.targetName)
+            .put("uploadId", session.uploadId)
+            .put("uploadedChunks", session.uploadedChunks)
+            .put("commitInFlight", session.commitInFlight)
+    })
     .put("message", message)
     .put("files", JSONArray().also { array ->
         files.forEach { file ->
@@ -667,6 +722,15 @@ private fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = A
     completedFiles = optInt("completedFiles"),
     uploadedNames = getJSONArray("uploadedNames").let { array ->
         List(array.length()) { index -> array.getString(index) }
+    },
+    chunkSession = optJSONObject("chunkSession")?.let { session ->
+        AndroidIncomingShareChunkSession(
+            fileIndex = session.getInt("fileIndex"),
+            targetName = session.getString("targetName"),
+            uploadId = session.getString("uploadId"),
+            uploadedChunks = session.optInt("uploadedChunks"),
+            commitInFlight = session.optBoolean("commitInFlight"),
+        )
     },
     message = optString("message").takeIf(String::isNotBlank),
     files = getJSONArray("files").let { array ->

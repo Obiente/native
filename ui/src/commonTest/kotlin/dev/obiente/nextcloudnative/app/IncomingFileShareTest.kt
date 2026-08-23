@@ -11,6 +11,7 @@ class IncomingFileShareTest {
         assertEquals("report_final.pdf", safeIncomingShareFileName(" ../report/final.pdf ", 0))
         assertEquals("shared-file-3", safeIncomingShareFileName("..", 2))
         assertTrue(safeIncomingShareFileName("a".repeat(400), 0).length <= MAX_INCOMING_SHARE_FILE_NAME_LENGTH)
+        assertTrue(safeIncomingShareFileName("😀".repeat(100), 0).encodeToByteArray().size <= 255)
     }
 
     @Test
@@ -22,6 +23,10 @@ class IncomingFileShareTest {
         assertEquals(
             listOf("README", "README (1)"),
             incomingShareUploadNameCandidates("README", limit = 2),
+        )
+        assertTrue(
+            incomingShareUploadNameCandidates("😀".repeat(100) + ".txt", limit = 100)
+                .all { it.encodeToByteArray().size <= 255 && it.endsWith(".txt") },
         )
     }
 
