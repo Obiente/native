@@ -276,6 +276,15 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         updated
     }
 
+    fun clearChunkCommitInFlight(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
+        val current = requireAvailable(id)
+        val session = requireNotNull(current.chunkSession)
+        require(current.state == AndroidIncomingShareState.Uploading && session.commitInFlight)
+        val updated = current.copy(chunkSession = session.copy(commitInFlight = false))
+        save(updated)
+        updated
+    }
+
     fun clearChunkSession(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
         val current = requireAvailable(id)
         require(current.state == AndroidIncomingShareState.Uploading)
@@ -482,6 +491,13 @@ internal class AndroidIncomingShareUploadWorker(
             }
             throw cancelled
         } catch (failure: Throwable) {
+            val definitelyRejected = mutationInFlight && !incomingShareMutationOutcomeUnknown(failure, true)
+            if (definitelyRejected) {
+                store.load(requestId)?.chunkSession?.takeIf { it.commitInFlight }?.let {
+                    store.clearChunkCommitInFlight(requestId)
+                }
+                mutationInFlight = false
+            }
             val resumableChunk = store.load(requestId)?.chunkSession?.takeIf { !it.commitInFlight }
             val retryable = !mutationInFlight &&
                 failure.isRetryableIncomingShareTransferFailure() &&

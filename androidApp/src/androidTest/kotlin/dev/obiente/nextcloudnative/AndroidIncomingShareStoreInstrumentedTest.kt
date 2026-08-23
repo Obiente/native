@@ -95,6 +95,8 @@ class AndroidIncomingShareStoreInstrumentedTest {
             )
             store.save(uploading)
             assertEquals(uploading, AndroidIncomingShareStore(context).requireAvailable(staged.id))
+            assertTrue(store.markChunkCommitInFlight(staged.id).chunkSession?.commitInFlight == true)
+            assertTrue(store.clearChunkCommitInFlight(staged.id).chunkSession?.commitInFlight == false)
         } finally {
             assertTrue(store.remove(staged.id))
         }

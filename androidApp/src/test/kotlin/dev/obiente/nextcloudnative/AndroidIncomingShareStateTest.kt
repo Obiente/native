@@ -144,6 +144,14 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
+    fun throttledFinalMoveIsARejectedRatherThanAmbiguousMutation() {
+        val throttled = DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
+
+        assertFalse(incomingShareMutationOutcomeUnknown(throttled, mutationInFlight = true))
+        assertTrue(throttled.isRetryableIncomingShareTransferFailure())
+    }
+
+    @Test
     fun collisionResponsesAdvanceNamesWithoutBecomingUnknownOutcomes() {
         assertTrue(
             DocumentWebDavException(
