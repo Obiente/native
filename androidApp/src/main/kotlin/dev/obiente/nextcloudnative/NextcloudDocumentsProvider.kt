@@ -769,6 +769,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             DocumentWebDavError.Locked,
             DocumentWebDavError.InsufficientStorage,
             DocumentWebDavError.TooLarge,
+            DocumentWebDavError.Throttled,
             DocumentWebDavError.Server,
             -> throw IllegalStateException(failure.message, failure)
         }
