@@ -6,6 +6,7 @@ enum class SupportDiagnosticsReplyRecoveryState {
     None,
     RefreshRequired,
     DeliveredAwaitingAcknowledgement,
+    DeliveryUnknownAwaitingAcknowledgement,
 }
 
 @ConsistentCopyVisibility
@@ -13,27 +14,50 @@ internal data class SupportReplyRecoveryMarker private constructor(
     val reporterMessageIdsBeforeAttempt: Set<String>?,
     val reporterMessageCountBeforeAttempt: Int?,
     val lastReporterMessageIdBeforeAttempt: String?,
+    val attemptedReplyIdentity: SupportReplyRecoveryIdentity?,
     val deliveryConfirmed: Boolean,
+    val deliveryUnknownAfterRefresh: Boolean,
 ) {
     val presentationState: SupportDiagnosticsReplyRecoveryState
-        get() = if (deliveryConfirmed) SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement
-        else SupportDiagnosticsReplyRecoveryState.RefreshRequired
+        get() = when {
+            deliveryConfirmed -> SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement
+            deliveryUnknownAfterRefresh ->
+                SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement
+            else -> SupportDiagnosticsReplyRecoveryState.RefreshRequired
+        }
+
+    val acknowledgementRequired: Boolean
+        get() = deliveryConfirmed || deliveryUnknownAfterRefresh
 
     fun markDelivered(): SupportReplyRecoveryMarker =
-        if (deliveryConfirmed) this else copy(deliveryConfirmed = true)
+        if (deliveryConfirmed) this else copy(deliveryConfirmed = true, deliveryUnknownAfterRefresh = false)
 
-    fun afterAuthoritativeGet(reporterMessageIds: Collection<String>): SupportReplyRecoveryMarker? {
-        if (deliveryConfirmed) return this
+    private fun markDeliveryUnknownAfterRefresh(): SupportReplyRecoveryMarker =
+        if (deliveryUnknownAfterRefresh) this else copy(deliveryUnknownAfterRefresh = true)
+
+    fun afterAuthoritativeGet(
+        reporterMessages: Collection<SupportReplyRecoveryObservation>,
+    ): SupportReplyRecoveryMarker? {
+        if (acknowledgementRequired) return this
+        val current = reporterMessages.normalizedRecoveryObservations() ?: return this
         reporterMessageIdsBeforeAttempt?.let { previousIds ->
-            return if (reporterMessageIds.any { it !in previousIds }) markDelivered() else null
+            val additions = current.filter { it.id !in previousIds }
+            return when {
+                additions.any(SupportReplyRecoveryObservation::attemptedReplyMatch) -> markDelivered()
+                additions.isEmpty() -> null
+                else -> markDeliveryUnknownAfterRefresh()
+            }
         }
-        val previousCount = reporterMessageCountBeforeAttempt ?: return this
-        val current = reporterMessageIds.normalizedRecoveryCursor() ?: return this
+        val previousCount = reporterMessageCountBeforeAttempt
+            ?: return markDeliveryUnknownAfterRefresh()
+        if (current.size < previousCount || previousCount > 0 &&
+            current[previousCount - 1].id != lastReporterMessageIdBeforeAttempt
+        ) return this
+        val additions = current.drop(previousCount)
         return when {
-            current.messageCount > previousCount -> markDelivered()
-            current.messageCount == previousCount &&
-                current.lastMessageId == lastReporterMessageIdBeforeAttempt -> null
-            else -> this
+            additions.any(SupportReplyRecoveryObservation::attemptedReplyMatch) -> markDelivered()
+            attemptedReplyIdentity == null && additions.isNotEmpty() -> markDeliveryUnknownAfterRefresh()
+            else -> null
         }
     }
 
@@ -41,17 +65,24 @@ internal data class SupportReplyRecoveryMarker private constructor(
         reporterMessageIdsBeforeAttempt = reporterMessageIdsBeforeAttempt?.sorted(),
         reporterMessageCountBeforeAttempt = reporterMessageCountBeforeAttempt,
         lastReporterMessageIdBeforeAttempt = lastReporterMessageIdBeforeAttempt,
+        attemptedReplyIdentity = attemptedReplyIdentity,
         deliveryConfirmed = deliveryConfirmed,
+        deliveryUnknownAfterRefresh = deliveryUnknownAfterRefresh,
     )
 
     companion object {
-        fun awaiting(reporterMessageIds: Collection<String>): SupportReplyRecoveryMarker? =
+        fun awaiting(
+            reporterMessageIds: Collection<String>,
+            attemptedReplyIdentity: SupportReplyRecoveryIdentity,
+        ): SupportReplyRecoveryMarker? =
             reporterMessageIds.normalizedRecoveryCursor()?.let { cursor ->
                 SupportReplyRecoveryMarker(
                     reporterMessageIdsBeforeAttempt = null,
                     reporterMessageCountBeforeAttempt = cursor.messageCount,
                     lastReporterMessageIdBeforeAttempt = cursor.lastMessageId,
+                    attemptedReplyIdentity = attemptedReplyIdentity,
                     deliveryConfirmed = false,
+                    deliveryUnknownAfterRefresh = false,
                 )
             }
 
@@ -67,15 +98,20 @@ internal data class SupportReplyRecoveryMarker private constructor(
             }
             require(ids == null || cursor == null)
             require(!persisted.deliveryConfirmed || ids != null || cursor != null)
+            require(!persisted.deliveryConfirmed || !persisted.deliveryUnknownAfterRefresh)
             return SupportReplyRecoveryMarker(
                 reporterMessageIdsBeforeAttempt = ids,
                 reporterMessageCountBeforeAttempt = cursor?.messageCount,
                 lastReporterMessageIdBeforeAttempt = cursor?.lastMessageId,
+                attemptedReplyIdentity = persisted.attemptedReplyIdentity,
                 deliveryConfirmed = persisted.deliveryConfirmed,
+                deliveryUnknownAfterRefresh = persisted.deliveryUnknownAfterRefresh,
             )
         }
 
-        fun legacyUnknown(): SupportReplyRecoveryMarker = SupportReplyRecoveryMarker(null, null, null, false)
+        fun legacyUnknown(): SupportReplyRecoveryMarker = SupportReplyRecoveryMarker(
+            null, null, null, null, deliveryConfirmed = false, deliveryUnknownAfterRefresh = false,
+        )
     }
 }
 
@@ -84,13 +120,40 @@ internal data class PersistedSupportReplyRecoveryMarker(
     val reporterMessageIdsBeforeAttempt: List<String>? = null,
     val reporterMessageCountBeforeAttempt: Int? = null,
     val lastReporterMessageIdBeforeAttempt: String? = null,
+    val attemptedReplyIdentity: SupportReplyRecoveryIdentity? = null,
     val deliveryConfirmed: Boolean = false,
+    val deliveryUnknownAfterRefresh: Boolean = false,
+)
+
+@Serializable
+internal data class SupportReplyRecoveryIdentity(
+    val salt: String,
+    val digest: String,
+) {
+    init {
+        require(salt.matches(SUPPORT_REPLY_RECOVERY_SALT))
+        require(digest.matches(SUPPORT_REPLY_RECOVERY_DIGEST))
+    }
+}
+
+internal data class SupportReplyRecoveryObservation(
+    val id: String,
+    val attemptedReplyMatch: Boolean,
 )
 
 private data class SupportReplyRecoveryCursor(
     val messageCount: Int,
     val lastMessageId: String?,
 )
+
+private fun Collection<SupportReplyRecoveryObservation>.normalizedRecoveryObservations(): List<SupportReplyRecoveryObservation>? {
+    val observations = toList()
+    return observations.takeIf { values ->
+        values.size <= MAX_SUPPORT_CONVERSATION_MESSAGES &&
+            values.distinctBy(SupportReplyRecoveryObservation::id).size == values.size &&
+            values.all { it.id.matches(SUPPORT_REPLY_RECOVERY_ID) }
+    }
+}
 
 private fun Collection<String>.normalizedRecoveryCursor(): SupportReplyRecoveryCursor? {
     if (size > MAX_SUPPORT_CONVERSATION_MESSAGES || size != distinct().size ||
@@ -109,3 +172,5 @@ private fun Collection<String>.normalizedRecoveryIds(): Set<String>? {
 
 internal const val MAX_SUPPORT_CONVERSATION_MESSAGES = 1_000
 private val SUPPORT_REPLY_RECOVERY_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
+private val SUPPORT_REPLY_RECOVERY_SALT = Regex("^[0-9a-f]{32}$")
+private val SUPPORT_REPLY_RECOVERY_DIGEST = Regex("^[0-9a-f]{64}$")

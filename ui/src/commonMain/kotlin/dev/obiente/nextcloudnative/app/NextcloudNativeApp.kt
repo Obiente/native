@@ -970,7 +970,6 @@ private fun LoginScreen(
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     val supportDrafts = remember { SupportSettingsDraftRegistry.loginState() }
     val scope = rememberCoroutineScope()
-
     fun startLogin(
         transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
         certificateJustApproved: String? = null,
@@ -998,6 +997,7 @@ private fun LoginScreen(
                     services.finishLoginPolling(challenge)
                 }
                 onLoggedIn(authenticated)
+                supportDrafts.clearDrafts()
             } catch (failure: CancellationException) {
                 throw failure
             } catch (failure: Throwable) {

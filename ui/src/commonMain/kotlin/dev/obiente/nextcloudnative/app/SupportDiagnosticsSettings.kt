@@ -325,11 +325,16 @@ private fun RequestCard(
                                 "Delivery was uncertain. Refresh requests before sending again."
                             SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement ->
                                 "Support received this reply. Clear the retained draft before writing another."
+                            SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement ->
+                                "Delivery is unknown. Review the refreshed conversation, then clear this draft before replying."
                         })
                     },
                 )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    if (replyRecoveryState == SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement) {
+                    if (replyRecoveryState == SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement ||
+                        replyRecoveryState == SupportDiagnosticsReplyRecoveryState.DeliveryUnknownAwaitingAcknowledgement
+                    ) {
+                        val delivered = replyRecoveryState == SupportDiagnosticsReplyRecoveryState.DeliveredAwaitingAcknowledgement
                         Button(
                             enabled = !report.conversationLoading,
                             onClick = {
@@ -337,13 +342,15 @@ private fun RequestCard(
                                     if (services.acknowledgeSubmittedSupportDiagnosticsReplyDelivery(report.recordId)) {
                                         onReplyDraft("")
                                         onReplyOpen(false)
-                                        onNotice("Delivered reply confirmed and retained draft cleared.")
+                                        onNotice(if (delivered) {
+                                            "Delivered reply confirmed and retained draft cleared."
+                                        } else "Reply recovery acknowledged and retained draft cleared.")
                                     } else {
-                                        onNotice("The delivered reply could not be acknowledged on this device.")
+                                        onNotice("The retained reply could not be acknowledged on this device.")
                                     }
                                 }
                             },
-                        ) { Text("Clear delivered draft") }
+                        ) { Text(if (delivered) "Clear delivered draft" else "I reviewed this reply") }
                     } else Button(
                         enabled = replyDraft.isNotBlank() && !replyBlocked && !report.conversationLoading,
                         onClick = {

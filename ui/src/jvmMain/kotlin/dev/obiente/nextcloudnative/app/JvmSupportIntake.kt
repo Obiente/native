@@ -559,7 +559,7 @@ class JvmSupportIntake(
             ?.filter { it.author == "reporter" }?.map { it.id } }
             ?: return@withContext failConversation(
                 completed, "Refresh the conversation before sending a reply.")
-        val recovery = SupportReplyRecoveryMarker.awaiting(reporterIds)
+        val recovery = createSupportReplyRecoveryMarker(reporterIds, normalizedMessage)
             ?: return@withContext failConversation(completed, "The conversation is too large to prepare a safe reply retry.")
         synchronized(lock) { completed.replyRecovery = recovery }
         if (!persistCompletedSafely(completed)) {
@@ -618,7 +618,7 @@ class JvmSupportIntake(
                 it.originAccountIdentity == activeAccountIdentity && it.recordId == recordId
             } } ?: return@withContext false
             val previous = synchronized(lock) {
-                completed.replyRecovery?.takeIf { it.deliveryConfirmed }?.also { completed.replyRecovery = null }
+                completed.replyRecovery?.takeIf { it.acknowledgementRequired }?.also { completed.replyRecovery = null }
             } ?: return@withContext false
             if (!persistCompletedSafely(completed)) {
                 synchronized(lock) { completed.replyRecovery = previous }
@@ -671,10 +671,10 @@ class JvmSupportIntake(
                 val conversation = decodeConversation(body, completed)
                 val (previousRecovery, recoveryChanged) = synchronized(lock) {
                     val previous = completed.replyRecovery
-                    val reporterIds = conversation.messages.filter { it.author == "reporter" }.map { it.id }
-                    completed.replyRecovery = when (request.method) {
-                        "POST" -> previous?.markDelivered()
-                        "GET" -> previous?.afterAuthoritativeGet(reporterIds)
+                val reporterMessages = conversation.messages.filter { it.author == "reporter" }
+                completed.replyRecovery = when (request.method) {
+                    "POST" -> previous?.markDelivered()
+                    "GET" -> previous?.afterAuthoritativeGet(reporterMessages.map(previous::observeReporterMessage))
                         else -> previous
                     }
                     completed.conversation = conversation

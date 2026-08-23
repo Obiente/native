@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 
@@ -17,8 +18,19 @@ class SupportSettingsDraftRegistryTest {
             assertSame(first, restored)
             assertEquals("Private login report draft", restored.reportDraft)
         } finally {
-            first.updateReportDraft("")
+            first.clearDrafts()
         }
+    }
+
+    @Test
+    fun `login draft is cleared after identity handoff`() {
+        val draft = SupportSettingsDraftRegistry.loginState()
+        draft.updateReportDraft("First person's private report")
+        draft.updateReplyDraft("retained-report", "First person's private reply")
+
+        draft.clearDrafts()
+
+        assertFalse(SupportSettingsDraftRegistry.loginState().hasDraftContent())
     }
 
     @Test
