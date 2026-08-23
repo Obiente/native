@@ -220,7 +220,7 @@ internal fun canCreateMissingRemoteFolderDestination(
         )
 
 @Composable
-internal fun RemoteFolderPickerDialog(
+fun RemoteFolderPickerDialog(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     userId: String,
