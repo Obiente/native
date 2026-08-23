@@ -218,7 +218,12 @@ class FileSyncCenterTest {
                 state = FileSyncExecutionState.AwaitingDecision,
                 decision = FileSyncDecision(
                     FileSyncDecisionReason.FirstSyncCollision,
-                    setOf(FileSyncDecisionChoice.UseLocal, FileSyncDecisionChoice.UseRemote),
+                    setOf(
+                        FileSyncDecisionChoice.UseLocal,
+                        FileSyncDecisionChoice.UseRemote,
+                        FileSyncDecisionChoice.KeepBoth,
+                        FileSyncDecisionChoice.Skip,
+                    ),
                 ),
             )
         }

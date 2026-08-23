@@ -55,7 +55,7 @@ class FileSyncCoordinatorTest {
             workIds.map { FileSyncConflictResolution(it, FileSyncDecisionChoice.UseLocal) },
         )
         val latestLocal = listOf(local("one.md", "local-2"), local("two.md", "local-1"))
-        val latestRemote = listOf(remote("one.md", "remote-1"), remote("two.md", "remote-1"))
+        val latestRemote = listOf(remote("one.md", "remote-2"), remote("two.md", "remote-1"))
         val partiallyRetained = scanFileSyncPair(
             resolved,
             PAIR_ID,
