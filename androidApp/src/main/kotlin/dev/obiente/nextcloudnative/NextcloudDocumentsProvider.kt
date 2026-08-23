@@ -756,24 +756,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     private fun childPath(parentPath: String, displayName: String): String =
         if (parentPath.isBlank()) displayName else "$parentPath/$displayName"
 
-    private inline fun <T> mutationCall(operation: () -> T): T = try {
-        operation()
-    } catch (failure: DocumentWebDavException) {
-        when (failure.error) {
-            DocumentWebDavError.Authentication,
-            DocumentWebDavError.Permission,
-            -> throw SecurityException(failure.message, failure)
-            DocumentWebDavError.NotFound -> throw FileNotFoundException(failure.message).also { it.initCause(failure) }
-            DocumentWebDavError.AlreadyExists,
-            DocumentWebDavError.Conflict,
-            DocumentWebDavError.Locked,
-            DocumentWebDavError.InsufficientStorage,
-            DocumentWebDavError.TooLarge,
-            DocumentWebDavError.Throttled,
-            DocumentWebDavError.Server,
-            -> throw IllegalStateException(failure.message, failure)
-        }
-    }
+    private inline fun <T> mutationCall(operation: () -> T): T = documentMutationCall(operation)
 
     private fun notifyMove(session: NextcloudSession, sourcePath: String, destinationPath: String) {
         notifyDocumentChanged(session, sourcePath)
