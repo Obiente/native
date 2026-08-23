@@ -258,7 +258,6 @@ internal class DesktopFileSyncEngine(
                     safeFailureMessage(failure, "That conflict decision is no longer valid. Scan again."),
                 )
             }
-            store.savePair(current.copy(coordinator = resolved), pairId)
             runPairLocked(
                 session,
                 userId,
@@ -268,6 +267,8 @@ internal class DesktopFileSyncEngine(
                 shouldContinue,
                 resetExhaustedFailures = true,
                 expectedResolvedWorkIds = resolutions.mapTo(mutableSetOf(), FileSyncConflictResolution::workId),
+                rejectedResolutionBaseline = current.coordinator,
+                startingCoordinatorOverride = resolved,
             )
         }
     }
@@ -281,9 +282,13 @@ internal class DesktopFileSyncEngine(
         shouldContinue: () -> Boolean,
         resetExhaustedFailures: Boolean,
         expectedResolvedWorkIds: Set<Long> = emptySet(),
+        rejectedResolutionBaseline: FileSyncCoordinatorState? = null,
+        startingCoordinatorOverride: FileSyncCoordinatorState? = null,
     ): FileSyncCenterActionResult {
         reclaimDesktopFileSyncStages(stagingRoot)
-        var persisted = store.loadPair(pairId)
+        var persisted = store.loadPair(pairId).let { loaded ->
+            startingCoordinatorOverride?.let { loaded.copy(coordinator = it) } ?: loaded
+        }
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
             ?: return FileSyncCenterActionResult.Rejected("The folder sync pair no longer exists.")
         if (initialPair.accountId != desktopFileCacheAccountId(session)) {
@@ -318,13 +323,13 @@ internal class DesktopFileSyncEngine(
             scannedLocalEntries,
             scannedRemoteEntries,
             initialPair.baselines,
-        )
+        ).withinFileSyncContentVerificationBudget()
         val verifiedContent = try {
             candidates.mapNotNull { candidate ->
                 verifyDesktopFileSyncContent(candidate, scannedLocalEntries, remote, shouldContinue)
             }
         } catch (_: DesktopFileSyncScanStoppedException) {
-            return FileSyncCenterActionResult.Completed("The folder scan stopped before making changes.")
+            return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
         }
         val contentIdentity = applyVerifiedFileSyncContent(
             scannedLocalEntries,
@@ -346,6 +351,19 @@ internal class DesktopFileSyncEngine(
         )
         val scannedPair = persisted.coordinator.pairs.single()
         if (!scannedPair.retainsResolvedFileSyncDecisions(expectedResolvedWorkIds)) {
+            val baseline = requireNotNull(rejectedResolutionBaseline) {
+                "A rejected conflict batch is missing its pre-decision state."
+            }
+            persisted = persisted.copy(
+                coordinator = scanFileSyncPair(
+                    baseline,
+                    pairId,
+                    localEntries,
+                    remoteEntries,
+                    System.currentTimeMillis(),
+                    maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
+                ),
+            )
             store.savePair(persisted, pairId)
             return FileSyncCenterActionResult.Rejected(
                 "The conflict changed while you reviewed it. Review the latest device and " +
@@ -479,27 +497,20 @@ internal class DesktopFileSyncEngine(
         shouldContinue: () -> Boolean,
     ): VerifiedFileSyncContent? {
         val expectedBytes = candidate.expectedSizeBytes ?: return null
-        if (expectedBytes > MAX_SYNC_FILE_BYTES) return null
         val localHash = localEntries.first { it.relativePath == candidate.relativePath }.contentHash
             ?: return null
-        return try {
-            if (
-                remote.verifyContentHash(
-                    relativePath = candidate.relativePath,
-                    expectedRemoteEtag = candidate.remoteEtag,
-                    expectedBytes = expectedBytes,
-                    expectedContentHash = localHash,
-                    maximumBytes = MAX_SYNC_FILE_BYTES,
-                    shouldContinue = shouldContinue,
-                )
-            ) {
-                VerifiedFileSyncContent(candidate, localHash)
-            } else {
-                null
-            }
-        } catch (stopped: DesktopFileSyncScanStoppedException) {
-            throw stopped
-        } catch (_: Throwable) {
+        return if (
+            remote.verifyContentHash(
+                relativePath = candidate.relativePath,
+                expectedRemoteEtag = candidate.remoteEtag,
+                expectedBytes = expectedBytes,
+                expectedContentHash = localHash,
+                maximumBytes = expectedBytes,
+                shouldContinue = shouldContinue,
+            )
+        ) {
+            VerifiedFileSyncContent(candidate, localHash)
+        } else {
             null
         }
     }

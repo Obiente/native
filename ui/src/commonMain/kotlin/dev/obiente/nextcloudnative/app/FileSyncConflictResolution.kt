@@ -37,4 +37,20 @@ fun resolveFileSyncDecisions(
     }
 }
 
+fun FileSyncPair.retainsResolvedFileSyncDecision(workId: Long): Boolean =
+    workItems.any { work ->
+        work.id == workId &&
+            work.decision?.state is FileSyncDecisionState.Resolved &&
+            when (work.state) {
+                FileSyncExecutionState.Ready ->
+                    work.operation !is FileSyncOperation.NeedsDecision &&
+                        work.operation !is FileSyncOperation.Skipped
+                FileSyncExecutionState.Skipped -> work.operation is FileSyncOperation.Skipped
+                else -> false
+            }
+    }
+
+fun FileSyncPair.retainsResolvedFileSyncDecisions(workIds: Set<Long>): Boolean =
+    workIds.all(::retainsResolvedFileSyncDecision)
+
 internal const val MAX_FILE_SYNC_CONFLICT_BATCH = 1_000

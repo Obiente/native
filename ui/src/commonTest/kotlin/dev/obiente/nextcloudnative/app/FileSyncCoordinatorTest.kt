@@ -40,6 +40,45 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `rejected stale batch can be rescanned from the pre-decision state`() {
+        val original = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("one.md", "local-1"), local("two.md", "local-1")),
+            listOf(remote("one.md", "remote-1"), remote("two.md", "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val workIds = original.pair().workItems.mapTo(mutableSetOf(), FileSyncWorkItem::id)
+        val resolved = resolveFileSyncDecisions(
+            original,
+            PAIR_ID,
+            workIds.map { FileSyncConflictResolution(it, FileSyncDecisionChoice.UseLocal) },
+        )
+        val latestLocal = listOf(local("one.md", "local-2"), local("two.md", "local-1"))
+        val latestRemote = listOf(remote("one.md", "remote-1"), remote("two.md", "remote-1"))
+        val partiallyRetained = scanFileSyncPair(
+            resolved,
+            PAIR_ID,
+            latestLocal,
+            latestRemote,
+            nowEpochMillis = 20L,
+        )
+
+        assertTrue(!partiallyRetained.pair().retainsResolvedFileSyncDecisions(workIds))
+        assertTrue(partiallyRetained.pair().workItems.any { it.state == FileSyncExecutionState.Ready })
+
+        val rejected = scanFileSyncPair(
+            original,
+            PAIR_ID,
+            latestLocal,
+            latestRemote,
+            nowEpochMillis = 20L,
+        )
+        assertTrue(rejected.pair().workItems.all { it.state == FileSyncExecutionState.AwaitingDecision })
+        assertTrue(rejected.pair().workItems.all { it.decision?.state == FileSyncDecisionState.Pending })
+    }
+
+    @Test
     fun `conflict decision becomes guarded command and baseline advances only after verification`() {
         val baseline = baseline("Vault/today.md", "local-1", "remote-1")
         var state = state(baselines = listOf(baseline))

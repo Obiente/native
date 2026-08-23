@@ -89,6 +89,24 @@ class FileSyncContentIdentityTest {
         }
     }
 
+    @Test
+    fun `automatic verification is bounded per file and per scan`() {
+        val candidates = listOf(
+            FileSyncContentVerificationCandidate("a", "local-a", "remote-a", 40L),
+            FileSyncContentVerificationCandidate("b", "local-b", "remote-b", 70L),
+            FileSyncContentVerificationCandidate("c", "local-c", "remote-c", 40L),
+            FileSyncContentVerificationCandidate("d", "local-d", "remote-d", null),
+        )
+
+        assertEquals(
+            listOf(candidates[0], candidates[2]),
+            candidates.withinFileSyncContentVerificationBudget(
+                maximumFileBytes = 64L,
+                maximumTotalBytes = 80L,
+            ),
+        )
+    }
+
     private fun fileOnDevice(path: String, revision: String, size: Long, hash: String? = null) =
         LocalSyncEntry(path, SyncEntryKind.File, revision, size, hash)
 

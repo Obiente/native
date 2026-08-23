@@ -48,7 +48,9 @@ Choose **Two-way**, **Device to Nextcloud**, or **Nextcloud to device** accordin
 
 Start with **Ask before changing either copy** or **Keep both copies** for conflicts. Treat deletion policy separately: propagating a deletion can remove the counterpart even when there is no content conflict. Add ignores for generated output, lock files, or temporary application data, and review the estimated file count and size before continuing.
 
-Watch the first scan and queued operations. If a conflict or ambiguous interrupted operation appears, compare both versions and preserve both when uncertain. A successful scan is evidence for that generation only. Keep independent backups of important data while the product remains an alpha, and do not treat bidirectional synchronization as backup history.
+Watch the first scan and queued operations. If a conflict appears, the inspector shows the local and Nextcloud type, size, and modification details for every item on the current page. Resolve one item at a time, or use a displayed **all** action only when the same choice is valid for the whole reviewed page. Batch choices are atomic: every generation is checked again, and one changed item returns the entire batch to review without running the unchanged subset. Additional conflict pages appear after the current page is resolved.
+
+If a conflict or ambiguous interrupted operation appears, compare both versions and preserve both when uncertain. A successful scan is evidence for that generation only. Keep independent backups of important data while the product remains an alpha, and do not treat bidirectional synchronization as backup history.
 
 A desktop sync pair supports no more than 100,000 selected entries or planned operations. The early check covers the local selection only and runs before the client hashes local file content. A larger remote tree or combined change plan can reach the limit later, so choose narrower roots or add ignore rules.
 

@@ -77,6 +77,25 @@ fun fileSyncContentVerificationCandidates(
 }
 
 /**
+ * Bounds automatic identity reads so reconnecting a large tree cannot silently consume an
+ * unlimited amount of network traffic. Files outside this budget remain conservative conflicts.
+ */
+fun List<FileSyncContentVerificationCandidate>.withinFileSyncContentVerificationBudget(
+    maximumFileBytes: Long = MAX_FILE_SYNC_IDENTITY_FILE_BYTES,
+    maximumTotalBytes: Long = MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES,
+): List<FileSyncContentVerificationCandidate> {
+    require(maximumFileBytes >= 0L && maximumTotalBytes >= 0L)
+    var remaining = maximumTotalBytes
+    return mapNotNull { candidate ->
+        val size = candidate.expectedSizeBytes
+            ?.takeIf { it <= maximumFileBytes && it <= remaining }
+            ?: return@mapNotNull null
+        remaining -= size
+        candidate
+    }
+}
+
+/**
  * Publishes only exact, version-bound equality evidence to shared planning. Unverified checksum
  * hints are removed from paired files so a client-supplied DAV property cannot suppress a real
  * conflict by itself.
@@ -149,3 +168,6 @@ fun applyVerifiedFileSyncContent(
 private fun requireUniqueSyncContentPaths(paths: List<String>, label: String) {
     require(paths.size == paths.distinct().size) { "The $label sync snapshot contains duplicate paths." }
 }
+
+const val MAX_FILE_SYNC_IDENTITY_FILE_BYTES = 64L * 1024L * 1024L
+const val MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES = 256L * 1024L * 1024L

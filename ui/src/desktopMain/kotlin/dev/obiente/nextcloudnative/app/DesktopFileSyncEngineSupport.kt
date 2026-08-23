@@ -5,22 +5,6 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.util.UUID
 
-internal fun FileSyncPair.retainsResolvedFileSyncDecision(workId: Long): Boolean =
-    workItems.any { work ->
-        work.id == workId &&
-            work.decision?.state is FileSyncDecisionState.Resolved &&
-            when (work.state) {
-                FileSyncExecutionState.Ready ->
-                    work.operation !is FileSyncOperation.NeedsDecision &&
-                        work.operation !is FileSyncOperation.Skipped
-                FileSyncExecutionState.Skipped -> work.operation is FileSyncOperation.Skipped
-                else -> false
-            }
-    }
-
-internal fun FileSyncPair.retainsResolvedFileSyncDecisions(workIds: Set<Long>): Boolean =
-    workIds.all(::retainsResolvedFileSyncDecision)
-
 internal fun DesktopFileSyncPersistedState.scopedToDesktopWork(
     pair: FileSyncPair,
     work: FileSyncWorkItem,
