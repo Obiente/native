@@ -458,7 +458,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SettingsWorkspace.kt": "8ca60233573ac9768f0dd716d6be1ee34f562341483b985d15d23d2ae77d297a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnostics.kt": "ae9e2daa635332327b296ec5bce8da09ef32aa5249b6b1f8e029b73fa224f31a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportDiagnosticsSettings.kt": "503ce1a678cd6d1b5bee401f5067a604ffe0566bf81fc08e61a332005f3e6096",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportReplyRecovery.kt": "74b166a0553ae7dc54f2e891124a6f453c607b0199acb3ee1a4a72276f77a574",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportReplyRecovery.kt": "95a51fc36dcbfa062e3e65fa1065c0dad62056bee145ab54db700eb0ad44c7ba",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportRequestsEmptyState.kt": "397b6752a3fb99117574dfa83a861f906e174d50ab9ea7b94fdebc9b9ce624f3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportSettingsDraftRegistry.kt": "a03fe54637093e36495c7f99f76724376df2ca2dc64f4952c14898e37e676d6f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/SupportSettingsDraftState.kt": "5ae34b76388f590658c0e987fc68d4475a1b872673132f7928314d7a548db05c",
