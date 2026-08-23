@@ -364,7 +364,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "f666770a8a1e52e026670b40b4fbeb35be8ad6dabcc3a95a26825f198de50be7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "a08560f00781ed4118f48ea224b0965bae0b9a88bc281f1ec7a89f68cbffe94e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "3a66544fe239670feeea1c8808f882061344bd27b03ad488accbca96ae902cd3",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncRecovery.kt": "c7770e2d441f2c48a87e84449c7765e22daa9949f8f3e052c486aa373e6af76f",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncRecovery.kt": "7813b8fa6a2b6cfdb21733e23eec27df4ae02d4866b4ba54e17ea6c4f54fcd66",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistory.kt": "fc5d0165cc47bf4e54fd92bf860a0b262c3c5213e0a1e35e16e99db0126657c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionHistorySection.kt": "321ecbc2e388ec3e9befa2f7486f5357e02a9e333f7643b901626d15a2674750",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileVersionRestoreHttpPolicy.kt": "2887700cfc59c51ebcc4ec87575b037c74bd7e47e33568f46ace10bf2a1fc2c5",

@@ -464,11 +464,11 @@ internal class DesktopFileSyncStore(
         val conflictCount = counts[FileSyncExecutionState.AwaitingDecision] ?: 0
         val skippedCount = counts[FileSyncExecutionState.Skipped] ?: 0
         return DesktopFileSyncWorkOverview(
-            readyCount = (counts[FileSyncExecutionState.Ready] ?: 0) +
-                (counts[FileSyncExecutionState.Running] ?: 0),
+            readyCount = counts[FileSyncExecutionState.Ready] ?: 0,
             runningCount = 0,
             conflictCount = conflictCount,
-            failedCount = counts[FileSyncExecutionState.Failed] ?: 0,
+            failedCount = (counts[FileSyncExecutionState.Failed] ?: 0) +
+                (counts[FileSyncExecutionState.Running] ?: 0),
             skippedCount = skippedCount,
             conflicts = if (conflictCount == 0) {
                 emptyList()
@@ -540,8 +540,8 @@ internal class DesktopFileSyncStore(
             "SELECT pair_id, work_id, state, relative_path, record FROM sync_work " +
                 "WHERE pair_id IN ($placeholders) AND state != ? " +
                 "ORDER BY CASE " +
-                "WHEN state IN ('AwaitingDecision', 'Failed') THEN 1 " +
-                "WHEN state IN ('Ready', 'Running') THEN 2 ELSE 3 END, relative_path, work_id LIMIT $limit",
+                "WHEN state IN ('AwaitingDecision', 'Failed', 'Running') THEN 1 " +
+                "WHEN state = 'Ready' THEN 2 ELSE 3 END, relative_path, work_id LIMIT $limit",
         ).use { statement ->
             pairIds.forEachIndexed { index, pairId -> statement.bindText(index + 1, pairId) }
             statement.bindText(pairIds.size + 1, FileSyncExecutionState.Skipped.name)
@@ -556,11 +556,7 @@ internal class DesktopFileSyncStore(
                     add(
                         DesktopFileSyncScopedWorkItem(
                             pairId,
-                            if (decoded.state == FileSyncExecutionState.Running) {
-                                decoded.copy(state = FileSyncExecutionState.Ready)
-                            } else {
-                                decoded
-                            },
+                            recoverInterruptedFileSyncWork(decoded),
                         ),
                     )
                 }
