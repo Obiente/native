@@ -923,8 +923,7 @@ private fun MarketingDesktopStartupSettingsScenario(
         selected = NextcloudDestination.Settings,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
-    ) {
-        DesktopSettingsWorkspace(
+    ) { DesktopSettingsWorkspace(
             summary = SettingsWorkspaceSummary(
                 displayName = fixture.displayName,
                 cloudName = fixture.cloudName,
@@ -934,15 +933,14 @@ private fun MarketingDesktopStartupSettingsScenario(
                 syncLabel = "4 active syncs",
                 storageLabel = "34.2 GB of 100 GB used",
             ),
-            initialSection = SettingsWorkspaceSection.DesktopApp,
+            visibleSections = visibleSettingsSections(true, false, true),
+            selectedSection = SettingsWorkspaceSection.DesktopApp, onSectionSelected = {},
         ) { section ->
             when (section) {
                 SettingsWorkspaceSection.DesktopApp -> {
-                    DesktopBackgroundSettingsCard(enabled = true, onEnabledChanged = {})
-                    DesktopStartOnLoginSettingsCard(
-                        enabled = true,
-                        message = "Nextcloud Native will start in your desktop session and recover after a crash.",
-                        onEnabledChanged = {},
+                    SettingsDesktopAppSectionContent(
+                        preferences = settingsDesktopPreferences(true, true),
+                        onPreferenceChanged = { _, _ -> },
                     )
                 }
                 else -> SettingsActionCard(
@@ -970,8 +968,8 @@ private fun LoginScreen(
     var trustingCertificate by remember { mutableStateOf(false) }
     var confirmPlainHttp by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    val supportDrafts = remember { SupportSettingsDraftRegistry.loginState() }
     val scope = rememberCoroutineScope()
-
     fun startLogin(
         transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
         certificateJustApproved: String? = null,
@@ -999,6 +997,7 @@ private fun LoginScreen(
                     services.finishLoginPolling(challenge)
                 }
                 onLoggedIn(authenticated)
+                supportDrafts.clearDrafts()
             } catch (failure: CancellationException) {
                 throw failure
             } catch (failure: Throwable) {
@@ -1124,7 +1123,7 @@ private fun LoginScreen(
                         .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    SupportDiagnosticsSettingsCard(services)
+                    SupportDiagnosticsSettingsCard(services, supportDrafts)
                 }
             },
             confirmButton = {

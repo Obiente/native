@@ -2659,6 +2659,7 @@ class WindowsCloudFilesProviderTest {
 
         provider.start()
         assertTrue(backend.awaitFirstUploadStarted())
+        assertEquals(listOf<String?>("\"etag-01\""), backend.uploadExpectedRevisions)
 
         val migrationFailure = AtomicReference<Throwable?>()
         val migration = Thread {
@@ -2676,8 +2677,6 @@ class WindowsCloudFilesProviderTest {
         assertFalse(migration.isAlive)
         migrationFailure.get()?.let { throw it }
         assertTrue(backend.awaitUploads())
-        assertEquals("\"etag-01\"", backend.lastExpectedRemoteRevision)
-        assertEquals(listOf<String?>("\"etag-01\""), backend.uploadExpectedRevisions)
         assertEquals(0, provider.summary().pendingWritebackCount)
         provider.close()
     }

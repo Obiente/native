@@ -436,7 +436,7 @@ class JvmSupportIntake(
         }
     }
 
-    suspend fun deleteCompletedReport(deletionUrl: String): SupportDiagnosticsDeletionResult =
+    suspend fun deleteCompletedReport(recordId: String): SupportDiagnosticsDeletionResult =
         withContext(Dispatchers.IO) {
             awaitInitialization()
             synchronized(lock) { storageUnavailableMessage }?.let { message ->
@@ -454,7 +454,7 @@ class JvmSupportIntake(
                 val completed = synchronized(lock) {
                     completedSubmissions.firstOrNull { submission ->
                         submission.originAccountIdentity == activeAccountIdentity &&
-                            submission.receipt.deletionUrl == deletionUrl
+                            submission.recordId == recordId
                     }
                 } ?: return@withContext SupportDiagnosticsDeletionResult.Failed(
                     "This submitted support report is no longer available on this device.",
@@ -471,16 +471,12 @@ class JvmSupportIntake(
 
     suspend fun refreshCompletedReports(): SupportDiagnosticsConversationResult = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!beginOperation()) {
-            return@withContext SupportDiagnosticsConversationResult.Failed(
-                "Another private support operation is still in progress.",
-            )
-        }
+        if (!beginOperation()) return@withContext SupportDiagnosticsConversationResult.Failed(
+            "Another private support operation is still in progress.")
         try {
             val accountIdentity = synchronized(lock) { activeAccountIdentity }
                 ?: return@withContext SupportDiagnosticsConversationResult.Failed(
-                    "Sign in to refresh private support reports.",
-                )
+                    "Sign in to refresh private support reports.")
             val reports = synchronized(lock) {
                 completedSubmissions.filter { completed ->
                     completed.originAccountIdentity == accountIdentity && completed.isRetained(currentTimeMillis())
@@ -489,64 +485,59 @@ class JvmSupportIntake(
                     completed.conversationError = null
                 }
             }
-            if (reports.isEmpty()) {
-                return@withContext SupportDiagnosticsConversationResult.Failed(
-                    "No submitted support reports are available on this device.",
-                )
-            }
+            if (reports.isEmpty()) return@withContext SupportDiagnosticsConversationResult.Failed(
+                "No submitted support reports are available on this device.")
             publishState(submittedStateFor(accountIdentity), accountIdentity)
             var failure: String? = null
             reports.forEach { completed ->
                 when (val result = refreshCompletedReport(completed)) {
                     SupportDiagnosticsConversationResult.Updated -> Unit
+                    is SupportDiagnosticsConversationResult.ReplyDeliveryUnknown -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Failed -> if (failure == null) failure = result.message
                     is SupportDiagnosticsConversationResult.Unsupported -> if (failure == null) failure = result.reason
                 }
                 publishState(submittedStateFor(accountIdentity), accountIdentity)
             }
-            failure?.let { message -> SupportDiagnosticsConversationResult.Failed(message) }
-                ?: SupportDiagnosticsConversationResult.Updated
+            if (failure == null) SupportDiagnosticsConversationResult.Updated
+            else SupportDiagnosticsConversationResult.Failed(failure)
         } finally {
             endOperation()
         }
     }
-
     suspend fun sendCompletedReportMessage(
-        statusUrl: String,
+        recordId: String,
         message: String,
     ): SupportDiagnosticsConversationResult = withContext(Dispatchers.IO) {
         awaitInitialization()
-        if (!beginOperation()) {
-            return@withContext SupportDiagnosticsConversationResult.Failed(
-                "Another private support operation is still in progress.",
-            )
-        }
+        if (!beginOperation()) return@withContext SupportDiagnosticsConversationResult.Failed(
+            "Another private support operation is still in progress.")
         try {
-        if (!supportMutationsAreAllowed()) {
-            return@withContext SupportDiagnosticsConversationResult.Unsupported(READ_ONLY_SUPPORT_MESSAGE)
-        }
+        if (!supportMutationsAreAllowed()) return@withContext SupportDiagnosticsConversationResult.Unsupported(
+            READ_ONLY_SUPPORT_MESSAGE)
         val normalizedMessage = message.trim()
         if (
             normalizedMessage.isEmpty() ||
             normalizedMessage.toByteArray(StandardCharsets.UTF_8).size > MAX_SUPPORT_CONVERSATION_MESSAGE_BYTES
         ) {
-            return@withContext SupportDiagnosticsConversationResult.Failed(
-                "Enter a message no longer than 8 KiB.",
-            )
+            return@withContext SupportDiagnosticsConversationResult.Failed("Enter a message no longer than 8 KiB.")
         }
         val completed = synchronized(lock) {
             completedSubmissions.firstOrNull { submission ->
                 submission.originAccountIdentity == activeAccountIdentity &&
-                    submission.receipt.statusUrl == statusUrl &&
+                    submission.recordId == recordId &&
                     submission.isRetained(currentTimeMillis())
             }?.also { submission ->
                 submission.conversationLoading = true
                 submission.conversationError = null
             }
         } ?: return@withContext SupportDiagnosticsConversationResult.Failed(
-            "This submitted support report is no longer available on this device.",
-        )
-        publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
+            "This submitted support report is no longer available on this device.")
+        synchronized(lock) { completed.replyRecovery }?.let { recovery ->
+            return@withContext failConversation(completed, if (recovery.deliveryConfirmed) {
+                "A delivered reply is awaiting acknowledgement on this device."
+            } else "Refresh the conversation before retrying the previous reply.",
+                replyDeliveryUnknown = !recovery.deliveryConfirmed)
+        }
         val capability = runCatching { capabilityFor(completed) }.getOrElse {
             return@withContext failConversation(completed, "The private report capability is invalid.")
         }
@@ -564,6 +555,20 @@ class JvmSupportIntake(
             .header("Accept", "application/json")
             .post(requestBody)
             .build()
+        val reporterIds = synchronized(lock) { completed.conversation?.messages
+            ?.filter { it.author == "reporter" }?.map { it.id } }
+            ?: return@withContext failConversation(
+                completed, "Refresh the conversation before sending a reply.")
+        val recovery = createSupportReplyRecoveryMarker(reporterIds, normalizedMessage)
+            ?: return@withContext failConversation(completed, "The conversation is too large to prepare a safe reply retry.")
+        synchronized(lock) { completed.replyRecovery = recovery }
+        if (!persistCompletedSafely(completed)) {
+            synchronized(lock) { completed.replyRecovery = null }
+            val failure = failConversation(completed, "The safe reply recovery marker could not be stored. The reply was not sent.")
+            publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
+            return@withContext failure
+        }
+        publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
         val result = executeConversationRequest(completed, request, expectedStatusCode = 201)
         publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
         result
@@ -572,14 +577,14 @@ class JvmSupportIntake(
         }
     }
 
-    suspend fun markCompletedReportRead(statusUrl: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun markCompletedReportRead(recordId: String): Boolean = withContext(Dispatchers.IO) {
         awaitInitialization()
         if (!beginOperation()) return@withContext false
         try {
         val completed = synchronized(lock) {
             completedSubmissions.firstOrNull { submission ->
                 submission.originAccountIdentity == activeAccountIdentity &&
-                    submission.receipt.statusUrl == statusUrl
+                    submission.recordId == recordId
             }
         } ?: return@withContext false
         val conversation = synchronized(lock) { completed.conversation } ?: return@withContext false
@@ -600,6 +605,27 @@ class JvmSupportIntake(
         }
         publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
         true
+        } finally {
+            endOperation()
+        }
+    }
+
+    suspend fun acknowledgeCompletedReportReplyDelivery(recordId: String): Boolean = withContext(Dispatchers.IO) {
+        awaitInitialization()
+        if (!beginOperation()) return@withContext false
+        try {
+            val completed = synchronized(lock) { completedSubmissions.firstOrNull {
+                it.originAccountIdentity == activeAccountIdentity && it.recordId == recordId
+            } } ?: return@withContext false
+            val previous = synchronized(lock) {
+                completed.replyRecovery?.takeIf { it.acknowledgementRequired }?.also { completed.replyRecovery = null }
+            } ?: return@withContext false
+            if (!persistCompletedSafely(completed)) {
+                synchronized(lock) { completed.replyRecovery = previous }
+                return@withContext false
+            }
+            publishState(submittedStateFor(completed.originAccountIdentity), completed.originAccountIdentity)
+            true
         } finally {
             endOperation()
         }
@@ -643,7 +669,14 @@ class JvmSupportIntake(
                     )
                 }
                 val conversation = decodeConversation(body, completed)
-                synchronized(lock) {
+                val (previousRecovery, recoveryChanged) = synchronized(lock) {
+                    val previous = completed.replyRecovery
+                val reporterMessages = conversation.messages.filter { it.author == "reporter" }
+                completed.replyRecovery = when (request.method) {
+                    "POST" -> previous?.markDelivered()
+                    "GET" -> previous?.afterAuthoritativeGet(reporterMessages.map(previous::observeReporterMessage))
+                        else -> previous
+                    }
                     completed.conversation = conversation
                     completed.conversationLoading = false
                     completed.conversationError = null
@@ -653,11 +686,13 @@ class JvmSupportIntake(
                             .lastOrNull { message -> message.author == "maintainer" }
                             ?.id
                     }
+                    previous to (previous != completed.replyRecovery)
                 }
-                if (request.method == "POST" && !persistCompletedSafely(completed)) {
+                if ((request.method == "POST" || recoveryChanged) && !persistCompletedSafely(completed)) {
+                    synchronized(lock) { completed.replyRecovery = previousRecovery }
                     return@use failConversation(
                         completed,
-                        "Your reply was sent, but its read state could not be stored on this device.",
+                        if (request.method == "GET") "The conversation was refreshed, but its recovery state could not be stored on this device." else "Your reply was sent, but its recovery state could not be stored on this device.",
                     )
                 }
                 SupportDiagnosticsConversationResult.Updated
@@ -670,13 +705,14 @@ class JvmSupportIntake(
                 } else {
                     "Could not reach Obiente Support. Check your connection and try again."
                 },
+                replyDeliveryUnknown = request.method == "POST",
             )
         } catch (_: SerializationException) {
-            failConversation(completed, "Obiente Support returned an invalid private conversation.")
+            failConversation(completed, "Obiente Support returned an invalid private conversation.", request.method == "POST")
         } catch (_: DateTimeException) {
-            failConversation(completed, "Obiente Support returned an invalid private conversation.")
+            failConversation(completed, "Obiente Support returned an invalid private conversation.", request.method == "POST")
         } catch (_: IllegalArgumentException) {
-            failConversation(completed, "Obiente Support returned an invalid private conversation.")
+            failConversation(completed, "Obiente Support returned an invalid private conversation.", request.method == "POST")
         } finally {
             activeCall.compareAndSet(call, null)
         }
@@ -708,12 +744,13 @@ class JvmSupportIntake(
     private fun failConversation(
         completed: CompletedSubmission,
         message: String,
-    ): SupportDiagnosticsConversationResult.Failed {
+        replyDeliveryUnknown: Boolean = false,
+    ): SupportDiagnosticsConversationResult {
         synchronized(lock) {
             completed.conversationLoading = false
             completed.conversationError = message
         }
-        return SupportDiagnosticsConversationResult.Failed(message)
+        return if (replyDeliveryUnknown) SupportDiagnosticsConversationResult.ReplyDeliveryUnknown(message) else SupportDiagnosticsConversationResult.Failed(message)
     }
 
     private fun cancelAfterIntentPublished(callAtIntent: Call?): Boolean {
@@ -1793,6 +1830,7 @@ class JvmSupportIntake(
                     receipt = submission.receipt,
                     acknowledgedStatus = submission.acknowledgedStatus,
                     lastReadMaintainerMessageId = submission.lastReadMaintainerMessageId,
+                    replyRecovery = submission.replyRecovery?.persisted(),
                 ),
             ).encodeToByteArray(),
             ".completed-",
@@ -2086,6 +2124,7 @@ class JvmSupportIntake(
             receipt = persisted.receipt,
             acknowledgedStatus = persisted.acknowledgedStatus,
             lastReadMaintainerMessageId = persisted.lastReadMaintainerMessageId,
+            replyRecovery = persisted.restoredReplyRecovery(),
         )
     } catch (_: IOException) {
         completedDescriptorRestorePending.set(true)
@@ -2147,6 +2186,7 @@ class JvmSupportIntake(
         val receipt: SupportIntakeReceipt,
         var acknowledgedStatus: String = receipt.status,
         var lastReadMaintainerMessageId: String? = null,
+        var replyRecovery: SupportReplyRecoveryMarker? = null,
         var conversation: SupportPrivateStatus? = null,
         var conversationLoading: Boolean = false,
         var conversationError: String? = null,
@@ -2156,64 +2196,6 @@ class JvmSupportIntake(
 
         fun isRetained(nowEpochMillis: Long): Boolean = nowEpochMillis <= retentionUntilEpochMillis
     }
-
-    @Serializable
-    private data class SupportIntakeProblem(
-        val contractVersion: Int,
-        val code: String,
-        val message: String,
-    )
-
-    @Serializable
-    private data class PersistedPendingSubmission(
-        val archiveName: String?,
-        val metadata: SupportIntakeMetadata,
-        val idempotencyKey: String,
-        val createdAtEpochMillis: Long,
-        val originAccountIdentity: String,
-        val context: PreparedSupportSubmissionContext,
-        val cancellationPending: Boolean = false,
-        val outcomeAmbiguous: Boolean = true,
-        val cancellationRequiresTombstone: Boolean? = null,
-        val latestUploadAttemptAtEpochMillis: Long? = null,
-        // Read descriptors written by early PR #386 builds, but never use wall time to confirm
-        // cancellation. Only the server's idempotency-key tombstone is terminal.
-        val cancellationRequestedAtEpochMillis: Long? = null,
-        val retryNotBeforeEpochMillis: Long? = null,
-        val receipt: SupportIntakeReceipt? = null,
-    )
-
-    @Serializable
-    private data class PersistedCompletedSubmission(
-        val originAccountIdentity: String,
-        val receipt: SupportIntakeReceipt,
-        val acknowledgedStatus: String = receipt.status,
-        val lastReadMaintainerMessageId: String? = null,
-    )
-
-    @Serializable
-    private data class SupportConversationMessageInput(val body: String)
-
-    @Serializable
-    private data class SupportPrivateStatus(
-        val contractVersion: Int,
-        val supportCode: String,
-        val productId: String,
-        val requestType: String,
-        val status: String,
-        val createdAt: String,
-        val updatedAt: String,
-        val retentionUntil: String,
-        val messages: List<SupportPrivateMessage>,
-    )
-
-    @Serializable
-    private data class SupportPrivateMessage(
-        val id: String,
-        val author: String,
-        val body: String,
-        val createdAt: String,
-    )
 
     private fun publishState(
         next: SupportDiagnosticsSubmissionState,
@@ -2303,9 +2285,9 @@ class JvmSupportIntake(
                         maintainerMessages.indexOfFirst { message -> message.id == readId }
                     } ?: -1
                     SupportDiagnosticsSubmissionState.SubmittedReport(
+                        recordId = completed.recordId,
                         supportCode = completed.receipt.supportCode,
-                        statusUrl = completed.receipt.statusUrl,
-                        deletionUrl = completed.receipt.deletionUrl,
+                        createdAt = completed.receipt.createdAt,
                         retentionUntil = completed.receipt.retentionUntil,
                         status = conversation?.status ?: completed.receipt.status,
                         updatedAt = conversation?.updatedAt,
@@ -2331,6 +2313,8 @@ class JvmSupportIntake(
                         statusChanged = conversation?.status?.let { status ->
                             status != completed.acknowledgedStatus
                         } ?: false,
+                        replyRecoveryState = completed.replyRecovery?.presentationState
+                            ?: SupportDiagnosticsReplyRecoveryState.None,
                         conversationLoading = completed.conversationLoading,
                         conversationError = completed.conversationError,
                     )
@@ -2508,7 +2492,6 @@ private const val SUPPORT_SUBMISSION_CANCELLED_CODE = "submission_cancelled"
 private const val MAX_SUPPORT_INTAKE_MESSAGE_LENGTH = 240
 private const val MAX_SUPPORT_INTAKE_RESPONSE_BYTES = 64 * 1024
 private const val MAX_SUPPORT_CONVERSATION_MESSAGE_BYTES = 8 * 1024
-private const val MAX_SUPPORT_CONVERSATION_MESSAGES = 1_000
 private const val MAX_SUPPORT_INTAKE_DESCRIPTION_BYTES = 8_000
 private const val MIN_SUPPORT_INTAKE_DESCRIPTION_BYTES = 10
 private const val MAX_PENDING_DESCRIPTOR_BYTES = 4L * 1024L * 1024L
