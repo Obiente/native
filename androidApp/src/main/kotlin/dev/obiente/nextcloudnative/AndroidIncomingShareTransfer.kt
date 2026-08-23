@@ -5,31 +5,6 @@ import java.io.IOException
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CancellationException
-import kotlinx.coroutines.Job
-
-internal class CoroutineDocumentRequestCancellation(
-    private val job: Job,
-) : DocumentRequestCancellation {
-    private val lock = Any()
-    private var cancelAction: (() -> Unit)? = null
-
-    override fun throwIfCancelled() {
-        if (!job.isActive) throw CancellationException("Incoming share upload canceled")
-    }
-
-    override fun setOnCancelAction(action: (() -> Unit)?) {
-        synchronized(lock) {
-            cancelAction = action
-            if (!job.isActive) cancelAction?.invoke()
-        }
-    }
-
-    init {
-        job.invokeOnCompletion {
-            synchronized(lock) { cancelAction?.invoke() }
-        }
-    }
-}
 
 internal fun Throwable.isRetryableIncomingShareTransferFailure(): Boolean {
     val dav = this as? DocumentWebDavException

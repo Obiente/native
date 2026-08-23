@@ -518,6 +518,8 @@ internal class AndroidIncomingShareUploadWorker(
                 scheduleIncomingShareCleanup(applicationContext, it.id)
             }
             Result.failure()
+        } finally {
+            requestCancellation.close()
         }
     }
 
