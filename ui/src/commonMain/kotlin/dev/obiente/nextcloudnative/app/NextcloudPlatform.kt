@@ -1019,6 +1019,29 @@ interface NextcloudPlatformServices {
         "Folder sync conflict review is not available on this platform.",
     )
 
+    /** Resolves one validated conflict batch and runs the resulting guarded work once. */
+    suspend fun resolveFileSyncConflicts(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+    ): FileSyncCenterActionResult {
+        require(resolutions.isNotEmpty() && resolutions.size <= MAX_FILE_SYNC_CONFLICT_BATCH)
+        if (resolutions.size == 1) {
+            val resolution = resolutions.single()
+            return resolveFileSyncConflict(
+                session,
+                userId,
+                pairId,
+                resolution.workId,
+                resolution.choice,
+            )
+        }
+        return FileSyncCenterActionResult.Unsupported(
+            "Atomic folder sync conflict batches are not available on this platform.",
+        )
+    }
+
     suspend fun removeFileSyncPair(
         session: NextcloudSession,
         userId: String,
@@ -1605,26 +1628,6 @@ interface NextcloudPlatformServices {
     suspend fun revokeSession(session: NextcloudSession)
 }
 
-/**
- * Read-only handle for one immutable remote file generation.
- *
- * Closing the handle is idempotent from the caller's perspective. Platform implementations own
- * the synchronization needed to reject new reads and cancel an active request.
- */
-class NextcloudFileRangeSession(
-    val size: Long,
-    private val readBlock: suspend (offset: Long, length: Int) -> ByteArray,
-    private val closeBlock: () -> Unit = {},
-) : AutoCloseable {
-    init {
-        require(size > 0L) { "A file range session must have a positive size." }
-    }
-
-    suspend fun read(offset: Long, length: Int): ByteArray = readBlock(offset, length)
-
-    override fun close() = closeBlock()
-}
-
 const val DEFAULT_PREVIEW_DIMENSION = 512
 const val MIN_PREVIEW_DIMENSION = 32
 const val MAX_PREVIEW_DIMENSION = 2048
@@ -1638,38 +1641,6 @@ const val MAX_ACTIVITY_LIMIT = 200
 const val MAX_NOTE_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 4L * 1024L * 1024L
 const val MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES = 16L * 1024L * 1024L
-const val MAX_FILE_RANGE_ETAG_LENGTH = 1_024
-
-fun requireSafeFileRangeEtag(value: String): String {
-    require(value == value.trim() && value.isNotEmpty() && value.length <= MAX_FILE_RANGE_ETAG_LENGTH) {
-        "A safe current strong ETag is required for a file range read."
-    }
-    if (value.first() == '"' || value.last() == '"') {
-        require(
-            value.length >= 2 &&
-                value.first() == '"' &&
-                value.last() == '"' &&
-                value.substring(1, value.lastIndex).all(::isHttpEntityTagCharacter),
-        ) {
-            "A safe current strong ETag is required for a file range read."
-        }
-        return value
-    }
-    require(
-        value != "*" &&
-            value.length <= MAX_FILE_RANGE_ETAG_LENGTH - 2 &&
-            value.all(::isHttpEntityTagCharacter),
-    ) {
-        "A safe current strong ETag is required for a file range read."
-    }
-    return "\"$value\""
-}
-
-private fun isHttpEntityTagCharacter(character: Char): Boolean =
-    character.code == 0x21 ||
-        character.code in 0x23..0x7E ||
-        character.code in 0x80..0xFF
-
 fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     require(relativePath.startsWith('/') && !relativePath.startsWith("//")) {
         "Dynamic API paths must be relative to the connected Nextcloud server."

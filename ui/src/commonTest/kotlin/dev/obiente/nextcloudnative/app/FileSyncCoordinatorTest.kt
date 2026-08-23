@@ -9,6 +9,37 @@ import kotlin.test.assertTrue
 
 class FileSyncCoordinatorTest {
     @Test
+    fun `conflict batch validates every choice before changing coordinator state`() {
+        val scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("one.md", "local-1"), local("two.md", "local-2")),
+            listOf(remote("one.md", "remote-1"), remote("two.md", "remote-2")),
+            nowEpochMillis = 10L,
+        )
+        val conflicts = scanned.pair().workItems
+        val resolved = resolveFileSyncDecisions(
+            scanned,
+            PAIR_ID,
+            conflicts.map { work ->
+                FileSyncConflictResolution(work.id, FileSyncDecisionChoice.UseLocal)
+            },
+        )
+
+        assertTrue(resolved.pair().workItems.all { it.state == FileSyncExecutionState.Ready })
+        assertTrue(resolved.pair().workItems.all { it.operation is FileSyncOperation.Upload })
+
+        val invalid = listOf(
+            FileSyncConflictResolution(conflicts.first().id, FileSyncDecisionChoice.UseLocal),
+            FileSyncConflictResolution(conflicts.last().id, FileSyncDecisionChoice.PropagateDeletion),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            resolveFileSyncDecisions(scanned, PAIR_ID, invalid)
+        }
+        assertTrue(scanned.pair().workItems.all { it.state == FileSyncExecutionState.AwaitingDecision })
+    }
+
+    @Test
     fun `conflict decision becomes guarded command and baseline advances only after verification`() {
         val baseline = baseline("Vault/today.md", "local-1", "remote-1")
         var state = state(baselines = listOf(baseline))

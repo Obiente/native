@@ -97,7 +97,7 @@ internal fun FileOfflineCenterScreen(
     var syncLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
-    var syncBusyPairId by remember(session, userId) { mutableStateOf<String?>(null) }
+    var syncBusyPairIds by remember(session, userId) { mutableStateOf<Set<String>>(emptySet()) }
     var pendingLocalRootJson by rememberSaveable(session.serverUrl, session.loginName, userId) {
         mutableStateOf<String?>(null)
     }
@@ -173,8 +173,8 @@ internal fun FileOfflineCenterScreen(
     }
 
     fun runSyncAction(pairId: String, remove: Boolean) {
-        if (syncBusyPairId != null) return
-        syncBusyPairId = pairId
+        if (pairId in syncBusyPairIds) return
+        syncBusyPairIds += pairId
         actionMessage = null
         scope.launch {
             runCatching {
@@ -189,12 +189,11 @@ internal fun FileOfflineCenterScreen(
             }.onFailure { failure ->
                 actionMessage = failure.message ?: "Could not update this folder sync pair."
             }
-            syncBusyPairId = null
+            syncBusyPairIds -= pairId
         }
     }
 
     fun beginAddFolderSync() {
-        if (syncBusyPairId != null) return
         scope.launch {
             runCatching { services.chooseFileSyncLocalRoot() }
                 .onSuccess { selected ->
@@ -214,7 +213,6 @@ internal fun FileOfflineCenterScreen(
     }
 
     fun openMediaSuggestion(suggestion: MediaSyncFolderSuggestion) {
-        if (syncBusyPairId != null) return
         pendingMediaPreview = null
         mediaPreviewError = null
         pendingMediaSuggestionJson = fileSyncSetupJson.encodeToString(suggestion)
@@ -228,17 +226,18 @@ internal fun FileOfflineCenterScreen(
     }
 
     fun resolveSyncConflict(target: PendingFileSyncDecision) {
-        if (syncBusyPairId != null) return
-        syncBusyPairId = target.pair.id
+        if (target.pair.id in syncBusyPairIds) return
+        syncBusyPairIds += target.pair.id
         actionMessage = null
         scope.launch {
             runCatching {
-                services.resolveFileSyncConflict(
+                services.resolveFileSyncConflicts(
                     session,
                     userId,
                     target.pair.id,
-                    target.conflict.workId,
-                    target.choice,
+                    target.conflicts.map { conflict ->
+                        FileSyncConflictResolution(conflict.workId, target.choice)
+                    },
                 )
             }.onSuccess { result ->
                 actionMessage = result.fileSyncCenterMessage()
@@ -246,7 +245,7 @@ internal fun FileOfflineCenterScreen(
             }.onFailure { failure ->
                 actionMessage = failure.message ?: "Could not apply this conflict decision."
             }
-            syncBusyPairId = null
+            syncBusyPairIds -= target.pair.id
         }
     }
 
@@ -547,7 +546,8 @@ internal fun FileOfflineCenterScreen(
                                 loading = syncLoading,
                                 mediaDiscovery = mediaFolderDiscovery,
                                 mediaDiscoveryLoading = mediaDiscoveryLoading,
-                                busyPairId = syncBusyPairId,
+                                busyPairId = syncBusyPairIds.firstOrNull(),
+                                busyPairIds = syncBusyPairIds,
                                 onAdd = ::beginAddFolderSync,
                                 onOpenMediaSuggestion = ::openMediaSuggestion,
                                 onRequestMediaPermission = {
@@ -559,7 +559,10 @@ internal fun FileOfflineCenterScreen(
                                 onRun = { pair -> runSyncAction(pair.id, remove = false) },
                                 onRemove = { pair -> removeSyncPair = pair },
                                 onResolve = { pair, conflict, choice ->
-                                    pendingSyncDecision = PendingFileSyncDecision(pair, conflict, choice)
+                                    pendingSyncDecision = PendingFileSyncDecision(pair, listOf(conflict), choice)
+                                },
+                                onResolveBatch = { pair, conflicts, choice ->
+                                    pendingSyncDecision = PendingFileSyncDecision(pair, conflicts, choice)
                                 },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                 fillAvailableHeight = true,
@@ -694,7 +697,8 @@ internal fun FileOfflineCenterScreen(
                                         loading = syncLoading,
                                         mediaDiscovery = mediaFolderDiscovery,
                                         mediaDiscoveryLoading = mediaDiscoveryLoading,
-                                        busyPairId = syncBusyPairId,
+                                        busyPairId = syncBusyPairIds.firstOrNull(),
+                                        busyPairIds = syncBusyPairIds,
                                         onAdd = ::beginAddFolderSync,
                                         onOpenMediaSuggestion = ::openMediaSuggestion,
                                         onRequestMediaPermission = {
@@ -706,7 +710,10 @@ internal fun FileOfflineCenterScreen(
                                         onRun = { pair -> runSyncAction(pair.id, remove = false) },
                                         onRemove = { pair -> removeSyncPair = pair },
                                         onResolve = { pair, conflict, choice ->
-                                            pendingSyncDecision = PendingFileSyncDecision(pair, conflict, choice)
+                                            pendingSyncDecision = PendingFileSyncDecision(pair, listOf(conflict), choice)
+                                        },
+                                        onResolveBatch = { pair, conflicts, choice ->
+                                            pendingSyncDecision = PendingFileSyncDecision(pair, conflicts, choice)
                                         },
                                     )
                                 }
@@ -1029,9 +1036,9 @@ internal fun FileOfflineCenterScreen(
             mediaPreview = pendingMediaPreview,
             mediaPreviewLoading = mediaPreviewLoading,
             mediaPreviewError = mediaPreviewError,
-            busy = syncBusyPairId == ADD_PAIR_BUSY_ID,
+            busy = ADD_PAIR_BUSY_ID in syncBusyPairIds,
             onDismiss = {
-                if (syncBusyPairId == null) {
+                if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) {
                     pendingLocalRootJson = null
                     pendingMediaSuggestionJson = null
                     pendingRemotePath = null
@@ -1041,15 +1048,15 @@ internal fun FileOfflineCenterScreen(
                 }
             },
             onChooseDestination = {
-                if (syncBusyPairId == null) remoteFolderPickerVisible = true
+                if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) remoteFolderPickerVisible = true
             },
             onChooseSelectedPaths = {
-                if (syncBusyPairId == null) syncSelectionPickerVisible = true
+                if (ADD_PAIR_BUSY_ID !in syncBusyPairIds) syncSelectionPickerVisible = true
             },
             onConfigurationChanged = { pendingSyncConfigurationJson = fileSyncSetupJson.encodeToString(it) },
             onAdd = {
-                if (syncBusyPairId != null) return@AddFolderSyncDialog
-                syncBusyPairId = ADD_PAIR_BUSY_ID
+                if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return@AddFolderSyncDialog
+                syncBusyPairIds += ADD_PAIR_BUSY_ID
                 actionMessage = null
                 scope.launch {
                     runCatching {
@@ -1076,7 +1083,7 @@ internal fun FileOfflineCenterScreen(
                     }.onFailure { failure ->
                         actionMessage = failure.message ?: "Could not add this folder sync pair."
                     }
-                    syncBusyPairId = null
+                    syncBusyPairIds -= ADD_PAIR_BUSY_ID
                 }
             },
         )
@@ -1084,7 +1091,7 @@ internal fun FileOfflineCenterScreen(
 
     removeSyncPair?.let { pair ->
         AlertDialog(
-            onDismissRequest = { if (syncBusyPairId == null) removeSyncPair = null },
+            onDismissRequest = { if (pair.id !in syncBusyPairIds) removeSyncPair = null },
             title = { Text("Remove folder sync?") },
             text = {
                 Text(
@@ -1095,7 +1102,7 @@ internal fun FileOfflineCenterScreen(
             },
             confirmButton = {
                 Button(
-                    enabled = syncBusyPairId == null,
+                    enabled = pair.id !in syncBusyPairIds,
                     onClick = {
                         removeSyncPair = null
                         runSyncAction(pair.id, remove = true)
@@ -1104,7 +1111,7 @@ internal fun FileOfflineCenterScreen(
             },
             dismissButton = {
                 TextButton(
-                    enabled = syncBusyPairId == null,
+                    enabled = pair.id !in syncBusyPairIds,
                     onClick = { removeSyncPair = null },
                 ) { Text("Cancel") }
             },
@@ -1113,19 +1120,23 @@ internal fun FileOfflineCenterScreen(
 
     pendingSyncDecision?.let { target ->
         AlertDialog(
-            onDismissRequest = { if (syncBusyPairId == null) pendingSyncDecision = null },
+            onDismissRequest = { if (target.pair.id !in syncBusyPairIds) pendingSyncDecision = null },
             title = { Text("Resolve sync conflict?") },
             text = {
                 Text(
-                    target.choice.confirmationText(
-                        target.conflict.relativePath,
-                        target.conflict.reason,
-                    ),
+                    if (target.conflicts.size == 1) {
+                        val conflict = target.conflicts.single()
+                        target.choice.confirmationText(conflict.relativePath, conflict.reason)
+                    } else {
+                        "Apply ${target.choice.readableDecision().lowercase()} to all " +
+                            "${target.conflicts.size} reviewed conflicts? Every item is checked again before " +
+                            "the batch is saved, and the batch is rejected if any item changed."
+                    },
                 )
             },
             confirmButton = {
                 Button(
-                    enabled = syncBusyPairId == null,
+                    enabled = target.pair.id !in syncBusyPairIds,
                     onClick = {
                         pendingSyncDecision = null
                         resolveSyncConflict(target)
@@ -1134,33 +1145,13 @@ internal fun FileOfflineCenterScreen(
             },
             dismissButton = {
                 TextButton(
-                    enabled = syncBusyPairId == null,
+                    enabled = target.pair.id !in syncBusyPairIds,
                     onClick = { pendingSyncDecision = null },
                 ) { Text("Cancel") }
             },
         )
     }
 }
-
-internal fun virtualStorageHydrationPollDelay(
-    statuses: List<VirtualFolderHydrationStatus>,
-    nowEpochMillis: Long,
-): Long? {
-    require(nowEpochMillis >= 0L)
-    if (statuses.any { status ->
-            status.phase == VirtualFolderHydrationPhase.Queued ||
-                status.phase == VirtualFolderHydrationPhase.Downloading ||
-                status.refreshing
-        }
-    ) return VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS
-    val retryAt = statuses.mapNotNull(VirtualFolderHydrationStatus::refreshRetryAtEpochMillis).minOrNull()
-        ?: return null
-    if (retryAt <= nowEpochMillis) return VIRTUAL_STORAGE_RETRY_POLL_MILLIS
-    return (retryAt - nowEpochMillis).coerceAtMost(VIRTUAL_STORAGE_RETRY_POLL_MILLIS)
-}
-
-private const val VIRTUAL_STORAGE_HYDRATION_POLL_MILLIS = 750L
-private const val VIRTUAL_STORAGE_RETRY_POLL_MILLIS = 10_000L
 
 @Composable
 internal fun FileOfflineWorkspaceNavigation(
@@ -1294,12 +1285,15 @@ internal fun FolderSyncSection(
     mediaDiscovery: MediaSyncFolderDiscovery?,
     mediaDiscoveryLoading: Boolean,
     busyPairId: String?,
+    busyPairIds: Set<String> = busyPairId?.let(::setOf).orEmpty(),
     onAdd: () -> Unit,
     onOpenMediaSuggestion: (MediaSyncFolderSuggestion) -> Unit,
     onRequestMediaPermission: () -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit =
+        { _, _, _ -> },
     modifier: Modifier = Modifier,
     fillAvailableHeight: Boolean = false,
 ) {
@@ -1310,7 +1304,7 @@ internal fun FolderSyncSection(
         MediaFolderSuggestions(
             discovery = mediaDiscovery,
             loading = mediaDiscoveryLoading,
-            enabled = busyPairId == null,
+            enabled = ADD_PAIR_BUSY_ID !in busyPairIds,
             onOpen = onOpenMediaSuggestion,
             onRequestPermission = onRequestMediaPermission,
         )
@@ -1318,10 +1312,12 @@ internal fun FolderSyncSection(
             snapshot = snapshot,
             loading = loading,
             busyPairId = busyPairId,
+            busyPairIds = busyPairIds,
             onAdd = onAdd,
             onRun = onRun,
             onRemove = onRemove,
             onResolve = onResolve,
+            onResolveBatch = onResolveBatch,
             modifier = if (fillAvailableHeight) {
                 Modifier.weight(1f).fillMaxWidth()
             } else {
@@ -3014,8 +3010,3 @@ internal fun fileOfflineRefreshEnabled(
 
 private const val ADD_PAIR_BUSY_ID = "__adding_sync_pair__"
 private const val MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS = 6
-private data class PendingFileSyncDecision(
-    val pair: FileSyncPairSummary,
-    val conflict: FileSyncConflictSummary,
-    val choice: FileSyncDecisionChoice,
-)

@@ -218,6 +218,24 @@ internal class DesktopFileSyncEngine(
         onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
         shouldContinue: () -> Boolean = { true },
         onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit,
+    ): FileSyncCenterActionResult = resolveConflictsAndRun(
+        session = session,
+        userId = userId,
+        pairId = pairId,
+        resolutions = listOf(FileSyncConflictResolution(workId, choice)),
+        onProgress = onProgress,
+        shouldContinue = shouldContinue,
+        onDiagnostic = onDiagnostic,
+    )
+
+    suspend fun resolveConflictsAndRun(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+        onProgress: (DesktopFileSyncProgressEvent) -> Unit = {},
+        shouldContinue: () -> Boolean = { true },
+        onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit,
     ): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess transaction@ {
             val current = store.loadPair(pairId)
@@ -228,13 +246,13 @@ internal class DesktopFileSyncEngine(
                     "This folder sync pair belongs to another account.",
                 )
             }
-            if (pair.workItems.none { it.id == workId }) {
+            if (resolutions.any { resolution -> pair.workItems.none { it.id == resolution.workId } }) {
                 return@transaction FileSyncCenterActionResult.Rejected(
-                    "That conflict no longer exists. Scan again.",
+                    "One or more conflicts no longer exist. Scan again.",
                 )
             }
             val resolved = runCatching {
-                resolveFileSyncDecision(current.coordinator, pairId, workId, choice)
+                resolveFileSyncDecisions(current.coordinator, pairId, resolutions)
             }.getOrElse { failure ->
                 return@transaction FileSyncCenterActionResult.Rejected(
                     safeFailureMessage(failure, "That conflict decision is no longer valid. Scan again."),
@@ -249,7 +267,7 @@ internal class DesktopFileSyncEngine(
                 onDiagnostic,
                 shouldContinue,
                 resetExhaustedFailures = true,
-                expectedResolvedWorkId = workId,
+                expectedResolvedWorkIds = resolutions.mapTo(mutableSetOf(), FileSyncConflictResolution::workId),
             )
         }
     }
@@ -262,7 +280,7 @@ internal class DesktopFileSyncEngine(
         onDiagnostic: (DesktopFileSyncRunDiagnosticEvent) -> Unit,
         shouldContinue: () -> Boolean,
         resetExhaustedFailures: Boolean,
-        expectedResolvedWorkId: Long? = null,
+        expectedResolvedWorkIds: Set<Long> = emptySet(),
     ): FileSyncCenterActionResult {
         reclaimDesktopFileSyncStages(stagingRoot)
         var persisted = store.loadPair(pairId)
@@ -287,7 +305,7 @@ internal class DesktopFileSyncEngine(
         val cachedLocalRevisions = initialPair.baselines.mapNotNull { baseline ->
             baseline.localRevision?.let { revision -> baseline.relativePath to revision }
         }.toMap()
-        val localEntries = try {
+        val scannedLocalEntries = try {
             local.scan(cachedLocalRevisions, includes, shouldContinue).map(DesktopLocalSyncDocument::entry)
         } catch (_: DesktopFileSyncScanStoppedException) {
             return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
@@ -295,7 +313,26 @@ internal class DesktopFileSyncEngine(
             onDiagnostic(failure.toDesktopFileSyncRunDiagnosticEvent(pairId, DesktopFileSyncScanStage.Local))
             throw failure
         }
-        val remoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
+        val scannedRemoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
+        val candidates = fileSyncContentVerificationCandidates(
+            scannedLocalEntries,
+            scannedRemoteEntries,
+            initialPair.baselines,
+        )
+        val verifiedContent = try {
+            candidates.mapNotNull { candidate ->
+                verifyDesktopFileSyncContent(candidate, scannedLocalEntries, remote, shouldContinue)
+            }
+        } catch (_: DesktopFileSyncScanStoppedException) {
+            return FileSyncCenterActionResult.Completed("The folder scan stopped before making changes.")
+        }
+        val contentIdentity = applyVerifiedFileSyncContent(
+            scannedLocalEntries,
+            scannedRemoteEntries,
+            verifiedContent,
+        )
+        val localEntries = contentIdentity.localEntries
+        val remoteEntries = contentIdentity.remoteEntries
         val snapshotDiagnostics = desktopFileSyncSnapshotDiagnostics(localEntries, remoteEntries)
         persisted = persisted.copy(
             coordinator = scanFileSyncPair(
@@ -308,7 +345,7 @@ internal class DesktopFileSyncEngine(
             ),
         )
         val scannedPair = persisted.coordinator.pairs.single()
-        if (expectedResolvedWorkId != null && !scannedPair.retainsResolvedFileSyncDecision(expectedResolvedWorkId)) {
+        if (!scannedPair.retainsResolvedFileSyncDecisions(expectedResolvedWorkIds)) {
             store.savePair(persisted, pairId)
             return FileSyncCenterActionResult.Rejected(
                 "The conflict changed while you reviewed it. Review the latest device and " +
@@ -433,6 +470,38 @@ internal class DesktopFileSyncEngine(
         }
         return if (failures > 0) FileSyncCenterActionResult.Rejected(message)
         else FileSyncCenterActionResult.Completed(message)
+    }
+
+    private fun verifyDesktopFileSyncContent(
+        candidate: FileSyncContentVerificationCandidate,
+        localEntries: List<LocalSyncEntry>,
+        remote: DesktopFileSyncRemoteTree,
+        shouldContinue: () -> Boolean,
+    ): VerifiedFileSyncContent? {
+        val expectedBytes = candidate.expectedSizeBytes ?: return null
+        if (expectedBytes > MAX_SYNC_FILE_BYTES) return null
+        val localHash = localEntries.first { it.relativePath == candidate.relativePath }.contentHash
+            ?: return null
+        return try {
+            if (
+                remote.verifyContentHash(
+                    relativePath = candidate.relativePath,
+                    expectedRemoteEtag = candidate.remoteEtag,
+                    expectedBytes = expectedBytes,
+                    expectedContentHash = localHash,
+                    maximumBytes = MAX_SYNC_FILE_BYTES,
+                    shouldContinue = shouldContinue,
+                )
+            ) {
+                VerifiedFileSyncContent(candidate, localHash)
+            } else {
+                null
+            }
+        } catch (stopped: DesktopFileSyncScanStoppedException) {
+            throw stopped
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun syncPairLabel(localDisplayName: String, remoteRootPath: String): String =
@@ -741,144 +810,4 @@ internal class DesktopFileSyncEngine(
     private companion object {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
     }
-}
-
-internal fun FileSyncPair.retainsResolvedFileSyncDecision(workId: Long): Boolean =
-    workItems.any { work ->
-        work.id == workId &&
-            work.decision?.state is FileSyncDecisionState.Resolved &&
-            when (work.state) {
-                FileSyncExecutionState.Ready ->
-                    work.operation !is FileSyncOperation.NeedsDecision &&
-                        work.operation !is FileSyncOperation.Skipped
-                FileSyncExecutionState.Skipped -> work.operation is FileSyncOperation.Skipped
-                else -> false
-            }
-    }
-
-private fun DesktopFileSyncPersistedState.scopedToDesktopWork(
-    pair: FileSyncPair,
-    work: FileSyncWorkItem,
-): DesktopFileSyncPersistedState = copy(
-    coordinator = FileSyncCoordinatorState(
-        listOf(pair.copy(baselines = emptyList(), workItems = listOf(work))),
-    ),
-)
-
-internal fun requireDesktopFileSyncBaselineCapacity(
-    operation: FileSyncOperation,
-    baselinePaths: Set<String>,
-    maximumEntries: Int = MAX_FILE_SYNC_ENTRIES,
-) {
-    require(maximumEntries > 0 && baselinePaths.size <= maximumEntries)
-    val affectedPaths: Set<String>
-    val synchronizedPaths: Set<String>
-    when (operation) {
-        is FileSyncOperation.Upload,
-        is FileSyncOperation.Download,
-        -> {
-            affectedPaths = setOf(operation.relativePath)
-            synchronizedPaths = affectedPaths
-        }
-        is FileSyncOperation.KeepBoth -> {
-            affectedPaths = setOf(
-                operation.relativePath,
-                operation.localConflictPath,
-                operation.remoteConflictPath,
-            )
-            synchronizedPaths = affectedPaths
-        }
-        is FileSyncOperation.DeleteLocal,
-        is FileSyncOperation.DeleteRemote,
-        -> {
-            affectedPaths = setOf(operation.relativePath)
-            synchronizedPaths = emptySet()
-        }
-        is FileSyncOperation.NeedsDecision,
-        is FileSyncOperation.Skipped,
-        -> error("Non-executable sync work has no baseline result.")
-    }
-    val replacedCount = affectedPaths.count { it in baselinePaths }
-    require(baselinePaths.size - replacedCount + synchronizedPaths.size <= maximumEntries) {
-        "The synchronized result would exceed the folder baseline limit."
-    }
-}
-
-internal fun desktopFileSyncRemoteMutationPath(remoteRootPath: String, relativePath: String): String {
-    val relative = relativePath.trim('/')
-    requireValidSyncPath(relative)
-    val root = remoteRootPath.trim('/')
-    if (root.isNotEmpty()) requireValidSyncPath(root)
-    return listOf(root, relative).filter(String::isNotBlank).joinToString("/")
-}
-
-internal fun reclaimDesktopFileSyncStages(stagingRoot: File): Int {
-    if (!stagingRoot.isDirectory) return 0
-    return stagingRoot.listFiles().orEmpty().count { candidate ->
-        if (!Files.isRegularFile(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)) return@count false
-        val name = candidate.name
-        val prefix = DESKTOP_FILE_SYNC_STAGE_PREFIXES.firstOrNull { ownedPrefix ->
-            name.startsWith("nextcloud-native-$ownedPrefix-")
-        } ?: return@count false
-        val token = name.removePrefix("nextcloud-native-$prefix-").removeSuffix(".tmp")
-        if (!name.endsWith(".tmp") || runCatching { UUID.fromString(token) }.isFailure) return@count false
-        candidate.delete()
-    }
-}
-
-private val DESKTOP_FILE_SYNC_STAGE_PREFIXES = setOf(
-    "upload",
-    "verify-upload",
-    "download",
-    "keep-local",
-    "keep-remote",
-    "verify-local-conflict",
-    "verify-remote-conflict",
-    "verify-local-original",
-)
-
-internal fun requiredDesktopDownloadFreeBytes(
-    downloadBytes: Long,
-    reserveBytes: Long,
-    sameStore: Boolean,
-): Long {
-    require(downloadBytes >= 0L && reserveBytes >= 0L)
-    val contentBytes = if (sameStore) {
-        if (downloadBytes > Long.MAX_VALUE / 2L) Long.MAX_VALUE else downloadBytes * 2L
-    } else {
-        downloadBytes
-    }
-    return if (reserveBytes > Long.MAX_VALUE - contentBytes) Long.MAX_VALUE else contentBytes + reserveBytes
-}
-
-internal fun desktopSyncRootsOverlap(first: String, second: String): Boolean {
-    val firstPath = File(first).toPath().toAbsolutePath().normalize()
-    val secondPath = File(second).toPath().toAbsolutePath().normalize()
-    return firstPath == secondPath || firstPath.startsWith(secondPath) || secondPath.startsWith(firstPath)
-}
-
-internal fun desktopSyncRemoteRootsOverlap(first: String, second: String): Boolean {
-    val left = first.trim('/')
-    val right = second.trim('/')
-    return left.isEmpty() || right.isEmpty() ||
-        left == right || left.startsWith("$right/") || right.startsWith("$left/")
-}
-
-internal fun desktopSyncMappingsOverlap(
-    existingAccountId: String,
-    requestedAccountId: String,
-    existingLocalRoot: String,
-    requestedLocalRoot: String,
-    existingRemoteRoot: String,
-    requestedRemoteRoot: String,
-): Boolean = desktopSyncRootsOverlap(existingLocalRoot, requestedLocalRoot) ||
-    (
-        existingAccountId == requestedAccountId &&
-            desktopSyncRemoteRootsOverlap(existingRemoteRoot, requestedRemoteRoot)
-        )
-
-private fun desktopFileSyncStagingDirectory(): File {
-    val cacheRoot = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)?.let(::File)
-        ?: File(System.getProperty("user.home"), ".cache")
-    return File(cacheRoot, "nextcloud-native/file-sync-staging")
 }

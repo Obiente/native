@@ -18,6 +18,59 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
+    fun `content identity streams and verifies one exact remote generation`() {
+        val methods = mutableListOf<String>()
+        val ifMatches = mutableListOf<String?>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            methods += chain.request().method
+            ifMatches += chain.request().header("If-Match")
+            when (chain.request().method) {
+                "GET" -> Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("test")
+                    .header("ETag", "\"note-7\"")
+                    .body("same note".toResponseBody())
+                    .build()
+                "PROPFIND" -> response(
+                    chain.request(),
+                    207,
+                    """
+                    <d:multistatus xmlns:d="DAV:">
+                      <d:response><d:href>/remote.php/dav/files/alice/Vault/Notes/today.md</d:href>
+                        <d:propstat><d:prop><d:getetag>"note-7"</d:getetag>
+                          <d:getcontentlength>9</d:getcontentlength><d:resourcetype/></d:prop>
+                        </d:propstat></d:response>
+                    </d:multistatus>
+                    """.trimIndent(),
+                )
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "Vault",
+            client = client,
+        )
+        val expected = "sha256:8b4c848f9c906b8b340c2400c9aa8fdc1c9d5db557bad1b6aabdd9aabe3eb6e9"
+
+        assertTrue(
+            tree.verifyContentHash(
+                relativePath = "Notes/today.md",
+                expectedRemoteEtag = "\"note-7\"",
+                expectedBytes = 9L,
+                expectedContentHash = expected,
+                maximumBytes = 1_024L,
+                shouldContinue = { true },
+            ),
+        )
+        assertEquals(listOf("GET", "PROPFIND"), methods)
+        assertEquals(listOf("\"note-7\"", null), ifMatches)
+    }
+
+    @Test
     fun `replacing an existing file uses a destination guarded put`() {
         val methods = mutableListOf<String>()
         val conditionalHeaders = mutableListOf<String?>()

@@ -22,6 +22,12 @@ internal interface AndroidFileSyncLocalTree {
     fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
     ): List<AndroidLocalSyncDocument>
+    fun contentHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): String?
     fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
@@ -38,7 +44,6 @@ internal interface AndroidFileSyncLocalTree {
 internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
-    private val contentHashPaths: Set<String> = emptySet(),
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -72,6 +77,27 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }
         return result.sortedBy { it.entry.relativePath }
+    }
+
+    override fun contentHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): String? {
+        val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision) {
+            "The local file changed before content verification."
+        }
+        require(before.entry.size == expectedBytes) { "The local file size changed before content verification." }
+        val hash = resolver.openInputStream(before.uri)?.use { input ->
+            sha256SyncContentHash(input, expectedBytes, maximumBytes)
+        } ?: return null
+        val after = requireNotNull(resolve(path)) { "The local file disappeared during content verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
+            "The local file changed during content verification."
+        }
+        return hash
     }
 
     override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
@@ -247,24 +273,6 @@ internal class AndroidSafFileSyncLocalTree(
                                 kind = kind,
                                 revision = revision(documentId, mimeType, modified, size),
                                 size = if (kind == SyncEntryKind.File) size else null,
-                                contentHash = if (
-                                    kind == SyncEntryKind.File &&
-                                    path in contentHashPaths &&
-                                    size != null &&
-                                    size <= ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES
-                                ) {
-                                    runCatching {
-                                        resolver.openInputStream(documentUri)?.use { input ->
-                                            sha256SyncContentHash(
-                                                input,
-                                                expectedBytes = size,
-                                                maximumBytes = ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES,
-                                            )
-                                        }
-                                    }.getOrNull()
-                                } else {
-                                    null
-                                },
                             ),
                             uri = documentUri,
                             displayName = name,
@@ -308,8 +316,6 @@ internal class AndroidSafFileSyncLocalTree(
         )
     }
 }
-
-internal const val ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES = 64L * 1024L * 1024L
 
 internal fun sha256SyncContentHash(
     input: InputStream,

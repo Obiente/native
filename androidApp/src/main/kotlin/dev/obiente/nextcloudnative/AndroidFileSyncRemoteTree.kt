@@ -128,7 +128,7 @@ internal class AndroidFileSyncRemoteTree(
         relativePath: String,
         expectedRemoteEtag: String,
         expectedContentHash: String,
-        maximumBytes: Long = ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES,
+        maximumBytes: Long,
     ): Boolean {
         val digest = MessageDigest.getInstance("SHA-256")
         val sink = object : OutputStream() {

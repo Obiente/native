@@ -840,7 +840,7 @@ private fun FileSyncPair.updateWork(
 private fun FileSyncPair.requireWork(workId: Long): FileSyncWorkItem =
     workItems.firstOrNull { it.id == workId } ?: error("The sync work item does not exist.")
 
-private fun FileSyncCoordinatorState.requirePair(pairId: String): FileSyncPair =
+internal fun FileSyncCoordinatorState.requirePair(pairId: String): FileSyncPair =
     pairs.firstOrNull { it.id == pairId } ?: error("The sync pair does not exist.")
 
 private fun FileSyncCoordinatorState.updatePair(
