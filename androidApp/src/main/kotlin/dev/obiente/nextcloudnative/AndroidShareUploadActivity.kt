@@ -24,6 +24,7 @@ import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
 import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.remoteFolderPickerOperations
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
