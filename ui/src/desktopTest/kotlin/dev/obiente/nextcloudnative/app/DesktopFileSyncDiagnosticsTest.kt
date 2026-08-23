@@ -24,6 +24,7 @@ class DesktopFileSyncDiagnosticsTest {
             .toSupportDiagnosticEventDraft()
 
         val pair = event.fields.single { it.name == "pair" }
+        assertEquals("SYNC_SCAN_LIMIT_EXCEEDED", event.code)
         assertEquals("pair-private", pair.value)
         assertEquals(SupportDiagnosticValuePrivacy.Identifier, pair.privacy)
     }

@@ -14,6 +14,7 @@ internal enum class DashboardWidgetsResponseClassification(val diagnosticValue: 
     Supported("supported"),
     HttpRouteMissing("http_route_missing"),
     OcsRouteMissing("ocs_route_missing"),
+    OcsFailure("ocs_failure"),
     HttpFailure("http_failure"),
     MalformedResponse("malformed_response"),
     TransportFailure("transport_failure"),
@@ -52,6 +53,9 @@ internal suspend fun acquireDashboardWidgets(
 
             DashboardWidgetsResponseClassification.HttpFailure ->
                 throw DashboardWidgetsHttpFailure(response.status)
+
+            DashboardWidgetsResponseClassification.OcsFailure ->
+                throw DashboardWidgetsOcsFailure()
 
             DashboardWidgetsResponseClassification.Supported -> {
                 val widgets = try {
@@ -92,11 +96,16 @@ internal fun dashboardSnapshotForUnavailableWidgets(
 
 private fun classifyDashboardWidgetsResponse(
     response: NextcloudApiResponse,
-): DashboardWidgetsResponseClassification = when {
-    response.status == 404 -> DashboardWidgetsResponseClassification.HttpRouteMissing
-    response.status !in 200..299 -> DashboardWidgetsResponseClassification.HttpFailure
-    isDashboardApiUnavailable(response) -> DashboardWidgetsResponseClassification.OcsRouteMissing
-    else -> DashboardWidgetsResponseClassification.Supported
+): DashboardWidgetsResponseClassification {
+    val ocsStatusCode = dashboardOcsStatusCode(response)
+    return when {
+        response.status == 404 -> DashboardWidgetsResponseClassification.HttpRouteMissing
+        response.status !in 200..299 -> DashboardWidgetsResponseClassification.HttpFailure
+        ocsStatusCode == 404 -> DashboardWidgetsResponseClassification.OcsRouteMissing
+        ocsStatusCode != null && ocsStatusCode !in setOf(100, 200) ->
+            DashboardWidgetsResponseClassification.OcsFailure
+        else -> DashboardWidgetsResponseClassification.Supported
+    }
 }
 
 private fun dashboardWidgetsDiagnostic(
@@ -144,4 +153,8 @@ private fun Int.dashboardHttpStatusFamily(): String = when (this) {
 
 private class DashboardWidgetsHttpFailure(status: Int) : IllegalStateException(
     "The Dashboard widgets request failed with HTTP $status.",
+)
+
+private class DashboardWidgetsOcsFailure : IllegalStateException(
+    "The Dashboard widgets request was rejected by OCS.",
 )

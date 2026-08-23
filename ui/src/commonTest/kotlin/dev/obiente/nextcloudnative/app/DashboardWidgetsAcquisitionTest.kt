@@ -133,6 +133,29 @@ class DashboardWidgetsAcquisitionTest {
     }
 
     @Test
+    fun `valid OCS rejection remains distinct from malformed data`() {
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+
+        assertFailsWith<IllegalStateException> {
+            runBlocking {
+                acquireDashboardWidgets(
+                    cachedAvailable = true,
+                    executeResponse = {
+                        rawResponse(200, """{"ocs":{"meta":{"statuscode":403},"data":[]}}""")
+                    },
+                    onDiagnostic = diagnostics::add,
+                )
+            }
+        }
+
+        assertEquals("DASHBOARD_WIDGETS_FAILED", diagnostics.single().code)
+        assertEquals(
+            "ocs_failure",
+            diagnostics.single().fields.single { it.name == "response_classification" }.value,
+        )
+    }
+
+    @Test
     fun `cancellation remains control flow and produces no diagnostic`() {
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 

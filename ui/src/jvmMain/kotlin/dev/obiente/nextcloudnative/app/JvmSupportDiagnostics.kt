@@ -43,7 +43,7 @@ internal class JvmSupportDiagnostics(
     private var storedEventBytes = 0L
     private var discardedHistoryBytes = 0L
     private var capacityTruncationObserved = false
-    private val historyPresentAtStartup = historyFile.isFile && historyFile.length() > 0L
+    private var historyPresentAtStartup = historyFile.isFile && historyFile.length() > 0L
     private var activeAccountScope: String? = null
     private var storageAvailable = false
     private var batchPersistenceDeferred = false
@@ -210,6 +210,9 @@ internal class JvmSupportDiagnostics(
         runCatching {
             events.clear()
             storedEventBytes = 0L
+            discardedHistoryBytes = 0L
+            capacityTruncationObserved = false
+            historyPresentAtStartup = false
             persistHistory()
             publishRevision()
             true

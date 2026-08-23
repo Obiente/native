@@ -73,6 +73,7 @@ internal fun DesktopFileSyncRunDiagnosticEvent.toSupportDiagnosticEventDraft() =
     component = SupportDiagnosticComponent.Sync,
     operation = "sync.scan",
     outcome = outcome,
+    code = "SYNC_SCAN_LIMIT_EXCEEDED",
     message = "A desktop folder sync scan exceeded its selected-entry limit.",
     fields = listOf(
         SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),

@@ -187,7 +187,7 @@ class DesktopFileSyncLocalTreeTest {
             val tree = DesktopFileSyncLocalTree(
                 root.toFile(),
                 changeTokenProvider = { "stable-change-token" },
-            ) {
+            ) { _, _ ->
                 digestCount += 1
                 "a".repeat(64)
             }
@@ -214,7 +214,7 @@ class DesktopFileSyncLocalTreeTest {
             val tree = DesktopFileSyncLocalTree(
                 root.toFile(),
                 changeTokenProvider = { null },
-            ) {
+            ) { _, _ ->
                 digestCount += 1
                 "b".repeat(64)
             }
@@ -307,7 +307,7 @@ class DesktopFileSyncLocalTreeTest {
             val tree = DesktopFileSyncLocalTree(
                 root = root.toFile(),
                 maximumEntries = 2,
-            ) {
+            ) { _, _ ->
                 digestCount += 1
                 "c".repeat(64)
             }
@@ -328,7 +328,7 @@ class DesktopFileSyncLocalTreeTest {
         try {
             root.resolve("one.txt").writeText("one")
             var digestCount = 0
-            val tree = DesktopFileSyncLocalTree(root.toFile()) {
+            val tree = DesktopFileSyncLocalTree(root.toFile()) { _, _ ->
                 digestCount += 1
                 "d".repeat(64)
             }

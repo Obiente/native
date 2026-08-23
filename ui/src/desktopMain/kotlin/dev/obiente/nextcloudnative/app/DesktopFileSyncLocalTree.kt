@@ -30,7 +30,7 @@ internal class DesktopFileSyncLocalTree(
     root: File,
     private val changeTokenProvider: (Path) -> String? = ::desktopFileChangeToken,
     private val maximumEntries: Int = MAX_ENTRIES,
-    private val contentDigester: (Path) -> String = ::desktopSha256File,
+    private val contentDigester: (Path, () -> Boolean) -> String = ::desktopSha256File,
 ) {
     private val root = root.toPath().toAbsolutePath().normalize()
     private val knownDirectoryIdentities = ConcurrentHashMap<String, LocalDirectoryIdentity>()
@@ -110,7 +110,7 @@ internal class DesktopFileSyncLocalTree(
                         reusableContentDigest(cachedLocalRevisions[relative], metadata)
                             ?: run {
                                 requireSafeAncestors(path, includeLeaf = true, allowMissingTail = false)
-                                contentDigester(path)
+                                contentDigester(path, shouldContinue)
                             }
                     }
                     result += DesktopLocalSyncDocument(
@@ -203,7 +203,7 @@ internal class DesktopFileSyncLocalTree(
         if (kind == SyncEntryKind.Directory) rememberOrRequireDirectoryIdentity(path, attrs)
         val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let {
             requireSafeAncestors(path, includeLeaf = true, allowMissingTail = false)
-            contentDigester(path)
+            contentDigester(path) { true }
         }
         return DesktopLocalSyncDocument(
             LocalSyncEntry(
@@ -337,7 +337,7 @@ internal class DesktopFileSyncLocalTree(
     ): LocalSyncEntry {
         val parent = requireNotNull(destination.parent)
         requireSafeAncestors(destination, includeLeaf = false, allowMissingTail = false)
-        val expectedContentHash = "sha256:${contentDigester(source.toPath())}"
+        val expectedContentHash = "sha256:${contentDigester(source.toPath()) { true }}"
         val token = UUID.randomUUID().toString()
         val staged = parent.resolve(".${destination.fileName}.nextcloud-native-download-$token")
         val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
@@ -633,12 +633,13 @@ private fun desktopFileChangeToken(path: Path): String? = runCatching {
     Files.getAttribute(path, "unix:ctime", LinkOption.NOFOLLOW_LINKS).toString()
 }.getOrNull()
 
-private fun desktopSha256File(path: Path): String {
+private fun desktopSha256File(path: Path, shouldContinue: () -> Boolean): String {
     val digest = MessageDigest.getInstance("SHA-256")
     Files.newByteChannel(path, setOf(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)).use { channel ->
         Channels.newInputStream(channel).use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (true) {
+                if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
                 val count = input.read(buffer)
                 if (count < 0) break
                 digest.update(buffer, 0, count)
