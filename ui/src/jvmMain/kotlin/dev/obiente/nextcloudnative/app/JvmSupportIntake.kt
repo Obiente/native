@@ -745,7 +745,7 @@ class JvmSupportIntake(
             if (!cancellationPersisted) {
                 call?.cancel()
                 publishState(SupportDiagnosticsSubmissionState.RetryableFailure(
-                    "Cancellation could not be stored safely. Keep the app open and retry to reconcile the private report.",
+                    "Cancellation was not sent because its recovery state could not be stored safely. Keep the app open and retry.",
                     outcomeAmbiguous = true,
                 ))
                 return false
