@@ -968,7 +968,7 @@ private fun LoginScreen(
     var trustingCertificate by remember { mutableStateOf(false) }
     var confirmPlainHttp by remember { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
-    val supportDrafts = remember { SupportSettingsDraftState() }
+    val supportDrafts = remember { SupportSettingsDraftRegistry.loginState() }
     val scope = rememberCoroutineScope()
 
     fun startLogin(

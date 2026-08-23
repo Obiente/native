@@ -1,7 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 internal object SupportSettingsDraftRegistry {
+    private val loginDraftState = SupportSettingsDraftState()
     private val states = linkedMapOf<String, SupportSettingsDraftState>()
+
+    fun loginState(): SupportSettingsDraftState = loginDraftState
 
     fun stateFor(session: NextcloudSession): SupportSettingsDraftState = stateFor(previewCacheDigest(session))
 

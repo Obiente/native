@@ -7,6 +7,21 @@ import kotlin.test.assertSame
 
 class SupportSettingsDraftRegistryTest {
     @Test
+    fun `login draft survives state reacquisition without saved instance data`() {
+        val first = SupportSettingsDraftRegistry.loginState()
+        try {
+            first.updateReportDraft("Private login report draft")
+
+            val restored = SupportSettingsDraftRegistry.loginState()
+
+            assertSame(first, restored)
+            assertEquals("Private login report draft", restored.reportDraft)
+        } finally {
+            first.updateReportDraft("")
+        }
+    }
+
+    @Test
     fun `account draft survives state reacquisition without saved instance data`() {
         val account = "a".repeat(64)
         val first = SupportSettingsDraftRegistry.stateFor(account)
