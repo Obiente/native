@@ -6,6 +6,20 @@ import java.nio.file.FileSystemException
 
 internal class DesktopFileSyncScanStoppedException : RuntimeException()
 
+internal class DesktopFileSyncHttpStatusException(
+    val statusCode: Int,
+    operation: String,
+) : RuntimeException("Could not $operation (HTTP $statusCode).") {
+    init {
+        require(statusCode in 100..599)
+    }
+}
+
+internal class DesktopFileSyncAmbiguousMutationException(cause: IOException) : IOException(
+    "The remote sync mutation ended without a verified result.",
+    cause,
+)
+
 internal class DesktopFileSyncScanLimitException(
     val maximumEntries: Int,
     val observedEntries: Int,
@@ -108,6 +122,15 @@ internal fun DesktopFileSyncProgressEvent.toSupportDiagnosticEventDraft(): Suppo
 }
 
 internal fun desktopFileSyncFailureKind(failure: Throwable): String = when (failure) {
+    is DesktopFileSyncAmbiguousMutationException -> "ambiguous_delivery"
+    is DesktopFileSyncHttpStatusException -> when (failure.statusCode) {
+        401, 403 -> "authorization"
+        409, 412 -> "conflict"
+        429 -> "throttled"
+        in 500..599 -> "server"
+        in 400..499 -> "client"
+        else -> "protocol"
+    }
     is AccessDeniedException, is SecurityException -> "permission_denied"
     is FileSystemException -> "filesystem"
     is IllegalArgumentException -> "precondition"

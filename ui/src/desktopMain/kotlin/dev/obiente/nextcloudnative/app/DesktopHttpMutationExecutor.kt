@@ -33,6 +33,7 @@ internal class DesktopHttpMutationExecutor(client: OkHttpClient) {
         } catch (failure: IOException) {
             if (desktopMutationResultIsAmbiguous(attempt.networkExchangeStarted, failure)) {
                 runCatching(onAmbiguousNetworkResult)
+                throw DesktopFileSyncAmbiguousMutationException(failure)
             }
             throw failure
         }

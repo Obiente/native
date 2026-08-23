@@ -123,7 +123,7 @@ internal class DesktopFileSyncRemoteTree(
             .get()
             .build()
         client.newCall(request).execute().use { response ->
-            require(response.code == 200) { response.failure("download file") }
+            response.requireAccepted(response.code == 200, "download file")
             val declared = response.body.contentLength()
             require(declared == -1L || declared <= maximumBytes) { "The server file exceeds the sync size limit." }
             beforeTransfer(declared.takeIf { it >= 0L })
@@ -339,7 +339,7 @@ internal class DesktopFileSyncRemoteTree(
 
     private fun executeDirectoryListing(request: Request): List<DesktopRemoteSyncDocument> =
         client.newCall(request).execute().use { response ->
-            require(response.code == 207) { response.failure("list folder") }
+            response.requireAccepted(response.code == 207, "list folder")
             parseDesktopSyncDav(
                 input = response.body.byteStream(),
                 userId = userId,
@@ -466,7 +466,7 @@ internal class DesktopFileSyncRemoteTree(
         onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
         onAcceptedResponse = { notifyMutationCommitted(*mutationRelativePaths) },
     ) { response ->
-            require(response.code in 200..299) { response.failure(operation) }
+            response.requireAccepted(response.code in 200..299, operation)
             response.header("ETag") ?: response.header("OC-Etag")
         }
 
@@ -482,7 +482,7 @@ internal class DesktopFileSyncRemoteTree(
         onAcceptedResponse = { notifyMutationCommitted(*mutationRelativePaths) },
     ) { response ->
         val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
-        require(accepted) { response.failure(operation) }
+        response.requireAccepted(accepted, operation)
         response.body.byteStream().readBounded(maximumResponseBytes)
     }
 
@@ -493,7 +493,7 @@ internal class DesktopFileSyncRemoteTree(
         maximumResponseBytes: Long = MAX_ERROR_RESPONSE_BYTES,
     ): ByteArray = client.newCall(request).execute().use { response ->
         val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
-        require(accepted) { response.failure(operation) }
+        response.requireAccepted(accepted, operation)
         response.body.byteStream().readBounded(maximumResponseBytes)
     }
 
@@ -869,8 +869,8 @@ private fun java.io.InputStream.copyBoundedTo(output: java.io.OutputStream, maxi
     }
 }
 
-private fun okhttp3.Response.failure(operation: String): String =
-    "Could not $operation (HTTP $code)."
+private fun okhttp3.Response.requireAccepted(accepted: Boolean, operation: String): Unit =
+    if (accepted) Unit else throw DesktopFileSyncHttpStatusException(code, operation)
 
 private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .followRedirects(false)

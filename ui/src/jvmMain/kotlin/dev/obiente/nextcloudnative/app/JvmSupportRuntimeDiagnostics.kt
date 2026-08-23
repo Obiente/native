@@ -40,7 +40,7 @@ internal fun captureJvmSupportRuntimeSnapshot(): SupportRuntimeSnapshot {
             nonHeapCommittedBytes = management.nonHeapCommittedBytes,
             nonHeapMaximumBytes = management.nonHeapMaximumBytes,
             processUptimeMillis = management.processUptimeMillis,
-            liveThreadCount = management.liveThreadCount ?: runCatching(Thread::activeCount).getOrNull()?.toLong(),
+            liveThreadCount = management.liveThreadCount,
             peakThreadCount = management.peakThreadCount,
             daemonThreadCount = management.daemonThreadCount,
             garbageCollectionCount = management.garbageCollectionCount,

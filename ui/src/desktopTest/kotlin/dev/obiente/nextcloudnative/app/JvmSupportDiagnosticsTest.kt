@@ -435,6 +435,7 @@ class JvmSupportDiagnosticsTest {
                 File(root, "redaction-key-v1").readText().trim(),
             ).forEach { privateValue -> assertFalse(privateValue in combined, privateValue) }
             assertTrue("Reports are never uploaded automatically" in combined)
+            assertTrue("one-time runtime snapshot of memory, buffers, uptime, threads" in combined)
             assertTrue("\"eventCount\":1" in combined)
             assertTrue("<local-path:" in combined)
             val manifest = JSONObject(

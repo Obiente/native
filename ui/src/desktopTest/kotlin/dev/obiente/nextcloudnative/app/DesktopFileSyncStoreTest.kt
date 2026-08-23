@@ -441,8 +441,12 @@ class DesktopFileSyncStoreTest {
             val restored = store.loadPair(pair.id)
 
             assertEquals(
-                FileSyncExecutionState.Ready,
+                FileSyncExecutionState.Failed,
                 restored.coordinator.pairs.single().workItems.single().state,
+            )
+            assertEquals(
+                INTERRUPTED_FILE_SYNC_FAILURE_MESSAGE,
+                restored.coordinator.pairs.single().workItems.single().failureMessage,
             )
             assertEquals(pair.configuration, restored.coordinator.pairs.single().configuration)
             assertEquals(expected.roots, restored.roots)

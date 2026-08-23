@@ -9,8 +9,9 @@ import kotlinx.serialization.json.Json
  * Strict, versioned persistence for the transport-neutral sync coordinator.
  *
  * Platform stores must atomically publish these bytes. Credentials, absolute local paths, and file
- * contents are deliberately absent. Work persisted as running is restored as ready because an
- * interrupted executor has not supplied a verified completion result.
+ * contents are deliberately absent. Work persisted as running is restored as failed because an
+ * interrupted executor has not supplied a verified completion result. A fresh scan reconciles the
+ * postcondition before the retry policy can make that work executable again.
  */
 fun encodeFileSyncCoordinatorSnapshot(state: FileSyncCoordinatorState): ByteArray {
     val validated = FileSyncCoordinatorState(state.pairs)

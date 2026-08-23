@@ -616,7 +616,8 @@ private fun supportBundleReadme(): String = """
     are anonymized, but you should still review that text before sharing the report.
 
     Files:
-    - report.json: app, platform, feature, and user-supplied reproduction context
+    - report.json: app, platform, feature, reproduction context, bounded event-history metadata, and
+      a one-time runtime snapshot of memory, buffers, uptime, threads, and garbage collection where available
     - events.jsonl: bounded structured application events in chronological order
     - manifest.json: byte size and SHA-256 digest for each report payload
 

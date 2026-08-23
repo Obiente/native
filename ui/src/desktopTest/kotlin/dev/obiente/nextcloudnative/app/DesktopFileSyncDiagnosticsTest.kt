@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -27,5 +28,17 @@ class DesktopFileSyncDiagnosticsTest {
         assertEquals("SYNC_SCAN_LIMIT_EXCEEDED", event.code)
         assertEquals("pair-private", pair.value)
         assertEquals(SupportDiagnosticValuePrivacy.Identifier, pair.privacy)
+    }
+
+    @Test
+    fun `remote failures retain actionable delivery semantics`() {
+        assertEquals("authorization", desktopFileSyncFailureKind(DesktopFileSyncHttpStatusException(403, "write")))
+        assertEquals("conflict", desktopFileSyncFailureKind(DesktopFileSyncHttpStatusException(412, "write")))
+        assertEquals("throttled", desktopFileSyncFailureKind(DesktopFileSyncHttpStatusException(429, "write")))
+        assertEquals("server", desktopFileSyncFailureKind(DesktopFileSyncHttpStatusException(503, "write")))
+        assertEquals(
+            "ambiguous_delivery",
+            desktopFileSyncFailureKind(DesktopFileSyncAmbiguousMutationException(IOException("closed"))),
+        )
     }
 }
