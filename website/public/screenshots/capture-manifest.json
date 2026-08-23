@@ -294,7 +294,7 @@
         "settings.gradle.kts": "0acbe4b907815189abfedb2256c8659558e5a7e6995a3681a2bdfb05e335fd1a",
         "tools/marketing-capture-inputs.txt": "3c96e83e1ba2d715b1cda9cedf036fc97b78c3ca63b7fc930325ed536940c1f3",
         "ui/build.gradle.kts": "d059de12ee24196c9f27dbd383e9c36e57ad22331430c9d54f8d43f9a2e5f229",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AccountSettingsScreen.kt": "eef3ad1bbe83939f12a1b59c701ce9303faf27a0da9b9f422ca6682bef8e5da6",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AccountSettingsScreen.kt": "6934031d13a01ce6bd013b73d4a94baf6df405457f888e3540c5f2fa063faa66",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivitySemantics.kt": "625e281281f28e5a2d0497626efc882f4fb2b5e778fcbdcac34425c853f83730",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt": "17eee9756397bf7ecc589f781a3a405e12451a26fdbd41e6e35bb4747806b1d4",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AdminAppManagement.kt": "b11fbc2c93ab17a20f123c8bde25a993c612ffb1b1525329a7e341952fefbf7d",
