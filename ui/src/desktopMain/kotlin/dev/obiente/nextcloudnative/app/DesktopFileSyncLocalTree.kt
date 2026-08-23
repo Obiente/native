@@ -29,12 +29,14 @@ internal data class DesktopLocalSyncDocument(
 internal class DesktopFileSyncLocalTree(
     root: File,
     private val changeTokenProvider: (Path) -> String? = ::desktopFileChangeToken,
-    private val contentDigester: (Path) -> String = ::desktopSha256File,
+    private val maximumEntries: Int = MAX_ENTRIES,
+    private val contentDigester: (Path, () -> Boolean) -> String = ::desktopSha256File,
 ) {
     private val root = root.toPath().toAbsolutePath().normalize()
     private val knownDirectoryIdentities = ConcurrentHashMap<String, LocalDirectoryIdentity>()
 
     init {
+        require(maximumEntries in 1..MAX_ENTRIES)
         require(Files.isDirectory(this.root, LinkOption.NOFOLLOW_LINKS)) {
             "The selected desktop sync folder is no longer available."
         }
@@ -48,16 +50,21 @@ internal class DesktopFileSyncLocalTree(
     fun scan(
         cachedLocalRevisions: Map<String, String> = emptyMap(),
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
+        shouldContinue: () -> Boolean = { true },
     ): List<DesktopLocalSyncDocument> {
         requireSafeAncestors(root, includeLeaf = true, allowMissingTail = false)
         recoverOwnedStagingFiles()
+        preflight(includes, shouldContinue)
         val result = ArrayList<DesktopLocalSyncDocument>()
+        var observedFileCount = 0
+        var observedFileBytes = 0L
         Files.walkFileTree(
             root,
             setOf(),
             MAX_DEPTH,
             object : SimpleFileVisitor<Path>() {
                 override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
                     require(!Files.isSymbolicLink(dir)) {
                         "Folder sync stopped because ${relative(dir)} is a symbolic link."
                     }
@@ -72,6 +79,7 @@ internal class DesktopFileSyncLocalTree(
                 }
 
                 override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
                     if (isOwnedRecoveryPath(file)) return FileVisitResult.CONTINUE
                     require(!Files.isSymbolicLink(file)) {
                         "Folder sync stopped because ${relative(file)} is a symbolic link."
@@ -84,14 +92,25 @@ internal class DesktopFileSyncLocalTree(
                 }
 
                 private fun add(path: Path, attrs: BasicFileAttributes, kind: SyncEntryKind) {
-                    require(result.size < MAX_ENTRIES) { "The desktop folder contains too many entries." }
+                    if (kind == SyncEntryKind.File) {
+                        observedFileCount += 1
+                        observedFileBytes = saturatingAdd(observedFileBytes, attrs.size())
+                    }
+                    if (result.size >= maximumEntries) {
+                        throw DesktopFileSyncScanLimitException(
+                            maximumEntries = maximumEntries,
+                            observedEntries = result.size + 1,
+                            observedFiles = observedFileCount,
+                            observedFileBytes = observedFileBytes,
+                        )
+                    }
                     val relative = relative(path)
                     val metadata = metadataDigest(path, attrs)
                     val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let {
                         reusableContentDigest(cachedLocalRevisions[relative], metadata)
                             ?: run {
                                 requireSafeAncestors(path, includeLeaf = true, allowMissingTail = false)
-                                contentDigester(path)
+                                contentDigester(path, shouldContinue)
                             }
                     }
                     result += DesktopLocalSyncDocument(
@@ -111,6 +130,64 @@ internal class DesktopFileSyncLocalTree(
         return result.sortedBy { it.entry.relativePath }
     }
 
+    /** Counts the selected tree before any file content is hashed. */
+    private fun preflight(
+        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+        shouldContinue: () -> Boolean,
+    ) {
+        var observedEntries = 0
+        var observedFiles = 0
+        var observedFileBytes = 0L
+        Files.walkFileTree(
+            root,
+            setOf(),
+            MAX_DEPTH,
+            object : SimpleFileVisitor<Path>() {
+                override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
+                    require(!Files.isSymbolicLink(dir)) {
+                        "Folder sync stopped because ${relative(dir)} is a symbolic link."
+                    }
+                    if (dir == root) return FileVisitResult.CONTINUE
+                    if (isOwnedRecoveryPath(dir)) return FileVisitResult.SKIP_SUBTREE
+                    val relative = relative(dir)
+                    if (!includes(relative, SyncEntryKind.Directory)) return FileVisitResult.SKIP_SUBTREE
+                    accept(fileBytes = null)
+                    return FileVisitResult.CONTINUE
+                }
+
+                override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                    if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
+                    if (isOwnedRecoveryPath(file)) return FileVisitResult.CONTINUE
+                    require(!Files.isSymbolicLink(file)) {
+                        "Folder sync stopped because ${relative(file)} is a symbolic link."
+                    }
+                    require(attrs.isRegularFile) {
+                        "Folder sync stopped because ${relative(file)} is not a regular file."
+                    }
+                    if (includes(relative(file), SyncEntryKind.File)) accept(attrs.size())
+                    return FileVisitResult.CONTINUE
+                }
+
+                private fun accept(fileBytes: Long?) {
+                    observedEntries += 1
+                    if (fileBytes != null) {
+                        observedFiles += 1
+                        observedFileBytes = saturatingAdd(observedFileBytes, fileBytes)
+                    }
+                    if (observedEntries > maximumEntries) {
+                        throw DesktopFileSyncScanLimitException(
+                            maximumEntries = maximumEntries,
+                            observedEntries = observedEntries,
+                            observedFiles = observedFiles,
+                            observedFileBytes = observedFileBytes,
+                        )
+                    }
+                }
+            },
+        )
+    }
+
     fun resolve(relativePath: String): DesktopLocalSyncDocument? {
         val path = safePath(relativePath)
         requireSafeAncestors(path, includeLeaf = true, allowMissingTail = true)
@@ -126,7 +203,7 @@ internal class DesktopFileSyncLocalTree(
         if (kind == SyncEntryKind.Directory) rememberOrRequireDirectoryIdentity(path, attrs)
         val contentDigest = path.takeIf { kind == SyncEntryKind.File }?.let {
             requireSafeAncestors(path, includeLeaf = true, allowMissingTail = false)
-            contentDigester(path)
+            contentDigester(path) { true }
         }
         return DesktopLocalSyncDocument(
             LocalSyncEntry(
@@ -260,7 +337,7 @@ internal class DesktopFileSyncLocalTree(
     ): LocalSyncEntry {
         val parent = requireNotNull(destination.parent)
         requireSafeAncestors(destination, includeLeaf = false, allowMissingTail = false)
-        val expectedContentHash = "sha256:${contentDigester(source.toPath())}"
+        val expectedContentHash = "sha256:${contentDigester(source.toPath()) { true }}"
         val token = UUID.randomUUID().toString()
         val staged = parent.resolve(".${destination.fileName}.nextcloud-native-download-$token")
         val backup = parent.resolve(".${destination.fileName}.nextcloud-native-backup-$token")
@@ -556,12 +633,13 @@ private fun desktopFileChangeToken(path: Path): String? = runCatching {
     Files.getAttribute(path, "unix:ctime", LinkOption.NOFOLLOW_LINKS).toString()
 }.getOrNull()
 
-private fun desktopSha256File(path: Path): String {
+private fun desktopSha256File(path: Path, shouldContinue: () -> Boolean): String {
     val digest = MessageDigest.getInstance("SHA-256")
     Files.newByteChannel(path, setOf(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)).use { channel ->
         Channels.newInputStream(channel).use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (true) {
+                if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
                 val count = input.read(buffer)
                 if (count < 0) break
                 digest.update(buffer, 0, count)

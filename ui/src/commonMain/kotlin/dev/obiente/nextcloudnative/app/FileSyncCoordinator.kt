@@ -545,21 +545,6 @@ fun resetExhaustedFileSyncOperations(
     )
 }
 
-internal fun recoverInterruptedFileSyncWork(state: FileSyncCoordinatorState): FileSyncCoordinatorState =
-    state.copy(
-        pairs = state.pairs.map { pair ->
-            pair.copy(
-                workItems = pair.workItems.map { work ->
-                    if (work.state == FileSyncExecutionState.Running) {
-                        work.copy(state = FileSyncExecutionState.Ready)
-                    } else {
-                        work
-                    }
-                },
-            )
-        },
-    )
-
 private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSyncDecisionChoice> = when (reason) {
     FileSyncDecisionReason.FirstSyncCollision,
     FileSyncDecisionReason.SimultaneousEdit,

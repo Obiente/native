@@ -91,11 +91,6 @@ internal sealed interface DashboardSurfaceState {
     data class Failed(val message: String) : DashboardSurfaceState
 }
 
-private data class DashboardWidgetsLoad(
-    val widgets: List<NativeDashboardWidget>,
-    val authoritative: Boolean,
-)
-
 private data class DashboardLoadResult(
     val snapshot: NativeDashboardSnapshot,
     val status: NativeUserStatus?,
@@ -463,28 +458,13 @@ internal fun rememberNativeDashboardState(
         runCatching {
             coroutineScope {
                 val widgetsDeferred = async {
-                    runCatching {
-                        val response = services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
-                        if (withContext(Dispatchers.Default) { isDashboardApiUnavailable(response) }) {
-                            DashboardWidgetsLoad(emptyList(), authoritative = false)
-                        } else {
-                            DashboardWidgetsLoad(
-                                withContext(Dispatchers.Default) { parseDashboardWidgets(response) },
-                                authoritative = true,
-                            )
-                        }
-                    }.getOrElse { failure ->
-                        if (failure is CancellationException) throw failure
-                        services.recordSupportDiagnostic(
-                            dashboardLoadFailureDiagnostic(
-                                stage = "widgets",
-                                code = "DASHBOARD_WIDGETS_FAILED",
-                                cachedAvailable = previousSnapshot != null,
-                                severity = SupportDiagnosticSeverity.Error,
-                            ),
-                        )
-                        throw failure
-                    }
+                    acquireDashboardWidgets(
+                        cachedAvailable = previousSnapshot != null,
+                        executeResponse = {
+                            services.executeNextcloudApi(session, dashboardWidgetsRequest(cachePolicy))
+                        },
+                        onDiagnostic = services::recordSupportDiagnostic,
+                    )
                 }
                 val statusDeferred = async {
                     runCatching {
@@ -496,7 +476,7 @@ internal fun rememberNativeDashboardState(
                 }
                 val widgetsLoad = widgetsDeferred.await()
                 if (!widgetsLoad.authoritative) {
-                    val snapshot = previousSnapshot ?: NativeDashboardSnapshot(emptyList(), emptyMap())
+                    val snapshot = dashboardSnapshotForUnavailableWidgets(previousSnapshot)
                     state = DashboardSurfaceState.Available(
                         snapshot,
                         previousStatus,

@@ -112,7 +112,7 @@ class DesktopFileSyncEngineTest {
     }
 
     @Test
-    fun `desktop execution preparation retries a large queue in one state transition`() {
+    fun `desktop execution preparation respects automatic backoff and explicit recovery`() {
         val pair = FileSyncPair(
             id = "pair",
             accountId = "account",
@@ -133,16 +133,20 @@ class DesktopFileSyncEngineTest {
         val retryable = planned.workItems[0].copy(
             state = FileSyncExecutionState.Failed,
             attemptCount = 1,
+            lastAttemptEpochMillis = 1_000L,
             failureMessage = "Temporary failure",
         )
         val exhausted = planned.workItems[1].copy(
             state = FileSyncExecutionState.Failed,
             attemptCount = MAX_FILE_SYNC_ATTEMPTS,
+            lastAttemptEpochMillis = 1_000L,
             failureMessage = "Repeated failure",
         )
         val failed = planned.copy(workItems = listOf(retryable, exhausted))
 
-        val automatic = failed.prepareForDesktopExecution(resetExhaustedFailures = false)
+        val waiting = failed.prepareForDesktopExecution(resetExhaustedFailures = false, nowEpochMillis = 120_999L)
+        assertTrue(waiting.workItems.all { it.state == FileSyncExecutionState.Failed })
+        val automatic = failed.prepareForDesktopExecution(resetExhaustedFailures = false, nowEpochMillis = 121_000L)
         assertEquals(FileSyncExecutionState.Ready, automatic.workItems[0].state)
         assertEquals(FileSyncExecutionState.Failed, automatic.workItems[1].state)
 

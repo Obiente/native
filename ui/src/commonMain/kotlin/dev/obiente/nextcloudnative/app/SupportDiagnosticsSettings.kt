@@ -575,6 +575,7 @@ private fun PrivacyTab(
             "Reports include a stable pseudonymous account scope so maintainers can connect reports from the same " +
                 "account on this installation. It does not contain the account address or login name.",
         )
+        PrivacyPoint(SUPPORT_RUNTIME_DIAGNOSTICS_DISCLOSURE)
         PrivacyPoint(
             "Deleting revokes the live request and removes diagnostics. Backups have separate retention, " +
                 "so immediate deletion from every backup is not guaranteed.",
@@ -677,11 +678,7 @@ private fun SupportDialogs(
         onDismissRequest = { if (!busy) onSend(false) },
         title = { Text("Send this private report?") },
         text = {
-            Text(
-                "Obiente Support receives the text you reviewed, sanitized diagnostics, and release details. " +
-                    "A stable pseudonymous account scope links reports from the same account on this installation. " +
-                    "Authorized maintainers can read it. Retention is 30 days unless you delete it first.",
-            )
+            Text(SUPPORT_SEND_DIAGNOSTICS_DISCLOSURE)
         },
         confirmButton = {
             TextButton(

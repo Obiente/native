@@ -53,7 +53,7 @@ class FileSyncCoordinatorSnapshotTest {
     }
 
     @Test
-    fun `interrupted running command is ready after restart and not considered complete`() {
+    fun `interrupted running command requires reconciliation after restart`() {
         var state = FileSyncCoordinatorState(
             listOf(
                 pair(
@@ -74,8 +74,9 @@ class FileSyncCoordinatorSnapshotTest {
         val restored = decodeFileSyncCoordinatorSnapshot(encodeFileSyncCoordinatorSnapshot(state))
         val restoredPair = restored.pairs.single()
 
-        assertEquals(FileSyncExecutionState.Ready, restoredPair.workItems.single().state)
+        assertEquals(FileSyncExecutionState.Failed, restoredPair.workItems.single().state)
         assertEquals(1, restoredPair.workItems.single().attemptCount)
+        assertEquals(INTERRUPTED_FILE_SYNC_FAILURE_MESSAGE, restoredPair.workItems.single().failureMessage)
         assertEquals(listOf(baseline("note.md", "l1", "r1")), restoredPair.baselines)
     }
 

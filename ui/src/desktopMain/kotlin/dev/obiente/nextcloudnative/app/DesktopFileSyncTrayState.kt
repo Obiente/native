@@ -40,7 +40,7 @@ enum class DesktopFileSyncProgressStage {
     Failed,
 }
 
-data class DesktopFileSyncProgressEvent(
+internal data class DesktopFileSyncProgressEvent(
     val pairId: String,
     val workId: Long,
     val relativePath: String,
@@ -51,6 +51,9 @@ data class DesktopFileSyncProgressEvent(
     val sizeBytes: Long?,
     val stage: DesktopFileSyncProgressStage,
     val failureMessage: String? = null,
+    val attemptCount: Int = 1,
+    val snapshot: DesktopFileSyncSnapshotDiagnostics = DesktopFileSyncSnapshotDiagnostics.Unknown,
+    val failureKind: String? = null,
 ) {
     init {
         require(pairId.isNotBlank())
@@ -60,8 +63,10 @@ data class DesktopFileSyncProgressEvent(
         require(completedOperations in 0..totalOperations)
         require(totalOperations > 0)
         require(sizeBytes == null || sizeBytes >= 0L)
+        require(attemptCount > 0)
         require((stage == DesktopFileSyncProgressStage.Failed) == (failureMessage != null))
         require(failureMessage == null || failureMessage.isNotBlank())
+        require(failureKind == null || failureKind.isNotBlank())
     }
 
     val stableId: String = "$pairId:$workId"

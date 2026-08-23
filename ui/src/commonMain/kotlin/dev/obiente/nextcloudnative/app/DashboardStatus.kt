@@ -139,13 +139,7 @@ internal fun dashboardItemsFetchResult(
 internal fun isDashboardApiUnavailable(response: NextcloudApiResponse): Boolean {
     if (response.status == 404) return true
     if (response.status !in 200..299) return false
-    val statusCode = runCatching {
-        val root = dashboardJson.parseToJsonElement(response.body.decodeToString()).jsonObject
-        val ocs = root["ocs"] as? JsonObject
-        val meta = ocs?.get("meta") as? JsonObject
-        (meta?.get("statuscode") as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
-    }.getOrNull()
-    return statusCode == 404
+    return dashboardOcsStatusCode(response) == 404
 }
 
 internal fun DashboardItemsRequestPlan.v1FallbackRequest(
