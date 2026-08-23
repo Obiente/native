@@ -2895,9 +2895,9 @@ private fun FileOfflineCenterActionResult.offlineCenterActionMessage(): String =
     is FileOfflineCenterActionResult.Rejected -> reason
     is FileOfflineCenterActionResult.Unsupported -> reason
 }
-
 private fun FileSyncCenterActionResult.fileSyncCenterMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message
+    is FileSyncCenterActionResult.Stopped -> message
     is FileSyncCenterActionResult.Rejected -> reason
     is FileSyncCenterActionResult.Unsupported -> reason
 }

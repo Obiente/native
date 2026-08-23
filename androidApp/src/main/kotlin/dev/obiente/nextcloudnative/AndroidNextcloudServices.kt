@@ -146,6 +146,7 @@ import dev.obiente.nextcloudnative.app.isJvmLocalUploadSourceFailure
 import dev.obiente.nextcloudnative.app.requireExactJvmNetworkResponseBytes
 import dev.obiente.nextcloudnative.app.toJvmLocalUploadSourceDiagnosticEvent
 import dev.obiente.nextcloudnative.app.toJvmNetworkFailureDiagnostic
+import dev.obiente.nextcloudnative.app.toFileSyncActionDiagnosticSummary
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
 import dev.obiente.nextcloudnative.app.ambiguousLoginPollResponse
@@ -3698,26 +3699,15 @@ internal class AndroidNextcloudServices(
         fields: List<SupportDiagnosticFieldDraft>,
         result: FileSyncCenterActionResult,
     ) {
+        val diagnostic = result.toFileSyncActionDiagnosticSummary()
         recordSupportDiagnosticForAccountIdentity(
             accountIdentity,
             SupportDiagnosticEventDraft(
-                severity = if (result is FileSyncCenterActionResult.Completed) {
-                    SupportDiagnosticSeverity.Info
-                } else {
-                    SupportDiagnosticSeverity.Warning
-                },
+                severity = diagnostic.severity,
                 component = SupportDiagnosticComponent.Sync,
                 operation = operation,
-                outcome = when (result) {
-                    is FileSyncCenterActionResult.Completed -> "completed"
-                    is FileSyncCenterActionResult.Rejected -> "rejected"
-                    is FileSyncCenterActionResult.Unsupported -> "unsupported"
-                },
-                message = when (result) {
-                    is FileSyncCenterActionResult.Completed -> null
-                    is FileSyncCenterActionResult.Rejected -> result.reason
-                    is FileSyncCenterActionResult.Unsupported -> result.reason
-                },
+                outcome = diagnostic.outcome,
+                message = diagnostic.message,
                 fields = fields,
             ),
         )

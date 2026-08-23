@@ -2941,6 +2941,7 @@ class DesktopNextcloudServices(
                 )
                 try {
                     var failures = 0
+                    var stopped = 0
                     var waitingForConditions = 0
                     initial.pairs.forEach { pair ->
                         if (isFileSyncPaused()) return@forEach
@@ -2968,21 +2969,17 @@ class DesktopNextcloudServices(
                             return@forEach
                         }
                         if (result is FileSyncCenterActionResult.Rejected) failures += 1
+                        if (result is FileSyncCenterActionResult.Stopped) stopped += 1
                         if (source != DesktopFileSyncRunSource.Tray && !runtimeAllowsPair()) {
                             waitingForConditions += 1
                         }
                     }
-                    if (failures == 0) {
-                        FileSyncCenterActionResult.Completed(
-                            if (waitingForConditions == 0) {
-                                "All desktop sync folders were checked."
-                            } else {
-                                "$waitingForConditions desktop sync folder(s) are waiting for their network or power rules."
-                            },
-                        )
-                    } else {
-                        FileSyncCenterActionResult.Rejected("$failures desktop sync folders need attention.")
-                    }
+                    desktopFileSyncBatchResult(
+                        failures,
+                        stopped,
+                        waitingForConditions,
+                        isFileSyncPaused(),
+                    )
                 } finally {
                     runCatching {
                         publishFileSyncTraySnapshot(
@@ -3157,26 +3154,15 @@ class DesktopNextcloudServices(
         fields: List<SupportDiagnosticFieldDraft>,
         result: FileSyncCenterActionResult,
     ) {
+        val diagnostic = result.toFileSyncActionDiagnosticSummary()
         supportDiagnostics.recordForAccountIdentity(
             accountId,
             SupportDiagnosticEventDraft(
-                severity = if (result is FileSyncCenterActionResult.Completed) {
-                    SupportDiagnosticSeverity.Info
-                } else {
-                    SupportDiagnosticSeverity.Warning
-                },
+                severity = diagnostic.severity,
                 component = SupportDiagnosticComponent.Sync,
                 operation = operation,
-                outcome = when (result) {
-                    is FileSyncCenterActionResult.Completed -> "completed"
-                    is FileSyncCenterActionResult.Rejected -> "rejected"
-                    is FileSyncCenterActionResult.Unsupported -> "unsupported"
-                },
-                message = when (result) {
-                    is FileSyncCenterActionResult.Completed -> null
-                    is FileSyncCenterActionResult.Rejected -> result.reason
-                    is FileSyncCenterActionResult.Unsupported -> result.reason
-                },
+                outcome = diagnostic.outcome,
+                message = diagnostic.message,
                 fields = fields,
             ),
         )

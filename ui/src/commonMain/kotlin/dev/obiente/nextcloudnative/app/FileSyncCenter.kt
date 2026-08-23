@@ -244,6 +244,12 @@ sealed interface FileSyncCenterActionResult {
         }
     }
 
+    data class Stopped(val message: String) : FileSyncCenterActionResult {
+        init {
+            require(message.isSafeFileSyncCenterText(1_024))
+        }
+    }
+
     data class Rejected(
         val reason: String,
         val scope: FileSyncRejectionScope = FileSyncRejectionScope.Items,

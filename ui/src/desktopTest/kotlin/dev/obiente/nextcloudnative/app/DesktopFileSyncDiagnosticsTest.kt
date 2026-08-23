@@ -41,4 +41,20 @@ class DesktopFileSyncDiagnosticsTest {
             desktopFileSyncFailureKind(DesktopFileSyncAmbiguousMutationException(IOException("closed"))),
         )
     }
+
+    @Test
+    fun `remote byte diagnostics preserve missing file sizes`() {
+        val directory = RemoteSyncEntry("Photos", SyncEntryKind.Directory, "directory")
+        val known = RemoteSyncEntry("Photos/known.jpg", SyncEntryKind.File, "known", size = 0L)
+        val unknown = RemoteSyncEntry("Photos/unknown.jpg", SyncEntryKind.File, "unknown")
+
+        assertEquals(
+            "0",
+            desktopFileSyncSnapshotDiagnostics(emptyList(), listOf(directory, known)).remoteFileBytesBucket,
+        )
+        assertEquals(
+            "unknown",
+            desktopFileSyncSnapshotDiagnostics(emptyList(), listOf(directory, known, unknown)).remoteFileBytesBucket,
+        )
+    }
 }

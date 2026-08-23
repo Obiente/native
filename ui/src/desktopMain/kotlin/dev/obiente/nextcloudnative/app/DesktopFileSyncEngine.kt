@@ -290,7 +290,7 @@ internal class DesktopFileSyncEngine(
         val localEntries = try {
             local.scan(cachedLocalRevisions, includes, shouldContinue).map(DesktopLocalSyncDocument::entry)
         } catch (_: DesktopFileSyncScanStoppedException) {
-            return FileSyncCenterActionResult.Completed("The folder scan stopped before making changes.")
+            return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
         } catch (failure: DesktopFileSyncScanLimitException) {
             onDiagnostic(failure.toDesktopFileSyncRunDiagnosticEvent(pairId, DesktopFileSyncScanStage.Local))
             throw failure

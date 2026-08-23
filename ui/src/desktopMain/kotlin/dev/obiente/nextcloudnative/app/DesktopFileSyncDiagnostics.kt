@@ -170,8 +170,13 @@ private fun List<LocalSyncEntry>.saturatingLocalFileBytes(): Long = fold(0L) { t
     saturatingAdd(total, entry.size ?: 0L)
 }
 
-private fun List<RemoteSyncEntry>.saturatingRemoteFileBytes(): Long = fold(0L) { total, entry ->
-    saturatingAdd(total, entry.size ?: 0L)
+private fun List<RemoteSyncEntry>.saturatingRemoteFileBytes(): Long? {
+    var total = 0L
+    for (entry in this) {
+        if (entry.kind != SyncEntryKind.File) continue
+        total = saturatingAdd(total, entry.size ?: return null)
+    }
+    return total
 }
 
 private fun FileSyncOperation.desktopFileSyncOperationCode(): String = when (this) {

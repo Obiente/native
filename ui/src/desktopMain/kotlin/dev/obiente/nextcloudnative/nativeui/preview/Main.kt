@@ -411,6 +411,7 @@ internal fun runOnAwtEventThread(action: () -> Unit) {
 
 private fun FileSyncCenterActionResult.trayMessage(): String = when (this) {
     is FileSyncCenterActionResult.Completed -> message
+    is FileSyncCenterActionResult.Stopped -> message
     is FileSyncCenterActionResult.Rejected -> reason
     is FileSyncCenterActionResult.Unsupported -> reason
 }
