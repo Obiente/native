@@ -230,8 +230,16 @@ internal class AndroidFileSyncRemoteTree(
     fun createChunkUpload(
         uploadId: String,
         relativePath: String,
+        allowExistingSession: Boolean,
         cancellation: DocumentRequestCancellation,
-    ): Boolean = webDav.createChunkUpload(session, userId, uploadId, fullPath(relativePath), cancellation)
+    ): Boolean = webDav.createChunkUpload(
+        session,
+        userId,
+        uploadId,
+        fullPath(relativePath),
+        allowExistingSession,
+        cancellation,
+    )
 
     fun uploadChunk(
         uploadId: String,

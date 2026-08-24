@@ -257,7 +257,8 @@ class NextcloudDocumentWebDavTest {
                     "alice",
                     uploadId,
                     "Shared/archive.bin",
-                    TestCancellation(),
+                    allowExistingSession = false,
+                    cancellation = TestCancellation(),
                 ),
             )
             client.uploadChunk(
@@ -299,27 +300,41 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
-    fun chunkCollectionDistinguishesExistingSessionFromMissingParent() = RecordingServer().use { server ->
+    fun chunkCollectionDistinguishesUnsupportedFreshExistingAndMissingParent() = RecordingServer().use { server ->
+        server.enqueue(405)
         server.enqueue(405)
         server.enqueue(409)
         val client = NextcloudDocumentWebDav()
 
-        assertFalse(
+        val unsupported = assertFailsWith<DocumentWebDavException> {
             client.createChunkUpload(
                 server.session,
                 "alice",
                 "01234567-89ab-cdef-0123-456789abcdef",
                 "Shared/archive.bin",
-                TestCancellation(),
+                allowExistingSession = false,
+                cancellation = TestCancellation(),
+            )
+        }
+        assertEquals(405, unsupported.status)
+        assertFalse(
+            client.createChunkUpload(
+                server.session,
+                "alice",
+                "11234567-89ab-cdef-0123-456789abcdef",
+                "Shared/archive.bin",
+                allowExistingSession = true,
+                cancellation = TestCancellation(),
             ),
         )
         val failure = assertFailsWith<DocumentWebDavException> {
             client.createChunkUpload(
                 server.session,
                 "alice",
-                "11234567-89ab-cdef-0123-456789abcdef",
+                "21234567-89ab-cdef-0123-456789abcdef",
                 "Missing/archive.bin",
-                TestCancellation(),
+                allowExistingSession = false,
+                cancellation = TestCancellation(),
             )
         }
         assertEquals(409, failure.status)

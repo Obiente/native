@@ -294,6 +294,7 @@ internal class NextcloudDocumentWebDav(
         userId: String,
         uploadId: String,
         destinationPath: String,
+        allowExistingSession: Boolean,
         cancellation: DocumentRequestCancellation,
     ): Boolean = try {
         execute(
@@ -307,7 +308,7 @@ internal class NextcloudDocumentWebDav(
         )
         true
     } catch (failure: DocumentWebDavException) {
-        if (failure.status == 405) false else throw failure
+        if (allowExistingSession && failure.status == 405) false else throw failure
     }
 
     fun uploadChunk(

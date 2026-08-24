@@ -92,16 +92,19 @@ internal class AndroidIncomingShareFileTransfer(
                     ?: error("No safe available name remains for $displayName.")
                 val uploadId = UUID.randomUUID().toString()
                 current = store.beginChunkSession(requestId, fileIndex, targetName, uploadId)
-                if (!remote.createChunkUpload(uploadId, targetName, cancellation)) {
-                    current = store.clearChunkSession(requestId)
-                    continue
-                }
+                remote.createChunkUpload(
+                    uploadId,
+                    targetName,
+                    allowExistingSession = false,
+                    cancellation = cancellation,
+                )
             } else {
                 require(existingUpload.fileIndex == fileIndex)
                 val recreated = remote.createChunkUpload(
                     existingUpload.uploadId,
                     existingUpload.targetName,
-                    cancellation,
+                    allowExistingSession = true,
+                    cancellation = cancellation,
                 )
                 if (shouldResetIncomingShareChunkProgress(recreated, existingUpload.uploadedChunks)) {
                     current = store.clearChunkSession(requestId)
