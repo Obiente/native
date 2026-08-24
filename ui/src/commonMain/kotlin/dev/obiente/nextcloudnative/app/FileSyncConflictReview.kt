@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -63,6 +64,14 @@ internal fun FileSyncConflictBlock(
                             enabled = actionsEnabled,
                             onClick = { onResolveBatch(conflicts, choice) },
                             modifier = Modifier.weight(1f),
+                            colors = if (choice.isDestructiveSyncDecision()) {
+                                ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                )
+                            } else {
+                                ButtonDefaults.buttonColors()
+                            },
                         ) {
                             Text("${choice.syncDecisionTitle()} all", maxLines = 1)
                         }
@@ -102,6 +111,13 @@ internal fun FileSyncConflictBlock(
                                 enabled = actionsEnabled,
                                 onClick = { onResolve(conflict, choice) },
                                 modifier = Modifier.weight(1f),
+                                colors = if (choice.isDestructiveSyncDecision()) {
+                                    ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error,
+                                    )
+                                } else {
+                                    ButtonDefaults.outlinedButtonColors()
+                                },
                             ) { Text(choice.syncDecisionTitle(), maxLines = 1) }
                         }
                         if (choices.size == 1) Spacer(Modifier.weight(1f))
@@ -160,6 +176,9 @@ private fun FileSyncDecisionChoice.syncDecisionTitle(): String = when (this) {
     FileSyncDecisionChoice.RestoreMissing -> "Restore missing copy"
     FileSyncDecisionChoice.Skip -> "Skip this version"
 }
+
+internal fun FileSyncDecisionChoice.isDestructiveSyncDecision(): Boolean =
+    this == FileSyncDecisionChoice.PropagateDeletion
 
 private fun FileSyncConflictSideSummary.syncConflictSideDescription(): String = buildString {
     append(if (kind == SyncEntryKind.File) "File" else "Folder")

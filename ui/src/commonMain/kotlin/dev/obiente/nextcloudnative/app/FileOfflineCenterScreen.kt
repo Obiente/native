@@ -1137,6 +1137,14 @@ internal fun FileOfflineCenterScreen(
             confirmButton = {
                 Button(
                     enabled = target.pair.id !in syncBusyPairIds,
+                    colors = if (target.choice.isDestructiveSyncDecision()) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
                     onClick = {
                         pendingSyncDecision = null
                         resolveSyncConflict(target)
