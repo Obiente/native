@@ -250,26 +250,32 @@ private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
         listNetwork = base.listNetwork,
         createDirectoryIfAbsent = { path ->
             val parent = path.substringBeforeLast('/', "")
-            val access = AndroidFileSyncRemoteTree(session, userId, parent, webDav).directoryAccess()
+            val access = inspectIncomingShareDirectoryAccess(session, userId, parent, webDav)
             require(access.canCreateDirectories) {
                 "This Nextcloud folder does not allow creating subfolders."
             }
             base.createDirectoryIfAbsent(path)
         },
         selectionAccess = { path ->
-            val remote = AndroidFileSyncRemoteTree(
-                session,
-                userId,
-                path,
-                webDav,
-            )
-            if (remote.directoryAccess().canCreateFiles) {
+            if (inspectIncomingShareDirectoryAccess(session, userId, path, webDav).canCreateFiles) {
                 RemoteFolderSelectionAccess.Allowed
             } else {
                 RemoteFolderSelectionAccess.Denied("This Nextcloud folder is read-only for this account.")
             }
         },
     )
+}
+
+private suspend fun inspectIncomingShareDirectoryAccess(
+    session: NextcloudSession,
+    userId: String,
+    path: String,
+    webDav: NextcloudDocumentWebDav,
+): DocumentDirectoryAccess = withContext(Dispatchers.IO) {
+    val job = requireNotNull(coroutineContext[Job])
+    CoroutineDocumentRequestCancellation(job).use { cancellation ->
+        AndroidFileSyncRemoteTree(session, userId, path, webDav).directoryAccess(cancellation)
+    }
 }
 
 internal fun AndroidIncomingShareRequest.toPresentation(): IncomingShareUploadPresentation =
