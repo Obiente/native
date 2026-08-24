@@ -52,12 +52,13 @@ internal fun verifyAndroidRemoteDeletionContent(
         if (!budget.reserve(expectedBytes)) {
             return@map entry.copy(contentIdentityUnverified = true)
         }
+        val verifiedBytes = requireNotNull(expectedBytes)
         val localHash = requireNotNull(
             local.contentHash(
                 path = entry.relativePath,
                 expectedLocalRevision = entry.revision,
-                expectedBytes = expectedBytes,
-                maximumBytes = maxOf(1L, expectedBytes),
+                expectedBytes = verifiedBytes,
+                maximumBytes = maxOf(1L, verifiedBytes),
             ),
         ) { "The local file could not be verified before applying a remote deletion." }
         entry.copy(contentHash = localHash)
