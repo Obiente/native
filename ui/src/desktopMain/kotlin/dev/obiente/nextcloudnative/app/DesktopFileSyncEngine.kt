@@ -319,7 +319,11 @@ internal class DesktopFileSyncEngine(
             throw failure
         }
         val scannedRemoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
-        val cachedMismatchResults = initialPair.knownFileSyncContentMismatchResults()
+        val cachedMismatchResults = currentFileSyncContentVerificationResults(
+            scannedLocalEntries,
+            scannedRemoteEntries,
+            initialPair.knownFileSyncContentMismatchResults(),
+        )
         val candidates = fileSyncContentVerificationCandidates(
             scannedLocalEntries,
             scannedRemoteEntries,

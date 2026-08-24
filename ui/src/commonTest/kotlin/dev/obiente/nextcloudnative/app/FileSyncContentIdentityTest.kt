@@ -135,6 +135,34 @@ class FileSyncContentIdentityTest {
     }
 
     @Test
+    fun `cached verification is discarded when either generation or size changes`() {
+        val digest = "sha256:" + "cd".repeat(32)
+        val results = listOf(
+            verificationResult("current", "local-1", "remote-1", 42L, digest),
+            verificationResult("local-changed", "local-1", "remote-1", 42L, digest),
+            verificationResult("remote-changed", "local-1", "remote-1", 42L, digest),
+            verificationResult("size-changed", "local-1", "remote-1", 42L, digest),
+        )
+        val local = listOf(
+            fileOnDevice("current", "local-1", 42L),
+            fileOnDevice("local-changed", "local-2", 42L),
+            fileOnDevice("remote-changed", "local-1", 42L),
+            fileOnDevice("size-changed", "local-1", 43L),
+        )
+        val remote = listOf(
+            fileOnServer("current", "remote-1", 42L),
+            fileOnServer("local-changed", "remote-1", 42L),
+            fileOnServer("remote-changed", "remote-2", 42L),
+            fileOnServer("size-changed", "remote-1", 43L),
+        )
+
+        assertEquals(
+            listOf(results.first()),
+            currentFileSyncContentVerificationResults(local, remote, results),
+        )
+    }
+
+    @Test
     fun `automatic verification is bounded per file and per scan`() {
         val candidates = listOf(
             FileSyncContentVerificationCandidate("a", "local-a", "remote-a", 40L),
@@ -171,6 +199,18 @@ class FileSyncContentIdentityTest {
 
     private fun fileOnServer(path: String, etag: String, size: Long, hash: String? = null) =
         RemoteSyncEntry(path, SyncEntryKind.File, etag, size, hash)
+
+    private fun verificationResult(
+        path: String,
+        localRevision: String,
+        remoteEtag: String,
+        size: Long,
+        digest: String,
+    ) = FileSyncContentVerificationResult(
+        FileSyncContentVerificationCandidate(path, localRevision, remoteEtag, size),
+        digest,
+        matchingContentHash = null,
+    )
 
     private companion object {
         val CONFIGURATION = FileSyncConfiguration(deviceLabel = "Test device")

@@ -132,6 +132,32 @@ fun FileSyncPair.knownFileSyncContentMismatchResults(): List<FileSyncContentVeri
         )
     }
 
+/** Keeps cached evidence only while the exact local and remote generations are still present. */
+fun currentFileSyncContentVerificationResults(
+    localEntries: List<LocalSyncEntry>,
+    remoteEntries: List<RemoteSyncEntry>,
+    results: List<FileSyncContentVerificationResult>,
+): List<FileSyncContentVerificationResult> {
+    requireUniqueSyncContentPaths(localEntries.map(LocalSyncEntry::relativePath), "local")
+    requireUniqueSyncContentPaths(remoteEntries.map(RemoteSyncEntry::relativePath), "remote")
+    requireUniqueSyncContentPaths(results.map { it.candidate.relativePath }, "content verification")
+    val localByPath = localEntries.associateBy(LocalSyncEntry::relativePath)
+    val remoteByPath = remoteEntries.associateBy(RemoteSyncEntry::relativePath)
+    return results.filter { result ->
+        val candidate = result.candidate
+        val local = localByPath[candidate.relativePath]
+        val remote = remoteByPath[candidate.relativePath]
+        local?.kind == SyncEntryKind.File &&
+            remote?.kind == SyncEntryKind.File &&
+            local.revision == candidate.localRevision &&
+            remote.etag == candidate.remoteEtag &&
+            (candidate.expectedSizeBytes == null || (
+                local.size == candidate.expectedSizeBytes &&
+                    remote.size == candidate.expectedSizeBytes
+                ))
+    }
+}
+
 internal fun requireValidFileSyncContentMismatchEvidence(work: FileSyncWorkItem) {
     require(
         work.contentMismatchVerified == (work.contentMismatchLocalHash != null) &&

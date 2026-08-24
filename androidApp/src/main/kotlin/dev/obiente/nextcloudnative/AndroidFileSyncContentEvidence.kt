@@ -8,15 +8,35 @@ import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 
+internal class AndroidFileSyncContentReadBudget(
+    private val maximumFileBytes: Long = MAX_FILE_SYNC_IDENTITY_FILE_BYTES,
+    maximumTotalBytes: Long = MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES,
+) {
+    var remainingBytes: Long = maximumTotalBytes
+        private set
+
+    init {
+        require(maximumFileBytes >= 0L && maximumTotalBytes >= 0L)
+    }
+
+    fun reserve(expectedBytes: Long?): Boolean {
+        if (expectedBytes == null) return false
+        require(expectedBytes >= 0L)
+        if (expectedBytes > maximumFileBytes || expectedBytes > remainingBytes) return false
+        remainingBytes -= expectedBytes
+        return true
+    }
+}
+
 internal fun verifyAndroidRemoteDeletionContent(
     localEntries: List<LocalSyncEntry>,
     remoteEntries: List<RemoteSyncEntry>,
     baselines: List<FileSyncBaseline>,
     local: AndroidFileSyncLocalTree,
+    budget: AndroidFileSyncContentReadBudget,
 ): List<LocalSyncEntry> {
     val remotePaths = remoteEntries.mapTo(mutableSetOf(), RemoteSyncEntry::relativePath)
     val baselineByPath = baselines.associateBy(FileSyncBaseline::relativePath)
-    var remainingBytes = MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES
     return localEntries.map { entry ->
         val baseline = baselineByPath[entry.relativePath]
         if (
@@ -29,14 +49,9 @@ internal fun verifyAndroidRemoteDeletionContent(
             return@map entry
         }
         val expectedBytes = entry.size
-        if (
-            expectedBytes == null ||
-            expectedBytes > MAX_FILE_SYNC_IDENTITY_FILE_BYTES ||
-            expectedBytes > remainingBytes
-        ) {
+        if (!budget.reserve(expectedBytes)) {
             return@map entry.copy(contentIdentityUnverified = true)
         }
-        remainingBytes -= expectedBytes
         val localHash = requireNotNull(
             local.contentHash(
                 path = entry.relativePath,
@@ -52,9 +67,11 @@ internal fun verifyAndroidRemoteDeletionContent(
 internal fun validateAndroidCachedMismatchContent(
     cached: List<FileSyncContentVerificationResult>,
     local: AndroidFileSyncLocalTree,
+    budget: AndroidFileSyncContentReadBudget,
 ): List<FileSyncContentVerificationResult> = cached.mapNotNull { result ->
     val candidate = result.candidate
     val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
+    if (!budget.reserve(expectedBytes)) return@mapNotNull null
     val currentHash = local.contentHash(
         path = candidate.relativePath,
         expectedLocalRevision = candidate.localRevision,
