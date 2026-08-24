@@ -74,7 +74,7 @@ class NextcloudDocumentWebDavTest {
     @Test
     fun remoteSyncContentIdentityReadsAndHashesTheExactEtagGeneration() = RecordingServer().use { server ->
         server.enqueue(200, mapOf("ETag" to "\"note-7\""), body = "same note")
-        server.enqueue(200, mapOf("ETag" to "\"note-7\""), body = "different note")
+        server.enqueue(200, mapOf("ETag" to "\"note-7\""), body = "else note")
         val remote = AndroidFileSyncRemoteTree(
             server.session,
             "alice",
@@ -83,8 +83,16 @@ class NextcloudDocumentWebDavTest {
         )
         val expected = "sha256:8b4c848f9c906b8b340c2400c9aa8fdc1c9d5db557bad1b6aabdd9aabe3eb6e9"
 
-        assertTrue(remote.verifyContentHash("Notes/today.md", "\"note-7\"", expected, maximumBytes = 1_024L))
-        assertTrue(!remote.verifyContentHash("Notes/today.md", "\"note-7\"", expected, maximumBytes = 1_024L))
+        assertTrue(
+            remote.verifyContentHash(
+                "Notes/today.md", "\"note-7\"", expected, expectedBytes = 9L, maximumBytes = 1_024L,
+            ),
+        )
+        assertTrue(
+            !remote.verifyContentHash(
+                "Notes/today.md", "\"note-7\"", expected, expectedBytes = 9L, maximumBytes = 1_024L,
+            ),
+        )
         repeat(2) { index ->
             val request = server.request(index)
             assertEquals("GET", request.method)
