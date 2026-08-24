@@ -144,6 +144,16 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
+    fun recreatedExpiredChunkCollectionDiscardsPersistedProgress() {
+        assertTrue(shouldResetIncomingShareChunkProgress(collectionCreated = true, uploadedChunks = 3))
+        assertFalse(shouldResetIncomingShareChunkProgress(collectionCreated = false, uploadedChunks = 3))
+        assertFalse(shouldResetIncomingShareChunkProgress(collectionCreated = true, uploadedChunks = 0))
+        assertFailsWith<IllegalArgumentException> {
+            shouldResetIncomingShareChunkProgress(collectionCreated = true, uploadedChunks = -1)
+        }
+    }
+
+    @Test
     fun throttledFinalMoveIsARejectedRatherThanAmbiguousMutation() {
         val throttled = DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
 
@@ -153,11 +163,11 @@ class AndroidIncomingShareStateTest {
 
     @Test
     fun collisionResponsesAdvanceNamesWithoutBecomingUnknownOutcomes() {
-        assertTrue(
+        assertFalse(
             DocumentWebDavException(
                 DocumentWebDavError.AlreadyExists,
                 409,
-                "Already exists",
+                "Parent is missing",
             ).isIncomingShareNameCollision(),
         )
         assertTrue(
@@ -173,6 +183,27 @@ class AndroidIncomingShareStateTest {
                 403,
                 "Forbidden",
             ).isIncomingShareNameCollision(),
+        )
+    }
+
+    @Test
+    fun canceledMutationRemainsVisibleAsAnUnknownFileOutcome() {
+        val canceled = request(AndroidIncomingShareState.Canceled).copy(
+            message = CANCELED_INCOMING_SHARE_MUTATION_WARNING,
+        )
+
+        assertTrue(canceled.requiresIncomingShareRecovery("account-1"))
+        assertEquals(
+            dev.obiente.nextcloudnative.app.IncomingShareUploadFileStatus.OutcomeUnknown,
+            canceled.toPresentation().files.first().status,
+        )
+        assertFalse(
+            canceled.copy(accountId = "another-account")
+                .requiresIncomingShareRecovery("account-1"),
+        )
+        assertFalse(
+            canceled.copy(message = "Upload canceled before a transfer was active.")
+                .requiresIncomingShareRecovery("account-1"),
         )
     }
 

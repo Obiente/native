@@ -92,23 +92,26 @@ internal class AndroidIncomingShareFileTransfer(
                     ?: error("No safe available name remains for $displayName.")
                 val uploadId = UUID.randomUUID().toString()
                 current = store.beginChunkSession(requestId, fileIndex, targetName, uploadId)
-                try {
-                    remote.createChunkUpload(uploadId, targetName, cancellation)
-                } catch (failure: DocumentWebDavException) {
-                    if (!failure.isIncomingShareNameCollision()) throw failure
+                if (!remote.createChunkUpload(uploadId, targetName, cancellation)) {
                     current = store.clearChunkSession(requestId)
                     continue
                 }
             } else {
                 require(existingUpload.fileIndex == fileIndex)
-                runCatching {
-                    remote.createChunkUpload(existingUpload.uploadId, existingUpload.targetName, cancellation)
+                val recreated = remote.createChunkUpload(
+                    existingUpload.uploadId,
+                    existingUpload.targetName,
+                    cancellation,
+                )
+                if (shouldResetIncomingShareChunkProgress(recreated, existingUpload.uploadedChunks)) {
+                    current = store.clearChunkSession(requestId)
+                    current = store.beginChunkSession(
+                        requestId,
+                        fileIndex,
+                        existingUpload.targetName,
+                        existingUpload.uploadId,
+                    )
                 }
-                    .onFailure { failure ->
-                        if (failure !is DocumentWebDavException || !failure.isIncomingShareNameCollision()) {
-                            throw failure
-                        }
-                    }
             }
             var upload = requireNotNull(current.chunkSession)
             val chunkCount = incomingShareChunkCount(stagedFile.length())
@@ -159,4 +162,9 @@ internal class AndroidIncomingShareFileTransfer(
     ): Sequence<String> = incomingShareUploadNameCandidates(displayName, limit = 1_000)
         .asSequence()
         .filterNot(occupiedNames::contains)
+}
+
+internal fun shouldResetIncomingShareChunkProgress(collectionCreated: Boolean, uploadedChunks: Int): Boolean {
+    require(uploadedChunks >= 0)
+    return collectionCreated && uploadedChunks > 0
 }

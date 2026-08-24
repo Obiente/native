@@ -38,4 +38,23 @@ class IncomingFileShareTest {
             incomingShareRemotePath("../Shared", "photo.jpg")
         }
     }
+
+    @Test
+    fun recoveryPrioritizesAResultThatNeedsReview() {
+        val active = recovery("active", IncomingShareUploadState.Uploading)
+        val uncertain = recovery("uncertain", IncomingShareUploadState.OutcomeUnknown)
+
+        assertEquals(uncertain, listOf(active, uncertain).primaryIncomingShareRecovery())
+        assertEquals(active, listOf(active).primaryIncomingShareRecovery())
+        assertEquals(null, emptyList<IncomingShareUploadPresentation>().primaryIncomingShareRecovery())
+    }
+
+    private fun recovery(id: String, state: IncomingShareUploadState) = IncomingShareUploadPresentation(
+        id = id,
+        files = listOf(IncomingShareUploadFilePresentation("file-$id", "$id.txt", 1L)),
+        state = state,
+        destinationPath = "Shared",
+        completedFiles = 0,
+        message = null,
+    )
 }

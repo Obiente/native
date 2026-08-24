@@ -194,6 +194,22 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         AndroidIncomingShareLoadResult.Missing -> error("This shared upload is no longer available.")
     }
 
+    fun listRecoverable(accountId: String): List<AndroidIncomingShareRequest> = synchronized(LOCK) {
+        root.listFiles().orEmpty()
+            .asSequence()
+            .filter(File::isDirectory)
+            .sortedByDescending(File::lastModified)
+            .take(MAX_INCOMING_SHARE_RECOVERY_SCAN)
+            .mapNotNull { directory ->
+                val id = directory.name.takeIf { runCatching { UUID.fromString(it) }.isSuccess }
+                    ?: return@mapNotNull null
+                (loadResult(id) as? AndroidIncomingShareLoadResult.Available)?.request
+            }
+            .filter { request -> request.requiresIncomingShareRecovery(accountId) }
+            .take(MAX_INCOMING_SHARE_FILES)
+            .toList()
+    }
+
     fun save(request: AndroidIncomingShareRequest) = synchronized(LOCK) {
         val directory = directory(request.id)
         require(directory.isDirectory)
@@ -324,6 +340,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val LOCK = Any()
         const val MAX_SHARE_FILE_BYTES = 8L * 1024L * 1024L * 1024L
         const val MAX_SHARE_TOTAL_BYTES = 16L * 1024L * 1024L * 1024L
+        const val MAX_INCOMING_SHARE_RECOVERY_SCAN = 1_000
     }
 }
 
@@ -357,11 +374,16 @@ internal class AndroidIncomingShareUploads(private val context: Context) {
     }
 
     fun cancel(requestId: String) {
+        val current = store.load(requestId)
         val canceled = store.transition(
             id = requestId,
             expected = setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading),
             target = AndroidIncomingShareState.Canceled,
-            message = "Upload canceled. An in-flight file may already have reached Nextcloud.",
+            message = if (current?.state == AndroidIncomingShareState.Uploading) {
+                CANCELED_INCOMING_SHARE_MUTATION_WARNING
+            } else {
+                "Upload canceled before a transfer was active."
+            },
         )
         WorkManager.getInstance(context).cancelUniqueWork(workName(requestId))
         canceled?.let { scheduleIncomingShareCleanup(context, it.id) }
@@ -445,13 +467,13 @@ internal class AndroidIncomingShareUploadWorker(
                 cloudMutationsAllowed = applicationContext.cloudMutationGate(),
             ),
         )
-        val occupiedNames = remote.rootChildNames().names.toMutableSet().apply {
-            addAll(request.uploadedNames)
-        }
         val requestCancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
-        val transfer = AndroidIncomingShareFileTransfer(store, remote, requestCancellation)
         var mutationInFlight = false
         try {
+            val occupiedNames = remote.rootChildNames().names.toMutableSet().apply {
+                addAll(request.uploadedNames)
+            }
+            val transfer = AndroidIncomingShareFileTransfer(store, remote, requestCancellation)
             for (index in request.completedFiles until request.files.size) {
                 ensureNotCanceled(requestId, store)
                 request = transfer.upload(requestId, request, index, occupiedNames) { inFlight ->
@@ -612,7 +634,7 @@ internal class AndroidIncomingShareUploadWorker(
 }
 
 internal fun DocumentWebDavException.isIncomingShareNameCollision(): Boolean =
-    error == DocumentWebDavError.AlreadyExists || error == DocumentWebDavError.Conflict
+    status == 405 || status == 412
 
 internal fun transitionIncomingShareRequest(
     current: AndroidIncomingShareRequest,

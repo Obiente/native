@@ -15,6 +15,8 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -83,6 +85,39 @@ internal fun publishCorruptIncomingShareNotification(context: Context, requestId
     } catch (_: SecurityException) {
         // Permission can be revoked after the explicit check.
     }
+}
+
+internal const val CANCELED_INCOMING_SHARE_MUTATION_WARNING = "Upload canceled. The active file may already have " +
+    "reached Nextcloud; check Files before sharing it again."
+
+internal fun AndroidIncomingShareRequest.requiresIncomingShareRecovery(accountId: String): Boolean {
+    if (this.accountId != null && this.accountId != accountId) return false
+    return state in setOf(
+        AndroidIncomingShareState.Staged,
+        AndroidIncomingShareState.Queued,
+        AndroidIncomingShareState.Uploading,
+        AndroidIncomingShareState.Failed,
+        AndroidIncomingShareState.OutcomeUnknown,
+    ) || state == AndroidIncomingShareState.Canceled && message == CANCELED_INCOMING_SHARE_MUTATION_WARNING
+}
+
+internal suspend fun loadAndroidIncomingShareRecoveries(
+    context: Context,
+    session: NextcloudSession,
+    userId: String,
+): List<IncomingShareUploadPresentation> = withContext(Dispatchers.IO) {
+    require(userId.isNotBlank())
+    AndroidIncomingShareStore(context)
+        .listRecoverable(NextcloudDocumentIds.accountKey(session))
+        .map(AndroidIncomingShareRequest::toPresentation)
+}
+
+internal fun openAndroidIncomingShareRecovery(context: Context, requestId: String) {
+    context.startActivity(
+        Intent(context, AndroidShareUploadActivity::class.java)
+            .putExtra(AndroidShareUploadActivity.KEY_REQUEST_ID, requestId)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+    )
 }
 
 internal val TERMINAL_INCOMING_SHARE_STATES = setOf(

@@ -295,7 +295,7 @@ internal class NextcloudDocumentWebDav(
         uploadId: String,
         destinationPath: String,
         cancellation: DocumentRequestCancellation,
-    ) {
+    ): Boolean = try {
         execute(
             requestBuilder(session, chunkUploadUrl(session, userId, uploadId))
                 .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
@@ -305,6 +305,9 @@ internal class NextcloudDocumentWebDav(
             "start chunked upload",
             cancellation = cancellation,
         )
+        true
+    } catch (failure: DocumentWebDavException) {
+        if (failure.status == 405) false else throw failure
     }
 
     fun uploadChunk(

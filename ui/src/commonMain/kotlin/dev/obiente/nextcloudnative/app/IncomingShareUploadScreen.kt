@@ -63,6 +63,56 @@ data class IncomingShareUploadPresentation(
 )
 
 @Composable
+internal fun IncomingShareRecoveryCard(
+    requests: List<IncomingShareUploadPresentation>,
+    onOpen: (String) -> Unit,
+) {
+    val request = requests.primaryIncomingShareRecovery() ?: return
+    val needsAttention = request.state in setOf(
+        IncomingShareUploadState.Failed,
+        IncomingShareUploadState.OutcomeUnknown,
+        IncomingShareUploadState.Canceled,
+    )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (needsAttention) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (needsAttention) "Shared upload needs review" else "Shared upload in progress",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    "${request.completedFiles} of ${request.files.size} files confirmed" +
+                        if (requests.size == 1) "." else "; ${requests.size} recoverable shares total.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Button(onClick = { onOpen(request.id) }) { Text("Open") }
+        }
+    }
+}
+
+internal fun List<IncomingShareUploadPresentation>.primaryIncomingShareRecovery():
+    IncomingShareUploadPresentation? = firstOrNull { candidate ->
+        candidate.state in setOf(
+            IncomingShareUploadState.Failed,
+            IncomingShareUploadState.OutcomeUnknown,
+            IncomingShareUploadState.Canceled,
+        )
+    } ?: firstOrNull()
+
+@Composable
 fun IncomingShareUploadScreen(
     request: IncomingShareUploadPresentation?,
     accountLabel: String?,
@@ -171,7 +221,7 @@ private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
         IncomingShareUploadState.OutcomeUnknown ->
             "${request.completedFiles} of ${request.files.size} files are confirmed uploaded. " +
                 (request.message ?: "The next file result is unknown. Check Files before trying again.")
-        IncomingShareUploadState.Canceled -> "Upload canceled."
+        IncomingShareUploadState.Canceled -> request.message ?: "Upload canceled."
     }
     if (request.state in setOf(IncomingShareUploadState.Queued, IncomingShareUploadState.Uploading)) {
         LinearProgressIndicator(
@@ -181,7 +231,10 @@ private fun IncomingShareProgress(request: IncomingShareUploadPresentation) {
     }
     Text(
         label,
-        color = if (request.state in setOf(IncomingShareUploadState.Failed, IncomingShareUploadState.OutcomeUnknown)) {
+        color = if (
+            request.state in setOf(IncomingShareUploadState.Failed, IncomingShareUploadState.OutcomeUnknown) ||
+            request.files.any { it.status == IncomingShareUploadFileStatus.OutcomeUnknown }
+        ) {
             MaterialTheme.colorScheme.error
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant

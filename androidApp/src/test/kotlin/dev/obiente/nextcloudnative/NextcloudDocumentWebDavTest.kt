@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
@@ -250,7 +251,15 @@ class NextcloudDocumentWebDavTest {
         try {
             source.writeText("0123456789")
             val client = NextcloudDocumentWebDav()
-            client.createChunkUpload(server.session, "alice", uploadId, "Shared/archive.bin", TestCancellation())
+            assertTrue(
+                client.createChunkUpload(
+                    server.session,
+                    "alice",
+                    uploadId,
+                    "Shared/archive.bin",
+                    TestCancellation(),
+                ),
+            )
             client.uploadChunk(
                 server.session,
                 "alice",
@@ -287,6 +296,33 @@ class NextcloudDocumentWebDavTest {
         } finally {
             source.delete()
         }
+    }
+
+    @Test
+    fun chunkCollectionDistinguishesExistingSessionFromMissingParent() = RecordingServer().use { server ->
+        server.enqueue(405)
+        server.enqueue(409)
+        val client = NextcloudDocumentWebDav()
+
+        assertFalse(
+            client.createChunkUpload(
+                server.session,
+                "alice",
+                "01234567-89ab-cdef-0123-456789abcdef",
+                "Shared/archive.bin",
+                TestCancellation(),
+            ),
+        )
+        val failure = assertFailsWith<DocumentWebDavException> {
+            client.createChunkUpload(
+                server.session,
+                "alice",
+                "11234567-89ab-cdef-0123-456789abcdef",
+                "Missing/archive.bin",
+                TestCancellation(),
+            )
+        }
+        assertEquals(409, failure.status)
     }
 
     @Test

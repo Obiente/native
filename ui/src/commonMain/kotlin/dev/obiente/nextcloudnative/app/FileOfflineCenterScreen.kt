@@ -94,6 +94,9 @@ internal fun FileOfflineCenterScreen(
     var actionMessage by remember(session, userId) { mutableStateOf<String?>(null) }
     var removeTarget by remember(session, userId) { mutableStateOf<FileOfflineCenterItem?>(null) }
     var syncSnapshot by remember(session, userId) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
+    var incomingShareRecoveries by remember(session, userId) {
+        mutableStateOf<List<IncomingShareUploadPresentation>>(emptyList())
+    }
     var syncLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
@@ -443,6 +446,14 @@ internal fun FileOfflineCenterScreen(
     }
 
     LaunchedEffect(session, userId, refreshAttempt) {
+        if (userId.isNotBlank()) {
+            incomingShareRecoveries = runCatching {
+                services.loadIncomingShareRecoveries(session, userId)
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    LaunchedEffect(session, userId, refreshAttempt) {
         if (userId.isBlank() || !services.supportsVirtualFileStorage) return@LaunchedEffect
         virtualStorageLoading = true
         try {
@@ -544,6 +555,10 @@ internal fun FileOfflineCenterScreen(
                 actionMessage?.let { message ->
                     OfflineCenterMessageCard(message, errorTone = false)
                 }
+                IncomingShareRecoveryCard(
+                    requests = incomingShareRecoveries,
+                    onOpen = services::openIncomingShareRecovery,
+                )
                 when (selectedWorkspaceSection) {
                     FileOfflineWorkspaceSection.FolderSync -> {
                         if (services.supportsBidirectionalFileSync) {
@@ -693,6 +708,14 @@ internal fun FileOfflineCenterScreen(
                     }
                     actionMessage?.let { message ->
                         item { OfflineCenterMessageCard(message, errorTone = false) }
+                    }
+                    if (incomingShareRecoveries.isNotEmpty()) {
+                        item {
+                            IncomingShareRecoveryCard(
+                                requests = incomingShareRecoveries,
+                                onOpen = services::openIncomingShareRecovery,
+                            )
+                        }
                     }
                     when (selectedWorkspaceSection) {
                         FileOfflineWorkspaceSection.FolderSync -> {

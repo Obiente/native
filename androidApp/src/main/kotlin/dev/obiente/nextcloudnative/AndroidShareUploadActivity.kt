@@ -36,6 +36,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private lateinit var store: AndroidIncomingShareStore
     private lateinit var uploads: AndroidIncomingShareUploads
     private lateinit var services: AndroidNextcloudServices
+    private lateinit var permissionWebDav: NextcloudDocumentWebDav
     private var request by mutableStateOf<AndroidIncomingShareRequest?>(null)
     private var session by mutableStateOf<NextcloudSession?>(null)
     private var serverInfo by mutableStateOf<NextcloudServerInfo?>(null)
@@ -50,6 +51,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
         store = AndroidIncomingShareStore(applicationContext)
         uploads = AndroidIncomingShareUploads(applicationContext)
         services = AndroidNextcloudServices(applicationContext)
+        permissionWebDav = NextcloudDocumentWebDav(
+            OkHttpClient.Builder().useAndroidNextcloudCertificateTrust(applicationContext).build(),
+            applicationContext.cloudMutationGate(),
+        )
         setContent {
             NextcloudNativeTheme {
                 NextcloudAppBackground {
@@ -60,7 +65,12 @@ class AndroidShareUploadActivity : ComponentActivity() {
                     val activeUserId = serverInfo?.userId
                     val folderOperations = remember(activeSession, activeUserId) {
                         if (activeSession != null && activeUserId != null) {
-                            incomingShareFolderPickerOperations(services, activeSession, activeUserId)
+                            incomingShareFolderPickerOperations(
+                                services,
+                                activeSession,
+                                activeUserId,
+                                permissionWebDav,
+                            )
                         } else {
                             null
                         }
@@ -91,16 +101,22 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 }
             }
         }
-        restoreOrStage(savedInstanceState?.getString(KEY_REQUEST_ID) ?: intent.getStringExtra(KEY_REQUEST_ID))
+        restoreOrStage(
+            sourceIntent = intent,
+            restoredRequestId = savedInstanceState?.getString(KEY_REQUEST_ID)
+                ?: intent.getStringExtra(KEY_REQUEST_ID),
+        )
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent.getStringExtra(KEY_REQUEST_ID)?.let { requestId ->
+        val requestId = intent.getStringExtra(KEY_REQUEST_ID)
+        if (requestId != null || incomingShareUris(intent).isNotEmpty()) {
+            releaseSafeDisplayedRequestForReplacement()
             loading = true
             error = null
-            restoreOrStage(requestId)
+            restoreOrStage(intent, requestId)
         }
     }
 
@@ -109,7 +125,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun restoreOrStage(restoredRequestId: String?) {
+    private fun restoreOrStage(sourceIntent: Intent, restoredRequestId: String?) {
         recoveryRequestId = restoredRequestId
         lifecycleScope.launch {
             try {
@@ -118,7 +134,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 val staged = withContext(Dispatchers.IO) {
                     restoredRequestId?.let { requestId ->
                         store.requireAvailable(requestId)
-                    } ?: store.stage(intent)
+                    } ?: store.stage(sourceIntent)
                 }
                 request = staged
                 recoveryRequestId = staged.id
@@ -130,6 +146,27 @@ class AndroidShareUploadActivity : ComponentActivity() {
             }
             loading = false
         }
+    }
+
+    private fun releaseSafeDisplayedRequestForReplacement() {
+        request?.takeIf { it.state == AndroidIncomingShareState.Staged }?.let { current ->
+            store.transition(
+                current.id,
+                expected = setOf(AndroidIncomingShareState.Staged),
+                target = AndroidIncomingShareState.Canceled,
+                message = "Replaced by a newer share before transfer started.",
+            )
+            scheduleIncomingShareCleanup(applicationContext, current.id)
+        }
+        request?.takeIf { current ->
+            current.state in setOf(AndroidIncomingShareState.Completed, AndroidIncomingShareState.Canceled)
+        }?.let { current -> store.remove(current.id) }
+        request = null
+        session = null
+        serverInfo = null
+        recoveryRequestId = null
+        queueing = false
+        folderPickerVisible = false
     }
 
     private fun enqueue(destinationPath: String) {
@@ -182,6 +219,7 @@ private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,
     session: NextcloudSession,
     userId: String,
+    webDav: NextcloudDocumentWebDav,
 ): RemoteFolderPickerOperations {
     val base = remoteFolderPickerOperations(services, session, userId)
     return RemoteFolderPickerOperations(
@@ -194,10 +232,7 @@ private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
                 session,
                 userId,
                 path,
-                NextcloudDocumentWebDav(
-                    OkHttpClient.Builder().useAndroidNextcloudCertificateTrust(applicationContext).build(),
-                    applicationContext.cloudMutationGate(),
-                ),
+                webDav,
             )
             if (remote.canCreateChildren()) {
                 RemoteFolderSelectionAccess.Allowed
@@ -217,6 +252,9 @@ internal fun AndroidIncomingShareRequest.toPresentation(): IncomingShareUploadPr
                 index == completedFiles && state == AndroidIncomingShareState.Failed ->
                     IncomingShareUploadFileStatus.Failed
                 index == completedFiles && state == AndroidIncomingShareState.OutcomeUnknown ->
+                    IncomingShareUploadFileStatus.OutcomeUnknown
+                index == completedFiles && state == AndroidIncomingShareState.Canceled &&
+                    message == CANCELED_INCOMING_SHARE_MUTATION_WARNING ->
                     IncomingShareUploadFileStatus.OutcomeUnknown
                 else -> IncomingShareUploadFileStatus.Pending
             }
