@@ -118,6 +118,15 @@ class FileSyncContentIdentityTest {
             listOf(FileSyncContentVerificationCandidate("empty", "local", "remote", 0L))
                 .withinFileSyncContentVerificationBudget(maximumFileBytes = 0L, maximumTotalBytes = 0L),
         )
+        assertEquals(
+            listOf(candidates[0]),
+            candidates.withinFileSyncContentVerificationBudget(
+                maximumFileBytes = Long.MAX_VALUE,
+                maximumTotalBytes = Long.MAX_VALUE,
+                maximumCandidates = 1,
+            ),
+        )
+        assertEquals(emptyList(), candidates.withinFileSyncContentVerificationBudget(maximumCandidates = 0))
     }
 
     private fun fileOnDevice(path: String, revision: String, size: Long, hash: String? = null) =

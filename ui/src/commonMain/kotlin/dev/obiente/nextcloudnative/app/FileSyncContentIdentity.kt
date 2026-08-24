@@ -28,6 +28,20 @@ data class VerifiedFileSyncContent(
     }
 }
 
+/** Generation-bound result of an exact local/remote content comparison. */
+data class FileSyncContentVerificationResult(
+    val candidate: FileSyncContentVerificationCandidate,
+    val matchingContentHash: String?,
+) {
+    init {
+        require(matchingContentHash == null || normalizeSyncSha256(matchingContentHash) == matchingContentHash)
+    }
+
+    fun verifiedContent(): VerifiedFileSyncContent? = matchingContentHash?.let { hash ->
+        VerifiedFileSyncContent(candidate, hash)
+    }
+}
+
 data class FileSyncContentIdentitySnapshot(
     val localEntries: List<LocalSyncEntry>,
     val remoteEntries: List<RemoteSyncEntry>,
@@ -41,12 +55,15 @@ fun fileSyncContentVerificationCandidates(
     localEntries: List<LocalSyncEntry>,
     remoteEntries: List<RemoteSyncEntry>,
     baselines: List<FileSyncBaseline>,
+    knownMismatches: List<FileSyncContentVerificationCandidate> = emptyList(),
 ): List<FileSyncContentVerificationCandidate> {
     requireUniqueSyncContentPaths(localEntries.map(LocalSyncEntry::relativePath), "local")
     requireUniqueSyncContentPaths(remoteEntries.map(RemoteSyncEntry::relativePath), "remote")
     requireUniqueSyncContentPaths(baselines.map(FileSyncBaseline::relativePath), "baseline")
+    requireUniqueSyncContentPaths(knownMismatches.map(FileSyncContentVerificationCandidate::relativePath), "mismatch")
     val remoteByPath = remoteEntries.associateBy(RemoteSyncEntry::relativePath)
     val baselineByPath = baselines.associateBy(FileSyncBaseline::relativePath)
+    val mismatchByPath = knownMismatches.associateBy(FileSyncContentVerificationCandidate::relativePath)
     return localEntries.asSequence()
         .filter { it.kind == SyncEntryKind.File }
         .mapNotNull { local ->
@@ -67,6 +84,16 @@ fun fileSyncContentVerificationCandidates(
             ) {
                 return@mapNotNull null
             }
+            if (
+                mismatchByPath[local.relativePath] == FileSyncContentVerificationCandidate(
+                    relativePath = local.relativePath,
+                    localRevision = local.revision,
+                    remoteEtag = remote.etag,
+                    expectedSizeBytes = expectedSize,
+                )
+            ) {
+                return@mapNotNull null
+            }
             FileSyncContentVerificationCandidate(
                 relativePath = local.relativePath,
                 localRevision = local.revision,
@@ -78,6 +105,59 @@ fun fileSyncContentVerificationCandidates(
         .toList()
 }
 
+/** Exact mismatch evidence retained by conflict work while both observed generations stay unchanged. */
+fun FileSyncPair.knownFileSyncContentMismatches(): List<FileSyncContentVerificationCandidate> =
+    workItems.mapNotNull { work ->
+        if (!work.contentMismatchVerified) return@mapNotNull null
+        val local = requireNotNull(work.observedLocal)
+        val remote = requireNotNull(work.observedRemote)
+        FileSyncContentVerificationCandidate(
+            relativePath = work.relativePath,
+            localRevision = local.revision,
+            remoteEtag = remote.etag,
+            expectedSizeBytes = local.size,
+        )
+    }
+
+internal fun requireValidFileSyncContentMismatchEvidence(work: FileSyncWorkItem) {
+    require(
+        !work.contentMismatchVerified || (
+            work.observedLocal?.kind == SyncEntryKind.File &&
+                work.observedRemote?.kind == SyncEntryKind.File &&
+                work.observedLocal.size != null &&
+                work.observedLocal.size == work.observedRemote.size
+            )
+    ) { "Verified mismatch evidence requires equal-size observed files." }
+}
+
+internal fun verifiedFileSyncContentMismatchPaths(
+    mismatches: List<FileSyncContentVerificationCandidate>,
+    localByPath: Map<String, LocalSyncEntry>,
+    remoteByPath: Map<String, RemoteSyncEntry>,
+): Set<String> {
+    requireUniqueSyncContentPaths(
+        mismatches.map(FileSyncContentVerificationCandidate::relativePath),
+        "verified mismatch",
+    )
+    return mismatches.mapTo(mutableSetOf()) { mismatch ->
+        val local = requireNotNull(localByPath[mismatch.relativePath]) {
+            "A verified mismatch is missing its local file."
+        }
+        val remote = requireNotNull(remoteByPath[mismatch.relativePath]) {
+            "A verified mismatch is missing its remote file."
+        }
+        require(
+            local.kind == SyncEntryKind.File &&
+                remote.kind == SyncEntryKind.File &&
+                local.revision == mismatch.localRevision &&
+                remote.etag == mismatch.remoteEtag &&
+                local.size == mismatch.expectedSizeBytes &&
+                remote.size == mismatch.expectedSizeBytes,
+        ) { "Verified mismatch evidence no longer matches the scanned generations." }
+        mismatch.relativePath
+    }
+}
+
 /**
  * Bounds automatic identity reads so reconnecting a large tree cannot silently consume an
  * unlimited amount of network traffic. Files outside this budget remain conservative conflicts.
@@ -85,14 +165,18 @@ fun fileSyncContentVerificationCandidates(
 fun List<FileSyncContentVerificationCandidate>.withinFileSyncContentVerificationBudget(
     maximumFileBytes: Long = MAX_FILE_SYNC_IDENTITY_FILE_BYTES,
     maximumTotalBytes: Long = MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES,
+    maximumCandidates: Int = MAX_FILE_SYNC_WORK_ITEMS,
 ): List<FileSyncContentVerificationCandidate> {
-    require(maximumFileBytes >= 0L && maximumTotalBytes >= 0L)
+    require(maximumFileBytes >= 0L && maximumTotalBytes >= 0L && maximumCandidates >= 0)
     var remaining = maximumTotalBytes
+    var selected = 0
     return mapNotNull { candidate ->
+        if (selected >= maximumCandidates) return@mapNotNull null
         val size = candidate.expectedSizeBytes
             ?.takeIf { it <= maximumFileBytes && it <= remaining }
             ?: return@mapNotNull null
         remaining -= size
+        selected += 1
         candidate
     }
 }

@@ -194,21 +194,27 @@ internal fun FileOfflineCenterScreen(
     }
 
     fun beginAddFolderSync() {
+        if (ADD_PAIR_BUSY_ID in syncBusyPairIds) return
+        syncBusyPairIds += ADD_PAIR_BUSY_ID
         scope.launch {
-            runCatching { services.chooseFileSyncLocalRoot() }
-                .onSuccess { selected ->
-                    pendingMediaSuggestionJson = null
-                    pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
-                    pendingRemotePath = selected?.let { "" }
-                    pendingSyncConfigurationJson = selected
-                        ?.let { defaultFileSyncConfiguration(isMediaSuggestion = false) }
-                        ?.let { fileSyncSetupJson.encodeToString(it) }
-                    remoteFolderPickerVisible = false
-                    syncSelectionPickerVisible = false
-                }
-                .onFailure { failure ->
-                    actionMessage = failure.message ?: "Could not select a local folder."
-                }
+            try {
+                runCatching { services.chooseFileSyncLocalRoot() }
+                    .onSuccess { selected ->
+                        pendingMediaSuggestionJson = null
+                        pendingLocalRootJson = selected?.let { fileSyncSetupJson.encodeToString(it) }
+                        pendingRemotePath = selected?.let { "" }
+                        pendingSyncConfigurationJson = selected
+                            ?.let { defaultFileSyncConfiguration(isMediaSuggestion = false) }
+                            ?.let { fileSyncSetupJson.encodeToString(it) }
+                        remoteFolderPickerVisible = false
+                        syncSelectionPickerVisible = false
+                    }
+                    .onFailure { failure ->
+                        actionMessage = failure.message ?: "Could not select a local folder."
+                    }
+            } finally {
+                syncBusyPairIds -= ADD_PAIR_BUSY_ID
+            }
         }
     }
 
@@ -1321,6 +1327,7 @@ internal fun FolderSyncSection(
             loading = loading,
             busyPairId = busyPairId,
             busyPairIds = busyPairIds,
+            addEnabled = ADD_PAIR_BUSY_ID !in busyPairIds,
             onAdd = onAdd,
             onRun = onRun,
             onRemove = onRemove,
@@ -1335,6 +1342,7 @@ internal fun FolderSyncSection(
         )
     }
 }
+
 
 @Composable
 private fun MediaFolderSuggestions(
@@ -2960,47 +2968,6 @@ private fun FileSyncPowerPolicy.readablePowerPolicy(): String = when (this) {
     FileSyncPowerPolicy.AnyPower -> "Any battery level"
     FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
     FileSyncPowerPolicy.Charging -> "Only while charging"
-}
-
-private fun FileSyncDecisionReason.readableDecisionReason(): String = when (this) {
-    FileSyncDecisionReason.FirstSyncCollision -> "Both folders already contain this path."
-    FileSyncDecisionReason.SimultaneousEdit -> "Both copies changed since the last completed sync."
-    FileSyncDecisionReason.LocalDeletion -> "The device copy was deleted."
-    FileSyncDecisionReason.RemoteDeletion -> "The Nextcloud copy was deleted."
-    FileSyncDecisionReason.TypeChanged -> "One side is a file and the other is a folder."
-}
-
-private fun FileSyncDecisionChoice.readableDecision(): String = when (this) {
-    FileSyncDecisionChoice.UseLocal -> "Use device copy"
-    FileSyncDecisionChoice.UseRemote -> "Use Nextcloud copy"
-    FileSyncDecisionChoice.KeepBoth -> "Keep both"
-    FileSyncDecisionChoice.PropagateDeletion -> "Delete other copy"
-    FileSyncDecisionChoice.RestoreMissing -> "Restore missing copy"
-    FileSyncDecisionChoice.Skip -> "Skip this version"
-}
-
-private fun FileSyncDecisionChoice.confirmationText(
-    path: String,
-    reason: FileSyncDecisionReason,
-): String = when (this) {
-    FileSyncDecisionChoice.UseLocal ->
-        "Use the latest device version of $path. The current Nextcloud version will be replaced " +
-            "only if it has not changed since this conflict was shown."
-    FileSyncDecisionChoice.UseRemote ->
-        "Use the latest Nextcloud version of $path. The current device version will be replaced " +
-            "only if it has not changed since this conflict was shown."
-    FileSyncDecisionChoice.KeepBoth ->
-        "Preserve both versions of $path as named conflict copies and keep the Nextcloud version " +
-            "at the original path. Review again if either side changes before this starts."
-    FileSyncDecisionChoice.PropagateDeletion ->
-        "Apply the deletion for $path to the other location. This permanently removes the other copy " +
-            "only if its observed revision is unchanged."
-    FileSyncDecisionChoice.RestoreMissing ->
-        "Restore the missing copy of $path from the latest surviving version, only if the missing " +
-            "side is still empty."
-    FileSyncDecisionChoice.Skip ->
-        "Skip $path for this exact observed conflict (${reason.readableDecisionReason()}). " +
-            "It will be reconsidered if either side changes."
 }
 
 private fun formatOfflineBytes(bytes: Long): String = when {

@@ -146,6 +146,7 @@ private data class FileSyncWorkSnapshotV1(
     val attemptCount: Int,
     val lastAttemptEpochMillis: Long?,
     val failureMessage: String?,
+    val contentMismatchVerified: Boolean = false,
 )
 
 @Serializable
@@ -270,6 +271,7 @@ private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWork
     attemptCount = attemptCount,
     lastAttemptEpochMillis = lastAttemptEpochMillis,
     failureMessage = failureMessage,
+    contentMismatchVerified = contentMismatchVerified,
 )
 
 private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkItem(
@@ -284,6 +286,7 @@ private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkIt
     attemptCount = attemptCount,
     lastAttemptEpochMillis = lastAttemptEpochMillis,
     failureMessage = failureMessage,
+    contentMismatchVerified = contentMismatchVerified,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

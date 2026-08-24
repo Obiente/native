@@ -94,6 +94,7 @@ internal fun FileSyncWorkspace(
     loading: Boolean,
     busyPairId: String?,
     busyPairIds: Set<String> = busyPairId?.let(::setOf).orEmpty(),
+    addEnabled: Boolean = true,
     onAdd: () -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
     onRemove: (FileSyncPairSummary) -> Unit,
@@ -127,7 +128,7 @@ internal fun FileSyncWorkspace(
             FileSyncWorkspaceHeader(
                 pairs = pairs,
                 loading = loading,
-                actionsEnabled = true,
+                actionsEnabled = addEnabled,
                 onAdd = onAdd,
                 compact = !desktop,
             )
@@ -138,7 +139,11 @@ internal fun FileSyncWorkspace(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             if (!loading && pairs.isEmpty()) {
-                FileSyncEmptyState(onAdd = onAdd, fillAvailableHeight = fillAvailableHeight)
+                FileSyncEmptyState(
+                    onAdd = onAdd,
+                    enabled = addEnabled,
+                    fillAvailableHeight = fillAvailableHeight,
+                )
             } else if (pairs.isNotEmpty()) {
                 FileSyncFilters(
                     selected = filter,
@@ -1013,7 +1018,7 @@ private fun FileSyncNotice(message: String) {
 }
 
 @Composable
-private fun FileSyncEmptyState(onAdd: () -> Unit, fillAvailableHeight: Boolean) {
+private fun FileSyncEmptyState(onAdd: () -> Unit, enabled: Boolean, fillAvailableHeight: Boolean) {
     Surface(
         modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
         color = NextcloudTheme.colors.appTile,
@@ -1032,7 +1037,7 @@ private fun FileSyncEmptyState(onAdd: () -> Unit, fillAvailableHeight: Boolean) 
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onAdd) { Text("Add your first sync") }
+            Button(enabled = enabled, onClick = onAdd) { Text("Add your first sync") }
         }
     }
 }

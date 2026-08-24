@@ -9,6 +9,47 @@ import kotlin.test.assertTrue
 
 class FileSyncCoordinatorTest {
     @Test
+    fun `verified content mismatch survives unchanged scans without another read`() {
+        val local = LocalSyncEntry("same-name.md", SyncEntryKind.File, "local-1", size = 42L)
+        val remote = RemoteSyncEntry("same-name.md", SyncEntryKind.File, "remote-1", size = 42L)
+        val mismatch = FileSyncContentVerificationCandidate("same-name.md", "local-1", "remote-1", 42L)
+
+        var scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local),
+            listOf(remote),
+            nowEpochMillis = 10L,
+            verifiedContentMismatches = listOf(mismatch),
+        )
+
+        assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(listOf(mismatch), scanned.pair().knownFileSyncContentMismatches())
+        assertEquals(
+            emptyList(),
+            fileSyncContentVerificationCandidates(
+                listOf(local),
+                listOf(remote),
+                emptyList(),
+                scanned.pair().knownFileSyncContentMismatches(),
+            ),
+        )
+
+        scanned = decodeFileSyncCoordinatorSnapshot(encodeFileSyncCoordinatorSnapshot(scanned))
+        scanned = scanFileSyncPair(scanned, PAIR_ID, listOf(local), listOf(remote), nowEpochMillis = 20L)
+        assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(
+            listOf(mismatch.copy(remoteEtag = "remote-2")),
+            fileSyncContentVerificationCandidates(
+                listOf(local),
+                listOf(remote.copy(etag = "remote-2")),
+                emptyList(),
+                scanned.pair().knownFileSyncContentMismatches(),
+            ),
+        )
+    }
+
+    @Test
     fun `conflict batch validates every choice before changing coordinator state`() {
         val scanned = scanFileSyncPair(
             state(),

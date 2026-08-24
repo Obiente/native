@@ -73,7 +73,7 @@ internal fun FileSyncConflictBlock(
                                 ButtonDefaults.buttonColors()
                             },
                         ) {
-                            Text("${choice.syncDecisionTitle()} all", maxLines = 1)
+                            Text("${choice.readableDecision()} all", maxLines = 1)
                         }
                     }
                     if (choices.size == 1) Spacer(Modifier.weight(1f))
@@ -89,7 +89,7 @@ internal fun FileSyncConflictBlock(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                conflict.reason.syncDecisionReasonTitle(),
+                conflict.reason.readableDecisionReason(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -118,7 +118,7 @@ internal fun FileSyncConflictBlock(
                                 } else {
                                     ButtonDefaults.outlinedButtonColors()
                                 },
-                            ) { Text(choice.syncDecisionTitle(), maxLines = 1) }
+                            ) { Text(choice.readableDecision(), maxLines = 1) }
                         }
                         if (choices.size == 1) Spacer(Modifier.weight(1f))
                     }
@@ -160,7 +160,7 @@ private fun FileSyncConflictSideRow(
     }
 }
 
-private fun FileSyncDecisionReason.syncDecisionReasonTitle(): String = when (this) {
+internal fun FileSyncDecisionReason.readableDecisionReason(): String = when (this) {
     FileSyncDecisionReason.FirstSyncCollision -> "Both folders already contain this path."
     FileSyncDecisionReason.SimultaneousEdit -> "Both copies changed since the last completed sync."
     FileSyncDecisionReason.LocalDeletion -> "The device copy was deleted."
@@ -168,13 +168,37 @@ private fun FileSyncDecisionReason.syncDecisionReasonTitle(): String = when (thi
     FileSyncDecisionReason.TypeChanged -> "One side is a file and the other is a folder."
 }
 
-private fun FileSyncDecisionChoice.syncDecisionTitle(): String = when (this) {
+internal fun FileSyncDecisionChoice.readableDecision(): String = when (this) {
     FileSyncDecisionChoice.UseLocal -> "Use device copy"
     FileSyncDecisionChoice.UseRemote -> "Use Nextcloud copy"
     FileSyncDecisionChoice.KeepBoth -> "Keep both copies"
     FileSyncDecisionChoice.PropagateDeletion -> "Delete other copy"
     FileSyncDecisionChoice.RestoreMissing -> "Restore missing copy"
     FileSyncDecisionChoice.Skip -> "Skip this version"
+}
+
+internal fun FileSyncDecisionChoice.confirmationText(
+    path: String,
+    reason: FileSyncDecisionReason,
+): String = when (this) {
+    FileSyncDecisionChoice.UseLocal ->
+        "Use the latest device version of $path. The current Nextcloud version will be replaced " +
+            "only if it has not changed since this conflict was shown."
+    FileSyncDecisionChoice.UseRemote ->
+        "Use the latest Nextcloud version of $path. The current device version will be replaced " +
+            "only if it has not changed since this conflict was shown."
+    FileSyncDecisionChoice.KeepBoth ->
+        "Preserve both versions of $path as named conflict copies and keep the Nextcloud version " +
+            "at the original path. Review again if either side changes before this starts."
+    FileSyncDecisionChoice.PropagateDeletion ->
+        "Apply the deletion for $path to the other location. This permanently removes the other copy " +
+            "only if its observed revision is unchanged."
+    FileSyncDecisionChoice.RestoreMissing ->
+        "Restore the missing copy of $path from the latest surviving version, only if the missing " +
+            "side is still empty."
+    FileSyncDecisionChoice.Skip ->
+        "Skip $path for this exact observed conflict (${reason.readableDecisionReason()}). " +
+            "It will be reconsidered if either side changes."
 }
 
 internal fun FileSyncDecisionChoice.isDestructiveSyncDecision(): Boolean =

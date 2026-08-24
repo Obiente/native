@@ -86,6 +86,7 @@ data class FileSyncWorkItem(
     val attemptCount: Int = 0,
     val lastAttemptEpochMillis: Long? = null,
     val failureMessage: String? = null,
+    val contentMismatchVerified: Boolean = false,
 ) {
     init {
         require(id > 0)
@@ -97,6 +98,7 @@ data class FileSyncWorkItem(
         require(attemptCount in 0..MAX_FILE_SYNC_ATTEMPTS)
         require(lastAttemptEpochMillis == null || lastAttemptEpochMillis >= 0)
         require(failureMessage == null || failureMessage.isSafeSyncText(MAX_FILE_SYNC_FAILURE_LENGTH))
+        requireValidFileSyncContentMismatchEvidence(this)
         requireValidWorkState()
     }
 
@@ -212,6 +214,7 @@ fun scanFileSyncPair(
     nowEpochMillis: Long,
     maximumWorkItems: Int = MAX_FILE_SYNC_WORK_ITEMS,
     reservedNonExecutableWorkItems: Int = 0,
+    verifiedContentMismatches: List<FileSyncContentVerificationCandidate> = emptyList(),
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
     require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
@@ -239,6 +242,11 @@ fun scanFileSyncPair(
     val localByPath = scopedLocalEntries.associateBy(LocalSyncEntry::relativePath)
     val remoteByPath = scopedRemoteEntries.associateBy(RemoteSyncEntry::relativePath)
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
+    val mismatchPaths = verifiedFileSyncContentMismatchPaths(
+        verifiedContentMismatches,
+        localByPath,
+        remoteByPath,
+    )
     val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
     require(plan.operations.size <= MAX_FILE_SYNC_WORK_ITEMS) {
@@ -299,7 +307,7 @@ fun scanFileSyncPair(
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        reconciledExistingWork(operation) ?: FileSyncWorkItem(
+        val retainedOrNew = reconciledExistingWork(operation) ?: FileSyncWorkItem(
             id = nextId.also {
                 require(it < Long.MAX_VALUE) { "The sync work ID space is exhausted." }
                 nextId += 1
@@ -317,6 +325,11 @@ fun scanFileSyncPair(
                 )
             },
         )
+        if (path in mismatchPaths) {
+            retainedOrNew.copy(contentMismatchVerified = true)
+        } else {
+            retainedOrNew
+        }
     }
     val structuralBaselines = scopedLocalEntries
         .asSequence()

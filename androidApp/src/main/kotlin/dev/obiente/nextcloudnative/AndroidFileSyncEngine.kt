@@ -10,6 +10,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncCenterSupport
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
 import dev.obiente.nextcloudnative.app.FileSyncConflictResolution
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
@@ -27,7 +28,6 @@ import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SyncEntryKind
-import dev.obiente.nextcloudnative.app.VerifiedFileSyncContent
 import dev.obiente.nextcloudnative.app.addFileSyncPair
 import dev.obiente.nextcloudnative.app.applyVerifiedFileSyncContent
 import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
@@ -41,6 +41,7 @@ import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
+import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatches
 import dev.obiente.nextcloudnative.app.retainsResolvedFileSyncDecisions
 import dev.obiente.nextcloudnative.app.withinFileSyncContentVerificationBudget
 import java.io.File
@@ -401,10 +402,16 @@ internal class AndroidFileSyncEngine(context: Context) {
             localEntries,
             remoteEntries,
             initialPair.baselines,
-        ).withinFileSyncContentVerificationBudget()
-        val verifiedContent = candidates.mapNotNull { candidate ->
+            initialPair.knownFileSyncContentMismatches(),
+        ).withinFileSyncContentVerificationBudget(
+            maximumCandidates = initialPair.availableAndroidContentVerificationSlots(),
+        )
+        val verificationResults = candidates.map { candidate ->
             verifyAndroidFileSyncContent(candidate, local, remote)
         }
+        val verifiedContent = verificationResults.mapNotNull(FileSyncContentVerificationResult::verifiedContent)
+        val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
+            .map(FileSyncContentVerificationResult::candidate)
         val contentIdentity = applyVerifiedFileSyncContent(localEntries, remoteEntries, verifiedContent)
         val reconciledLocalEntries = contentIdentity.localEntries
         val reconciledRemoteEntries = contentIdentity.remoteEntries
@@ -417,6 +424,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 System.currentTimeMillis(),
                 maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
                 reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+                verifiedContentMismatches = verifiedMismatches,
             ),
         )
         val scannedPair = persisted.coordinator.pairs.first { it.id == pairId }
@@ -433,6 +441,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     System.currentTimeMillis(),
                     maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
                     reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+                    verifiedContentMismatches = verifiedMismatches,
                 ),
             )
             store.save(persisted)
@@ -546,27 +555,33 @@ internal class AndroidFileSyncEngine(context: Context) {
         candidate: FileSyncContentVerificationCandidate,
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
-    ): VerifiedFileSyncContent? {
-        val expectedBytes = candidate.expectedSizeBytes ?: return null
+    ): FileSyncContentVerificationResult {
+        val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
         val readCeiling = maxOf(1L, expectedBytes)
-        val localHash = local.contentHash(
-            path = candidate.relativePath,
-            expectedLocalRevision = candidate.localRevision,
-            expectedBytes = expectedBytes,
-            maximumBytes = readCeiling,
-        ) ?: return null
-        return if (
-            remote.verifyContentHash(
+        val localHash = requireNotNull(
+            local.contentHash(
+                path = candidate.relativePath,
+                expectedLocalRevision = candidate.localRevision,
+                expectedBytes = expectedBytes,
+                maximumBytes = readCeiling,
+            ),
+        ) { "The local file could not be opened for content verification." }
+        val matches = remote.verifyContentHash(
                 relativePath = candidate.relativePath,
                 expectedRemoteEtag = candidate.remoteEtag,
                 expectedContentHash = localHash,
                 maximumBytes = readCeiling,
             )
-        ) {
-            VerifiedFileSyncContent(candidate, localHash)
-        } else {
-            null
+        return FileSyncContentVerificationResult(candidate, localHash.takeIf { matches })
+    }
+
+    private fun FileSyncPair.availableAndroidContentVerificationSlots(): Int {
+        val retainedNonExecutable = workItems.count { work ->
+            work.state == FileSyncExecutionState.AwaitingDecision ||
+                work.state == FileSyncExecutionState.Failed ||
+                work.state == FileSyncExecutionState.Skipped
         }
+        return (ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE - retainedNonExecutable).coerceAtLeast(0)
     }
 
     suspend fun resolveConflictAndRun(
