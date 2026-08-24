@@ -122,6 +122,7 @@ private data class LocalSyncEntrySnapshotV1(
     val size: Long?,
     val contentHash: String? = null,
     val modifiedEpochMillis: Long? = null,
+    val contentIdentityUnverified: Boolean = false,
 )
 
 @Serializable
@@ -234,6 +235,7 @@ private fun LocalSyncEntry.toSnapshot(): LocalSyncEntrySnapshotV1 = LocalSyncEnt
     size = size,
     contentHash = contentHash,
     modifiedEpochMillis = modifiedEpochMillis,
+    contentIdentityUnverified = contentIdentityUnverified,
 )
 
 private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry(
@@ -243,6 +245,7 @@ private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry
     size = size,
     contentHash = contentHash,
     modifiedEpochMillis = modifiedEpochMillis,
+    contentIdentityUnverified = contentIdentityUnverified,
 )
 
 private fun RemoteSyncEntry.toSnapshot(): RemoteSyncEntrySnapshotV1 = RemoteSyncEntrySnapshotV1(

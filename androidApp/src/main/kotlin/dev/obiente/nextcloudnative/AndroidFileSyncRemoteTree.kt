@@ -128,6 +128,7 @@ internal class AndroidFileSyncRemoteTree(
         relativePath: String,
         expectedRemoteEtag: String,
         expectedContentHash: String,
+        expectedBytes: Long,
         maximumBytes: Long,
     ): Boolean {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -148,6 +149,7 @@ internal class AndroidFileSyncRemoteTree(
             maximumBytes = maximumBytes,
             expectedEtag = expectedRemoteEtag,
         )
+        require(result.byteCount == expectedBytes) { "The server returned truncated content during verification." }
         if (result.etag != null && result.etag != expectedRemoteEtag) return false
         val actual = "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         return actual == expectedContentHash

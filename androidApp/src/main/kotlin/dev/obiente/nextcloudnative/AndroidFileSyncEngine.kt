@@ -26,6 +26,8 @@ import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_FILE_BYTES
+import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
@@ -43,7 +45,6 @@ import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
-import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatches
 import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatchResults
 import dev.obiente.nextcloudnative.app.retainsResolvedFileSyncDecisions
 import dev.obiente.nextcloudnative.app.withinFileSyncContentVerificationBudget
@@ -406,12 +407,15 @@ internal class AndroidFileSyncEngine(context: Context) {
             baselines = initialPair.baselines,
             local = local,
         )
-        val cachedMismatchResults = initialPair.knownFileSyncContentMismatchResults()
+        val cachedMismatchResults = validateAndroidCachedMismatchContent(
+            initialPair.knownFileSyncContentMismatchResults(),
+            local,
+        )
         val candidates = fileSyncContentVerificationCandidates(
             localEntries,
             remoteEntries,
             initialPair.baselines,
-            initialPair.knownFileSyncContentMismatches(),
+            cachedMismatchResults.map(FileSyncContentVerificationResult::candidate),
             requireContentBackedBaseline = true,
         ).withinFileSyncContentVerificationBudget(
             maximumCandidates = initialPair.availableAndroidContentVerificationSlots(),
@@ -584,42 +588,10 @@ internal class AndroidFileSyncEngine(context: Context) {
                 relativePath = candidate.relativePath,
                 expectedRemoteEtag = candidate.remoteEtag,
                 expectedContentHash = localHash,
+                expectedBytes = expectedBytes,
                 maximumBytes = readCeiling,
             )
         return FileSyncContentVerificationResult(candidate, localHash, localHash.takeIf { matches })
-    }
-
-    private fun verifyAndroidRemoteDeletionContent(
-        localEntries: List<LocalSyncEntry>,
-        remoteEntries: List<RemoteSyncEntry>,
-        baselines: List<FileSyncBaseline>,
-        local: AndroidFileSyncLocalTree,
-    ): List<LocalSyncEntry> {
-        val remotePaths = remoteEntries.mapTo(mutableSetOf(), RemoteSyncEntry::relativePath)
-        val baselineByPath = baselines.associateBy(FileSyncBaseline::relativePath)
-        return localEntries.map { entry ->
-            val baseline = baselineByPath[entry.relativePath]
-            if (
-                entry.kind != SyncEntryKind.File ||
-                entry.relativePath in remotePaths ||
-                baseline?.kind != SyncEntryKind.File ||
-                entry.revision != baseline.localRevision
-            ) {
-                return@map entry
-            }
-            val expectedBytes = requireNotNull(entry.size) {
-                "The local file size is unknown, so a remote deletion cannot be applied safely."
-            }
-            val localHash = requireNotNull(
-                local.contentHash(
-                    path = entry.relativePath,
-                    expectedLocalRevision = entry.revision,
-                    expectedBytes = expectedBytes,
-                    maximumBytes = maxOf(1L, expectedBytes),
-                ),
-            ) { "The local file could not be verified before applying a remote deletion." }
-            entry.copy(contentHash = localHash)
-        }
     }
 
     private fun FileSyncPair.availableAndroidContentVerificationSlots(): Int {
@@ -807,7 +779,10 @@ internal class AndroidFileSyncEngine(context: Context) {
         val localEntry = requireNotNull(local.resolve(path)) { "The local result could not be verified." }.entry
         val remoteEntry = requireNotNull(remote.resolve(path)) { "The server result could not be verified." }.entry
         require(localEntry.kind == remoteEntry.kind) { "The synchronized item types do not match." }
-        return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag)
+        val contentHash = localEntry.size
+            ?.takeIf { localEntry.kind == SyncEntryKind.File && it <= MAX_FILE_SYNC_IDENTITY_FILE_BYTES }
+            ?.let { size -> local.contentHash(path, localEntry.revision, size, maxOf(1L, size)) }
+        return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, contentHash)
     }
 
     private inline fun <T> withStagingFile(prefix: String, block: (File) -> T): T {

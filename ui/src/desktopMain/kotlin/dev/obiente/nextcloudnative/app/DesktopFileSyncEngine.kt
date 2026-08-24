@@ -770,7 +770,7 @@ internal class DesktopFileSyncEngine(
         val localEntry = requireNotNull(local.resolve(path)) { "The local result could not be verified." }.entry
         val remoteEntry = requireNotNull(remote.resolve(path)) { "The server result could not be verified." }.entry
         require(localEntry.kind == remoteEntry.kind) { "The synchronized item types do not match." }
-        return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag)
+        return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, localEntry.contentHash)
     }
 
     private inline fun <T> withStagingFile(prefix: String, block: (File) -> T): T {

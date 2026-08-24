@@ -149,6 +149,37 @@ class FileSyncPlanningTest {
     }
 
     @Test
+    fun unverifiedLocalContentCannotBeDeletedByPropagation() {
+        val local = LocalSyncEntry(
+            "vault/large.bin",
+            SyncEntryKind.File,
+            "local-1",
+            size = null,
+            contentIdentityUnverified = true,
+        )
+        val baseline = baseline("vault/large.bin", "local-1", "remote-1")
+
+        val bidirectional = planFileSync(
+            listOf(local),
+            emptyList(),
+            listOf(baseline),
+            config.copy(deletionPolicy = FileSyncDeletionPolicy.Propagate),
+        ).operations.single()
+        assertEquals(
+            FileSyncDecisionReason.RemoteDeletion,
+            assertIs<FileSyncOperation.NeedsDecision>(bidirectional).reason,
+        )
+
+        val uploadOnly = planFileSync(
+            listOf(local),
+            emptyList(),
+            listOf(baseline),
+            config.copy(direction = FileSyncDirection.UploadOnly),
+        ).operations.single()
+        assertIs<FileSyncOperation.Upload>(uploadOnly)
+    }
+
+    @Test
     fun oneWaySyncNeverMutatesTheProhibitedSideDuringDeletionEditRaces() {
         val uploadOnly = planFileSync(
             localEntries = emptyList(),

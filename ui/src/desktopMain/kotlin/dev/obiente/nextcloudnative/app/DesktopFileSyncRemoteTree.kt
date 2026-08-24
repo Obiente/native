@@ -183,7 +183,7 @@ internal class DesktopFileSyncRemoteTree(
                 }
             }
         }
-        if (total != expectedBytes) return false
+        require(total == expectedBytes) { "The server returned truncated content during verification." }
         val after = requireNotNull(resolve(relativePath)) {
             "The server file disappeared during content verification."
         }
