@@ -122,10 +122,13 @@ data class FileSyncBaseline(
     val kind: SyncEntryKind,
     val localRevision: String?,
     val remoteEtag: String?,
+    val contentHash: String? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
         require(localRevision != null || remoteEtag != null)
+        require(contentHash == null || kind == SyncEntryKind.File)
+        require(contentHash == null || normalizeSyncSha256(contentHash) == contentHash)
     }
 }
 
@@ -352,7 +355,8 @@ private fun planSyncPath(
         return planFirstSync(path, local, remote, configuration)
     }
 
-    val localChanged = local?.revision != baseline.localRevision
+    val localContentChanged = local?.contentHash != null && local.contentHash != baseline.contentHash
+    val localChanged = local?.revision != baseline.localRevision || localContentChanged
     val remoteChanged = remote?.etag != baseline.remoteEtag
     return when {
         !localChanged && !remoteChanged -> null

@@ -117,7 +117,10 @@ class FileSyncCoordinatorSnapshotTest {
 
     private fun state() = FileSyncCoordinatorState(
         pairs = listOf(
-            pair("pair-b", listOf(baseline("vault.md", "local-1", "remote-1"))),
+            pair(
+                "pair-b",
+                listOf(baseline("vault.md", "local-1", "remote-1", "sha256:" + "33".repeat(32))),
+            ),
             pair("pair-a"),
         ),
     )
@@ -138,6 +141,10 @@ class FileSyncCoordinatorSnapshotTest {
         baselines = baselines,
     )
 
-    private fun baseline(path: String, localRevision: String, remoteEtag: String) =
-        FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag)
+    private fun baseline(
+        path: String,
+        localRevision: String,
+        remoteEtag: String,
+        contentHash: String? = null,
+    ) = FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag, contentHash)
 }

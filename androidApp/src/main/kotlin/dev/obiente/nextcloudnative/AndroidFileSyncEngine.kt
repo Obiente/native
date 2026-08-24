@@ -25,11 +25,13 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.addFileSyncPair
-import dev.obiente.nextcloudnative.app.applyVerifiedFileSyncContent
+import dev.obiente.nextcloudnative.app.applyFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
 import dev.obiente.nextcloudnative.app.completeFileSyncOperation
 import dev.obiente.nextcloudnative.app.failFileSyncOperation
@@ -42,6 +44,7 @@ import dev.obiente.nextcloudnative.app.toCenterSummary
 import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
 import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatches
+import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatchResults
 import dev.obiente.nextcloudnative.app.retainsResolvedFileSyncDecisions
 import dev.obiente.nextcloudnative.app.withinFileSyncContentVerificationBudget
 import java.io.File
@@ -397,22 +400,31 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
         val remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
         val local = createAndroidFileSyncLocalTree(appContext.contentResolver, initialPair.localRootId)
-        val localEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry)
+        val localEntries = verifyAndroidRemoteDeletionContent(
+            localEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry),
+            remoteEntries = remoteEntries,
+            baselines = initialPair.baselines,
+            local = local,
+        )
+        val cachedMismatchResults = initialPair.knownFileSyncContentMismatchResults()
         val candidates = fileSyncContentVerificationCandidates(
             localEntries,
             remoteEntries,
             initialPair.baselines,
             initialPair.knownFileSyncContentMismatches(),
+            requireContentBackedBaseline = true,
         ).withinFileSyncContentVerificationBudget(
             maximumCandidates = initialPair.availableAndroidContentVerificationSlots(),
         )
-        val verificationResults = candidates.map { candidate ->
+        val verificationResults = cachedMismatchResults + candidates.map { candidate ->
             verifyAndroidFileSyncContent(candidate, local, remote)
         }
-        val verifiedContent = verificationResults.mapNotNull(FileSyncContentVerificationResult::verifiedContent)
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
             .map(FileSyncContentVerificationResult::candidate)
-        val contentIdentity = applyVerifiedFileSyncContent(localEntries, remoteEntries, verifiedContent)
+        val verifiedMismatchHashes = verificationResults
+            .filter { it.matchingContentHash == null }
+            .associate { it.candidate.relativePath to it.localContentHash }
+        val contentIdentity = applyFileSyncContentVerificationResults(localEntries, remoteEntries, verificationResults)
         val reconciledLocalEntries = contentIdentity.localEntries
         val reconciledRemoteEntries = contentIdentity.remoteEntries
         persisted = persisted.copy(
@@ -425,6 +437,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
                 reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
                 verifiedContentMismatches = verifiedMismatches,
+                verifiedContentMismatchHashes = verifiedMismatchHashes,
             ),
         )
         val scannedPair = persisted.coordinator.pairs.first { it.id == pairId }
@@ -442,6 +455,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
                     reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
                     verifiedContentMismatches = verifiedMismatches,
+                    verifiedContentMismatchHashes = verifiedMismatchHashes,
                 ),
             )
             store.save(persisted)
@@ -572,7 +586,40 @@ internal class AndroidFileSyncEngine(context: Context) {
                 expectedContentHash = localHash,
                 maximumBytes = readCeiling,
             )
-        return FileSyncContentVerificationResult(candidate, localHash.takeIf { matches })
+        return FileSyncContentVerificationResult(candidate, localHash, localHash.takeIf { matches })
+    }
+
+    private fun verifyAndroidRemoteDeletionContent(
+        localEntries: List<LocalSyncEntry>,
+        remoteEntries: List<RemoteSyncEntry>,
+        baselines: List<FileSyncBaseline>,
+        local: AndroidFileSyncLocalTree,
+    ): List<LocalSyncEntry> {
+        val remotePaths = remoteEntries.mapTo(mutableSetOf(), RemoteSyncEntry::relativePath)
+        val baselineByPath = baselines.associateBy(FileSyncBaseline::relativePath)
+        return localEntries.map { entry ->
+            val baseline = baselineByPath[entry.relativePath]
+            if (
+                entry.kind != SyncEntryKind.File ||
+                entry.relativePath in remotePaths ||
+                baseline?.kind != SyncEntryKind.File ||
+                entry.revision != baseline.localRevision
+            ) {
+                return@map entry
+            }
+            val expectedBytes = requireNotNull(entry.size) {
+                "The local file size is unknown, so a remote deletion cannot be applied safely."
+            }
+            val localHash = requireNotNull(
+                local.contentHash(
+                    path = entry.relativePath,
+                    expectedLocalRevision = entry.revision,
+                    expectedBytes = expectedBytes,
+                    maximumBytes = maxOf(1L, expectedBytes),
+                ),
+            ) { "The local file could not be verified before applying a remote deletion." }
+            entry.copy(contentHash = localHash)
+        }
     }
 
     private fun FileSyncPair.availableAndroidContentVerificationSlots(): Int {

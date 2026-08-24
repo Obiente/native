@@ -13,6 +13,7 @@ class FileSyncCoordinatorTest {
         val local = LocalSyncEntry("same-name.md", SyncEntryKind.File, "local-1", size = 42L)
         val remote = RemoteSyncEntry("same-name.md", SyncEntryKind.File, "remote-1", size = 42L)
         val mismatch = FileSyncContentVerificationCandidate("same-name.md", "local-1", "remote-1", 42L)
+        val localDigest = "sha256:" + "44".repeat(32)
 
         var scanned = scanFileSyncPair(
             state(),
@@ -21,10 +22,16 @@ class FileSyncCoordinatorTest {
             listOf(remote),
             nowEpochMillis = 10L,
             verifiedContentMismatches = listOf(mismatch),
+            verifiedContentMismatchHashes = mapOf(mismatch.relativePath to localDigest),
         )
 
         assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(localDigest, scanned.pair().workItems.single().contentMismatchLocalHash)
         assertEquals(listOf(mismatch), scanned.pair().knownFileSyncContentMismatches())
+        assertEquals(
+            listOf(FileSyncContentVerificationResult(mismatch, localDigest, null)),
+            scanned.pair().knownFileSyncContentMismatchResults(),
+        )
         assertEquals(
             emptyList(),
             fileSyncContentVerificationCandidates(
@@ -495,7 +502,7 @@ class FileSyncCoordinatorTest {
         )
         assertEquals(emptyList(), state.pair().workItems)
         assertEquals(
-            listOf(baseline("Vault/today.md", "local-1", "remote-1")),
+            listOf(baseline("Vault/today.md", "local-1", "remote-1", digest)),
             state.pair().baselines,
         )
 
@@ -508,7 +515,7 @@ class FileSyncCoordinatorTest {
         )
         assertEquals(emptyList(), state.pair().workItems)
         assertEquals(
-            listOf(baseline("Vault/today.md", "local-2", "remote-2")),
+            listOf(baseline("Vault/today.md", "local-2", "remote-2", digest)),
             state.pair().baselines,
         )
     }
@@ -977,8 +984,12 @@ class FileSyncCoordinatorTest {
     private fun remote(path: String, etag: String, contentHash: String? = null) =
         RemoteSyncEntry(path, SyncEntryKind.File, etag, contentHash = contentHash)
 
-    private fun baseline(path: String, localRevision: String, remoteEtag: String) =
-        FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag)
+    private fun baseline(
+        path: String,
+        localRevision: String,
+        remoteEtag: String,
+        contentHash: String? = null,
+    ) = FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag, contentHash)
 
     private companion object {
         const val PAIR_ID = "obsidian-notes"

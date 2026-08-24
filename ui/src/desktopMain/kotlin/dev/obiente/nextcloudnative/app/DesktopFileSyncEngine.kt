@@ -319,6 +319,7 @@ internal class DesktopFileSyncEngine(
             throw failure
         }
         val scannedRemoteEntries = remote.scan(includes).map(DesktopRemoteSyncDocument::entry)
+        val cachedMismatchResults = initialPair.knownFileSyncContentMismatchResults()
         val candidates = fileSyncContentVerificationCandidates(
             scannedLocalEntries,
             scannedRemoteEntries,
@@ -326,19 +327,21 @@ internal class DesktopFileSyncEngine(
             initialPair.knownFileSyncContentMismatches(),
         ).withinFileSyncContentVerificationBudget()
         val verificationResults = try {
-            candidates.map { candidate ->
+            cachedMismatchResults + candidates.map { candidate ->
                 verifyDesktopFileSyncContent(candidate, scannedLocalEntries, remote, shouldContinue)
             }
         } catch (_: DesktopFileSyncScanStoppedException) {
             return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
         }
-        val verifiedContent = verificationResults.mapNotNull(FileSyncContentVerificationResult::verifiedContent)
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
             .map(FileSyncContentVerificationResult::candidate)
-        val contentIdentity = applyVerifiedFileSyncContent(
+        val verifiedMismatchHashes = verificationResults
+            .filter { it.matchingContentHash == null }
+            .associate { it.candidate.relativePath to it.localContentHash }
+        val contentIdentity = applyFileSyncContentVerificationResults(
             scannedLocalEntries,
             scannedRemoteEntries,
-            verifiedContent,
+            verificationResults,
         )
         val localEntries = contentIdentity.localEntries
         val remoteEntries = contentIdentity.remoteEntries
@@ -352,6 +355,7 @@ internal class DesktopFileSyncEngine(
                 System.currentTimeMillis(),
                 maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
                 verifiedContentMismatches = verifiedMismatches,
+                verifiedContentMismatchHashes = verifiedMismatchHashes,
             ),
         )
         val scannedPair = persisted.coordinator.pairs.single()
@@ -368,6 +372,7 @@ internal class DesktopFileSyncEngine(
                     System.currentTimeMillis(),
                     maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
                     verifiedContentMismatches = verifiedMismatches,
+                    verifiedContentMismatchHashes = verifiedMismatchHashes,
                 ),
             )
             store.savePair(persisted, pairId)
@@ -514,7 +519,7 @@ internal class DesktopFileSyncEngine(
                 maximumBytes = expectedBytes,
                 shouldContinue = shouldContinue,
             )
-        return FileSyncContentVerificationResult(candidate, localHash.takeIf { matches })
+        return FileSyncContentVerificationResult(candidate, localHash, localHash.takeIf { matches })
     }
 
     private fun syncPairLabel(localDisplayName: String, remoteRootPath: String): String =

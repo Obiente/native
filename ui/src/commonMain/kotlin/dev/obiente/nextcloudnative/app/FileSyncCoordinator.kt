@@ -87,6 +87,7 @@ data class FileSyncWorkItem(
     val lastAttemptEpochMillis: Long? = null,
     val failureMessage: String? = null,
     val contentMismatchVerified: Boolean = false,
+    val contentMismatchLocalHash: String? = null,
 ) {
     init {
         require(id > 0)
@@ -215,6 +216,7 @@ fun scanFileSyncPair(
     maximumWorkItems: Int = MAX_FILE_SYNC_WORK_ITEMS,
     reservedNonExecutableWorkItems: Int = 0,
     verifiedContentMismatches: List<FileSyncContentVerificationCandidate> = emptyList(),
+    verifiedContentMismatchHashes: Map<String, String> = emptyMap(),
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
     require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
@@ -242,10 +244,8 @@ fun scanFileSyncPair(
     val localByPath = scopedLocalEntries.associateBy(LocalSyncEntry::relativePath)
     val remoteByPath = scopedRemoteEntries.associateBy(RemoteSyncEntry::relativePath)
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
-    val mismatchPaths = verifiedFileSyncContentMismatchPaths(
-        verifiedContentMismatches,
-        localByPath,
-        remoteByPath,
+    val mismatchHashes = verifiedFileSyncContentMismatchHashes(
+        verifiedContentMismatches, verifiedContentMismatchHashes, localByPath, remoteByPath,
     )
     val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
@@ -325,8 +325,8 @@ fun scanFileSyncPair(
                 )
             },
         )
-        if (path in mismatchPaths) {
-            retainedOrNew.copy(contentMismatchVerified = true)
+        if (path in mismatchHashes) {
+            retainedOrNew.copy(contentMismatchVerified = true, contentMismatchLocalHash = mismatchHashes.getValue(path))
         } else {
             retainedOrNew
         }
@@ -361,6 +361,7 @@ fun scanFileSyncPair(
                 kind = SyncEntryKind.File,
                 localRevision = local.revision,
                 remoteEtag = remote.etag,
+                contentHash = local.contentHash,
             )
         }
         .toList()

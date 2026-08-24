@@ -55,6 +55,30 @@ class FileSyncPlanningTest {
     }
 
     @Test
+    fun contentEvidenceDetectsAnEditWhenThePlatformRevisionDidNotChange() {
+        val baselineDigest = "sha256:" + "11".repeat(32)
+        val localDigest = "sha256:" + "22".repeat(32)
+        val operation = planFileSync(
+            listOf(local("vault/a.md", "local-1", contentHash = localDigest)),
+            listOf(remote("vault/a.md", "remote-2")),
+            listOf(FileSyncBaseline("vault/a.md", SyncEntryKind.File, "local-1", "remote-1", baselineDigest)),
+            config,
+        ).operations.single()
+
+        assertEquals(
+            FileSyncDecisionReason.SimultaneousEdit,
+            assertIs<FileSyncOperation.NeedsDecision>(operation).reason,
+        )
+        val remoteDeletion = planFileSync(
+            listOf(local("vault/a.md", "local-1", contentHash = localDigest)),
+            emptyList(),
+            listOf(FileSyncBaseline("vault/a.md", SyncEntryKind.File, "local-1", "remote-1", baselineDigest)),
+            config.copy(deletionPolicy = FileSyncDeletionPolicy.Propagate),
+        ).operations.single()
+        assertIs<FileSyncOperation.Upload>(remoteDeletion)
+    }
+
+    @Test
     fun firstSyncCollisionIsExplicitEvenWhenNamesAndSizesMatch() {
         val operation = planFileSync(
             listOf(local("vault/a.md", "local", size = 42)),

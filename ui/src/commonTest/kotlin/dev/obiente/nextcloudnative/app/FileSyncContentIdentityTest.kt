@@ -28,6 +28,7 @@ class FileSyncContentIdentityTest {
     fun `unchanged baselines and different known sizes do not read content`() {
         val unchangedLocal = fileOnDevice("Notes/a.md", "local-1", 42L)
         val unchangedRemote = fileOnServer("Notes/a.md", "remote-1", 42L)
+        val digest = "sha256:" + "01".repeat(32)
 
         assertEquals(
             emptyList(),
@@ -35,6 +36,24 @@ class FileSyncContentIdentityTest {
                 listOf(unchangedLocal),
                 listOf(unchangedRemote),
                 listOf(FileSyncBaseline("Notes/a.md", SyncEntryKind.File, "local-1", "remote-1")),
+            ),
+        )
+        assertEquals(
+            listOf(FileSyncContentVerificationCandidate("Notes/a.md", "local-1", "remote-1", 42L)),
+            fileSyncContentVerificationCandidates(
+                listOf(unchangedLocal),
+                listOf(unchangedRemote),
+                listOf(FileSyncBaseline("Notes/a.md", SyncEntryKind.File, "local-1", "remote-1")),
+                requireContentBackedBaseline = true,
+            ),
+        )
+        assertEquals(
+            emptyList(),
+            fileSyncContentVerificationCandidates(
+                listOf(unchangedLocal),
+                listOf(unchangedRemote),
+                listOf(FileSyncBaseline("Notes/a.md", SyncEntryKind.File, "local-1", "remote-1", digest)),
+                requireContentBackedBaseline = true,
             ),
         )
         assertEquals(
@@ -81,6 +100,24 @@ class FileSyncContentIdentityTest {
             emptyList(),
             planFileSync(verified.localEntries, verified.remoteEntries, emptyList(), CONFIGURATION).operations,
         )
+    }
+
+    @Test
+    fun `verified local mismatch reaches planning without trusting the remote checksum hint`() {
+        val localDigest = "sha256:" + "ab".repeat(32)
+        val remoteHint = "sha256:" + "cd".repeat(32)
+        val local = fileOnDevice("Notes/a.md", "local-1", 42L)
+        val remote = fileOnServer("Notes/a.md", "remote-2", 42L, remoteHint)
+        val candidate = FileSyncContentVerificationCandidate("Notes/a.md", "local-1", "remote-2", 42L)
+
+        val verified = applyFileSyncContentVerificationResults(
+            listOf(local),
+            listOf(remote),
+            listOf(FileSyncContentVerificationResult(candidate, localDigest, null)),
+        )
+
+        assertEquals(localDigest, verified.localEntries.single().contentHash)
+        assertEquals(null, verified.remoteEntries.single().contentHash)
     }
 
     @Test
