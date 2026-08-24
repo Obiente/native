@@ -123,6 +123,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val requestId = UUID.randomUUID().toString()
         val requestDirectory = directory(requestId)
         check(requestDirectory.mkdirs()) { "The private upload staging folder could not be created." }
+        val stagingMarker = createIncomingShareStagingMarker(requestDirectory, STAGING_MARKER_NAME)
         try {
             var totalBytes = 0L
             val files = sources.mapIndexed { index, uri ->
@@ -134,6 +135,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                 require(declaredBytes == null || declaredBytes in 0L..MAX_SHARE_FILE_BYTES) {
                     "$displayName is too large to stage safely."
                 }
+                requireIncomingShareStagingSpace(requestDirectory, declaredBytes, displayName, MIN_STAGING_FREE_BYTES)
                 val copied = context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(destination).use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -148,6 +150,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                             require(fileBytes <= MAX_SHARE_FILE_BYTES && totalBytes <= MAX_SHARE_TOTAL_BYTES) {
                                 "The shared files are too large to stage safely."
                             }
+                            requireIncomingShareStreamingSpace(requestDirectory, count, MIN_STAGING_FREE_BYTES)
                             output.write(buffer, 0, count)
                         }
                         output.fd.sync()
@@ -169,7 +172,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                 id = requestId,
                 files = files,
                 state = AndroidIncomingShareState.Staged,
-            ).also(::save)
+            ).also(::save).also { stagingMarker.delete() }
         } catch (failure: Throwable) {
             requestDirectory.deleteRecursively()
             throw failure
@@ -195,6 +198,9 @@ internal class AndroidIncomingShareStore(private val context: Context) {
     }
 
     fun listRecoverable(accountId: String): List<AndroidIncomingShareRequest> = synchronized(LOCK) {
+        removeExpiredAbandonedIncomingShareStaging(
+            root, STAGING_MARKER_NAME, ABANDONED_STAGING_RETENTION_MILLIS,
+        )
         root.listFiles().orEmpty()
             .asSequence()
             .filter(File::isDirectory)
@@ -340,6 +346,9 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val LOCK = Any()
         const val MAX_SHARE_FILE_BYTES = 8L * 1024L * 1024L * 1024L
         const val MAX_SHARE_TOTAL_BYTES = 16L * 1024L * 1024L * 1024L
+        const val MIN_STAGING_FREE_BYTES = 64L * 1024L * 1024L
+        const val ABANDONED_STAGING_RETENTION_MILLIS = 24L * 60L * 60L * 1_000L
+        const val STAGING_MARKER_NAME = ".staging"
         const val MAX_INCOMING_SHARE_RECOVERY_SCAN = 1_000
     }
 }
@@ -462,6 +471,8 @@ internal class AndroidIncomingShareUploadWorker(
             remoteRootPath = requireNotNull(request.destinationPath),
             webDav = NextcloudDocumentWebDav(
                 client = OkHttpClient.Builder()
+                    .followRedirects(false)
+                    .followSslRedirects(false)
                     .useAndroidNextcloudCertificateTrust(applicationContext)
                     .build(),
                 cloudMutationsAllowed = applicationContext.cloudMutationGate(),

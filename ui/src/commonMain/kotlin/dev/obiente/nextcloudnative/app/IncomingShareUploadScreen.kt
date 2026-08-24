@@ -119,6 +119,7 @@ fun IncomingShareUploadScreen(
     loading: Boolean,
     queueing: Boolean,
     error: String?,
+    destinationReady: Boolean = true,
     folderPickerOperations: RemoteFolderPickerOperations?,
     folderPickerVisible: Boolean,
     onChooseDestination: () -> Unit,
@@ -193,7 +194,7 @@ fun IncomingShareUploadScreen(
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 HorizontalDivider()
-                IncomingShareActions(request, queueing, onChooseDestination, onCancel, onDone)
+                IncomingShareActions(request, queueing, destinationReady, onChooseDestination, onCancel, onDone)
             }
         }
     }
@@ -254,6 +255,7 @@ private fun IncomingShareUploadFilePresentation.incomingShareStatusLabel(): Stri
 private fun IncomingShareActions(
     request: IncomingShareUploadPresentation,
     queueing: Boolean,
+    destinationReady: Boolean,
     onChooseDestination: () -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
@@ -273,7 +275,13 @@ private fun IncomingShareActions(
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
                     }
-                    Text(if (request.state == IncomingShareUploadState.Failed) "Retry" else "Choose folder")
+                    Text(
+                        when {
+                            !destinationReady -> "Retry account"
+                            request.state == IncomingShareUploadState.Failed -> "Retry"
+                            else -> "Choose folder"
+                        },
+                    )
                 }
             }
             IncomingShareUploadState.Queued,

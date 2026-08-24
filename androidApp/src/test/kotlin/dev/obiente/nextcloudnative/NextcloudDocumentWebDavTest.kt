@@ -355,7 +355,9 @@ class NextcloudDocumentWebDavTest {
         server.enqueue(429, headers = mapOf("Retry-After" to "17"))
         val client = NextcloudDocumentWebDav()
 
-        assertTrue(client.inspectDirectoryAccess(server.session, "alice", "Shared").canCreateChildren)
+        val access = client.inspectDirectoryAccess(server.session, "alice", "Shared")
+        assertTrue(access.canCreateFiles)
+        assertTrue(access.canCreateDirectories)
         assertEquals("0", server.request(0).header("Depth"))
         val failure = assertFailsWith<DocumentWebDavException> {
             client.createFolder(server.session, "alice", "Shared/New")

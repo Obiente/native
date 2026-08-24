@@ -148,6 +148,7 @@ internal class AndroidIncomingShareFileTransfer(
                 if (!failure.isIncomingShareNameCollision()) throw failure
                 setMutationInFlight(false)
                 occupiedNames += upload.targetName
+                remote.deleteChunkUpload(upload.uploadId, cancellation)
                 current = store.clearChunkSession(requestId)
                 continue
             }

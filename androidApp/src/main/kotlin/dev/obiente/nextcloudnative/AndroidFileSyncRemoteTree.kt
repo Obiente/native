@@ -223,9 +223,9 @@ internal class AndroidFileSyncRemoteTree(
         )
     }
 
-    fun canCreateChildren(
+    fun directoryAccess(
         cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
-    ): Boolean = webDav.inspectDirectoryAccess(session, userId, fullPath(""), cancellation).canCreateChildren
+    ): DocumentDirectoryAccess = webDav.inspectDirectoryAccess(session, userId, fullPath(""), cancellation)
 
     fun createChunkUpload(
         uploadId: String,
@@ -261,6 +261,11 @@ internal class AndroidFileSyncRemoteTree(
         chunkNumber,
         cancellation,
     )
+
+    fun deleteChunkUpload(
+        uploadId: String,
+        cancellation: DocumentRequestCancellation,
+    ) = webDav.deleteChunkUpload(session, userId, uploadId, cancellation)
 
     fun commitChunkUpload(
         uploadId: String,

@@ -18,47 +18,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
-internal enum class DocumentWebDavError {
-    Authentication,
-    Permission,
-    NotFound,
-    AlreadyExists,
-    Conflict,
-    Locked,
-    InsufficientStorage,
-    TooLarge,
-    Throttled,
-    Server,
-}
-
-internal class DocumentWebDavException(
-    val error: DocumentWebDavError,
-    val status: Int,
-    message: String,
-    val retryAfterSeconds: Long? = null,
-) : Exception(message)
-
-internal data class DocumentMutationResult(val etag: String?)
-
-internal data class DocumentReadResult(
-    val byteCount: Long,
-    val contentType: String?,
-    val etag: String?,
-)
-
-internal data class DocumentSearchResult(
-    val files: List<NextcloudFile>,
-    val query: String,
-    val limited: Boolean,
-)
-
-internal data class DocumentDirectoryResult(
-    val files: List<NextcloudFile>,
-    val limited: Boolean,
-)
-
-internal data class DocumentDirectoryAccess(val canCreateChildren: Boolean)
-
 /**
  * Android's [android.os.CancellationSignal] is deliberately kept out of this transport so the
  * WebDAV behavior remains locally unit-testable. The provider adapter installs a callback which
@@ -286,7 +245,10 @@ internal class NextcloudDocumentWebDav(
         val isDirectory = response.searchCount(DOCUMENT_SEARCH_DAV, "collection") > 0
         val permissions = response.searchText(DOCUMENT_SEARCH_OC, "permissions")
         require(isDirectory) { "The selected upload destination is not a folder." }
-        return DocumentDirectoryAccess(canCreateChildren = permissions?.contains('C') == true)
+        return DocumentDirectoryAccess(
+            canCreateFiles = permissions?.contains('C') == true,
+            canCreateDirectories = permissions?.contains('K') == true,
+        )
     }
 
     fun createChunkUpload(
@@ -334,6 +296,23 @@ internal class NextcloudDocumentWebDav(
             "upload file chunk",
             cancellation = cancellation,
         )
+    }
+
+    fun deleteChunkUpload(
+        session: NextcloudSession,
+        userId: String,
+        uploadId: String,
+        cancellation: DocumentRequestCancellation,
+    ) {
+        try {
+            execute(
+                requestBuilder(session, chunkUploadUrl(session, userId, uploadId)).delete().build(),
+                "remove rejected chunked upload",
+                cancellation = cancellation,
+            )
+        } catch (failure: DocumentWebDavException) {
+            if (failure.status != 404) throw failure
+        }
     }
 
     fun commitChunkUpload(
