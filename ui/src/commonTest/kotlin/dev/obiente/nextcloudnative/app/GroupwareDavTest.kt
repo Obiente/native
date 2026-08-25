@@ -977,7 +977,7 @@ END:VCALENDAR</c:calendar-data>
                         <d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
                           ${requested.joinToString("\n") { href ->
                               val id = href.substringAfterLast('/').substringBefore('.')
-                              "<d:response><d:href>$href</d:href><d:propstat><d:prop><d:getetag>&quot;etag-$id&quot;</d:getetag><card:address-data>BEGIN:VCARD\r\nVERSION:4.0\r\nUID:$id\r\nFN:Contact $id\r\nEND:VCARD\r\n</card:address-data></d:prop></d:propstat></d:response>"
+                              "<d:response><d:href>$href</d:href><d:propstat><d:prop><d:getetag>&quot;etag-$id&quot;</d:getetag><card:address-data>BEGIN:VCARD\r\nVERSION:4.0\r\nUID:$id\r\nFN:Contact $id\r\nEND:VCARD\r\n</card:address-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
                           }}
                         </d:multistatus>
                     """.trimIndent().encodeToByteArray(),
