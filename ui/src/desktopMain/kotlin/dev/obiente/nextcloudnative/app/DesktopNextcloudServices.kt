@@ -5631,13 +5631,14 @@ class DesktopNextcloudServices(
             val responseBody = response.body
             val contentLength = responseBody.contentLength()
             val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
-            check(contentLength <= readLimit || contentLength == -1L) {
-                "The server response is larger than the allowed ${formatByteLimit(readLimit)} limit."
+            if (contentLength > readLimit && contentLength != -1L) {
+                throw NextcloudResponseTooLargeException(readLimit, response.code)
             }
             val bodyBytes = if (mutationExecutor != null && !response.isSuccessful) {
-                runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
+                runCatching { responseBody.byteStream().readBounded(readLimit, response.code) }
+                    .getOrDefault(byteArrayOf())
             } else {
-                responseBody.byteStream().readBounded(readLimit)
+                responseBody.byteStream().readBounded(readLimit, response.code)
             }
             if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
                 bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
@@ -5788,7 +5789,7 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
+    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
         val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
         var total = 0L
@@ -5796,18 +5797,12 @@ class DesktopNextcloudServices(
             val read = read(buffer)
             if (read == -1) break
             total += read
-            check(total <= maxBytes) {
-                "The server response is larger than the allowed ${formatByteLimit(maxBytes)} limit."
+            if (total > maxBytes) {
+                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
             }
             output.write(buffer, 0, read)
         }
         return output.toByteArray()
-    }
-
-    private fun formatByteLimit(bytes: Long): String = when {
-        bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
-        bytes >= 1024 -> "${bytes / 1024} KiB"
-        else -> "$bytes bytes"
     }
 
     private fun parseDavFiles(xml: ByteArray, userId: String): List<NextcloudFile> {

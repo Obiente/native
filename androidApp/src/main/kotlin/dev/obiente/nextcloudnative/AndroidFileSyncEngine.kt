@@ -46,7 +46,6 @@ import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
 import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatchResults
 import dev.obiente.nextcloudnative.app.retainsResolvedFileSyncDecisions
-import dev.obiente.nextcloudnative.app.withinFileSyncContentVerificationBudget
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -426,13 +425,11 @@ internal class AndroidFileSyncEngine(context: Context) {
             initialPair.baselines,
             cachedMismatchResults.map(FileSyncContentVerificationResult::candidate),
             requireContentBackedBaseline = true,
-        ).withinFileSyncContentVerificationBudget(
-            maximumTotalBytes = contentReadBudget.remainingBytes,
-            maximumCandidates = initialPair.availableAndroidContentVerificationSlots(),
         )
-        val verificationResults = cachedMismatchResults + candidates.mapNotNull { candidate ->
-            verifyAndroidFileSyncContent(candidate, local, remote, contentReadBudget)
-        }
+        val verificationResults = cachedMismatchResults + verifyAndroidFileSyncCandidates(
+            candidates = candidates,
+            maximumResults = initialPair.availableAndroidContentVerificationSlots(),
+        ) { candidate -> verifyAndroidFileSyncContent(candidate, local, remote, contentReadBudget) }
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
             .map(FileSyncContentVerificationResult::candidate)
         val verifiedMismatchHashes = verificationResults
@@ -586,9 +583,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         contentReadBudget: AndroidFileSyncContentReadBudget,
     ): FileSyncContentVerificationResult? {
         val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
-        require(contentReadBudget.reserve(expectedBytes)) {
-            "The Android content verification budget changed after candidate selection."
-        }
+        if (!contentReadBudget.reserve(expectedBytes)) return null
         val readCeiling = maxOf(1L, expectedBytes)
         val localHash = local.contentHash(
             path = candidate.relativePath,

@@ -215,6 +215,53 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun createFileRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
+        server.enqueue(204)
+        val source = Files.createTempFile("ncn-create-unconfirmed-", ".txt").toFile()
+        try {
+            source.writeText("preserve me")
+
+            val failure = assertFailsWith<DocumentWebDavException> {
+                NextcloudDocumentWebDav().createFile(
+                    server.session,
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                )
+            }
+
+            assertEquals(DocumentWebDavError.Server, failure.error)
+            assertEquals(204, failure.status)
+            assertTrue(failure.message.orEmpty().contains("did not confirm"))
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun createFileClassifiesPayloadTooLargeAsDefiniteRejection() = RecordingServer().use { server ->
+        server.enqueue(413)
+        val source = Files.createTempFile("ncn-create-too-large-", ".txt").toFile()
+        try {
+            source.writeText("too large according to server policy")
+
+            val failure = assertFailsWith<DocumentWebDavException> {
+                NextcloudDocumentWebDav().createFile(
+                    server.session,
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                )
+            }
+
+            assertEquals(DocumentWebDavError.TooLarge, failure.error)
+            assertEquals(413, failure.status)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun createFileDoesNotMarkRequestStartedWhenMutationGateRejectsPreflight() = RecordingServer().use { server ->
         val source = Files.createTempFile("ncn-create-gated-", ".txt").toFile()
         try {
@@ -330,6 +377,28 @@ class NextcloudDocumentWebDavTest {
         } finally {
             source.delete()
         }
+    }
+
+    @Test
+    fun chunkCommitRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
+        server.enqueue(204)
+
+        val failure = assertFailsWith<DocumentWebDavException> {
+            NextcloudDocumentWebDav().commitChunkUpload(
+                server.session,
+                "alice",
+                "01234567-89ab-cdef-0123-456789abcdef",
+                "Shared/archive.bin",
+                totalLength = 10,
+                cancellation = TestCancellation(),
+                onRequestStarted = {},
+            )
+        }
+
+        assertEquals(DocumentWebDavError.Server, failure.error)
+        assertEquals(204, failure.status)
+        assertTrue(failure.message.orEmpty().contains("did not confirm"))
+        assertEquals("F", server.request(0).header("Overwrite"))
     }
 
     @Test

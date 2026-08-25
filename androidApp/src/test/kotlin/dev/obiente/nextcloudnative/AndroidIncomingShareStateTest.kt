@@ -147,6 +147,16 @@ class AndroidIncomingShareStateTest {
                 mutationInFlight = true,
             ),
         )
+        assertFalse(
+            incomingShareMutationOutcomeUnknown(
+                DocumentWebDavException(
+                    DocumentWebDavError.TooLarge,
+                    413,
+                    "The file is too large.",
+                ),
+                mutationInFlight = true,
+            ),
+        )
         assertTrue(
             incomingShareMutationOutcomeUnknown(
                 IllegalStateException("Connection closed"),
@@ -172,6 +182,34 @@ class AndroidIncomingShareStateTest {
         assertFalse(
             DocumentWebDavException(DocumentWebDavError.Permission, 403, "No")
                 .isRetryableIncomingShareTransferFailure(),
+        )
+    }
+
+    @Test
+    fun resumableChunkDoesNotTurnPermanentFailureIntoAutomaticRetry() {
+        val permanent = DocumentWebDavException(DocumentWebDavError.Permission, 403, "No")
+
+        assertFalse(shouldRetryIncomingShareTransfer(permanent, mutationInFlight = false, automaticTransferAttempts = 0))
+        assertTrue(
+            shouldRetryIncomingShareTransfer(
+                java.io.IOException("offline"),
+                mutationInFlight = false,
+                automaticTransferAttempts = 0,
+            ),
+        )
+        assertFalse(
+            shouldRetryIncomingShareTransfer(
+                java.io.IOException("offline"),
+                mutationInFlight = true,
+                automaticTransferAttempts = 0,
+            ),
+        )
+        assertFalse(
+            shouldRetryIncomingShareTransfer(
+                java.io.IOException("offline"),
+                mutationInFlight = false,
+                automaticTransferAttempts = MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS - 1,
+            ),
         )
     }
 

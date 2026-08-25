@@ -226,6 +226,7 @@ internal class NextcloudDocumentWebDav(
             operation = "create file",
             onRequestStarted = onRequestStarted,
             cancellation = cancellation,
+            requiredSuccessStatus = 201,
         )
     }
 
@@ -335,6 +336,7 @@ internal class NextcloudDocumentWebDav(
         onRequestStarted,
         cancellation,
         timeoutMillis = CHUNK_COMMIT_TIMEOUT_MILLIS,
+        requiredSuccessStatus = 201,
     )
 
     fun replaceFile(
@@ -461,6 +463,7 @@ internal class NextcloudDocumentWebDav(
         onRequestStarted: () -> Unit = {},
         cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
         timeoutMillis: Long? = null,
+        requiredSuccessStatus: Int? = null,
     ): DocumentMutationResult {
         check(cloudMutationsAllowed()) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
@@ -479,6 +482,14 @@ internal class NextcloudDocumentWebDav(
             onRequestStarted()
             return call.execute().use { response ->
                 if (!response.isSuccessful) throw response.toDocumentException(operation)
+                if (requiredSuccessStatus != null && response.code != requiredSuccessStatus) {
+                    throw DocumentWebDavException(
+                        DocumentWebDavError.Server,
+                        response.code,
+                        "Nextcloud did not confirm that it created a new remote file for $operation " +
+                            "(HTTP ${response.code}).",
+                    )
+                }
                 DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))
             }
         } catch (failure: IOException) {
@@ -536,6 +547,7 @@ internal class NextcloudDocumentWebDav(
             404 -> DocumentWebDavError.NotFound
             405, 409 -> DocumentWebDavError.AlreadyExists
             412 -> DocumentWebDavError.Conflict
+            413 -> DocumentWebDavError.TooLarge
             423 -> DocumentWebDavError.Locked
             429 -> DocumentWebDavError.Throttled
             507 -> DocumentWebDavError.InsufficientStorage

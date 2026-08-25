@@ -25,9 +25,10 @@ import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.remoteFolderPickerOperations
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -147,18 +148,22 @@ class AndroidShareUploadActivity : ComponentActivity() {
         val generation = ++restoreGeneration
         recoveryRequestId = restoredRequestId
         restoreJob = lifecycleScope.launch {
+            var unclaimedStagedRequestId: String? = null
             try {
                 val activeSession = services.loadSession()
                     ?: error("Sign in to Nextcloud Native before sharing files to it.")
                 val staged = withContext(Dispatchers.IO) {
                     val restored = restoredRequestId?.let { requestId ->
                         store.requireAvailable(requestId)
-                    } ?: store.stage(sourceIntent)
+                    } ?: store.stage(sourceIntent).also { newlyStaged ->
+                        unclaimedStagedRequestId = newlyStaged.id
+                    }
                     uploads.ensureQueuedRequestScheduled(restored)
                     restored
                 }
                 ensureActive()
                 if (generation != restoreGeneration) return@launch
+                unclaimedStagedRequestId = null
                 request = staged
                 recoveryRequestId = staged.id
                 session = activeSession
@@ -168,6 +173,12 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 return@launch
             } catch (failure: Throwable) {
                 error = failure.message ?: "The shared files could not be prepared."
+            } finally {
+                unclaimedStagedRequestId?.let { requestId ->
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        store.removeIfReleasable(requestId)
+                    }
+                }
             }
             if (generation == restoreGeneration) loading = false
         }

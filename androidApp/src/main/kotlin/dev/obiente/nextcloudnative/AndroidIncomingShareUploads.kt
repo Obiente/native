@@ -603,6 +603,17 @@ internal fun incomingShareMutationOutcomeUnknown(failure: Throwable, mutationInF
     )
 }
 
+internal fun shouldRetryIncomingShareTransfer(
+    failure: Throwable,
+    mutationInFlight: Boolean,
+    automaticTransferAttempts: Int,
+): Boolean {
+    require(automaticTransferAttempts >= 0)
+    return !mutationInFlight &&
+        failure.isRetryableIncomingShareTransferFailure() &&
+        automaticTransferAttempts + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
+}
+
 private fun android.content.ContentResolver.queryIncomingShareMetadata(uri: Uri): Pair<String?, Long?> {
     var cursor: Cursor? = null
     return try {

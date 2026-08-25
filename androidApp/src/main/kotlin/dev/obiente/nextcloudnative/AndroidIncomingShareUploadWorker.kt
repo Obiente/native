@@ -171,15 +171,7 @@ internal class AndroidIncomingShareUploadWorker(
                 store.setVisibleMutationInFlight(requestId, false)
                 mutationInFlight = false
             }
-            val resumableChunk = store.load(requestId)?.chunkSession?.takeIf { !it.commitInFlight }
-            val retryable = !mutationInFlight &&
-                failure.isRetryableIncomingShareTransferFailure() &&
-                request.automaticTransferAttempts + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
-            if (
-                retryable ||
-                resumableChunk != null &&
-                request.automaticTransferAttempts + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
-            ) {
+            if (shouldRetryIncomingShareTransfer(failure, mutationInFlight, request.automaticTransferAttempts)) {
                 val retryNotBefore = failure.incomingShareRetryNotBeforeEpochMillis(System.currentTimeMillis())
                 val queued = store.queueAutomaticRetry(
                     id = requestId,
