@@ -38,7 +38,13 @@ internal class AndroidIncomingShareCleanupWorker(
         val store = AndroidIncomingShareStore(applicationContext)
         when (val loaded = store.loadResult(requestId)) {
             is AndroidIncomingShareLoadResult.Available -> {
-                if (loaded.request.chunkSession != null) {
+                val chunk = loaded.request.chunkSession
+                if (chunk != null) {
+                    store.claimChunkSessionForCleanup(
+                        requestId,
+                        chunk.uploadId,
+                        includeRetryableFailure = true,
+                    )
                     scheduleIncomingShareChunkCleanup(applicationContext, requestId)
                     return@withContext Result.retry()
                 }
@@ -48,6 +54,24 @@ internal class AndroidIncomingShareCleanupWorker(
             AndroidIncomingShareLoadResult.Missing -> Unit
         }
         Result.success()
+    }
+}
+
+internal class AndroidIncomingShareAbandonedStagingCleanupWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val requestId = inputData.getString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID)
+            ?: return@withContext Result.failure()
+        val store = AndroidIncomingShareStore(applicationContext)
+        when (store.loadResult(requestId)) {
+            AndroidIncomingShareLoadResult.Missing -> {
+                if (store.removeExpiredAbandonedStaging(requestId)) Result.success() else Result.retry()
+            }
+            is AndroidIncomingShareLoadResult.Available,
+            is AndroidIncomingShareLoadResult.Corrupt -> Result.success()
+        }
     }
 }
 
@@ -73,6 +97,11 @@ internal class AndroidIncomingShareChunkCleanupWorker(
         ) {
             return@withContext Result.retry()
         }
+        val claimed = store.claimChunkSessionForCleanup(
+            requestId,
+            chunk.uploadId,
+            includeRetryableFailure = false,
+        ) ?: return@withContext Result.success()
         val cancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
         try {
             val remote = AndroidFileSyncRemoteTree(
@@ -83,13 +112,14 @@ internal class AndroidIncomingShareChunkCleanupWorker(
                     client = OkHttpClient.Builder()
                         .followRedirects(false)
                         .followSslRedirects(false)
+                        .retryOnConnectionFailure(false)
                         .useAndroidNextcloudCertificateTrust(applicationContext)
                         .build(),
                     cloudMutationsAllowed = applicationContext.cloudMutationGate(),
                 ),
             )
-            remote.deleteChunkUpload(chunk.uploadId, cancellation)
-            store.clearChunkSessionForCleanup(requestId, chunk.uploadId)
+            remote.deleteChunkUpload(claimed.uploadId, cancellation)
+            store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
             Result.success()
         } catch (_: Throwable) {
             cancellation.throwIfCancelled()
@@ -98,12 +128,13 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             cancellation.close()
         }
     }
+
 }
 
 internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
     scheduleIncomingShareChunkCleanup(context, requestId)
     WorkManager.getInstance(context).enqueueUniqueWork(
-        "incoming-share-cleanup-$requestId",
+        incomingShareCleanupWorkName(requestId),
         ExistingWorkPolicy.REPLACE,
         OneTimeWorkRequestBuilder<AndroidIncomingShareCleanupWorker>()
             .setInitialDelay(7, TimeUnit.DAYS)
@@ -112,9 +143,20 @@ internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
     )
 }
 
+internal fun scheduleIncomingShareAbandonedStagingCleanup(context: Context, requestId: String) {
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        "incoming-share-abandoned-staging-$requestId",
+        ExistingWorkPolicy.KEEP,
+        OneTimeWorkRequestBuilder<AndroidIncomingShareAbandonedStagingCleanupWorker>()
+            .setInitialDelay(ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS, TimeUnit.MILLISECONDS)
+            .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
+            .build(),
+    )
+}
+
 private fun scheduleIncomingShareChunkCleanup(context: Context, requestId: String) {
     WorkManager.getInstance(context).enqueueUniqueWork(
-        "incoming-share-chunk-cleanup-$requestId",
+        incomingShareChunkCleanupWorkName(requestId),
         ExistingWorkPolicy.KEEP,
         OneTimeWorkRequestBuilder<AndroidIncomingShareChunkCleanupWorker>()
             .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
@@ -123,6 +165,10 @@ private fun scheduleIncomingShareChunkCleanup(context: Context, requestId: Strin
             .build(),
     )
 }
+
+internal fun incomingShareCleanupWorkName(requestId: String) = "incoming-share-cleanup-$requestId"
+
+internal fun incomingShareChunkCleanupWorkName(requestId: String) = "incoming-share-chunk-cleanup-$requestId"
 
 internal fun incomingShareRecoveryPendingIntent(context: Context, requestId: String): PendingIntent =
     PendingIntent.getActivity(

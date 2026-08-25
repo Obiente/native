@@ -31,10 +31,26 @@ internal fun removeExpiredAbandonedIncomingShareStaging(
 ) {
     root.listFiles().orEmpty().asSequence()
         .filter(File::isDirectory)
-        .filter { !File(it, "request.json").isFile }
-        .filter { directory ->
-            val marker = File(directory, markerName)
-            marker.isFile && nowMillis - marker.lastModified() >= retentionMillis
+        .forEach { directory ->
+            removeExpiredAbandonedIncomingShareStagingDirectory(
+                directory,
+                markerName,
+                retentionMillis,
+                nowMillis,
+            )
         }
-        .forEach(File::deleteRecursively)
+}
+
+internal fun removeExpiredAbandonedIncomingShareStagingDirectory(
+    directory: File,
+    markerName: String,
+    retentionMillis: Long,
+    nowMillis: Long = System.currentTimeMillis(),
+): Boolean {
+    require(retentionMillis >= 0L)
+    if (!directory.isDirectory || File(directory, "request.json").isFile) return false
+    val marker = File(directory, markerName)
+    val ageAnchor = marker.takeIf(File::isFile) ?: directory
+    if (nowMillis - ageAnchor.lastModified() < retentionMillis) return false
+    return directory.deleteRecursively()
 }

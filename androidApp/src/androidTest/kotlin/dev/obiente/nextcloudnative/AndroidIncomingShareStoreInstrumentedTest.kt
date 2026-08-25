@@ -14,6 +14,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -107,6 +109,25 @@ class AndroidIncomingShareStoreInstrumentedTest {
                     .requireAvailable(staged.id)
                     .chunkSession
                     ?.cleanupPending == true,
+            )
+            assertNull(
+                store.claimChunkSessionForCleanup(
+                    staged.id,
+                    "01234567-89ab-cdef-0123-456789abcdef",
+                    includeRetryableFailure = false,
+                ),
+            )
+            store.transition(
+                staged.id,
+                expected = setOf(AndroidIncomingShareState.Uploading),
+                target = AndroidIncomingShareState.Failed,
+            )
+            assertNotNull(
+                store.claimChunkSessionForCleanup(
+                    staged.id,
+                    "01234567-89ab-cdef-0123-456789abcdef",
+                    includeRetryableFailure = false,
+                ),
             )
             assertTrue(
                 store.clearChunkSessionForCleanup(

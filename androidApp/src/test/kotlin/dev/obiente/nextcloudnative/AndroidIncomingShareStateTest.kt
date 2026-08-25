@@ -171,6 +171,42 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
+    fun cleanupPendingChunkCannotBeRequeued() {
+        val failed = request(AndroidIncomingShareState.Failed).copy(
+            destinationPath = "Shared/Phone",
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                cleanupPending = true,
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            prepareIncomingShareRequestForQueue(
+                current = failed,
+                accountId = "account-1",
+                userId = "user-1",
+                destinationPath = "Shared/Phone",
+            )
+        }
+    }
+
+    @Test
+    fun fullyJournaledUploadCanRecoverAsCompleted() {
+        val completed = request(AndroidIncomingShareState.Uploading).copy(
+            completedFiles = 2,
+            uploadedNames = listOf("first.txt", "second.txt"),
+        )
+
+        assertTrue(completed.isFullyJournaledIncomingShareUpload())
+        assertFalse(completed.copy(completedFiles = 1, uploadedNames = listOf("first.txt"))
+            .isFullyJournaledIncomingShareUpload())
+        assertFalse(completed.copy(state = AndroidIncomingShareState.Failed)
+            .isFullyJournaledIncomingShareUpload())
+    }
+
+    @Test
     fun throttledFinalMoveIsARejectedRatherThanAmbiguousMutation() {
         val throttled = DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
 

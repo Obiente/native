@@ -20,15 +20,16 @@ internal class AndroidIncomingShareUploads(private val context: Context) {
         requestId: String,
         destinationPath: String,
     ): AndroidIncomingShareRequest {
-        val current = requireNotNull(store.load(requestId)) { "The staged share is no longer available." }
-        val queued = prepareIncomingShareRequestForQueue(
-            current = current,
+        val queued = store.queue(
+            id = requestId,
             accountId = NextcloudDocumentIds.accountKey(session),
             userId = userId,
             destinationPath = destinationPath,
         )
-        store.save(queued)
-        WorkManager.getInstance(context).enqueueUniqueWork(
+        val workManager = WorkManager.getInstance(context)
+        workManager.cancelUniqueWork(incomingShareCleanupWorkName(requestId))
+        workManager.cancelUniqueWork(incomingShareChunkCleanupWorkName(requestId))
+        workManager.enqueueUniqueWork(
             workName(requestId),
             ExistingWorkPolicy.REPLACE,
             incomingShareUploadWork(requestId),
