@@ -43,10 +43,12 @@ internal fun verifyAndroidRemoteDeletionContent(
             entry.kind != SyncEntryKind.File ||
             entry.relativePath in remotePaths ||
             baseline?.kind != SyncEntryKind.File ||
-            entry.revision != baseline.localRevision ||
-            baseline.contentHash == null
+            entry.revision != baseline.localRevision
         ) {
             return@map entry
+        }
+        if (baseline.contentHash == null) {
+            return@map entry.copy(contentIdentityUnverified = true)
         }
         val expectedBytes = entry.size
         if (!budget.reserve(expectedBytes)) {
