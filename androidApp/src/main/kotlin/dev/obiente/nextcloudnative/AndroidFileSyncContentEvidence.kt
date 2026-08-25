@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
+import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_FILE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES
@@ -32,9 +33,11 @@ internal fun verifyAndroidRemoteDeletionContent(
     localEntries: List<LocalSyncEntry>,
     remoteEntries: List<RemoteSyncEntry>,
     baselines: List<FileSyncBaseline>,
+    direction: FileSyncDirection,
     local: AndroidFileSyncLocalTree,
     budget: AndroidFileSyncContentReadBudget,
 ): List<LocalSyncEntry> {
+    if (direction == FileSyncDirection.UploadOnly) return localEntries
     val remotePaths = remoteEntries.mapTo(mutableSetOf(), RemoteSyncEntry::relativePath)
     val baselineByPath = baselines.associateBy(FileSyncBaseline::relativePath)
     return localEntries.map { entry ->
@@ -43,24 +46,24 @@ internal fun verifyAndroidRemoteDeletionContent(
             entry.kind != SyncEntryKind.File ||
             entry.relativePath in remotePaths ||
             baseline?.kind != SyncEntryKind.File ||
-            entry.revision != baseline.localRevision ||
-            baseline.contentHash == null
+            entry.revision != baseline.localRevision
         ) {
             return@map entry
+        }
+        if (baseline.contentHash == null) {
+            return@map entry.copy(contentIdentityUnverified = true)
         }
         val expectedBytes = entry.size
         if (!budget.reserve(expectedBytes)) {
             return@map entry.copy(contentIdentityUnverified = true)
         }
         val verifiedBytes = requireNotNull(expectedBytes)
-        val localHash = requireNotNull(
-            local.contentHash(
-                path = entry.relativePath,
-                expectedLocalRevision = entry.revision,
-                expectedBytes = verifiedBytes,
-                maximumBytes = maxOf(1L, verifiedBytes),
-            ),
-        ) { "The local file could not be verified before applying a remote deletion." }
+        val localHash = local.contentHash(
+            path = entry.relativePath,
+            expectedLocalRevision = entry.revision,
+            expectedBytes = verifiedBytes,
+            maximumBytes = maxOf(1L, verifiedBytes),
+        ) ?: return@map entry.copy(contentIdentityUnverified = true)
         entry.copy(contentHash = localHash)
     }
 }

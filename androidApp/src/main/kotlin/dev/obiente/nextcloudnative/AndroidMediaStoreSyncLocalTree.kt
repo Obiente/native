@@ -137,12 +137,14 @@ internal class AndroidMediaStoreSyncLocalTree(
     private fun File.toSyncDocument(relativePath: String): AndroidLocalSyncDocument {
         val kind = if (isDirectory) SyncEntryKind.Directory else SyncEntryKind.File
         val size = if (kind == SyncEntryKind.File) length().coerceAtLeast(0L) else null
+        val modified = lastModified().coerceAtLeast(0L)
         return AndroidLocalSyncDocument(
             entry = LocalSyncEntry(
                 relativePath = relativePath,
                 kind = kind,
-                revision = fileRevision(relativePath, kind, lastModified(), size),
+                revision = fileRevision(relativePath, kind, modified, size),
                 size = size,
+                modifiedEpochMillis = knownAndroidFileSyncModifiedEpochMillis(modified),
             ),
             uri = Uri.fromFile(this),
             displayName = name,

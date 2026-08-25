@@ -406,6 +406,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             localEntries = scannedLocalEntries,
             remoteEntries = remoteEntries,
             baselines = initialPair.baselines,
+            direction = configuration.direction,
             local = local,
             budget = contentReadBudget,
         )
@@ -429,7 +430,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             maximumTotalBytes = contentReadBudget.remainingBytes,
             maximumCandidates = initialPair.availableAndroidContentVerificationSlots(),
         )
-        val verificationResults = cachedMismatchResults + candidates.map { candidate ->
+        val verificationResults = cachedMismatchResults + candidates.mapNotNull { candidate ->
             verifyAndroidFileSyncContent(candidate, local, remote, contentReadBudget)
         }
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
@@ -583,20 +584,18 @@ internal class AndroidFileSyncEngine(context: Context) {
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
         contentReadBudget: AndroidFileSyncContentReadBudget,
-    ): FileSyncContentVerificationResult {
+    ): FileSyncContentVerificationResult? {
         val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
         require(contentReadBudget.reserve(expectedBytes)) {
             "The Android content verification budget changed after candidate selection."
         }
         val readCeiling = maxOf(1L, expectedBytes)
-        val localHash = requireNotNull(
-            local.contentHash(
-                path = candidate.relativePath,
-                expectedLocalRevision = candidate.localRevision,
-                expectedBytes = expectedBytes,
-                maximumBytes = readCeiling,
-            ),
-        ) { "The local file could not be opened for content verification." }
+        val localHash = local.contentHash(
+            path = candidate.relativePath,
+            expectedLocalRevision = candidate.localRevision,
+            expectedBytes = expectedBytes,
+            maximumBytes = readCeiling,
+        ) ?: return null
         val matches = remote.verifyContentHash(
                 relativePath = candidate.relativePath,
                 expectedRemoteEtag = candidate.remoteEtag,

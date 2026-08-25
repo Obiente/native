@@ -273,6 +273,7 @@ internal class AndroidSafFileSyncLocalTree(
                                 kind = kind,
                                 revision = revision(documentId, mimeType, modified, size),
                                 size = if (kind == SyncEntryKind.File) size else null,
+                                modifiedEpochMillis = knownAndroidFileSyncModifiedEpochMillis(modified),
                             ),
                             uri = documentUri,
                             displayName = name,
@@ -316,6 +317,8 @@ internal class AndroidSafFileSyncLocalTree(
         )
     }
 }
+
+internal fun knownAndroidFileSyncModifiedEpochMillis(value: Long): Long? = value.takeIf { it > 0L }
 
 internal fun sha256SyncContentHash(
     input: InputStream,
