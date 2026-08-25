@@ -1168,7 +1168,8 @@ internal fun FileOfflineCenterScreen(
                     } else {
                         "Apply ${target.choice.readableDecision().lowercase()} to all " +
                             "${target.conflicts.size} reviewed conflicts? Every item is checked again before " +
-                            "the batch is saved, and the batch is rejected if any item changed."
+                            "the batch is saved. A destination change rejects the batch; a newer chosen " +
+                            "source may be used only while its destination stays unchanged."
                     },
                 )
             },
