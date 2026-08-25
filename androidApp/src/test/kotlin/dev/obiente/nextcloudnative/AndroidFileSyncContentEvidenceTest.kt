@@ -67,7 +67,7 @@ class AndroidFileSyncContentEvidenceTest {
                     SyncEntryKind.File,
                     "local-1",
                     "remote-1",
-                    contentHash = "sha256:baseline",
+                    contentHash = "sha256:${"0".repeat(64)}",
                 ),
             ),
             local = UnreadableLocalTree,
