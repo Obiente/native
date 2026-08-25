@@ -104,6 +104,36 @@ class AndroidFileSyncContentEvidenceTest {
     }
 
     @Test
+    fun zeroByteReadFailureDoesNotStarveLaterDeletionEvidence() {
+        val localEntries = listOf("a.txt", "b.txt").map { path ->
+            LocalSyncEntry(path, SyncEntryKind.File, "local-$path", size = 4L)
+        }
+        val baselines = localEntries.map { entry ->
+            FileSyncBaseline(
+                entry.relativePath,
+                SyncEntryKind.File,
+                entry.revision,
+                "remote-${entry.relativePath}",
+                contentHash = "sha256:${"0".repeat(64)}",
+            )
+        }
+        val budget = AndroidFileSyncContentReadBudget(maximumFileBytes = 4L, maximumTotalBytes = 4L)
+
+        val verified = verifyAndroidRemoteDeletionContent(
+            localEntries = localEntries,
+            remoteEntries = emptyList(),
+            baselines = baselines,
+            direction = FileSyncDirection.Bidirectional,
+            local = ZeroReadThenReadableLocalTree,
+            budget = budget,
+        )
+
+        assertTrue(verified[0].contentIdentityUnverified)
+        assertEquals("sha256:${"1".repeat(64)}", verified[1].contentHash)
+        assertEquals(0L, budget.remainingBytes)
+    }
+
+    @Test
     fun uploadOnlyRemoteDeletionNeverReadsLocalContentEvidence() {
         val localEntry = LocalSyncEntry(
             relativePath = "camera.jpg",
@@ -163,5 +193,18 @@ class AndroidFileSyncContentEvidenceTest {
             expectedBytes: Long,
             maximumBytes: Long,
         ): String? = null
+    }
+
+    private object ZeroReadThenReadableLocalTree : AndroidFileSyncLocalTree by NoReadLocalTree {
+        override fun contentHashRead(
+            path: String,
+            expectedLocalRevision: String,
+            expectedBytes: Long,
+            maximumBytes: Long,
+        ): AndroidFileSyncContentHashRead = if (path == "a.txt") {
+            AndroidFileSyncContentHashRead(null, 0L)
+        } else {
+            AndroidFileSyncContentHashRead("sha256:${"1".repeat(64)}", expectedBytes)
+        }
     }
 }
