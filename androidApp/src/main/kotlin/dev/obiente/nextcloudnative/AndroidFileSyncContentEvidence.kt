@@ -78,13 +78,17 @@ internal fun verifyAndroidRemoteDeletionContent(
             return@map entry.copy(contentIdentityUnverified = true)
         }
         val verifiedBytes = requireNotNull(expectedBytes)
-        val localHash = local.contentHash(
+        val hashRead = local.contentHashRead(
             path = entry.relativePath,
             expectedLocalRevision = entry.revision,
             expectedBytes = verifiedBytes,
             maximumBytes = maxOf(1L, verifiedBytes),
-        ) ?: return@map entry.copy(contentIdentityUnverified = true)
-        entry.copy(contentHash = localHash)
+        )
+        if (hashRead.contentHash == null) {
+            if (hashRead.bytesRead == 0L) budget.refund(verifiedBytes)
+            return@map entry.copy(contentIdentityUnverified = true)
+        }
+        entry.copy(contentHash = hashRead.contentHash)
     }
 }
 
