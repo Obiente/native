@@ -49,6 +49,35 @@ class AndroidFileSyncContentEvidenceTest {
         assertEquals(null, verified.contentHash)
     }
 
+    @Test
+    fun unreadableContentRetainsRemoteDeletionForReview() {
+        val localEntry = LocalSyncEntry(
+            relativePath = "note.txt",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 4L,
+        )
+
+        val verified = verifyAndroidRemoteDeletionContent(
+            localEntries = listOf(localEntry),
+            remoteEntries = emptyList(),
+            baselines = listOf(
+                FileSyncBaseline(
+                    "note.txt",
+                    SyncEntryKind.File,
+                    "local-1",
+                    "remote-1",
+                    contentHash = "sha256:baseline",
+                ),
+            ),
+            local = UnreadableLocalTree,
+            budget = AndroidFileSyncContentReadBudget(),
+        ).single()
+
+        assertTrue(verified.contentIdentityUnverified)
+        assertEquals(null, verified.contentHash)
+    }
+
     private object NoReadLocalTree : AndroidFileSyncLocalTree {
         override fun scan(
             includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
@@ -71,5 +100,14 @@ class AndroidFileSyncContentEvidenceTest {
         override fun delete(path: String, expectedLocalRevision: String) = error("Not used")
 
         override fun resolve(path: String): AndroidLocalSyncDocument? = error("Not used")
+    }
+
+    private object UnreadableLocalTree : AndroidFileSyncLocalTree by NoReadLocalTree {
+        override fun contentHash(
+            path: String,
+            expectedLocalRevision: String,
+            expectedBytes: Long,
+            maximumBytes: Long,
+        ): String? = null
     }
 }

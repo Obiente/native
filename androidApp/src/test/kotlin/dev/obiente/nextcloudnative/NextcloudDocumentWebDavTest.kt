@@ -102,6 +102,30 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun remoteSyncContentIdentityRejectsAChangedResponseGeneration() = RecordingServer().use { server ->
+        server.enqueue(200, mapOf("ETag" to "\"note-8\""), body = "same note")
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Vault",
+            NextcloudDocumentWebDav(),
+        )
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            remote.verifyContentHash(
+                "Notes/today.md",
+                "\"note-7\"",
+                "sha256:8b4c848f9c906b8b340c2400c9aa8fdc1c9d5db557bad1b6aabdd9aabe3eb6e9",
+                expectedBytes = 9L,
+                maximumBytes = 1_024L,
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("changed during content verification"))
+        assertEquals("\"note-7\"", server.request(0).header("If-Match"))
+    }
+
+    @Test
     fun cancellationAbortsInflightHttpReadAndDetachesCallback() = RecordingServer().use { server ->
         server.enqueue(
             MockResponse.Builder()

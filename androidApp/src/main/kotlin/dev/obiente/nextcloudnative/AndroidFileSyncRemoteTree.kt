@@ -150,7 +150,9 @@ internal class AndroidFileSyncRemoteTree(
             expectedEtag = expectedRemoteEtag,
         )
         require(result.byteCount == expectedBytes) { "The server returned truncated content during verification." }
-        if (result.etag != null && result.etag != expectedRemoteEtag) return false
+        require(result.etag == null || result.etag == expectedRemoteEtag) {
+            "The server file changed during content verification."
+        }
         val actual = "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         return actual == expectedContentHash
     }
