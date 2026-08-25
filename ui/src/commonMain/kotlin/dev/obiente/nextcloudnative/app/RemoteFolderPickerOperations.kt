@@ -43,6 +43,18 @@ internal suspend fun RemoteFolderPickerOperations.confirmSelectionAccess(
         }
 }
 
+internal suspend fun RemoteFolderPickerOperations.createAndConfirmDestination(
+    destination: MissingRemoteFolderDestination,
+) {
+    destination.pathsToCreate.forEach { path -> createDirectoryIfAbsent(path) }
+    when (val access = selectionAccess(destination.intendedPath)) {
+        RemoteFolderSelectionAccess.Allowed -> Unit
+        RemoteFolderSelectionAccess.DirectoryCreationOnly ->
+            error("The new Nextcloud folder cannot receive files for this account.")
+        is RemoteFolderSelectionAccess.Denied -> error(access.message)
+    }
+}
+
 fun remoteFolderPickerOperations(
     services: NextcloudPlatformServices,
     session: NextcloudSession,

@@ -716,9 +716,7 @@ fun RemoteFolderPickerDialog(
                     scope.launch {
                         try {
                             runCatching {
-                                destination.pathsToCreate.forEach { path ->
-                                    operations.createDirectoryIfAbsent(path)
-                                }
+                                operations.createAndConfirmDestination(destination)
                             }.rethrowRemoteFolderCancellation().onSuccess {
                                 recoveryTarget = null
                                 missingDestination = null
