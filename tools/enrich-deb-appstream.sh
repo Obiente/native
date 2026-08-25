@@ -26,6 +26,15 @@ install -D -m 0644 "$metadata" \
     "$root/usr/share/metainfo/dev.obiente.nextcloudnative.metainfo.xml"
 install -D -m 0644 "$license" "$root/usr/share/doc/nextcloudnative/copyright"
 control="$root/DEBIAN/control"
+add_legacy_runtime_alternative() {
+    local current_package="$1"
+    local legacy_package="$2"
+    sed -i -E \
+        "/^Depends:/ s/(^Depends: |, )(${current_package}([[:space:]]*\\([^)]*\\))?)(,|$)/\\1\\2 | ${legacy_package}\\4/" \
+        "$control"
+}
+add_legacy_runtime_alternative libasound2t64 libasound2
+add_legacy_runtime_alternative libpng16-16t64 libpng16-16
 if ! grep -q '^Depends:' "$control"; then
     sed -i '/^Description:/i Depends: libsecret-tools' "$control"
 elif ! sed -n '/^Depends:/p' "$control" |
@@ -65,7 +74,20 @@ install -D -m 0644 "$icon" \
 )
 dpkg-deb --build --root-owner-group "$root" "$rebuilt"
 mv -- "$rebuilt" "${packages[0]}"
-dpkg-deb --field "${packages[0]}" Depends |
+dependencies="$(dpkg-deb --field "${packages[0]}" Depends)"
+printf '%s\n' "$dependencies" |
     tr ',' '\n' |
     sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
     grep -Eq '^libsecret-tools([[:space:](]|$)'
+verify_legacy_runtime_alternative() {
+    local current_package="$1"
+    local legacy_package="$2"
+    if grep -Eq "(^|,)[[:space:]]*${current_package}([[:space:](,]|$)" <<<"$dependencies"; then
+        tr ',' '\n' <<<"$dependencies" |
+            sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+            grep -Eq \
+                "^${current_package}([[:space:]]*\\([^)]*\\))?[[:space:]]*\\|[[:space:]]*${legacy_package}$"
+    fi
+}
+verify_legacy_runtime_alternative libasound2t64 libasound2
+verify_legacy_runtime_alternative libpng16-16t64 libpng16-16
