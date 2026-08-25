@@ -33,6 +33,11 @@ internal class AndroidFileSyncContentReadBudget(
         require(expectedBytes >= 0L && remainingBytes <= maximumTotalBytes - expectedBytes)
         remainingBytes += expectedBytes
     }
+
+    fun refundUnconsumed(reservedBytes: Long, consumedBytes: Long) {
+        require(reservedBytes >= 0L && consumedBytes >= 0L)
+        refund((reservedBytes - consumedBytes.coerceAtMost(reservedBytes)).coerceAtLeast(0L))
+    }
 }
 
 internal inline fun verifyAndroidFileSyncCandidates(
@@ -85,7 +90,7 @@ internal fun verifyAndroidRemoteDeletionContent(
             maximumBytes = maxOf(1L, verifiedBytes),
         )
         if (hashRead.contentHash == null) {
-            if (hashRead.bytesRead == 0L) budget.refund(verifiedBytes)
+            budget.refundUnconsumed(verifiedBytes, hashRead.bytesRead)
             return@map entry.copy(contentIdentityUnverified = true)
         }
         entry.copy(contentHash = hashRead.contentHash)
