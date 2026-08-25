@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
@@ -11,6 +13,23 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidFileSyncContentEvidenceTest {
+    @Test
+    fun unreadableCandidatesDoNotStarveLaterVerificationResults() {
+        val candidates = listOf(
+            FileSyncContentVerificationCandidate("a", "local-a", "remote-a", 40L),
+            FileSyncContentVerificationCandidate("b", "local-b", "remote-b", 40L),
+            FileSyncContentVerificationCandidate("c", "local-c", "remote-c", 40L),
+        )
+
+        val results = verifyAndroidFileSyncCandidates(candidates, maximumResults = 1) { candidate ->
+            candidate.takeIf { it.relativePath == "c" }?.let {
+                FileSyncContentVerificationResult(it, "sha256:${"0".repeat(64)}", null)
+            }
+        }
+
+        assertEquals(listOf("c"), results.map { it.candidate.relativePath })
+    }
+
     @Test
     fun identityReadBudgetIsSharedAndBounded() {
         val budget = AndroidFileSyncContentReadBudget(

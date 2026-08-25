@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
@@ -32,6 +33,20 @@ internal class AndroidFileSyncContentReadBudget(
         require(expectedBytes >= 0L && remainingBytes <= maximumTotalBytes - expectedBytes)
         remainingBytes += expectedBytes
     }
+}
+
+internal inline fun verifyAndroidFileSyncCandidates(
+    candidates: List<FileSyncContentVerificationCandidate>,
+    maximumResults: Int,
+    verify: (FileSyncContentVerificationCandidate) -> FileSyncContentVerificationResult?,
+): List<FileSyncContentVerificationResult> {
+    require(maximumResults >= 0)
+    val results = ArrayList<FileSyncContentVerificationResult>(minOf(candidates.size, maximumResults))
+    for (candidate in candidates) {
+        if (results.size >= maximumResults) break
+        verify(candidate)?.let(results::add)
+    }
+    return results
 }
 
 internal fun verifyAndroidRemoteDeletionContent(
