@@ -67,6 +67,8 @@ internal data class AndroidIncomingShareRequest(
     val completedFiles: Int = 0,
     val uploadedNames: List<String> = emptyList(),
     val chunkSession: AndroidIncomingShareChunkSession? = null,
+    val automaticTransferAttempts: Int = 0,
+    val retryNotBeforeEpochMillis: Long? = null,
     val message: String? = null,
 ) {
     init {
@@ -76,6 +78,8 @@ internal data class AndroidIncomingShareRequest(
         require(completedFiles in 0..files.size)
         require(uploadedNames.size == completedFiles)
         require(chunkSession == null || chunkSession.fileIndex == completedFiles)
+        require(automaticTransferAttempts in 0..MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS)
+        require(retryNotBeforeEpochMillis == null || retryNotBeforeEpochMillis >= 0L)
     }
 }
 
@@ -238,6 +242,38 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         updated
     }
 
+    fun beginUpload(id: String): AndroidIncomingShareRequest? = synchronized(LOCK) {
+        val current = load(id) ?: return@synchronized null
+        val updated = transitionIncomingShareRequest(
+            current,
+            expected = setOf(AndroidIncomingShareState.Queued),
+            target = AndroidIncomingShareState.Uploading,
+        )?.copy(retryNotBeforeEpochMillis = null) ?: return@synchronized null
+        save(updated)
+        updated
+    }
+
+    fun queueAutomaticRetry(
+        id: String,
+        message: String,
+        retryNotBeforeEpochMillis: Long?,
+    ): AndroidIncomingShareRequest? = synchronized(LOCK) {
+        val current = load(id) ?: return@synchronized null
+        if (
+            current.state != AndroidIncomingShareState.Uploading ||
+            current.automaticTransferAttempts + 1 >= MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
+        ) {
+            return@synchronized null
+        }
+        val updated = prepareIncomingShareRequestForAutomaticRetry(
+            current,
+            message,
+            retryNotBeforeEpochMillis,
+        )
+        save(updated)
+        updated
+    }
+
     fun recordUploadedFile(
         id: String,
         expectedCompletedFiles: Int,
@@ -366,6 +402,23 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         target.isDirectory && target.deleteRecursively()
     }
 
+    fun removeIfReleasable(id: String): Boolean = synchronized(LOCK) {
+        when (val loaded = loadResult(id)) {
+            AndroidIncomingShareLoadResult.Missing -> true
+            is AndroidIncomingShareLoadResult.Corrupt -> remove(id)
+            is AndroidIncomingShareLoadResult.Available -> {
+                if (
+                    loaded.request.state == AndroidIncomingShareState.Staged ||
+                    loaded.request.state in TERMINAL_INCOMING_SHARE_STATES
+                ) {
+                    remove(id)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     fun removeExpiredAbandonedStaging(id: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
         synchronized(LOCK) {
             val target = directory(id)
@@ -435,8 +488,31 @@ internal fun prepareIncomingShareRequestForQueue(
         accountId = accountId,
         userId = userId,
         destinationPath = destination,
+        automaticTransferAttempts = 0,
+        retryNotBeforeEpochMillis = null,
         message = null,
     )
+}
+
+internal fun prepareIncomingShareRequestForAutomaticRetry(
+    current: AndroidIncomingShareRequest,
+    message: String,
+    retryNotBeforeEpochMillis: Long?,
+): AndroidIncomingShareRequest {
+    require(current.state == AndroidIncomingShareState.Uploading)
+    require(current.automaticTransferAttempts + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS)
+    require(message.isNotBlank())
+    return current.copy(
+        state = AndroidIncomingShareState.Queued,
+        automaticTransferAttempts = current.automaticTransferAttempts + 1,
+        retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
+        message = message,
+    )
+}
+
+internal fun incomingShareClipItemsToInspect(itemCount: Int): Int {
+    require(itemCount >= 0)
+    return itemCount.coerceAtMost(MAX_INCOMING_SHARE_FILES + 1)
 }
 
 internal fun AndroidIncomingShareRequest.isFullyJournaledIncomingShareUpload(): Boolean =
@@ -455,7 +531,7 @@ internal fun incomingShareUris(intent: Intent): List<Uri> {
     }
     val fromClip = buildList {
         val clip = intent.clipData ?: return@buildList
-        repeat(clip.itemCount.coerceAtMost(MAX_INCOMING_SHARE_FILES)) { index ->
+        repeat(incomingShareClipItemsToInspect(clip.itemCount)) { index ->
             clip.getItemAt(index).uri?.let(::add)
         }
     }
@@ -507,6 +583,8 @@ private fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
     .put("destinationPath", destinationPath)
     .put("completedFiles", completedFiles)
     .put("uploadedNames", JSONArray(uploadedNames))
+    .put("automaticTransferAttempts", automaticTransferAttempts)
+    .put("retryNotBeforeEpochMillis", retryNotBeforeEpochMillis)
     .put("chunkSession", chunkSession?.let { session ->
         JSONObject()
             .put("fileIndex", session.fileIndex)
@@ -540,6 +618,9 @@ private fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = A
     uploadedNames = getJSONArray("uploadedNames").let { array ->
         List(array.length()) { index -> array.getString(index) }
     },
+    automaticTransferAttempts = optInt("automaticTransferAttempts"),
+    retryNotBeforeEpochMillis = optLong("retryNotBeforeEpochMillis")
+        .takeIf { has("retryNotBeforeEpochMillis") && !isNull("retryNotBeforeEpochMillis") && it >= 0L },
     chunkSession = optJSONObject("chunkSession")?.let { session ->
         AndroidIncomingShareChunkSession(
             fileIndex = session.getInt("fileIndex"),

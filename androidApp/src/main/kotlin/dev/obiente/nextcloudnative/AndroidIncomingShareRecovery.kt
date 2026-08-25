@@ -21,6 +21,7 @@ import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -69,8 +70,12 @@ internal class AndroidIncomingShareAbandonedStagingCleanupWorker(
             AndroidIncomingShareLoadResult.Missing -> {
                 if (store.removeExpiredAbandonedStaging(requestId)) Result.success() else Result.retry()
             }
-            is AndroidIncomingShareLoadResult.Available,
-            is AndroidIncomingShareLoadResult.Corrupt -> Result.success()
+            is AndroidIncomingShareLoadResult.Available -> Result.success()
+            is AndroidIncomingShareLoadResult.Corrupt -> {
+                publishCorruptIncomingShareNotification(applicationContext, requestId)
+                scheduleIncomingShareCleanup(applicationContext, requestId)
+                Result.success()
+            }
         }
     }
 }
@@ -89,19 +94,21 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             AndroidIncomingShareLoadResult.Missing -> return@withContext Result.success()
         }
         val chunk = request.chunkSession ?: return@withContext Result.success()
-        val session = AndroidNextcloudServices(applicationContext).loadSession()
-            ?: return@withContext Result.retry()
-        if (
-            request.accountId != NextcloudDocumentIds.accountKey(session) ||
-            request.userId.isNullOrBlank()
-        ) {
-            return@withContext Result.retry()
-        }
         val claimed = store.claimChunkSessionForCleanup(
             requestId,
             chunk.uploadId,
             includeRetryableFailure = false,
         ) ?: return@withContext Result.success()
+        val session = AndroidNextcloudServices(applicationContext).loadSession()
+        if (session == null) {
+            return@withContext retryOrReleaseIncomingShareChunkCleanup(store, requestId, claimed)
+        }
+        if (
+            request.accountId != NextcloudDocumentIds.accountKey(session) ||
+            request.userId.isNullOrBlank()
+        ) {
+            return@withContext retryOrReleaseIncomingShareChunkCleanup(store, requestId, claimed)
+        }
         val cancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
         try {
             val remote = AndroidFileSyncRemoteTree(
@@ -121,15 +128,44 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             remote.deleteChunkUpload(claimed.uploadId, cancellation)
             store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
             Result.success()
-        } catch (_: Throwable) {
+        } catch (failure: Throwable) {
             cancellation.throwIfCancelled()
-            Result.retry()
+            if (
+                failure.isRetryableIncomingShareChunkCleanupFailure() &&
+                runAttemptCount + 1 < MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS
+            ) {
+                Result.retry()
+            } else {
+                // Nextcloud expires abandoned upload collections server-side. Once cleanup is
+                // definitively rejected or exhausts its bounded retries, release local staging.
+                store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
+                Result.success()
+            }
         } finally {
             cancellation.close()
         }
     }
 
+    private fun retryOrReleaseIncomingShareChunkCleanup(
+        store: AndroidIncomingShareStore,
+        requestId: String,
+        claimed: AndroidIncomingShareChunkSession,
+    ): Result = if (runAttemptCount + 1 < MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS) {
+        Result.retry()
+    } else {
+        store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
+        Result.success()
+    }
 }
+
+internal fun Throwable.isRetryableIncomingShareChunkCleanupFailure(): Boolean {
+    val dav = this as? DocumentWebDavException
+    return this is IOException ||
+        dav?.error in setOf(DocumentWebDavError.Locked, DocumentWebDavError.Throttled) ||
+        (dav?.error == DocumentWebDavError.Server && dav.status >= 500)
+}
+
+internal const val MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS = 8
 
 internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
     scheduleIncomingShareChunkCleanup(context, requestId)

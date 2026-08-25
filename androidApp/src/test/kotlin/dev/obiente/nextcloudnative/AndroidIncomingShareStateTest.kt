@@ -62,6 +62,8 @@ class AndroidIncomingShareStateTest {
             destinationPath = "Shared/Phone",
             completedFiles = 1,
             uploadedNames = listOf("first.txt"),
+            automaticTransferAttempts = 3,
+            retryNotBeforeEpochMillis = 123_456L,
         )
 
         val queued = prepareIncomingShareRequestForQueue(
@@ -74,6 +76,8 @@ class AndroidIncomingShareStateTest {
         assertEquals(AndroidIncomingShareState.Queued, queued.state)
         assertEquals(1, queued.completedFiles)
         assertEquals("Shared/Phone", queued.destinationPath)
+        assertEquals(0, queued.automaticTransferAttempts)
+        assertNull(queued.retryNotBeforeEpochMillis)
         assertFailsWith<IllegalArgumentException> {
             prepareIncomingShareRequestForQueue(
                 current = failed,
@@ -90,6 +94,15 @@ class AndroidIncomingShareStateTest {
         assertFalse(isSupportedIncomingShareUriScheme("file"))
         assertFalse(isSupportedIncomingShareUriScheme("https"))
         assertFalse(isSupportedIncomingShareUriScheme(null))
+    }
+
+    @Test
+    fun clipInspectionRetainsOneOverflowItemForExplicitRejection() {
+        assertEquals(0, incomingShareClipItemsToInspect(0))
+        assertEquals(100, incomingShareClipItemsToInspect(100))
+        assertEquals(101, incomingShareClipItemsToInspect(101))
+        assertEquals(101, incomingShareClipItemsToInspect(4_000))
+        assertFailsWith<IllegalArgumentException> { incomingShareClipItemsToInspect(-1) }
     }
 
     @Test
@@ -212,6 +225,84 @@ class AndroidIncomingShareStateTest {
 
         assertFalse(incomingShareMutationOutcomeUnknown(throttled, mutationInFlight = true))
         assertTrue(throttled.isRetryableIncomingShareTransferFailure())
+    }
+
+    @Test
+    fun automaticRetriesUseDurableAttemptCountsAndServerDelay() {
+        val uploading = request(AndroidIncomingShareState.Uploading).copy(automaticTransferAttempts = 2)
+
+        val queued = prepareIncomingShareRequestForAutomaticRetry(
+            uploading,
+            message = "Nextcloud asked this upload to wait before retrying.",
+            retryNotBeforeEpochMillis = 240_000L,
+        )
+
+        assertEquals(AndroidIncomingShareState.Queued, queued.state)
+        assertEquals(3, queued.automaticTransferAttempts)
+        assertEquals(240_000L, queued.retryNotBeforeEpochMillis)
+        assertFailsWith<IllegalArgumentException> {
+            prepareIncomingShareRequestForAutomaticRetry(
+                uploading.copy(automaticTransferAttempts = MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS - 1),
+                message = "No attempts remain.",
+                retryNotBeforeEpochMillis = null,
+            )
+        }
+    }
+
+    @Test
+    fun longRetryAfterOverridesTheShortWorkManagerBackoff() {
+        val now = 5_000L
+        assertEquals(
+            now + 120_000L,
+            DocumentWebDavException(
+                DocumentWebDavError.Throttled,
+                429,
+                "Wait",
+                retryAfterSeconds = 120,
+            ).incomingShareRetryNotBeforeEpochMillis(now),
+        )
+        assertNull(
+            DocumentWebDavException(
+                DocumentWebDavError.Throttled,
+                429,
+                "Wait",
+                retryAfterSeconds = 12,
+            ).incomingShareRetryNotBeforeEpochMillis(now),
+        )
+        assertNull(
+            DocumentWebDavException(DocumentWebDavError.Permission, 403, "No")
+                .incomingShareRetryNotBeforeEpochMillis(now),
+        )
+    }
+
+    @Test
+    fun chunkCleanupRetriesOnlyFailuresThatCanRecover() {
+        assertTrue(java.io.IOException("offline").isRetryableIncomingShareChunkCleanupFailure())
+        assertTrue(
+            DocumentWebDavException(DocumentWebDavError.Locked, 423, "Locked")
+                .isRetryableIncomingShareChunkCleanupFailure(),
+        )
+        assertTrue(
+            DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
+                .isRetryableIncomingShareChunkCleanupFailure(),
+        )
+        assertTrue(
+            DocumentWebDavException(DocumentWebDavError.Server, 503, "Unavailable")
+                .isRetryableIncomingShareChunkCleanupFailure(),
+        )
+        assertFalse(
+            DocumentWebDavException(DocumentWebDavError.Permission, 403, "No")
+                .isRetryableIncomingShareChunkCleanupFailure(),
+        )
+        assertEquals(8, MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS)
+    }
+
+    @Test
+    fun staleEnqueueCompletionCannotReplaceANewerShare() {
+        assertTrue(isCurrentIncomingShareEnqueue(4, 4, "request-a", "request-a"))
+        assertFalse(isCurrentIncomingShareEnqueue(3, 4, "request-a", "request-a"))
+        assertFalse(isCurrentIncomingShareEnqueue(4, 4, "request-a", "request-b"))
+        assertFalse(isCurrentIncomingShareEnqueue(4, 4, "request-a", null))
     }
 
     @Test

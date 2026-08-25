@@ -49,6 +49,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private var error by mutableStateOf<String?>(null)
     private var recoveryRequestId: String? = null
     private var restoreJob: Job? = null
+    private var queueJob: Job? = null
     private var restoreGeneration = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -173,6 +174,9 @@ class AndroidShareUploadActivity : ComponentActivity() {
     }
 
     private fun releaseSafeDisplayedRequestForReplacement() {
+        restoreGeneration += 1
+        restoreJob?.cancel()
+        queueJob?.cancel()
         request?.takeIf { it.state == AndroidIncomingShareState.Staged }?.let { current ->
             val replaced = store.transition(
                 current.id,
@@ -199,14 +203,18 @@ class AndroidShareUploadActivity : ComponentActivity() {
         val activeSession = session ?: return
         val info = serverInfo ?: return
         val staged = request ?: return
+        val generation = restoreGeneration
         queueing = true
         error = null
-        lifecycleScope.launch {
-            runCatching {
+        queueJob?.cancel()
+        queueJob = lifecycleScope.launch {
+            val result = runCatching {
                 withContext(Dispatchers.IO) {
                     uploads.enqueue(activeSession, info.userId, staged.id, destinationPath)
                 }
-            }.onSuccess { queued -> request = queued }
+            }
+            if (!isCurrentIncomingShareEnqueue(generation, restoreGeneration, staged.id, request?.id)) return@launch
+            result.onSuccess { queued -> request = queued }
                 .onFailure { failure -> error = failure.message ?: "The upload could not be queued." }
             queueing = false
         }
@@ -223,10 +231,12 @@ class AndroidShareUploadActivity : ComponentActivity() {
     }
 
     private fun finishAndRelease() {
+        restoreGeneration += 1
+        restoreJob?.cancel()
+        queueJob?.cancel()
         val current = request
         val releaseId = current?.id ?: recoveryRequestId
-        if (releaseId != null && current?.state !in ACTIVE_SHARE_STATES) {
-            store.remove(releaseId)
+        if (releaseId != null && store.removeIfReleasable(releaseId)) {
             NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(releaseId))
         }
         finish()
@@ -240,6 +250,13 @@ class AndroidShareUploadActivity : ComponentActivity() {
         )
     }
 }
+
+internal fun isCurrentIncomingShareEnqueue(
+    enqueueGeneration: Long,
+    currentGeneration: Long,
+    queuedRequestId: String,
+    currentRequestId: String?,
+): Boolean = enqueueGeneration == currentGeneration && queuedRequestId == currentRequestId
 
 private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,

@@ -73,6 +73,10 @@ internal class AndroidIncomingShareUploadWorker(
             }
         }
         if (request.state != AndroidIncomingShareState.Queued) return@withContext Result.success()
+        if ((request.retryNotBeforeEpochMillis ?: 0L) > System.currentTimeMillis()) {
+            scheduleIncomingShareRetry(applicationContext, request)
+            return@withContext Result.success()
+        }
         val session = AndroidNextcloudServices(applicationContext).loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != request.accountId) {
             val failed = store.transition(
@@ -92,11 +96,7 @@ internal class AndroidIncomingShareUploadWorker(
             .onFailure { failure ->
                 if (failure !is IllegalStateException || !isForegroundStartUnavailable(failure)) throw failure
             }
-        request = store.transition(
-            id = requestId,
-            expected = setOf(AndroidIncomingShareState.Queued),
-            target = AndroidIncomingShareState.Uploading,
-        ) ?: return@withContext Result.success()
+        request = store.beginUpload(requestId) ?: return@withContext Result.success()
         val remote = AndroidFileSyncRemoteTree(
             session = session,
             userId = requireNotNull(request.userId),
@@ -167,14 +167,26 @@ internal class AndroidIncomingShareUploadWorker(
             val resumableChunk = store.load(requestId)?.chunkSession?.takeIf { !it.commitInFlight }
             val retryable = !mutationInFlight &&
                 failure.isRetryableIncomingShareTransferFailure() &&
-                runAttemptCount + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
-            if (retryable || resumableChunk != null && runAttemptCount + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS) {
-                store.transition(
+                request.automaticTransferAttempts + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
+            if (
+                retryable ||
+                resumableChunk != null &&
+                request.automaticTransferAttempts + 1 < MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS
+            ) {
+                val retryNotBefore = failure.incomingShareRetryNotBeforeEpochMillis(System.currentTimeMillis())
+                val queued = store.queueAutomaticRetry(
                     id = requestId,
-                    expected = setOf(AndroidIncomingShareState.Uploading),
-                    target = AndroidIncomingShareState.Queued,
-                    message = "Upload paused and will retry with backoff.",
-                )
+                    message = if (retryNotBefore == null) {
+                        "Upload paused and will retry with backoff."
+                    } else {
+                        "Nextcloud asked this upload to wait before retrying."
+                    },
+                    retryNotBeforeEpochMillis = retryNotBefore,
+                ) ?: return@withContext Result.success()
+                if (retryNotBefore != null) {
+                    scheduleIncomingShareRetry(applicationContext, queued)
+                    return@withContext Result.success()
+                }
                 return@withContext Result.retry()
             }
             // A transport failure after a conditional PUT starts cannot prove whether the server
@@ -275,4 +287,14 @@ internal class AndroidIncomingShareUploadWorker(
     internal companion object {
         const val KEY_REQUEST_ID = "request_id"
     }
+}
+
+internal fun Throwable.incomingShareRetryNotBeforeEpochMillis(nowEpochMillis: Long): Long? {
+    require(nowEpochMillis >= 0L)
+    val retryAfterSeconds = (this as? DocumentWebDavException)
+        ?.takeIf { it.error == DocumentWebDavError.Throttled }
+        ?.retryAfterSeconds
+        ?.takeIf { it > INCOMING_SHARE_WORK_BACKOFF_SECONDS }
+        ?: return null
+    return nowEpochMillis + retryAfterSeconds * 1_000L
 }

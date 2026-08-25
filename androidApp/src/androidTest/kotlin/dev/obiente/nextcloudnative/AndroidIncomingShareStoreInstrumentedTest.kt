@@ -91,6 +91,8 @@ class AndroidIncomingShareStoreInstrumentedTest {
         try {
             val uploading = staged.copy(
                 state = AndroidIncomingShareState.Uploading,
+                automaticTransferAttempts = 3,
+                retryNotBeforeEpochMillis = 240_000L,
                 chunkSession = AndroidIncomingShareChunkSession(
                     fileIndex = 0,
                     targetName = "one.txt",
@@ -100,6 +102,8 @@ class AndroidIncomingShareStoreInstrumentedTest {
             )
             store.save(uploading)
             assertEquals(uploading, AndroidIncomingShareStore(context).requireAvailable(staged.id))
+            assertEquals(3, AndroidIncomingShareStore(context).requireAvailable(staged.id).automaticTransferAttempts)
+            assertEquals(240_000L, AndroidIncomingShareStore(context).requireAvailable(staged.id).retryNotBeforeEpochMillis)
             assertTrue(store.markChunkCommitInFlight(staged.id).chunkSession?.commitInFlight == true)
             val cleanupPending = store.markChunkCleanupPending(staged.id)
             assertTrue(cleanupPending.chunkSession?.cleanupPending == true)
