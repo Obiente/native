@@ -45,10 +45,21 @@ class FileSyncConflictReviewTest {
             listOf(FileSyncDecisionChoice.RestoreMissing, FileSyncDecisionChoice.Skip),
             availableFileSyncBatchChoices(partialPair),
         )
+        assertEquals(
+            listOf(FileSyncDecisionChoice.RestoreMissing, FileSyncDecisionChoice.Skip),
+            availableFileSyncItemChoices(partialPair, directoryConflict),
+        )
         assertFailsWith<IllegalArgumentException> {
             PendingFileSyncDecision(
                 partialPair,
                 partialPair.conflicts,
+                FileSyncDecisionChoice.PropagateDeletion,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PendingFileSyncDecision(
+                partialPair,
+                listOf(directoryConflict),
                 FileSyncDecisionChoice.PropagateDeletion,
             )
         }

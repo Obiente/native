@@ -20,6 +20,9 @@ class AndroidFileSyncContentEvidenceTest {
 
         assertTrue(budget.reserve(40L))
         assertFalse(budget.reserve(70L))
+        budget.refund(40L)
+        assertEquals(80L, budget.remainingBytes)
+        assertTrue(budget.reserve(40L))
         assertTrue(budget.reserve(40L))
         assertFalse(budget.reserve(1L))
         assertTrue(budget.reserve(0L))

@@ -11,7 +11,7 @@ import dev.obiente.nextcloudnative.app.SyncEntryKind
 
 internal class AndroidFileSyncContentReadBudget(
     private val maximumFileBytes: Long = MAX_FILE_SYNC_IDENTITY_FILE_BYTES,
-    maximumTotalBytes: Long = MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES,
+    private val maximumTotalBytes: Long = MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES,
 ) {
     var remainingBytes: Long = maximumTotalBytes
         private set
@@ -26,6 +26,11 @@ internal class AndroidFileSyncContentReadBudget(
         if (expectedBytes > maximumFileBytes || expectedBytes > remainingBytes) return false
         remainingBytes -= expectedBytes
         return true
+    }
+
+    fun refund(expectedBytes: Long) {
+        require(expectedBytes >= 0L && remainingBytes <= maximumTotalBytes - expectedBytes)
+        remainingBytes += expectedBytes
     }
 }
 

@@ -595,7 +595,11 @@ internal class AndroidFileSyncEngine(context: Context) {
             expectedLocalRevision = candidate.localRevision,
             expectedBytes = expectedBytes,
             maximumBytes = readCeiling,
-        ) ?: return null
+        )
+        if (localHash == null) {
+            contentReadBudget.refund(expectedBytes)
+            return null
+        }
         val matches = remote.verifyContentHash(
                 relativePath = candidate.relativePath,
                 expectedRemoteEtag = candidate.remoteEtag,

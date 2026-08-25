@@ -28,7 +28,13 @@ internal data class PendingFileSyncDecision(
     init {
         require(conflicts.isNotEmpty())
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
-        require(choice in availableFileSyncBatchChoices(pair, conflicts))
+        require(
+            if (conflicts.size == 1) {
+                choice in availableFileSyncItemChoices(pair, conflicts.single())
+            } else {
+                choice in availableFileSyncBatchChoices(pair, conflicts)
+            },
+        )
     }
 }
 
@@ -99,7 +105,7 @@ internal fun FileSyncConflictBlock(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                conflict.choices.sortedBy(FileSyncDecisionChoice::ordinal).chunked(2).forEach { choices ->
+                availableFileSyncItemChoices(pair, conflict).chunked(2).forEach { choices ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -137,19 +143,29 @@ internal fun availableFileSyncBatchChoices(
     pair: FileSyncPairSummary,
     conflicts: List<FileSyncConflictSummary> = pair.conflicts,
 ): List<FileSyncDecisionChoice> {
-    val guardedDirectoryDeletion =
-        (pair.configuration.selectedPaths.isNotEmpty() || pair.configuration.ignoredPatterns.isNotEmpty()) &&
-            conflicts.any(FileSyncConflictSummary::isDirectoryDeletion)
+    val guardedDirectoryDeletion = conflicts.any { it.isGuardedDirectoryDeletion(pair) }
     return FileSyncDecisionChoice.entries.filter { choice ->
         conflicts.all { conflict -> choice in conflict.choices } &&
             !(choice == FileSyncDecisionChoice.PropagateDeletion && guardedDirectoryDeletion)
     }
 }
 
-private fun FileSyncConflictSummary.isDirectoryDeletion(): Boolean = when (reason) {
+internal fun availableFileSyncItemChoices(
+    pair: FileSyncPairSummary,
+    conflict: FileSyncConflictSummary,
+): List<FileSyncDecisionChoice> = conflict.choices
+    .filterNot { choice ->
+        choice == FileSyncDecisionChoice.PropagateDeletion && conflict.isGuardedDirectoryDeletion(pair)
+    }
+    .sortedBy(FileSyncDecisionChoice::ordinal)
+
+private fun FileSyncConflictSummary.isGuardedDirectoryDeletion(pair: FileSyncPairSummary): Boolean {
+    if (pair.configuration.selectedPaths.isEmpty() && pair.configuration.ignoredPatterns.isEmpty()) return false
+    return when (reason) {
     FileSyncDecisionReason.LocalDeletion -> remote?.kind == SyncEntryKind.Directory
     FileSyncDecisionReason.RemoteDeletion -> local?.kind == SyncEntryKind.Directory
     else -> false
+    }
 }
 
 @Composable
