@@ -193,6 +193,13 @@ class AndroidFileSyncContentEvidenceTest {
             expectedBytes: Long,
             maximumBytes: Long,
         ): String? = null
+
+        override fun contentHashRead(
+            path: String,
+            expectedLocalRevision: String,
+            expectedBytes: Long,
+            maximumBytes: Long,
+        ): AndroidFileSyncContentHashRead = AndroidFileSyncContentHashRead(null, expectedBytes)
     }
 
     private object ZeroReadThenReadableLocalTree : AndroidFileSyncLocalTree by NoReadLocalTree {
