@@ -269,17 +269,9 @@ fun NativeGroupwareContactsScreen(
             )
             val addressBooks = parseGroupwareAddressBooks(discovery)
             val contacts = addressBooks.flatMap { addressBook ->
-                parseGroupwareContacts(
-                    addressBook.href,
-                    services.executeGroupwareDav(
-                        session,
-                        groupwareDavCollectionQueryRequest(
-                            collectionHref = addressBook.href,
-                            kind = GroupwareDavKind.Contact,
-                            maxResults = 250,
-                        ),
-                    ),
-                )
+                loadGroupwareContactsInBatches(addressBook.href) { request ->
+                    services.executeGroupwareDav(session, request)
+                }
             }.sortedBy { it.displayName.lowercase() }
             ContactsLoadState.Ready(addressBooks, contacts)
         }.onSuccess { loaded ->

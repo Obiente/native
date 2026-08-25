@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -942,6 +943,86 @@ END:VCALENDAR</c:calendar-data>
                 maxResults = 251,
             )
         }
+    }
+
+    @Test
+    fun `large address books load through bounded multiget batches`() = runBlocking {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+        val hrefs = (1..25).map { index -> "$addressBookHref$index.vcf" }
+        val requests = mutableListOf<GroupwareDavRequest>()
+
+        val contacts = loadGroupwareContactsInBatches(addressBookHref) { request ->
+            requests += request
+            if (request.method == "PROPFIND") {
+                NextcloudApiResponse(
+                    status = 207,
+                    contentType = "application/xml",
+                    etag = null,
+                    body = """
+                        <d:multistatus xmlns:d="DAV:">
+                          <d:response><d:href>$addressBookHref</d:href></d:response>
+                          ${hrefs.joinToString("\n") { href ->
+                              "<d:response><d:href>$href</d:href><d:propstat><d:prop><d:getetag>&quot;etag&quot;</d:getetag></d:prop></d:propstat></d:response>"
+                          }}
+                        </d:multistatus>
+                    """.trimIndent().encodeToByteArray(),
+                )
+            } else {
+                val requested = hrefs.filter { href -> requireNotNull(request.body).decodeToString().contains(href) }
+                NextcloudApiResponse(
+                    status = 207,
+                    contentType = "application/xml",
+                    etag = null,
+                    body = """
+                        <d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
+                          ${requested.joinToString("\n") { href ->
+                              val id = href.substringAfterLast('/').substringBefore('.')
+                              "<d:response><d:href>$href</d:href><d:propstat><d:prop><d:getetag>&quot;etag-$id&quot;</d:getetag><card:address-data>BEGIN:VCARD\r\nVERSION:4.0\r\nUID:$id\r\nFN:Contact $id\r\nEND:VCARD\r\n</card:address-data></d:prop></d:propstat></d:response>"
+                          }}
+                        </d:multistatus>
+                    """.trimIndent().encodeToByteArray(),
+                )
+            }
+        }
+
+        assertEquals(25, contacts.size)
+        assertEquals(listOf("PROPFIND", "REPORT", "REPORT", "REPORT"), requests.map { it.method })
+        assertTrue(requests.all { it.maximumResponseBytes <= 16L * 1024L * 1024L })
+        assertTrue(requests.drop(1).all { request ->
+            requireNotNull(request.body).decodeToString().split("<d:href>").size - 1 <= 10
+        })
+    }
+
+    @Test
+    fun `address book multiget rejects objects outside the selected collection`() {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+        assertFailsWith<IllegalArgumentException> {
+            groupwareDavAddressBookMultiGetRequest(
+                addressBookHref,
+                listOf("/remote.php/dav/addressbooks/users/other/contacts/1.vcf"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            groupwareDavAddressBookMultiGetRequest(
+                addressBookHref,
+                List(11) { index -> "$addressBookHref$index.vcf" },
+            )
+        }
+    }
+
+    @Test
+    fun `contact mutations retain bounded vcards larger than one mibibyte`() {
+        val oversizedPhoto = "A".repeat((1024 * 1024) + 1)
+        val request = GroupwareDavMutationSpec(
+            kind = GroupwareDavKind.Contact,
+            mutation = GroupwareDavMutation.Update,
+            objectHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/photo.vcf",
+            etag = "\"etag\"",
+            content = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Photo contact\r\nPHOTO:$oversizedPhoto\r\nEND:VCARD\r\n",
+        ).toGroupwareDavRequest()
+
+        assertTrue(requireNotNull(request.body).size > 1024 * 1024)
+        assertTrue(request.body.size < 4 * 1024 * 1024)
     }
 
     @Test
