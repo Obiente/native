@@ -962,7 +962,7 @@ END:VCALENDAR</c:calendar-data>
                         <d:multistatus xmlns:d="DAV:">
                           <d:response><d:href>$addressBookHref</d:href></d:response>
                           ${hrefs.joinToString("\n") { href ->
-                              "<d:response><d:href>$href</d:href><d:propstat><d:prop><d:getetag>&quot;etag&quot;</d:getetag></d:prop></d:propstat></d:response>"
+                              "<d:response><d:href>$href</d:href><d:propstat><d:prop><d:getetag>&quot;etag&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
                           }}
                         </d:multistatus>
                     """.trimIndent().encodeToByteArray(),

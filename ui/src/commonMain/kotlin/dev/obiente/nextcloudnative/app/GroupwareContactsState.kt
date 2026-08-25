@@ -25,4 +25,10 @@ internal object ContactsWorkspaceMemoryCache {
     }
 }
 
+internal fun contactEditRequiresFullLoad(
+    editing: Boolean,
+    selectedContactHref: String?,
+    loadedContactHref: String?,
+): Boolean = editing && selectedContactHref != null && loadedContactHref != selectedContactHref
+
 private const val MAXIMUM_RETAINED_CONTACT_ACCOUNTS = 4

@@ -8,6 +8,31 @@ import kotlin.test.assertTrue
 
 class GroupwareContactsLoadingTest {
     @Test
+    fun `initial listing failure does not silently omit a contact`() {
+        runBlocking {
+            val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+            val failedHref = "${addressBookHref}failed.vcf"
+
+            assertFailsWith<IllegalStateException> {
+                loadGroupwareContactsInBatches(addressBookHref) { request ->
+                    assertEquals("PROPFIND", request.method)
+                    xmlResponse(
+                        """
+                        <d:multistatus xmlns:d="DAV:">
+                          <d:response><d:href>$addressBookHref</d:href></d:response>
+                          <d:response>
+                            <d:href>$failedHref</d:href>
+                            <d:status>HTTP/1.1 507 Insufficient Storage</d:status>
+                          </d:response>
+                        </d:multistatus>
+                        """.trimIndent(),
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun `multiget partial failure does not silently omit a contact`() {
         runBlocking {
             val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
@@ -48,7 +73,7 @@ class GroupwareContactsLoadingTest {
                 "REPORT" -> {
                     val requestText = requireNotNull(request.body).decodeToString()
                     reportSizes += hrefs.count(requestText::contains)
-                    throw NextcloudResponseTooLargeException(request.maximumResponseBytes)
+                    throw NextcloudResponseTooLargeException(request.maximumResponseBytes, responseStatus = 207)
                 }
                 "GET" -> {
                     getHrefs += request.relativePath
@@ -68,6 +93,31 @@ class GroupwareContactsLoadingTest {
         assertEquals(4, contacts.size)
         assertTrue(contacts.all { it.rawVCard.isEmpty() })
         assertTrue(contacts.all { it.etag == "\"get-etag\"" })
+    }
+
+    @Test
+    fun `oversized HTTP error responses do not split a multiget batch`() {
+        runBlocking {
+            val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+            val hrefs = listOf("${addressBookHref}one.vcf", "${addressBookHref}two.vcf")
+            val methods = mutableListOf<String>()
+
+            assertFailsWith<NextcloudResponseTooLargeException> {
+                loadGroupwareContactsInBatches(addressBookHref) { request ->
+                    methods += request.method
+                    if (request.method == "PROPFIND") {
+                        listingResponse(addressBookHref, hrefs)
+                    } else {
+                        throw NextcloudResponseTooLargeException(
+                            maximumBytes = 64L * 1024L,
+                            responseStatus = 401,
+                        )
+                    }
+                }
+            }
+
+            assertEquals(listOf("PROPFIND", "REPORT"), methods)
+        }
     }
 
     @Test

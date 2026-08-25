@@ -26,14 +26,25 @@ private fun parseGroupwareAddressBookObjects(
 ): List<GroupwareAddressBookObject> {
     require(response.status in 200..299) { "Contact discovery failed (HTTP ${response.status})." }
     val collectionHref = addressBookHref.requireDavCollectionHref()
-    return response.body.decodeToString().xmlElements("response").mapNotNull { block ->
-        val etag = block.xmlText("getetag")?.decodeXmlEntities()?.trim()?.takeIf(String::isNotBlank)
-            ?: return@mapNotNull null
+    val objects = response.body.decodeToString().xmlElements("response").mapNotNull { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
-            ?: return@mapNotNull null
-        href.takeIf { it.isDirectDavChildOf(collectionHref) }
-            ?.let { GroupwareAddressBookObject(it, etag) }
-    }.distinctBy(GroupwareAddressBookObject::href)
+            ?: error("The CardDAV listing response omitted an object href.")
+        if (href == collectionHref) return@mapNotNull null
+        require(href.isDirectDavChildOf(collectionHref)) {
+            "The CardDAV listing response contained an object outside its address book."
+        }
+        val successfulProperty = block.xmlElements("propstat").singleOrNull { property ->
+            property.xmlElements("getetag").isNotEmpty() &&
+                property.xmlText("status")?.davStatusCode() in 200..299
+        } ?: error("The CardDAV listing response contained a failed or malformed object.")
+        val etag = successfulProperty.xmlText("getetag")?.decodeXmlEntities()?.trim()?.takeIf(String::isNotBlank)
+            ?: error("The CardDAV listing response omitted an object ETag.")
+        GroupwareAddressBookObject(href, etag)
+    }
+    require(objects.map(GroupwareAddressBookObject::href).distinct().size == objects.size) {
+        "The CardDAV listing response contained a duplicate object."
+    }
+    return objects
 }
 
 fun groupwareDavAddressBookMultiGetRequest(
@@ -121,6 +132,7 @@ private suspend fun loadGroupwareContactBatch(
         ),
     )
 } catch (failure: NextcloudResponseTooLargeException) {
+    if (failure.responseStatus?.let { it in 200..299 } != true) throw failure
     if (objects.size == 1) {
         val objectMetadata = objects.single()
         val response = execute(groupwareDavDetailRequest(objectMetadata.href))

@@ -5623,12 +5623,13 @@ class DesktopNextcloudServices(
             val contentLength = responseBody.contentLength()
             val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
             if (contentLength > readLimit && contentLength != -1L) {
-                throw NextcloudResponseTooLargeException(readLimit)
+                throw NextcloudResponseTooLargeException(readLimit, response.code)
             }
             val bodyBytes = if (mutationExecutor != null && !response.isSuccessful) {
-                runCatching { responseBody.byteStream().readBounded(readLimit) }.getOrDefault(byteArrayOf())
+                runCatching { responseBody.byteStream().readBounded(readLimit, response.code) }
+                    .getOrDefault(byteArrayOf())
             } else {
-                responseBody.byteStream().readBounded(readLimit)
+                responseBody.byteStream().readBounded(readLimit, response.code)
             }
             if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
                 bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
@@ -5779,7 +5780,7 @@ class DesktopNextcloudServices(
         )
     }
 
-    private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
+    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
         val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
         var total = 0L
@@ -5788,7 +5789,7 @@ class DesktopNextcloudServices(
             if (read == -1) break
             total += read
             if (total > maxBytes) {
-                throw NextcloudResponseTooLargeException(maxBytes)
+                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
             }
             output.write(buffer, 0, read)
         }

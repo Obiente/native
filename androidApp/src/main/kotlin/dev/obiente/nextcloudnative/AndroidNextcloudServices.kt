@@ -3519,9 +3519,9 @@ internal class AndroidNextcloudServices(
                 val contentLength = responseBody.contentLength()
                 val readLimit = if (response.isSuccessful) maxResponseBytes else MAX_ERROR_RESPONSE_BYTES
                 if (contentLength > readLimit && contentLength != -1L) {
-                    throw NextcloudResponseTooLargeException(readLimit)
+                    throw NextcloudResponseTooLargeException(readLimit, response.code)
                 }
-                val bodyBytes = responseBody.byteStream().readBounded(readLimit)
+                val bodyBytes = responseBody.byteStream().readBounded(readLimit, response.code)
                 if (response.code == expectedSuccessResponseStatus && expectedSuccessResponseBytes != null) {
                     bodyBytes.requireExactJvmNetworkResponseBytes(expectedSuccessResponseBytes)
                 }
@@ -3717,7 +3717,7 @@ internal class AndroidNextcloudServices(
     private fun elapsedMillis(startedNanos: Long): Long =
         (System.nanoTime() - startedNanos).coerceAtLeast(0L) / 1_000_000L
 
-    private fun java.io.InputStream.readBounded(maxBytes: Long): ByteArray {
+    private fun java.io.InputStream.readBounded(maxBytes: Long, responseStatus: Int? = null): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_CAPACITY.toLong()).toInt())
         val buffer = ByteArray(DEFAULT_BUFFER_CAPACITY)
         var total = 0L
@@ -3726,7 +3726,7 @@ internal class AndroidNextcloudServices(
             if (read == -1) break
             total += read
             if (total > maxBytes) {
-                throw NextcloudResponseTooLargeException(maxBytes)
+                throw NextcloudResponseTooLargeException(maxBytes, responseStatus)
             }
             output.write(buffer, 0, read)
         }

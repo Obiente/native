@@ -108,6 +108,7 @@ fun NativeGroupwareContactsScreen(
         if (navigationCommitInProgress) {
             creating = false
             editing = false
+            editingContact = null
         }
     }
 
@@ -262,6 +263,7 @@ fun NativeGroupwareContactsScreen(
                         is ContactMutationPostcondition.Upsert -> {
                             if (mutationPostcondition.previousEtag == null) creating = false
                             editing = false
+                            editingContact = null
                             selectedContactHref = null
                         }
                         is ContactMutationPostcondition.Delete -> selectedContactHref = null
@@ -284,11 +286,53 @@ fun NativeGroupwareContactsScreen(
 
     val ready = state as? ContactsLoadState.Ready
     val selected = ready?.contacts?.firstOrNull { contact -> contact.href == selectedContactHref }
+    val selectedAddressBook = ready?.addressBooks?.firstOrNull { addressBook ->
+        addressBook.href == selected?.addressBookHref
+    }
     LaunchedEffect(ready, selectedContactHref) {
         if (ready != null && selectedContactHref != null && selected == null) {
             selectedContactHref = null
             editing = false
             editingContact = null
+        }
+    }
+    LaunchedEffect(
+        editing,
+        selected?.href,
+        selectedAddressBook?.href,
+        mutationInProgress,
+        services,
+        session,
+    ) {
+        if (mutationInProgress || !contactEditRequiresFullLoad(editing, selected?.href, editingContact?.href)) {
+            return@LaunchedEffect
+        }
+        val contact = selected ?: run {
+            editing = false
+            return@LaunchedEffect
+        }
+        val addressBook = selectedAddressBook?.takeIf(GroupwareAddressBook::writable) ?: run {
+            editing = false
+            return@LaunchedEffect
+        }
+        editLoading = true
+        mutationError = null
+        try {
+            val loaded = loadGroupwareContactForEditing(
+                addressBook.href,
+                contact.href,
+                contact.etag,
+            ) { request -> services.executeGroupwareDav(session, request) }
+            if (editing && selectedContactHref == contact.href) editingContact = loaded
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            if (selectedContactHref == contact.href) {
+                editing = false
+                mutationError = "The complete contact could not be loaded for editing. Try again."
+            }
+        } finally {
+            editLoading = false
         }
     }
     val editorVisible = creating ||
@@ -496,7 +540,7 @@ fun NativeGroupwareContactsScreen(
     }
 
     selected?.let { contact ->
-        val addressBook = ready.addressBooks.firstOrNull { it.href == contact.addressBookHref }
+        val addressBook = selectedAddressBook
         val fullContact = editingContact?.takeIf { it.href == contact.href }
         if (editing && addressBook != null && fullContact != null) {
             ContactEditorDialog(
@@ -508,12 +552,14 @@ fun NativeGroupwareContactsScreen(
                 recoveryAvailable = mutationRecoveryState != null,
                 onOpenRecovery = {
                     editing = false
+                    editingContact = null
                     showRecoveryOptions = true
                 },
                 navigationRequest = navigationRequest,
                 onNavigationConfirmed = onNavigationConfirmed,
                 onNavigationDiscardConfirmed = { request ->
                     editing = false
+                    editingContact = null
                     onNavigationConfirmed(request)
                 },
                 onNavigationCancelled = onNavigationCancelled,
@@ -581,32 +627,10 @@ fun NativeGroupwareContactsScreen(
                     editingContact = null
                     mutationError = null
                 },
-                onEdit = edit@{
-                    val selectedAddressBook = addressBook ?: return@edit
-                    if (mutationInProgress || editLoading) return@edit
-                    val requestedHref = contact.href
-                    editLoading = true
-                    mutationError = null
-                    scope.launch {
-                        try {
-                            val loaded = loadGroupwareContactForEditing(
-                                selectedAddressBook.href,
-                                requestedHref,
-                                contact.etag,
-                            ) { request -> services.executeGroupwareDav(session, request) }
-                            if (selectedContactHref == requestedHref) {
-                                editingContact = loaded
-                                editing = true
-                            }
-                        } catch (failure: CancellationException) {
-                            throw failure
-                        } catch (_: Exception) {
-                            if (selectedContactHref == requestedHref) {
-                                mutationError = "The complete contact could not be loaded for editing. Try again."
-                            }
-                        } finally {
-                            editLoading = false
-                        }
+                onEdit = {
+                    if (!mutationInProgress && !editLoading) {
+                        mutationError = null
+                        editing = true
                     }
                 },
                 onDelete = { if (!mutationInProgress) confirmDelete = true },
