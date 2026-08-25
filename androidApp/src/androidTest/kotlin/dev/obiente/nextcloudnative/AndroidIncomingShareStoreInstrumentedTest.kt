@@ -99,7 +99,21 @@ class AndroidIncomingShareStoreInstrumentedTest {
             store.save(uploading)
             assertEquals(uploading, AndroidIncomingShareStore(context).requireAvailable(staged.id))
             assertTrue(store.markChunkCommitInFlight(staged.id).chunkSession?.commitInFlight == true)
-            assertTrue(store.clearChunkCommitInFlight(staged.id).chunkSession?.commitInFlight == false)
+            val cleanupPending = store.markChunkCleanupPending(staged.id)
+            assertTrue(cleanupPending.chunkSession?.cleanupPending == true)
+            assertTrue(cleanupPending.chunkSession?.commitInFlight == false)
+            assertTrue(
+                AndroidIncomingShareStore(context)
+                    .requireAvailable(staged.id)
+                    .chunkSession
+                    ?.cleanupPending == true,
+            )
+            assertTrue(
+                store.clearChunkSessionForCleanup(
+                    staged.id,
+                    "01234567-89ab-cdef-0123-456789abcdef",
+                )?.chunkSession == null,
+            )
         } finally {
             assertTrue(store.remove(staged.id))
         }

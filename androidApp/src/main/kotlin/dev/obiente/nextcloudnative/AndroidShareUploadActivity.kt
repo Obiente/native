@@ -150,9 +150,11 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 val activeSession = services.loadSession()
                     ?: error("Sign in to Nextcloud Native before sharing files to it.")
                 val staged = withContext(Dispatchers.IO) {
-                    restoredRequestId?.let { requestId ->
+                    val restored = restoredRequestId?.let { requestId ->
                         store.requireAvailable(requestId)
                     } ?: store.stage(sourceIntent)
+                    uploads.ensureQueuedRequestScheduled(restored)
+                    restored
                 }
                 ensureActive()
                 if (generation != restoreGeneration) return@launch
@@ -172,13 +174,15 @@ class AndroidShareUploadActivity : ComponentActivity() {
 
     private fun releaseSafeDisplayedRequestForReplacement() {
         request?.takeIf { it.state == AndroidIncomingShareState.Staged }?.let { current ->
-            store.transition(
+            val replaced = store.transition(
                 current.id,
                 expected = setOf(AndroidIncomingShareState.Staged),
                 target = AndroidIncomingShareState.Canceled,
                 message = "Replaced by a newer share before transfer started.",
             )
-            scheduleIncomingShareCleanup(applicationContext, current.id)
+            if (replaced != null && !store.remove(current.id)) {
+                scheduleIncomingShareCleanup(applicationContext, current.id)
+            }
         }
         request?.takeIf { current ->
             current.state in setOf(AndroidIncomingShareState.Completed, AndroidIncomingShareState.Canceled)

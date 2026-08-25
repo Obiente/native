@@ -10,16 +10,23 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 
 internal class AndroidIncomingShareCleanupWorker(
     appContext: Context,
@@ -31,6 +38,10 @@ internal class AndroidIncomingShareCleanupWorker(
         val store = AndroidIncomingShareStore(applicationContext)
         when (val loaded = store.loadResult(requestId)) {
             is AndroidIncomingShareLoadResult.Available -> {
+                if (loaded.request.chunkSession != null) {
+                    scheduleIncomingShareChunkCleanup(applicationContext, requestId)
+                    return@withContext Result.retry()
+                }
                 if (loaded.request.state in TERMINAL_INCOMING_SHARE_STATES) store.remove(requestId)
             }
             is AndroidIncomingShareLoadResult.Corrupt -> store.remove(requestId)
@@ -40,13 +51,75 @@ internal class AndroidIncomingShareCleanupWorker(
     }
 }
 
+internal class AndroidIncomingShareChunkCleanupWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val requestId = inputData.getString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID)
+            ?: return@withContext Result.failure()
+        val store = AndroidIncomingShareStore(applicationContext)
+        val request = when (val loaded = store.loadResult(requestId)) {
+            is AndroidIncomingShareLoadResult.Available -> loaded.request
+            is AndroidIncomingShareLoadResult.Corrupt -> return@withContext Result.success()
+            AndroidIncomingShareLoadResult.Missing -> return@withContext Result.success()
+        }
+        val chunk = request.chunkSession ?: return@withContext Result.success()
+        val session = AndroidNextcloudServices(applicationContext).loadSession()
+            ?: return@withContext Result.retry()
+        if (
+            request.accountId != NextcloudDocumentIds.accountKey(session) ||
+            request.userId.isNullOrBlank()
+        ) {
+            return@withContext Result.retry()
+        }
+        val cancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
+        try {
+            val remote = AndroidFileSyncRemoteTree(
+                session = session,
+                userId = request.userId,
+                remoteRootPath = request.destinationPath.orEmpty(),
+                webDav = NextcloudDocumentWebDav(
+                    client = OkHttpClient.Builder()
+                        .followRedirects(false)
+                        .followSslRedirects(false)
+                        .useAndroidNextcloudCertificateTrust(applicationContext)
+                        .build(),
+                    cloudMutationsAllowed = applicationContext.cloudMutationGate(),
+                ),
+            )
+            remote.deleteChunkUpload(chunk.uploadId, cancellation)
+            store.clearChunkSessionForCleanup(requestId, chunk.uploadId)
+            Result.success()
+        } catch (_: Throwable) {
+            cancellation.throwIfCancelled()
+            Result.retry()
+        } finally {
+            cancellation.close()
+        }
+    }
+}
+
 internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
+    scheduleIncomingShareChunkCleanup(context, requestId)
     WorkManager.getInstance(context).enqueueUniqueWork(
         "incoming-share-cleanup-$requestId",
         ExistingWorkPolicy.REPLACE,
         OneTimeWorkRequestBuilder<AndroidIncomingShareCleanupWorker>()
             .setInitialDelay(7, TimeUnit.DAYS)
             .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
+            .build(),
+    )
+}
+
+private fun scheduleIncomingShareChunkCleanup(context: Context, requestId: String) {
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        "incoming-share-chunk-cleanup-$requestId",
+        ExistingWorkPolicy.KEEP,
+        OneTimeWorkRequestBuilder<AndroidIncomingShareChunkCleanupWorker>()
+            .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build(),
     )
 }
@@ -107,9 +180,11 @@ internal suspend fun loadAndroidIncomingShareRecoveries(
     userId: String,
 ): List<IncomingShareUploadPresentation> = withContext(Dispatchers.IO) {
     require(userId.isNotBlank())
-    AndroidIncomingShareStore(context)
+    val recoveries = AndroidIncomingShareStore(context)
         .listRecoverable(NextcloudDocumentIds.accountKey(session))
-        .map(AndroidIncomingShareRequest::toPresentation)
+    val uploads = AndroidIncomingShareUploads(context)
+    recoveries.forEach(uploads::ensureQueuedRequestScheduled)
+    recoveries.map(AndroidIncomingShareRequest::toPresentation)
 }
 
 internal fun openAndroidIncomingShareRecovery(context: Context, requestId: String) {

@@ -154,6 +154,23 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
+    fun chunkCleanupStateIsDurableAndCannotOverlapACommit() {
+        val cleanup = AndroidIncomingShareChunkSession(
+            fileIndex = 0,
+            targetName = "large.bin",
+            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+            uploadedChunks = 3,
+            cleanupPending = true,
+        )
+
+        assertTrue(cleanup.cleanupPending)
+        assertFalse(cleanup.commitInFlight)
+        assertFailsWith<IllegalArgumentException> {
+            cleanup.copy(commitInFlight = true)
+        }
+    }
+
+    @Test
     fun throttledFinalMoveIsARejectedRatherThanAmbiguousMutation() {
         val throttled = DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
 

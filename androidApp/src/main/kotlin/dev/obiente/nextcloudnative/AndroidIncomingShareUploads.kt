@@ -18,15 +18,8 @@ import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.work.Constraints
-import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
-import androidx.work.Data
-import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.MAX_INCOMING_SHARE_FILES
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -37,7 +30,6 @@ import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -72,11 +64,13 @@ internal data class AndroidIncomingShareChunkSession(
     val uploadId: String,
     val uploadedChunks: Int = 0,
     val commitInFlight: Boolean = false,
+    val cleanupPending: Boolean = false,
 ) {
     init {
         require(fileIndex >= 0 && safeIncomingShareFileName(targetName, 0) == targetName)
         require(runCatching { UUID.fromString(uploadId) }.isSuccess)
         require(uploadedChunks >= 0)
+        require(!commitInFlight || !cleanupPending)
     }
 }
 
@@ -307,6 +301,32 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         updated
     }
 
+    fun markChunkCleanupPending(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
+        val current = requireAvailable(id)
+        val session = requireNotNull(current.chunkSession)
+        require(current.state == AndroidIncomingShareState.Uploading && session.commitInFlight)
+        val updated = current.copy(
+            chunkSession = session.copy(commitInFlight = false, cleanupPending = true),
+        )
+        save(updated)
+        updated
+    }
+
+    fun clearChunkSessionForCleanup(id: String, uploadId: String): AndroidIncomingShareRequest? = synchronized(LOCK) {
+        val current = load(id) ?: return@synchronized null
+        val session = current.chunkSession ?: return@synchronized current
+        if (session.uploadId != uploadId) return@synchronized current
+        if (
+            current.state in setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading) &&
+            !session.cleanupPending
+        ) {
+            return@synchronized current
+        }
+        val updated = current.copy(chunkSession = null)
+        save(updated)
+        updated
+    }
+
     fun clearChunkSession(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
         val current = requireAvailable(id)
         require(current.state == AndroidIncomingShareState.Uploading)
@@ -351,54 +371,6 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         const val STAGING_MARKER_NAME = ".staging"
         const val MAX_INCOMING_SHARE_RECOVERY_SCAN = 1_000
     }
-}
-
-internal class AndroidIncomingShareUploads(private val context: Context) {
-    private val store = AndroidIncomingShareStore(context.applicationContext)
-
-    fun enqueue(
-        session: NextcloudSession,
-        userId: String,
-        requestId: String,
-        destinationPath: String,
-    ): AndroidIncomingShareRequest {
-        val current = requireNotNull(store.load(requestId)) { "The staged share is no longer available." }
-        val queued = prepareIncomingShareRequestForQueue(
-            current = current,
-            accountId = NextcloudDocumentIds.accountKey(session),
-            userId = userId,
-            destinationPath = destinationPath,
-        )
-        store.save(queued)
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            workName(requestId),
-            ExistingWorkPolicy.REPLACE,
-            OneTimeWorkRequestBuilder<AndroidIncomingShareUploadWorker>()
-                .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .build(),
-        )
-        return queued
-    }
-
-    fun cancel(requestId: String) {
-        val current = store.load(requestId)
-        val canceled = store.transition(
-            id = requestId,
-            expected = setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading),
-            target = AndroidIncomingShareState.Canceled,
-            message = if (current?.state == AndroidIncomingShareState.Uploading) {
-                CANCELED_INCOMING_SHARE_MUTATION_WARNING
-            } else {
-                "Upload canceled before a transfer was active."
-            },
-        )
-        WorkManager.getInstance(context).cancelUniqueWork(workName(requestId))
-        canceled?.let { scheduleIncomingShareCleanup(context, it.id) }
-    }
-
-    private fun workName(requestId: String) = "incoming-share-$requestId"
 }
 
 internal class AndroidIncomingShareUploadWorker(
@@ -492,14 +464,14 @@ internal class AndroidIncomingShareUploadWorker(
                 }
                 setForeground(foregroundInfo(request))
             }
+            scheduleIncomingShareCleanup(applicationContext, request.id)
             request = store.transition(
                 id = requestId,
                 expected = setOf(AndroidIncomingShareState.Uploading),
                 target = AndroidIncomingShareState.Completed,
             ) ?: throw CancellationException("Incoming share upload canceled")
-            store.removeStagedFiles(request)
+            runCatching { store.removeStagedFiles(request) }
             publishTerminalNotification(request)
-            scheduleIncomingShareCleanup(applicationContext, request.id)
             Result.success()
         } catch (cancelled: CancellationException) {
             if (store.load(requestId)?.state != AndroidIncomingShareState.Canceled) {
@@ -749,6 +721,7 @@ private fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
             .put("uploadId", session.uploadId)
             .put("uploadedChunks", session.uploadedChunks)
             .put("commitInFlight", session.commitInFlight)
+            .put("cleanupPending", session.cleanupPending)
     })
     .put("message", message)
     .put("files", JSONArray().also { array ->
@@ -781,6 +754,7 @@ private fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = A
             uploadId = session.getString("uploadId"),
             uploadedChunks = session.optInt("uploadedChunks"),
             commitInFlight = session.optBoolean("commitInFlight"),
+            cleanupPending = session.optBoolean("cleanupPending"),
         )
     },
     message = optString("message").takeIf(String::isNotBlank),

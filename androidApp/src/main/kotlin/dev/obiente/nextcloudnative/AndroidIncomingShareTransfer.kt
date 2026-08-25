@@ -87,6 +87,11 @@ internal class AndroidIncomingShareFileTransfer(
         while (true) {
             cancellation.throwIfCancelled()
             val existingUpload = current.chunkSession
+            if (existingUpload?.cleanupPending == true) {
+                remote.deleteChunkUpload(existingUpload.uploadId, cancellation)
+                current = store.clearChunkSession(requestId)
+                continue
+            }
             if (existingUpload == null) {
                 val targetName = incomingShareCandidates(displayName, occupiedNames).firstOrNull()
                     ?: error("No safe available name remains for $displayName.")
@@ -148,6 +153,8 @@ internal class AndroidIncomingShareFileTransfer(
                 if (!failure.isIncomingShareNameCollision()) throw failure
                 setMutationInFlight(false)
                 occupiedNames += upload.targetName
+                current = store.markChunkCleanupPending(requestId)
+                upload = requireNotNull(current.chunkSession)
                 remote.deleteChunkUpload(upload.uploadId, cancellation)
                 current = store.clearChunkSession(requestId)
                 continue
