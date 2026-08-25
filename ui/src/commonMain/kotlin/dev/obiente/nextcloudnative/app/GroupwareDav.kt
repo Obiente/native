@@ -1190,7 +1190,7 @@ private fun String.decodePercentEncoding(): String {
     return bytes.toByteArray().decodeToString()
 }
 
-private fun String.xmlElements(localName: String): List<String> {
+internal fun String.xmlElements(localName: String): List<String> {
     val results = mutableListOf<String>()
     var cursor = 0
     while (cursor < length) {
@@ -1228,7 +1228,7 @@ private fun String.xmlElements(localName: String): List<String> {
     return results
 }
 
-private fun String.xmlText(localName: String): String? = xmlElements(localName).firstOrNull()?.let { element ->
+internal fun String.xmlText(localName: String): String? = xmlElements(localName).firstOrNull()?.let { element ->
     val openingEnd = element.indexOf('>')
     val closingStart = element.lastIndexOf("</")
     if (openingEnd >= 0 && closingStart > openingEnd) element.substring(openingEnd + 1, closingStart) else null
@@ -1291,7 +1291,7 @@ private fun String.xmlOpeningTags(localName: String): List<String> {
     return tags
 }
 
-private fun String.decodeXmlEntities(): String {
+internal fun String.decodeXmlEntities(): String {
     val numeric = buildString(length) {
         var cursor = 0
         while (cursor < this@decodeXmlEntities.length) {
@@ -1335,7 +1335,7 @@ private fun StringBuilder.appendCodePoint(codePoint: Int) {
     }
 }
 
-private fun String.requireSafeDavHref(): String {
+internal fun String.requireSafeDavHref(): String {
     val normalized = lowercase()
     require(
         startsWith("/remote.php/dav/") &&
@@ -1347,7 +1347,7 @@ private fun String.requireSafeDavHref(): String {
     return this
 }
 
-private fun String.escapeDavXml(): String = buildString(length) {
+internal fun String.escapeDavXml(): String = buildString(length) {
     for (character in this@escapeDavXml) {
         append(
             when (character) {
@@ -1376,12 +1376,12 @@ private const val MAX_DAV_SYNC_TOKEN_LENGTH = 4_096
 private const val MAX_DAV_HREF_LENGTH = 4_096
 private const val MAX_DAV_ETAG_LENGTH = 1_024
 private const val MAX_CALENDAR_RECURRENCE_RULE_LENGTH = 1_024
-private const val MAX_DAV_OBJECT_BYTES = 1 * 1024 * 1024
+private const val MAX_DAV_OBJECT_BYTES = 4 * 1024 * 1024
 private const val DAV_DISCOVERY_RESPONSE_BYTES = 1L * 1024L * 1024L
 private const val DAV_COLLECTION_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_QUERY_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_SYNC_RESPONSE_BYTES = 4L * 1024L * 1024L
-private const val DAV_OBJECT_RESPONSE_BYTES = 1L * 1024L * 1024L
+private const val DAV_OBJECT_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_MUTATION_RESPONSE_BYTES = 256L * 1024L
 
 private val PRINCIPAL_DISCOVERY_BODY = """
