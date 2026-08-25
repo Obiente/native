@@ -122,6 +122,9 @@ class AndroidIncomingShareStateTest {
         assertEquals(101, incomingShareClipItemsToInspect(101))
         assertEquals(101, incomingShareClipItemsToInspect(4_000))
         assertFailsWith<IllegalArgumentException> { incomingShareClipItemsToInspect(-1) }
+        assertFalse(incomingShareChannelCountsExceedLimit(100, 100))
+        assertTrue(incomingShareChannelCountsExceedLimit(0, 101))
+        assertTrue(incomingShareChannelCountsExceedLimit(101, 0))
     }
 
     @Test
@@ -443,6 +446,13 @@ class AndroidIncomingShareStateTest {
         )
         assertFalse(
             DocumentWebDavException(
+                DocumentWebDavError.AlreadyExists,
+                405,
+                "Method not allowed",
+            ).isIncomingShareNameCollision(),
+        )
+        assertFalse(
+            DocumentWebDavException(
                 DocumentWebDavError.Permission,
                 403,
                 "Forbidden",
@@ -457,6 +467,7 @@ class AndroidIncomingShareStateTest {
         )
 
         assertTrue(canceled.requiresIncomingShareRecovery("account-1"))
+        assertFalse(canceled.canReleaseForIncomingShareReplacement())
         assertEquals(
             dev.obiente.nextcloudnative.app.IncomingShareUploadFileStatus.OutcomeUnknown,
             canceled.toPresentation().files.first().status,
@@ -469,6 +480,16 @@ class AndroidIncomingShareStateTest {
             canceled.copy(message = "Upload canceled before a transfer was active.")
                 .requiresIncomingShareRecovery("account-1"),
         )
+        assertTrue(
+            canceled.copy(message = "Upload canceled before a transfer was active.")
+                .canReleaseForIncomingShareReplacement(),
+        )
+    }
+
+    @Test
+    fun onlyUuidRecoveryReferencesAreRetained() {
+        assertTrue(isValidIncomingShareRequestId("01234567-89ab-cdef-0123-456789abcdef"))
+        assertFalse(isValidIncomingShareRequestId("../../not-a-request"))
     }
 
     @Test

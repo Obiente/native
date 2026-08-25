@@ -11,6 +11,7 @@ import dev.obiente.nextcloudnative.app.MAX_INCOMING_SHARE_FILES
 import dev.obiente.nextcloudnative.app.canonicalIncomingShareDestinationPath
 import dev.obiente.nextcloudnative.app.incomingShareUploadNameCandidates
 import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -93,11 +94,19 @@ internal sealed interface AndroidIncomingShareLoadResult {
 internal class CorruptIncomingShareManifestException(val requestId: String) :
     Exception("This shared upload needs attention because its recovery record is damaged.")
 
+internal sealed interface AndroidIncomingShareSource {
+    data class ContentUri(val uri: Uri) : AndroidIncomingShareSource
+    data class SharedText(val value: String) : AndroidIncomingShareSource
+}
+
 internal class AndroidIncomingShareStore(private val context: Context) {
     private val root = File(context.filesDir, "incoming-share")
 
     suspend fun stage(intent: Intent): AndroidIncomingShareRequest = withContext(Dispatchers.IO) {
-        val sources = incomingShareUris(intent)
+        require(!incomingShareSourceCountExceedsLimit(intent)) {
+            "Share at most $MAX_INCOMING_SHARE_FILES files at once."
+        }
+        val sources = incomingShareSources(intent)
         require(sources.isNotEmpty()) { "The share did not contain a readable file." }
         require(sources.size <= MAX_INCOMING_SHARE_FILES) {
             "Share at most $MAX_INCOMING_SHARE_FILES files at once."
@@ -109,9 +118,18 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val stagingMarker = createIncomingShareStagingMarker(requestDirectory, STAGING_MARKER_NAME)
         try {
             var totalBytes = 0L
-            val files = sources.mapIndexed { index, uri ->
-                val metadata = context.contentResolver.queryIncomingShareMetadata(uri)
-                val displayName = safeIncomingShareFileName(metadata.first ?: uri.lastPathSegment.orEmpty(), index)
+            val files = sources.mapIndexed { index, source ->
+                val textBytes = (source as? AndroidIncomingShareSource.SharedText)?.value?.encodeToByteArray()
+                val metadata = when (source) {
+                    is AndroidIncomingShareSource.ContentUri ->
+                        context.contentResolver.queryIncomingShareMetadata(source.uri)
+                    is AndroidIncomingShareSource.SharedText -> "shared-text.txt" to textBytes?.size?.toLong()
+                }
+                val rawName = when (source) {
+                    is AndroidIncomingShareSource.ContentUri -> metadata.first ?: source.uri.lastPathSegment.orEmpty()
+                    is AndroidIncomingShareSource.SharedText -> requireNotNull(metadata.first)
+                }
+                val displayName = safeIncomingShareFileName(rawName, index)
                 val stagedName = "${index.toString().padStart(3, '0')}-${UUID.randomUUID()}"
                 val destination = File(requestDirectory, stagedName)
                 val declaredBytes = metadata.second
@@ -119,7 +137,11 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                     "$displayName is too large to stage safely."
                 }
                 requireIncomingShareStagingSpace(requestDirectory, declaredBytes, displayName, MIN_STAGING_FREE_BYTES)
-                val copied = context.contentResolver.openInputStream(uri)?.use { input ->
+                val input = when (source) {
+                    is AndroidIncomingShareSource.ContentUri -> context.contentResolver.openInputStream(source.uri)
+                    is AndroidIncomingShareSource.SharedText -> ByteArrayInputStream(requireNotNull(textBytes))
+                }
+                val copied = input?.use { input ->
                     FileOutputStream(destination).use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         var fileBytes = 0L
@@ -146,7 +168,11 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                 AndroidIncomingShareFile(
                     id = UUID.randomUUID().toString(),
                     displayName = displayName,
-                    mimeType = context.contentResolver.getType(uri)?.take(160),
+                    mimeType = when (source) {
+                        is AndroidIncomingShareSource.ContentUri ->
+                            context.contentResolver.getType(source.uri)?.take(160)
+                        is AndroidIncomingShareSource.SharedText -> "text/plain; charset=utf-8"
+                    },
                     sizeBytes = copied,
                     stagedName = stagedName,
                 )
@@ -483,7 +509,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
 }
 
 internal fun DocumentWebDavException.isIncomingShareNameCollision(): Boolean =
-    status == 405 || status == 412
+    status == 412
 
 internal fun transitionIncomingShareRequest(
     current: AndroidIncomingShareRequest,
@@ -582,6 +608,30 @@ internal fun incomingShareUris(intent: Intent): List<Uri> {
         .filter { uri -> isSupportedIncomingShareUriScheme(uri.scheme) }
         .distinctBy(Uri::toString)
         .take(MAX_INCOMING_SHARE_FILES + 1)
+}
+
+internal fun incomingShareSources(intent: Intent): List<AndroidIncomingShareSource> {
+    val contentUris = incomingShareUris(intent)
+    if (contentUris.isNotEmpty()) return contentUris.map { uri -> AndroidIncomingShareSource.ContentUri(uri) }
+    if (intent.action != Intent.ACTION_SEND) return emptyList()
+    val sharedText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.takeIf(String::isNotBlank)
+        ?: return emptyList()
+    return listOf(AndroidIncomingShareSource.SharedText(sharedText))
+}
+
+@Suppress("DEPRECATION")
+internal fun incomingShareSourceCountExceedsLimit(intent: Intent): Boolean {
+    val streamExtraCount = if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
+        intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty().size
+    } else {
+        if (intent.getParcelableExtra(Intent.EXTRA_STREAM) is Uri) 1 else 0
+    }
+    return incomingShareChannelCountsExceedLimit(streamExtraCount, intent.clipData?.itemCount ?: 0)
+}
+
+internal fun incomingShareChannelCountsExceedLimit(streamExtraCount: Int, clipItemCount: Int): Boolean {
+    require(streamExtraCount >= 0 && clipItemCount >= 0)
+    return streamExtraCount > MAX_INCOMING_SHARE_FILES || clipItemCount > MAX_INCOMING_SHARE_FILES
 }
 
 internal fun isSupportedIncomingShareUriScheme(scheme: String?): Boolean =

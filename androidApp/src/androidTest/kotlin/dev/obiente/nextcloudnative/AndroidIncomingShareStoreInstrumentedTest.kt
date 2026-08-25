@@ -48,6 +48,22 @@ class AndroidIncomingShareStoreInstrumentedTest {
             assertTrue(store.remove(single.id))
         }
 
+        val sharedText = store.stage(
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, "A URL or selected text shared from another app"),
+        )
+        try {
+            assertEquals("shared-text.txt", sharedText.files.single().displayName)
+            assertEquals("text/plain; charset=utf-8", sharedText.files.single().mimeType)
+            assertArrayEquals(
+                "A URL or selected text shared from another app".encodeToByteArray(),
+                store.stagedFile(sharedText.id, sharedText.files.single()).readBytes(),
+            )
+        } finally {
+            assertTrue(store.remove(sharedText.id))
+        }
+
         val first = fixtureUri("one.txt")
         val large = fixtureUri("large.bin")
         val multiple = store.stage(

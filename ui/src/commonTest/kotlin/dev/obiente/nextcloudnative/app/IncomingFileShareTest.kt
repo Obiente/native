@@ -9,6 +9,8 @@ class IncomingFileShareTest {
     @Test
     fun providerNamesAreReducedToOneSafePathSegment() {
         assertEquals("report_final.pdf", safeIncomingShareFileName(" ../report/final.pdf ", 0))
+        assertEquals("invoice_gpj.exe", safeIncomingShareFileName("invoice\u202egpj.exe", 0))
+        assertEquals("zero_width.txt", safeIncomingShareFileName("zero\u200bwidth.txt", 0))
         assertEquals("shared-file-3", safeIncomingShareFileName("..", 2))
         assertTrue(safeIncomingShareFileName("a".repeat(400), 0).length <= MAX_INCOMING_SHARE_FILE_NAME_LENGTH)
         assertTrue(safeIncomingShareFileName("😀".repeat(100), 0).encodeToByteArray().size <= 255)

@@ -25,6 +25,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudAppBackground
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
 import dev.obiente.nextcloudnative.app.remoteFolderPickerOperations
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -130,7 +131,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val requestId = intent.getStringExtra(KEY_REQUEST_ID)
-        if (requestId != null || incomingShareUris(intent).isNotEmpty()) {
+        if (requestId != null || incomingShareSources(intent).isNotEmpty()) {
             releaseSafeDisplayedRequestForReplacement()
             loading = true
             error = null
@@ -146,14 +147,21 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private fun restoreOrStage(sourceIntent: Intent, restoredRequestId: String?) {
         restoreJob?.cancel()
         val generation = ++restoreGeneration
-        recoveryRequestId = restoredRequestId
+        val validatedRequestId = restoredRequestId?.takeIf(::isValidIncomingShareRequestId)
+        if (restoredRequestId != null && validatedRequestId == null) {
+            recoveryRequestId = null
+            error = "This shared upload reference is invalid."
+            loading = false
+            return
+        }
+        recoveryRequestId = validatedRequestId
         restoreJob = lifecycleScope.launch {
             var unclaimedStagedRequestId: String? = null
             try {
                 val activeSession = services.loadSession()
                     ?: error("Sign in to Nextcloud Native before sharing files to it.")
                 val staged = withContext(Dispatchers.IO) {
-                    val restored = restoredRequestId?.let { requestId ->
+                    val restored = validatedRequestId?.let { requestId ->
                         store.requireAvailable(requestId)
                     } ?: store.stage(sourceIntent).also { newlyStaged ->
                         unclaimedStagedRequestId = newlyStaged.id
@@ -199,9 +207,11 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 scheduleIncomingShareCleanup(applicationContext, current.id)
             }
         }
-        request?.takeIf { current ->
-            current.state in setOf(AndroidIncomingShareState.Completed, AndroidIncomingShareState.Canceled)
-        }?.let { current -> store.remove(current.id) }
+        request?.takeIf { current -> current.canReleaseForIncomingShareReplacement() }?.let { current ->
+            if (store.removeIfReleasable(current.id)) {
+                NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(current.id))
+            }
+        }
         request = null
         session = null
         serverInfo = null
@@ -268,6 +278,13 @@ internal fun isCurrentIncomingShareEnqueue(
     queuedRequestId: String,
     currentRequestId: String?,
 ): Boolean = enqueueGeneration == currentGeneration && queuedRequestId == currentRequestId
+
+internal fun isValidIncomingShareRequestId(value: String): Boolean =
+    runCatching { UUID.fromString(value) }.isSuccess
+
+internal fun AndroidIncomingShareRequest.canReleaseForIncomingShareReplacement(): Boolean =
+    state == AndroidIncomingShareState.Completed ||
+        state == AndroidIncomingShareState.Canceled && message != CANCELED_INCOMING_SHARE_MUTATION_WARNING
 
 private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,

@@ -10,7 +10,8 @@ fun safeIncomingShareFileName(rawName: String, fallbackIndex: Int): String {
     val cleaned = rawName
         .map { character ->
             when {
-                character == '/' || character == '\\' || character == '\u0000' || character.isISOControl() -> '_'
+                character == '/' || character == '\\' || character == '\u0000' ||
+                    character.isISOControl() || character.category == CharCategory.FORMAT -> '_'
                 else -> character
             }
         }
