@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -59,6 +60,8 @@ class AndroidIncomingShareStateTest {
     @Test
     fun partiallyCompletedRetryKeepsItsOriginalDestination() {
         val failed = request(AndroidIncomingShareState.Failed).copy(
+            accountId = "account-1",
+            userId = "user-1",
             destinationPath = "Shared/Phone",
             completedFiles = 1,
             uploadedNames = listOf("first.txt"),
@@ -84,6 +87,22 @@ class AndroidIncomingShareStateTest {
                 accountId = "account-1",
                 userId = "user-1",
                 destinationPath = "Somewhere/Else",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            prepareIncomingShareRequestForQueue(
+                current = failed,
+                accountId = "another-account",
+                userId = "user-1",
+                destinationPath = "Shared/Phone",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            prepareIncomingShareRequestForQueue(
+                current = failed,
+                accountId = "account-1",
+                userId = "another-user",
+                destinationPath = "Shared/Phone",
             )
         }
     }
@@ -186,6 +205,8 @@ class AndroidIncomingShareStateTest {
     @Test
     fun cleanupPendingChunkCannotBeRequeued() {
         val failed = request(AndroidIncomingShareState.Failed).copy(
+            accountId = "account-1",
+            userId = "user-1",
             destinationPath = "Shared/Phone",
             chunkSession = AndroidIncomingShareChunkSession(
                 fileIndex = 0,
@@ -217,6 +238,67 @@ class AndroidIncomingShareStateTest {
             .isFullyJournaledIncomingShareUpload())
         assertFalse(completed.copy(state = AndroidIncomingShareState.Failed)
             .isFullyJournaledIncomingShareUpload())
+    }
+
+    @Test
+    fun workerRestartResumesOnlyBeforeAVisibleMutationOrBetweenSavedChunks() {
+        val preflight = request(AndroidIncomingShareState.Uploading)
+        val chunked = preflight.copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                uploadedChunks = 2,
+            ),
+        )
+
+        assertTrue(preflight.canSafelyResumeAfterWorkerRestart())
+        assertTrue(chunked.canSafelyResumeAfterWorkerRestart())
+        assertFalse(preflight.copy(visibleMutationInFlight = true).canSafelyResumeAfterWorkerRestart())
+        assertFalse(
+            chunked.copy(chunkSession = requireNotNull(chunked.chunkSession).copy(commitInFlight = true))
+                .canSafelyResumeAfterWorkerRestart(),
+        )
+    }
+
+    @Test
+    fun terminalChunkSessionMustSurviveUntilRemoteCleanup() {
+        val terminal = request(AndroidIncomingShareState.Failed)
+        assertTrue(terminal.canReleaseIncomingShareRequest())
+        assertFalse(
+            terminal.copy(
+                chunkSession = AndroidIncomingShareChunkSession(
+                    fileIndex = 0,
+                    targetName = "first.txt",
+                    uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                    cleanupPending = true,
+                ),
+            ).canReleaseIncomingShareRequest(),
+        )
+    }
+
+    @Test
+    fun shareFolderSeparatesFileAndDirectoryCreationPermissions() {
+        assertEquals(
+            RemoteFolderSelectionAccess.Allowed,
+            incomingShareFolderSelectionAccess(DocumentDirectoryAccess(true, false)),
+        )
+        assertEquals(
+            RemoteFolderSelectionAccess.DirectoryCreationOnly,
+            incomingShareFolderSelectionAccess(DocumentDirectoryAccess(false, true)),
+        )
+        assertTrue(
+            incomingShareFolderSelectionAccess(DocumentDirectoryAccess(false, false)) is
+                RemoteFolderSelectionAccess.Denied,
+        )
+    }
+
+    @Test
+    fun foregroundAndTerminalNotificationsUseDifferentIds() {
+        val requestId = "01234567-89ab-cdef-0123-456789abcdef"
+        assertTrue(incomingShareForegroundNotificationId(requestId) > 0)
+        assertTrue(incomingShareNotificationId(requestId) > 0)
+        assertFalse(incomingShareForegroundNotificationId(requestId) == incomingShareNotificationId(requestId))
     }
 
     @Test

@@ -67,6 +67,7 @@ internal data class AndroidIncomingShareRequest(
     val completedFiles: Int = 0,
     val uploadedNames: List<String> = emptyList(),
     val chunkSession: AndroidIncomingShareChunkSession? = null,
+    val visibleMutationInFlight: Boolean = false,
     val automaticTransferAttempts: Int = 0,
     val retryNotBeforeEpochMillis: Long? = null,
     val message: String? = null,
@@ -253,6 +254,35 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         updated
     }
 
+    fun setVisibleMutationInFlight(
+        id: String,
+        inFlight: Boolean,
+    ): AndroidIncomingShareRequest? = synchronized(LOCK) {
+        val current = load(id) ?: return@synchronized null
+        if (current.state != AndroidIncomingShareState.Uploading) return@synchronized null
+        val updated = current.copy(visibleMutationInFlight = inFlight)
+        save(updated)
+        updated
+    }
+
+    fun cancel(id: String): AndroidIncomingShareRequest? = synchronized(LOCK) {
+        val current = load(id) ?: return@synchronized null
+        if (current.state !in setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading)) {
+            return@synchronized null
+        }
+        val mutationMayBeVisible = current.visibleMutationInFlight || current.chunkSession?.commitInFlight == true
+        val updated = current.copy(
+            state = AndroidIncomingShareState.Canceled,
+            message = if (mutationMayBeVisible) {
+                CANCELED_INCOMING_SHARE_MUTATION_WARNING
+            } else {
+                "Upload canceled before a server-visible transfer was active."
+            },
+        )
+        save(updated)
+        updated
+    }
+
     fun queueAutomaticRetry(
         id: String,
         message: String,
@@ -290,6 +320,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
             completedFiles = expectedCompletedFiles + 1,
             uploadedNames = current.uploadedNames + uploadedName,
             chunkSession = null,
+            visibleMutationInFlight = false,
         )
         save(updated)
         updated
@@ -407,10 +438,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
             AndroidIncomingShareLoadResult.Missing -> true
             is AndroidIncomingShareLoadResult.Corrupt -> remove(id)
             is AndroidIncomingShareLoadResult.Available -> {
-                if (
-                    loaded.request.state == AndroidIncomingShareState.Staged ||
-                    loaded.request.state in TERMINAL_INCOMING_SHARE_STATES
-                ) {
+                if (loaded.request.canReleaseIncomingShareRequest()) {
                     remove(id)
                 } else {
                     false
@@ -480,14 +508,19 @@ internal fun prepareIncomingShareRequestForQueue(
     }
     require(accountId.isNotBlank() && userId.isNotBlank())
     val destination = canonicalIncomingShareDestinationPath(destinationPath)
-    require((current.completedFiles == 0 && current.chunkSession == null) || current.destinationPath == destination) {
-        "A partially completed upload must resume in its original Nextcloud folder."
+    val hasDurableProgress = current.completedFiles > 0 || current.chunkSession != null
+    require(
+        !hasDurableProgress ||
+            current.accountId == accountId && current.userId == userId && current.destinationPath == destination,
+    ) {
+        "A partially completed upload must resume with its original account, user, and Nextcloud folder."
     }
     return current.copy(
         state = AndroidIncomingShareState.Queued,
         accountId = accountId,
         userId = userId,
         destinationPath = destination,
+        visibleMutationInFlight = false,
         automaticTransferAttempts = 0,
         retryNotBeforeEpochMillis = null,
         message = null,
@@ -504,6 +537,7 @@ internal fun prepareIncomingShareRequestForAutomaticRetry(
     require(message.isNotBlank())
     return current.copy(
         state = AndroidIncomingShareState.Queued,
+        visibleMutationInFlight = false,
         automaticTransferAttempts = current.automaticTransferAttempts + 1,
         retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
         message = message,
@@ -518,6 +552,15 @@ internal fun incomingShareClipItemsToInspect(itemCount: Int): Int {
 internal fun AndroidIncomingShareRequest.isFullyJournaledIncomingShareUpload(): Boolean =
     state == AndroidIncomingShareState.Uploading &&
         completedFiles == files.size &&
+        chunkSession == null
+
+internal fun AndroidIncomingShareRequest.canSafelyResumeAfterWorkerRestart(): Boolean =
+    state == AndroidIncomingShareState.Uploading &&
+        !visibleMutationInFlight &&
+        (chunkSession == null || !chunkSession.commitInFlight)
+
+internal fun AndroidIncomingShareRequest.canReleaseIncomingShareRequest(): Boolean =
+    (state == AndroidIncomingShareState.Staged || state in TERMINAL_INCOMING_SHARE_STATES) &&
         chunkSession == null
 
 @Suppress("DEPRECATION")
@@ -585,6 +628,7 @@ private fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
     .put("uploadedNames", JSONArray(uploadedNames))
     .put("automaticTransferAttempts", automaticTransferAttempts)
     .put("retryNotBeforeEpochMillis", retryNotBeforeEpochMillis)
+    .put("visibleMutationInFlight", visibleMutationInFlight)
     .put("chunkSession", chunkSession?.let { session ->
         JSONObject()
             .put("fileIndex", session.fileIndex)
@@ -621,6 +665,7 @@ private fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = A
     automaticTransferAttempts = optInt("automaticTransferAttempts"),
     retryNotBeforeEpochMillis = optLong("retryNotBeforeEpochMillis")
         .takeIf { has("retryNotBeforeEpochMillis") && !isNull("retryNotBeforeEpochMillis") && it >= 0L },
+    visibleMutationInFlight = optBoolean("visibleMutationInFlight"),
     chunkSession = optJSONObject("chunkSession")?.let { session ->
         AndroidIncomingShareChunkSession(
             fileIndex = session.getInt("fileIndex"),

@@ -217,7 +217,15 @@ internal fun incomingShareRecoveryPendingIntent(context: Context, requestId: Str
     )
 
 internal fun incomingShareNotificationId(requestId: String): Int =
-    requestId.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
+    scopedIncomingShareNotificationId(requestId, "terminal")
+
+internal fun incomingShareForegroundNotificationId(requestId: String): Int =
+    scopedIncomingShareNotificationId(requestId, "foreground")
+
+private fun scopedIncomingShareNotificationId(requestId: String, scope: String): Int =
+    "$scope:$requestId".hashCode()
+        .let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }
+        .coerceAtLeast(1)
 
 internal fun publishCorruptIncomingShareNotification(context: Context, requestId: String) {
     if (

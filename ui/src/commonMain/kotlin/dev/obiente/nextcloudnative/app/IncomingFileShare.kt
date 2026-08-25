@@ -36,9 +36,11 @@ fun incomingShareUploadNameCandidates(displayName: String, limit: Int = 100): Li
         add(safeName)
         for (copyIndex in 1 until limit) {
             val suffix = " ($copyIndex)$extension"
-            val boundedStem = stem.takeUtf8Bytes(
-                (MAX_INCOMING_SHARE_FILE_NAME_BYTES - suffix.encodeToByteArray().size).coerceAtLeast(1),
-            )
+            val boundedStem = stem
+                .take((MAX_INCOMING_SHARE_FILE_NAME_LENGTH - suffix.length).coerceAtLeast(1))
+                .takeUtf8Bytes(
+                    (MAX_INCOMING_SHARE_FILE_NAME_BYTES - suffix.encodeToByteArray().size).coerceAtLeast(1),
+                )
             add(boundedStem + suffix)
         }
     }

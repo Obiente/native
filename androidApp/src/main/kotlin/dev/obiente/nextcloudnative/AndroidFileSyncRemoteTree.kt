@@ -202,7 +202,14 @@ internal class AndroidFileSyncRemoteTree(
 
     /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
     fun rootChildNames(): AndroidRemoteChildNameSnapshot {
-        val listing = webDav.listDirectory(session, userId, fullPath(""), MAX_CHILDREN)
+        val listing = try {
+            webDav.listDirectory(session, userId, fullPath(""), MAX_CHILDREN)
+        } catch (failure: DocumentWebDavException) {
+            if (failure.error == DocumentWebDavError.TooLarge) {
+                return AndroidRemoteChildNameSnapshot(emptySet(), complete = false)
+            }
+            throw failure
+        }
         return AndroidRemoteChildNameSnapshot(
             names = listing.files.mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
             complete = !listing.limited,

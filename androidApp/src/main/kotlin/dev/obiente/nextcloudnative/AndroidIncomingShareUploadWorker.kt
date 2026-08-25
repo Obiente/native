@@ -50,13 +50,16 @@ internal class AndroidIncomingShareUploadWorker(
                 publishTerminalNotification(request)
                 return@withContext Result.success()
             }
-            val resumable = request.chunkSession?.takeIf { !it.commitInFlight }
-            if (resumable != null) {
+            if (request.canSafelyResumeAfterWorkerRestart()) {
                 request = store.transition(
                     id = requestId,
                     expected = setOf(AndroidIncomingShareState.Uploading),
                     target = AndroidIncomingShareState.Queued,
-                    message = "Resuming the large file from its last saved chunk.",
+                    message = if (request.chunkSession == null) {
+                        "Resuming after the destination check was interrupted."
+                    } else {
+                        "Resuming the large file from its last saved chunk."
+                    },
                 ) ?: return@withContext Result.success()
             } else {
                 val recovered = store.transition(
@@ -121,6 +124,9 @@ internal class AndroidIncomingShareUploadWorker(
             for (index in request.completedFiles until request.files.size) {
                 ensureNotCanceled(requestId, store)
                 request = transfer.upload(requestId, request, index, occupiedNames) { inFlight ->
+                    if (store.setVisibleMutationInFlight(requestId, inFlight) == null) {
+                        throw CancellationException("Incoming share upload canceled")
+                    }
                     mutationInFlight = inFlight
                 }
                 setForeground(foregroundInfo(request))
@@ -162,6 +168,7 @@ internal class AndroidIncomingShareUploadWorker(
                 store.load(requestId)?.chunkSession?.takeIf { it.commitInFlight }?.let {
                     store.clearChunkCommitInFlight(requestId)
                 }
+                store.setVisibleMutationInFlight(requestId, false)
                 mutationInFlight = false
             }
             val resumableChunk = store.load(requestId)?.chunkSession?.takeIf { !it.commitInFlight }
@@ -236,7 +243,7 @@ internal class AndroidIncomingShareUploadWorker(
             .setProgress(request.files.size, request.completedFiles, false)
             .setContentIntent(incomingShareRecoveryPendingIntent(applicationContext, request.id))
             .build()
-        val id = request.id.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
+        val id = incomingShareForegroundNotificationId(request.id)
         return if (Build.VERSION.SDK_INT >= 29) {
             ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {

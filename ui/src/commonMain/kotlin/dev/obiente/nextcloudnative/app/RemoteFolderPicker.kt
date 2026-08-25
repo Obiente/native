@@ -239,6 +239,7 @@ fun RemoteFolderPickerDialog(
         mutableStateOf<NextcloudFileListingSource?>(null)
     }
     var networkConfirmedPath by remember(operations.identity) { mutableStateOf<String?>(null) }
+    var networkConfirmedDirectoryCreationPath by remember(operations.identity) { mutableStateOf<String?>(null) }
     var displayedPath by remember(operations.identity) { mutableStateOf<String?>(null) }
     var loading by remember(operations.identity) { mutableStateOf(true) }
     var refreshing by remember(operations.identity) { mutableStateOf(false) }
@@ -272,9 +273,9 @@ fun RemoteFolderPickerDialog(
         mutableStateOf<MissingRemoteFolderDestination?>(null)
     }
     val scope = rememberCoroutineScope()
-
     LaunchedEffect(operations, currentPath, loadAttempt) {
         networkConfirmedPath = null
+        networkConfirmedDirectoryCreationPath = null
         val retainingCurrentPath = files != null && displayedPath == currentPath
         if (!retainingCurrentPath) {
             files = null
@@ -306,10 +307,14 @@ fun RemoteFolderPickerDialog(
                     listing.source == NextcloudFileListingSource.Network &&
                         selectionAccess == RemoteFolderSelectionAccess.Allowed
                 }
+                networkConfirmedDirectoryCreationPath = currentPath.takeIf {
+                    listing.source == NextcloudFileListingSource.Network &&
+                        selectionAccess !is RemoteFolderSelectionAccess.Denied
+                }
                 loading = false
                 refreshing = false
                 error = (selectionAccess as? RemoteFolderSelectionAccess.Denied)?.message
-                if (selectionAccess == RemoteFolderSelectionAccess.Allowed) {
+                if (selectionAccess !is RemoteFolderSelectionAccess.Denied) {
                     missingDestination = recoveryTarget?.let { intended ->
                         missingRemoteFolderDestination(intended, currentPath)
                     }
@@ -549,7 +554,7 @@ fun RemoteFolderPickerDialog(
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
                         OutlinedButton(
-                            enabled = !createRunning && networkConfirmedPath == currentPath,
+                            enabled = !createRunning && networkConfirmedDirectoryCreationPath == currentPath,
                             onClick = {
                                 recoveryTarget = null
                                 missingDestination = null
@@ -694,7 +699,7 @@ fun RemoteFolderPickerDialog(
             Button(
                 enabled = canConfirm || canCreateMissingRemoteFolderDestination(
                     missingDestination = missingDestination,
-                    networkConfirmedPath = networkConfirmedPath,
+                    networkConfirmedPath = networkConfirmedDirectoryCreationPath,
                     currentPath = currentPath,
                     manualPathVisible = manualVisible,
                     manualPathDraft = manualPath,

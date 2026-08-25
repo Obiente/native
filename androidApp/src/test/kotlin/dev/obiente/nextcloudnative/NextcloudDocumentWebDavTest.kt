@@ -16,6 +16,7 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.Headers.Companion.headersOf
+import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
@@ -274,7 +275,14 @@ class NextcloudDocumentWebDavTest {
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         try {
             source.writeText("0123456789")
-            val client = NextcloudDocumentWebDav()
+            var commitReadTimeoutMillis: Int? = null
+            val httpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    if (chain.request().method == "MOVE") commitReadTimeoutMillis = chain.readTimeoutMillis()
+                    chain.proceed(chain.request())
+                }
+                .build()
+            val client = NextcloudDocumentWebDav(httpClient)
             assertTrue(
                 client.createChunkUpload(
                     server.session,
@@ -318,9 +326,26 @@ class NextcloudDocumentWebDavTest {
             assertEquals("F", server.request(2).header("Overwrite"))
             assertEquals(destination, server.request(2).header("Destination"))
             assertTrue(server.request(2).path.endsWith("/$uploadId/.file"))
+            assertEquals(30 * 60 * 1_000, commitReadTimeoutMillis)
         } finally {
             source.delete()
         }
+    }
+
+    @Test
+    fun oversizedRootNameListingFallsBackToConditionalCreates() = RecordingServer().use { server ->
+        server.enqueue(207, body = " ".repeat(4 * 1024 * 1024 + 1))
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Shared",
+            NextcloudDocumentWebDav(),
+        )
+
+        val snapshot = remote.rootChildNames()
+
+        assertEquals(emptySet(), snapshot.names)
+        assertFalse(snapshot.complete)
     }
 
     @Test

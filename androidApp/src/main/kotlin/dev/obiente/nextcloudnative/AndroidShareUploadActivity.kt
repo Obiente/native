@@ -278,13 +278,17 @@ private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
             base.createDirectoryIfAbsent(path)
         },
         selectionAccess = { path ->
-            if (inspectIncomingShareDirectoryAccess(session, userId, path, webDav).canCreateFiles) {
-                RemoteFolderSelectionAccess.Allowed
-            } else {
-                RemoteFolderSelectionAccess.Denied("This Nextcloud folder is read-only for this account.")
-            }
+            incomingShareFolderSelectionAccess(
+                inspectIncomingShareDirectoryAccess(session, userId, path, webDav),
+            )
         },
     )
+}
+
+internal fun incomingShareFolderSelectionAccess(access: DocumentDirectoryAccess): RemoteFolderSelectionAccess = when {
+    access.canCreateFiles -> RemoteFolderSelectionAccess.Allowed
+    access.canCreateDirectories -> RemoteFolderSelectionAccess.DirectoryCreationOnly
+    else -> RemoteFolderSelectionAccess.Denied("This Nextcloud folder is read-only for this account.")
 }
 
 private suspend fun inspectIncomingShareDirectoryAccess(

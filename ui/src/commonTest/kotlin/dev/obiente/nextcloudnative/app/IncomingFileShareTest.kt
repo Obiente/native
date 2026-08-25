@@ -26,7 +26,18 @@ class IncomingFileShareTest {
         )
         assertTrue(
             incomingShareUploadNameCandidates("😀".repeat(100) + ".txt", limit = 100)
-                .all { it.encodeToByteArray().size <= 255 && it.endsWith(".txt") },
+                .all {
+                    it.length <= MAX_INCOMING_SHARE_FILE_NAME_LENGTH &&
+                        it.encodeToByteArray().size <= MAX_INCOMING_SHARE_FILE_NAME_BYTES &&
+                        it.endsWith(".txt")
+                },
+        )
+        assertTrue(
+            incomingShareUploadNameCandidates("a".repeat(MAX_INCOMING_SHARE_FILE_NAME_LENGTH), limit = 1_000)
+                .all {
+                    it.length <= MAX_INCOMING_SHARE_FILE_NAME_LENGTH &&
+                        it.encodeToByteArray().size <= MAX_INCOMING_SHARE_FILE_NAME_BYTES
+                },
         )
     }
 

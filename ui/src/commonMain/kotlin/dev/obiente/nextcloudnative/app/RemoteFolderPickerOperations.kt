@@ -19,6 +19,7 @@ class RemoteFolderPickerOperations(
 
 sealed interface RemoteFolderSelectionAccess {
     data object Allowed : RemoteFolderSelectionAccess
+    data object DirectoryCreationOnly : RemoteFolderSelectionAccess
     data class Denied(val message: String) : RemoteFolderSelectionAccess {
         init {
             require(message.isNotBlank() && message.none(Char::isISOControl))

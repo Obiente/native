@@ -59,17 +59,7 @@ internal class AndroidIncomingShareUploads(private val context: Context) {
     }
 
     fun cancel(requestId: String) {
-        val current = store.load(requestId)
-        val canceled = store.transition(
-            id = requestId,
-            expected = setOf(AndroidIncomingShareState.Queued, AndroidIncomingShareState.Uploading),
-            target = AndroidIncomingShareState.Canceled,
-            message = if (current?.state == AndroidIncomingShareState.Uploading) {
-                CANCELED_INCOMING_SHARE_MUTATION_WARNING
-            } else {
-                "Upload canceled before a transfer was active."
-            },
-        )
+        val canceled = store.cancel(requestId)
         WorkManager.getInstance(context).apply {
             cancelUniqueWork(incomingShareUploadWorkName(requestId))
             cancelUniqueWork(incomingShareRetryWorkName(requestId))

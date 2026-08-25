@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.UUID
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -333,6 +334,7 @@ internal class NextcloudDocumentWebDav(
         "assemble chunked upload",
         onRequestStarted,
         cancellation,
+        timeoutMillis = CHUNK_COMMIT_TIMEOUT_MILLIS,
     )
 
     fun replaceFile(
@@ -458,12 +460,20 @@ internal class NextcloudDocumentWebDav(
         operation: String,
         onRequestStarted: () -> Unit = {},
         cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+        timeoutMillis: Long? = null,
     ): DocumentMutationResult {
         check(cloudMutationsAllowed()) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         cancellation.throwIfCancelled()
-        val call = client.newCall(request)
+        val operationClient = timeoutMillis?.let { timeout ->
+            require(timeout > 0L)
+            client.newBuilder()
+                .readTimeout(timeout, TimeUnit.MILLISECONDS)
+                .callTimeout(timeout, TimeUnit.MILLISECONDS)
+                .build()
+        } ?: client
+        val call = operationClient.newCall(request)
         cancellation.setOnCancelAction(call::cancel)
         try {
             onRequestStarted()
@@ -553,6 +563,7 @@ internal class NextcloudDocumentWebDav(
 
     private companion object {
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android DocumentsProvider)"
+        const val CHUNK_COMMIT_TIMEOUT_MILLIS = 30L * 60L * 1_000L
         const val READ_BUFFER_BYTES = 32 * 1024
         const val DEFAULT_SEARCH_RESULT_LIMIT = 50
         const val MAX_SEARCH_RESULT_LIMIT = 100
