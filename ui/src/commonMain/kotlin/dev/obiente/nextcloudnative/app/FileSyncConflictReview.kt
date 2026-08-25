@@ -28,7 +28,7 @@ internal data class PendingFileSyncDecision(
     init {
         require(conflicts.isNotEmpty())
         require(conflicts.map(FileSyncConflictSummary::workId).distinct().size == conflicts.size)
-        require(conflicts.all { choice in it.choices })
+        require(choice in availableFileSyncBatchChoices(pair, conflicts))
     }
 }
 
@@ -41,9 +41,7 @@ internal fun FileSyncConflictBlock(
 ) {
     val conflicts = pair.conflicts
     if (conflicts.isEmpty()) return
-    val commonChoices = FileSyncDecisionChoice.entries.filter { choice ->
-        conflicts.all { conflict -> choice in conflict.choices }
-    }
+    val commonChoices = availableFileSyncBatchChoices(pair, conflicts)
     FileSyncDetailBlock(
         "${pair.conflictCount} ${if (pair.conflictCount == 1) "conflict" else "conflicts"} need review",
         attention = true,
@@ -133,6 +131,25 @@ internal fun FileSyncConflictBlock(
             )
         }
     }
+}
+
+internal fun availableFileSyncBatchChoices(
+    pair: FileSyncPairSummary,
+    conflicts: List<FileSyncConflictSummary> = pair.conflicts,
+): List<FileSyncDecisionChoice> {
+    val guardedDirectoryDeletion =
+        (pair.configuration.selectedPaths.isNotEmpty() || pair.configuration.ignoredPatterns.isNotEmpty()) &&
+            conflicts.any(FileSyncConflictSummary::isDirectoryDeletion)
+    return FileSyncDecisionChoice.entries.filter { choice ->
+        conflicts.all { conflict -> choice in conflict.choices } &&
+            !(choice == FileSyncDecisionChoice.PropagateDeletion && guardedDirectoryDeletion)
+    }
+}
+
+private fun FileSyncConflictSummary.isDirectoryDeletion(): Boolean = when (reason) {
+    FileSyncDecisionReason.LocalDeletion -> remote?.kind == SyncEntryKind.Directory
+    FileSyncDecisionReason.RemoteDeletion -> local?.kind == SyncEntryKind.Directory
+    else -> false
 }
 
 @Composable

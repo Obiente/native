@@ -406,6 +406,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             localEntries = scannedLocalEntries,
             remoteEntries = remoteEntries,
             baselines = initialPair.baselines,
+            direction = configuration.direction,
             local = local,
             budget = contentReadBudget,
         )

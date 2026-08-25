@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
+import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_FILE_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES
@@ -32,9 +33,11 @@ internal fun verifyAndroidRemoteDeletionContent(
     localEntries: List<LocalSyncEntry>,
     remoteEntries: List<RemoteSyncEntry>,
     baselines: List<FileSyncBaseline>,
+    direction: FileSyncDirection,
     local: AndroidFileSyncLocalTree,
     budget: AndroidFileSyncContentReadBudget,
 ): List<LocalSyncEntry> {
+    if (direction == FileSyncDirection.UploadOnly) return localEntries
     val remotePaths = remoteEntries.mapTo(mutableSetOf(), RemoteSyncEntry::relativePath)
     val baselineByPath = baselines.associateBy(FileSyncBaseline::relativePath)
     return localEntries.map { entry ->

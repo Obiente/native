@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
+import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.File
@@ -41,6 +42,7 @@ class AndroidFileSyncContentEvidenceTest {
             baselines = listOf(
                 FileSyncBaseline("large.bin", SyncEntryKind.File, "local-1", "remote-1", contentHash = null),
             ),
+            direction = FileSyncDirection.Bidirectional,
             local = NoReadLocalTree,
             budget = AndroidFileSyncContentReadBudget(),
         ).single()
@@ -70,12 +72,42 @@ class AndroidFileSyncContentEvidenceTest {
                     contentHash = "sha256:${"0".repeat(64)}",
                 ),
             ),
+            direction = FileSyncDirection.Bidirectional,
             local = UnreadableLocalTree,
             budget = AndroidFileSyncContentReadBudget(),
         ).single()
 
         assertTrue(verified.contentIdentityUnverified)
         assertEquals(null, verified.contentHash)
+    }
+
+    @Test
+    fun uploadOnlyRemoteDeletionNeverReadsLocalContentEvidence() {
+        val localEntry = LocalSyncEntry(
+            relativePath = "camera.jpg",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 32L,
+        )
+
+        val entries = verifyAndroidRemoteDeletionContent(
+            localEntries = listOf(localEntry),
+            remoteEntries = emptyList(),
+            baselines = listOf(
+                FileSyncBaseline(
+                    "camera.jpg",
+                    SyncEntryKind.File,
+                    "local-1",
+                    "remote-1",
+                    contentHash = "sha256:${"0".repeat(64)}",
+                ),
+            ),
+            direction = FileSyncDirection.UploadOnly,
+            local = NoReadLocalTree,
+            budget = AndroidFileSyncContentReadBudget(),
+        )
+
+        assertEquals(listOf(localEntry), entries)
     }
 
     private object NoReadLocalTree : AndroidFileSyncLocalTree {
