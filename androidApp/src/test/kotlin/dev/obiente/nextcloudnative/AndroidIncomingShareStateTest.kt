@@ -487,6 +487,37 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
+    fun incompleteDestinationSnapshotProbesBeforeStartingAChunkSession() {
+        val occupied = mutableSetOf<String>()
+        val probed = mutableListOf<String>()
+
+        val selected = selectIncomingShareChunkTarget(
+            displayName = "archive.bin",
+            occupiedNames = occupied,
+            destinationSnapshotComplete = false,
+        ) { candidate ->
+            probed += candidate
+            candidate == "archive.bin"
+        }
+
+        assertEquals("archive (1).bin", selected)
+        assertEquals(listOf("archive.bin", "archive (1).bin"), probed)
+        assertEquals(setOf("archive.bin"), occupied)
+    }
+
+    @Test
+    fun activePresentationCannotReleaseAConcurrentTerminalResult() {
+        val presented = request(AndroidIncomingShareState.Uploading)
+        val terminal = presented.copy(
+            state = AndroidIncomingShareState.OutcomeUnknown,
+            message = "Check Files before trying again.",
+        )
+
+        assertFalse(shouldReleasePresentedIncomingShareRequest(presented, terminal))
+        assertTrue(shouldReleasePresentedIncomingShareRequest(terminal, terminal))
+    }
+
+    @Test
     fun onlyUuidRecoveryReferencesAreRetained() {
         assertTrue(isValidIncomingShareRequestId("01234567-89ab-cdef-0123-456789abcdef"))
         assertFalse(isValidIncomingShareRequestId("../../not-a-request"))

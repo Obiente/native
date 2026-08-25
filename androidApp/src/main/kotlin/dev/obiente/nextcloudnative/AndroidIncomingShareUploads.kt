@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
+import android.os.Parcelable
 import android.provider.OpenableColumns
 import android.util.AtomicFile
 import dev.obiente.nextcloudnative.app.MAX_INCOMING_SHARE_FILES
@@ -103,6 +104,9 @@ internal class AndroidIncomingShareStore(private val context: Context) {
     private val root = File(context.filesDir, "incoming-share")
 
     suspend fun stage(intent: Intent): AndroidIncomingShareRequest = withContext(Dispatchers.IO) {
+        require(!hasMalformedIncomingShareStreamExtra(intent)) {
+            "The share contained an invalid file reference."
+        }
         require(!incomingShareSourceCountExceedsLimit(intent)) {
             "Share at most $MAX_INCOMING_SHARE_FILES files at once."
         }
@@ -473,6 +477,20 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         }
     }
 
+    fun removeIfPresentedReleasable(presented: AndroidIncomingShareRequest): Boolean = synchronized(LOCK) {
+        when (val loaded = loadResult(presented.id)) {
+            AndroidIncomingShareLoadResult.Missing -> true
+            is AndroidIncomingShareLoadResult.Corrupt -> false
+            is AndroidIncomingShareLoadResult.Available -> {
+                if (shouldReleasePresentedIncomingShareRequest(presented, loaded.request)) {
+                    remove(presented.id)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     fun removeExpiredAbandonedStaging(id: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
         synchronized(LOCK) {
             val target = directory(id)
@@ -589,15 +607,16 @@ internal fun AndroidIncomingShareRequest.canReleaseIncomingShareRequest(): Boole
     (state == AndroidIncomingShareState.Staged || state in TERMINAL_INCOMING_SHARE_STATES) &&
         chunkSession == null
 
+internal fun shouldReleasePresentedIncomingShareRequest(
+    presented: AndroidIncomingShareRequest,
+    current: AndroidIncomingShareRequest,
+): Boolean = presented == current && presented.canReleaseIncomingShareRequest()
+
 @Suppress("DEPRECATION")
 internal fun incomingShareUris(intent: Intent): List<Uri> {
     val action = intent.action
     if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return emptyList()
-    val fromExtras = if (action == Intent.ACTION_SEND_MULTIPLE) {
-        intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
-    } else {
-        listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri)
-    }
+    val fromExtras = incomingShareExtraUris(intent) ?: return emptyList()
     val fromClip = buildList {
         val clip = intent.clipData ?: return@buildList
         repeat(incomingShareClipItemsToInspect(clip.itemCount)) { index ->
@@ -619,15 +638,30 @@ internal fun incomingShareSources(intent: Intent): List<AndroidIncomingShareSour
     return listOf(AndroidIncomingShareSource.SharedText(sharedText))
 }
 
-@Suppress("DEPRECATION")
 internal fun incomingShareSourceCountExceedsLimit(intent: Intent): Boolean {
-    val streamExtraCount = if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
-        intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty().size
-    } else {
-        if (intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) != null) 1 else 0
-    }
+    val streamExtraCount = incomingShareExtraUris(intent)?.size ?: 0
     return incomingShareChannelCountsExceedLimit(streamExtraCount, intent.clipData?.itemCount ?: 0)
 }
+
+internal fun hasMalformedIncomingShareStreamExtra(intent: Intent): Boolean =
+    incomingShareExtraUris(intent) == null
+
+@Suppress("DEPRECATION")
+private fun incomingShareExtraUris(intent: Intent): List<Uri>? = runCatching {
+    when (intent.action) {
+        Intent.ACTION_SEND_MULTIPLE -> {
+            val values = intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM).orEmpty()
+            if (values.any { it !is Uri }) return@runCatching null
+            values.filterIsInstance<Uri>()
+        }
+        Intent.ACTION_SEND -> when (val value = intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM)) {
+            null -> emptyList()
+            is Uri -> listOf(value)
+            else -> null
+        }
+        else -> emptyList()
+    }
+}.getOrNull()
 
 internal fun incomingShareChannelCountsExceedLimit(streamExtraCount: Int, clipItemCount: Int): Boolean {
     require(streamExtraCount >= 0 && clipItemCount >= 0)

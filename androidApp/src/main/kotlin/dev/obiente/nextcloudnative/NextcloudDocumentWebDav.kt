@@ -253,6 +253,26 @@ internal class NextcloudDocumentWebDav(
         )
     }
 
+    /** Checks one exact destination without enumerating its potentially very large parent. */
+    fun resourceExists(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): Boolean {
+        val request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))
+            .header("Accept", "application/xml")
+            .header("Depth", "0")
+            .method("PROPFIND", RESOURCE_TYPE_PROPERTY.toRequestBody(XML_CONTENT_TYPE))
+            .build()
+        return try {
+            executeDavRead(request, "inspect upload destination", cancellation)
+            true
+        } catch (failure: DocumentWebDavException) {
+            if (failure.error == DocumentWebDavError.NotFound) false else throw failure
+        }
+    }
+
     fun createChunkUpload(
         session: NextcloudSession,
         userId: String,
@@ -540,39 +560,6 @@ internal class NextcloudDocumentWebDav(
             .header("User-Agent", USER_AGENT)
     }
 
-    private fun okhttp3.Response.toDocumentException(operation: String): DocumentWebDavException {
-        val error = when (code) {
-            401 -> DocumentWebDavError.Authentication
-            403 -> DocumentWebDavError.Permission
-            404 -> DocumentWebDavError.NotFound
-            405, 409 -> DocumentWebDavError.AlreadyExists
-            412 -> DocumentWebDavError.Conflict
-            413 -> DocumentWebDavError.TooLarge
-            423 -> DocumentWebDavError.Locked
-            429 -> DocumentWebDavError.Throttled
-            507 -> DocumentWebDavError.InsufficientStorage
-            else -> DocumentWebDavError.Server
-        }
-        val message = when (error) {
-            DocumentWebDavError.Authentication -> "Sign in again before trying to $operation."
-            DocumentWebDavError.Permission -> "Nextcloud did not allow this account to $operation."
-            DocumentWebDavError.NotFound -> "The document no longer exists."
-            DocumentWebDavError.AlreadyExists -> "A document with that name already exists."
-            DocumentWebDavError.Conflict -> "The document changed on the server. Refresh before trying again."
-            DocumentWebDavError.Locked -> "The document is currently locked by another operation."
-            DocumentWebDavError.InsufficientStorage -> "The Nextcloud server does not have enough free storage."
-            DocumentWebDavError.TooLarge -> "The document is larger than the current provider limit."
-            DocumentWebDavError.Throttled -> "Nextcloud asked this upload to wait before trying again."
-            DocumentWebDavError.Server -> "Nextcloud could not $operation (HTTP $code)."
-        }
-        return DocumentWebDavException(
-            error,
-            code,
-            message,
-            retryAfterSeconds = header("Retry-After")?.toLongOrNull()?.coerceIn(1L, 86_400L),
-        )
-    }
-
     private companion object {
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android DocumentsProvider)"
         const val CHUNK_COMMIT_TIMEOUT_MILLIS = 30L * 60L * 1_000L
@@ -594,6 +581,10 @@ internal class NextcloudDocumentWebDav(
                 <d:getcontentlength/><d:getetag/><oc:fileid/><oc:size/><oc:permissions/><oc:checksums/><nc:has-preview/>
               </d:prop>
             </d:propfind>
+        """.trimIndent()
+        val RESOURCE_TYPE_PROPERTY = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>
         """.trimIndent()
     }
 }

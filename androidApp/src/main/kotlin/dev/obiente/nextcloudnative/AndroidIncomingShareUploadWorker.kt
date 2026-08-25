@@ -95,10 +95,7 @@ internal class AndroidIncomingShareUploadWorker(
             return@withContext Result.failure()
         }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
-        runCatching { setForeground(foregroundInfo(request)) }
-            .onFailure { failure ->
-                if (failure !is IllegalStateException || !isForegroundStartUnavailable(failure)) throw failure
-            }
+        var foregroundPromotionAvailable = setForegroundIfAvailable(request)
         request = store.beginUpload(requestId) ?: return@withContext Result.success()
         val remote = AndroidFileSyncRemoteTree(
             session = session,
@@ -117,19 +114,28 @@ internal class AndroidIncomingShareUploadWorker(
         val requestCancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
         var mutationInFlight = false
         try {
-            val occupiedNames = remote.rootChildNames().names.toMutableSet().apply {
+            val destinationSnapshot = remote.rootChildNames()
+            val occupiedNames = destinationSnapshot.names.toMutableSet().apply {
                 addAll(request.uploadedNames)
             }
             val transfer = AndroidIncomingShareFileTransfer(store, remote, requestCancellation)
             for (index in request.completedFiles until request.files.size) {
                 ensureNotCanceled(requestId, store)
-                request = transfer.upload(requestId, request, index, occupiedNames) { inFlight ->
+                request = transfer.upload(
+                    requestId,
+                    request,
+                    index,
+                    occupiedNames,
+                    destinationSnapshot.complete,
+                ) { inFlight ->
                     if (store.setVisibleMutationInFlight(requestId, inFlight) == null) {
                         throw CancellationException("Incoming share upload canceled")
                     }
                     mutationInFlight = inFlight
                 }
-                setForeground(foregroundInfo(request))
+                if (foregroundPromotionAvailable) {
+                    foregroundPromotionAvailable = setForegroundIfAvailable(request)
+                }
             }
             scheduleIncomingShareCleanup(applicationContext, request.id)
             request = store.transition(
@@ -241,6 +247,14 @@ internal class AndroidIncomingShareUploadWorker(
         } else {
             ForegroundInfo(id, notification)
         }
+    }
+
+    private suspend fun setForegroundIfAvailable(request: AndroidIncomingShareRequest): Boolean = try {
+        setForeground(foregroundInfo(request))
+        true
+    } catch (failure: IllegalStateException) {
+        if (!isForegroundStartUnavailable(failure)) throw failure
+        false
     }
 
     private fun isForegroundStartUnavailable(error: IllegalStateException): Boolean =

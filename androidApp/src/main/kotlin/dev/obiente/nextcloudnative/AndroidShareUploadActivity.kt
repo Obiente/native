@@ -131,7 +131,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val requestId = intent.getStringExtra(KEY_REQUEST_ID)
-        if (requestId != null || incomingShareSources(intent).isNotEmpty()) {
+        if (requestId != null || intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
             releaseSafeDisplayedRequestForReplacement()
             loading = true
             error = null
@@ -255,10 +255,9 @@ class AndroidShareUploadActivity : ComponentActivity() {
         restoreGeneration += 1
         restoreJob?.cancel()
         queueJob?.cancel()
-        val current = request
-        val releaseId = current?.id ?: recoveryRequestId
-        if (releaseId != null && store.removeIfReleasable(releaseId)) {
-            NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(releaseId))
+        val presented = request
+        if (presented != null && store.removeIfPresentedReleasable(presented)) {
+            NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(presented.id))
         }
         finish()
     }

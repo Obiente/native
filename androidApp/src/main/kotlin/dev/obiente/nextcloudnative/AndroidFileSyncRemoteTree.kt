@@ -216,6 +216,11 @@ internal class AndroidFileSyncRemoteTree(
         )
     }
 
+    fun resourceExists(
+        relativePath: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): Boolean = webDav.resourceExists(session, userId, fullPath(relativePath), cancellation)
+
     /** Performs a conditional create without inferring absence from a directory listing. */
     fun createFileIfAbsent(
         relativePath: String,

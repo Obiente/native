@@ -58,7 +58,7 @@ internal class AndroidFileOfflineQueueStore private constructor(
                 }
                 val nextJobId = input.readLong()
                 val records = List(input.readBoundedCount("record")) { input.readRecord() }
-                val jobs = List(input.readBoundedCount("job")) { input.readJob() }
+                val jobs = List(input.readBoundedCount("job")) { input.readJob(version) }
                 val queue = FileOfflineQueueState(records = records, jobs = jobs, nextJobId = nextJobId)
                 val folders = if (version >= 2) {
                     input.readFolderState()
@@ -158,9 +158,10 @@ internal class AndroidFileOfflineQueueStore private constructor(
         writeInt(job.attemptCount)
         writeLong(job.enqueuedAtEpochMillis)
         writeNullableString(job.failureMessage)
+        writeNullableLong(job.retryNotBeforeEpochMillis)
     }
 
-    private fun DataInputStream.readJob(): FileOfflineJob = FileOfflineJob(
+    private fun DataInputStream.readJob(version: Int): FileOfflineJob = FileOfflineJob(
         id = readLong(),
         key = readKey(),
         operation = readEnum<FileOfflineJobOperation>(),
@@ -170,6 +171,7 @@ internal class AndroidFileOfflineQueueStore private constructor(
         attemptCount = readInt(),
         enqueuedAtEpochMillis = readLong(),
         failureMessage = readNullableString(),
+        retryNotBeforeEpochMillis = if (version >= 3) readNullableLong() else null,
     )
 
     private fun DataOutputStream.writeFolderState(state: AndroidOfflineFolderState) {
@@ -286,7 +288,7 @@ internal class AndroidFileOfflineQueueStore private constructor(
     internal companion object {
         private const val STATE_FILE_NAME = "offline-file-queue-v1.bin"
         private const val MAGIC = 0x4e434f46 // NCOF
-        private const val FORMAT_VERSION = 2
+        private const val FORMAT_VERSION = 3
         private const val MAX_STATE_BYTES = 16L * 1024L * 1024L
         private const val MAX_STRING_BYTES = 16 * 1024
         private const val MAX_ITEM_COUNT = 100_000

@@ -33,6 +33,7 @@ internal class AndroidIncomingShareFileTransfer(
         request: AndroidIncomingShareRequest,
         fileIndex: Int,
         occupiedNames: MutableSet<String>,
+        destinationSnapshotComplete: Boolean,
         setMutationInFlight: (Boolean) -> Unit,
     ): AndroidIncomingShareRequest {
         val source = request.files[fileIndex]
@@ -40,7 +41,15 @@ internal class AndroidIncomingShareFileTransfer(
         return if (stagedFile.length() <= DIRECT_INCOMING_SHARE_UPLOAD_BYTES) {
             uploadDirect(requestId, fileIndex, source.displayName, stagedFile, occupiedNames, setMutationInFlight)
         } else {
-            uploadChunked(requestId, fileIndex, source.displayName, stagedFile, occupiedNames, setMutationInFlight)
+            uploadChunked(
+                requestId,
+                fileIndex,
+                source.displayName,
+                stagedFile,
+                occupiedNames,
+                destinationSnapshotComplete,
+                setMutationInFlight,
+            )
         }
     }
 
@@ -81,6 +90,7 @@ internal class AndroidIncomingShareFileTransfer(
         displayName: String,
         stagedFile: File,
         occupiedNames: MutableSet<String>,
+        destinationSnapshotComplete: Boolean,
         setMutationInFlight: (Boolean) -> Unit,
     ): AndroidIncomingShareRequest {
         var current = store.requireAvailable(requestId)
@@ -93,7 +103,11 @@ internal class AndroidIncomingShareFileTransfer(
                 continue
             }
             if (existingUpload == null) {
-                val targetName = incomingShareCandidates(displayName, occupiedNames).firstOrNull()
+                val targetName = selectIncomingShareChunkTarget(
+                    displayName,
+                    occupiedNames,
+                    destinationSnapshotComplete,
+                ) { candidate -> remote.resourceExists(candidate, cancellation) }
                     ?: error("No safe available name remains for $displayName.")
                 val uploadId = UUID.randomUUID().toString()
                 current = store.beginChunkSession(requestId, fileIndex, targetName, uploadId)
@@ -105,6 +119,17 @@ internal class AndroidIncomingShareFileTransfer(
                 )
             } else {
                 require(existingUpload.fileIndex == fileIndex)
+                if (
+                    !destinationSnapshotComplete &&
+                    remote.resourceExists(existingUpload.targetName, cancellation)
+                ) {
+                    occupiedNames += existingUpload.targetName
+                    current = store.markChunkCleanupPending(requestId)
+                    val cleanup = requireNotNull(current.chunkSession)
+                    remote.deleteChunkUpload(cleanup.uploadId, cancellation)
+                    current = store.clearChunkSession(requestId)
+                    continue
+                }
                 val recreated = remote.createChunkUpload(
                     existingUpload.uploadId,
                     existingUpload.targetName,
@@ -173,6 +198,23 @@ internal class AndroidIncomingShareFileTransfer(
     ): Sequence<String> = incomingShareUploadNameCandidates(displayName, limit = 1_000)
         .asSequence()
         .filterNot(occupiedNames::contains)
+}
+
+internal fun selectIncomingShareChunkTarget(
+    displayName: String,
+    occupiedNames: MutableSet<String>,
+    destinationSnapshotComplete: Boolean,
+    resourceExists: (String) -> Boolean,
+): String? = incomingShareUploadNameCandidates(displayName, limit = 1_000).firstOrNull { candidate ->
+    when {
+        candidate in occupiedNames -> false
+        destinationSnapshotComplete -> true
+        resourceExists(candidate) -> {
+            occupiedNames += candidate
+            false
+        }
+        else -> true
+    }
 }
 
 internal fun shouldResetIncomingShareChunkProgress(collectionCreated: Boolean, uploadedChunks: Int): Boolean {

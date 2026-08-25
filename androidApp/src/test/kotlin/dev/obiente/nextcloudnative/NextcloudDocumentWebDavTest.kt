@@ -418,6 +418,34 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun exactResourceProbeAvoidsEnumeratingAnIncompleteParent() = RecordingServer().use { server ->
+        server.enqueue(404)
+        server.enqueue(207, body = "<d:multistatus xmlns:d=\"DAV:\"/>")
+        val client = NextcloudDocumentWebDav()
+
+        assertFalse(client.resourceExists(server.session, "alice", "Shared/archive.bin"))
+        assertTrue(client.resourceExists(server.session, "alice", "Shared/archive (1).bin"))
+        repeat(2) { index ->
+            assertEquals("PROPFIND", server.request(index).method)
+            assertEquals("0", server.request(index).header("Depth"))
+        }
+    }
+
+    @Test
+    fun retryAfterAcceptsSecondsAndHttpDatesWithinOneDay() {
+        assertEquals(17L, parseDocumentRetryAfterSeconds("17", nowEpochMillis = 0L))
+        assertEquals(
+            120L,
+            parseDocumentRetryAfterSeconds("Thu, 1 Jan 1970 00:02:00 GMT", nowEpochMillis = 0L),
+        )
+        assertEquals(
+            86_400L,
+            parseDocumentRetryAfterSeconds("Sat, 3 Jan 1970 00:00:00 GMT", nowEpochMillis = 0L),
+        )
+        assertEquals(null, parseDocumentRetryAfterSeconds("not-a-delay", nowEpochMillis = 0L))
+    }
+
+    @Test
     fun chunkCollectionDistinguishesUnsupportedFreshExistingAndMissingParent() = RecordingServer().use { server ->
         server.enqueue(405)
         server.enqueue(405)

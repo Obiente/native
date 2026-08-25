@@ -8,6 +8,7 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.os.Parcelable
 import android.provider.OpenableColumns
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -92,6 +93,23 @@ class AndroidIncomingShareStoreInstrumentedTest {
             )
         } finally {
             assertTrue(store.remove(multiple.id))
+        }
+    }
+
+    @Test
+    fun malformedMultipleStreamExtraIsRejectedWithoutStaging() = runBlocking {
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE)
+            .setType("*/*")
+            .putParcelableArrayListExtra(
+                Intent.EXTRA_STREAM,
+                arrayListOf<Parcelable>(android.os.Bundle()),
+            )
+
+        try {
+            AndroidIncomingShareStore(context).stage(intent)
+            fail("Expected the malformed stream extra to be rejected")
+        } catch (failure: IllegalArgumentException) {
+            assertTrue(failure.message.orEmpty().contains("invalid file reference"))
         }
     }
 

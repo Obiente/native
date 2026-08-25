@@ -26,11 +26,11 @@ class AndroidFileOfflineQueueStoreTest {
     fun missingStoreLoadsEmptyAndRoundTripsTypedQueueState() = withStore { store, stateFile ->
         assertEquals(AndroidFileOfflinePersistedState(), store.load())
         val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
-        val running = markFileOfflineJobRunning(queued, queued.jobs.single().id)
+        val running = markFileOfflineJobRunning(queued, queued.jobs.single().id, nowEpochMillis = 11)
         val waiting = recordFileOfflineJobResult(
             running,
             running.jobs.single().id,
-            FileOfflineJobResult.RetryableFailure("offline"),
+            FileOfflineJobResult.RetryableFailure("offline", retryNotBeforeEpochMillis = 120_000L),
             20,
         )
 

@@ -60,15 +60,16 @@ fun canonicalIncomingShareDestinationPath(destinationPath: String): String =
 
 private fun String.takeUtf8Bytes(maximumBytes: Int): String {
     require(maximumBytes > 0)
-    if (encodeToByteArray().size <= maximumBytes) return this
+    val codePointSafe = dropLastWhile(Char::isHighSurrogate)
+    if (codePointSafe.encodeToByteArray().size <= maximumBytes) return codePointSafe
     var low = 0
-    var high = length
+    var high = codePointSafe.length
     while (low < high) {
         val middle = (low + high + 1) / 2
-        val candidate = take(middle).dropLastWhile(Char::isHighSurrogate)
+        val candidate = codePointSafe.take(middle).dropLastWhile(Char::isHighSurrogate)
         if (candidate.encodeToByteArray().size <= maximumBytes) low = middle else high = middle - 1
     }
-    return take(low).dropLastWhile(Char::isHighSurrogate)
+    return codePointSafe.take(low).dropLastWhile(Char::isHighSurrogate)
 }
 
 private fun String.boundIncomingShareName(): String {

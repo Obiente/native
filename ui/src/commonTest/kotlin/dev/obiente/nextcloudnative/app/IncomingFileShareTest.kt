@@ -14,6 +14,10 @@ class IncomingFileShareTest {
         assertEquals("shared-file-3", safeIncomingShareFileName("..", 2))
         assertTrue(safeIncomingShareFileName("a".repeat(400), 0).length <= MAX_INCOMING_SHARE_FILE_NAME_LENGTH)
         assertTrue(safeIncomingShareFileName("😀".repeat(100), 0).encodeToByteArray().size <= 255)
+        assertEquals(
+            "a".repeat(235) + ".txt",
+            safeIncomingShareFileName("a".repeat(235) + "😀.txt", 0),
+        )
     }
 
     @Test
