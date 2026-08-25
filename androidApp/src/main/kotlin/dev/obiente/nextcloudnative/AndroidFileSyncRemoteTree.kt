@@ -8,6 +8,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.security.MessageDigest
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
 internal data class AndroidRemoteSyncDocument(
     val entry: RemoteSyncEntry,
@@ -52,6 +54,7 @@ internal class AndroidFileSyncRemoteTree(
                         kind = kind,
                         etag = etag,
                         size = if (file.isDirectory) null else file.size,
+                        modifiedEpochMillis = file.lastModified.androidFileSyncModifiedEpochMillis(),
                         contentHash = if (file.isDirectory) {
                             null
                         } else {
@@ -82,6 +85,7 @@ internal class AndroidFileSyncRemoteTree(
                         kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
                         etag = etag,
                         size = if (file.isDirectory) null else file.size,
+                        modifiedEpochMillis = file.lastModified.androidFileSyncModifiedEpochMillis(),
                         contentHash = if (file.isDirectory) {
                             null
                         } else {
@@ -219,4 +223,10 @@ internal class AndroidFileSyncRemoteTree(
         const val MAX_CHILDREN = 5_000
         const val MAX_DEPTH = 64
     }
+}
+
+internal fun String?.androidFileSyncModifiedEpochMillis(): Long? = this?.let { value ->
+    runCatching {
+        ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+    }.getOrNull()?.takeIf { it >= 0L }
 }
