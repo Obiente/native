@@ -624,7 +624,7 @@ internal fun incomingShareSourceCountExceedsLimit(intent: Intent): Boolean {
     val streamExtraCount = if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
         intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty().size
     } else {
-        if (intent.getParcelableExtra(Intent.EXTRA_STREAM) is Uri) 1 else 0
+        if (intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) != null) 1 else 0
     }
     return incomingShareChannelCountsExceedLimit(streamExtraCount, intent.clipData?.itemCount ?: 0)
 }
