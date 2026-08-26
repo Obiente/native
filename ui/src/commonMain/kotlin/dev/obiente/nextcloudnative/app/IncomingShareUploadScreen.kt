@@ -22,6 +22,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -69,7 +73,14 @@ internal fun IncomingShareRecoveryCard(
     requests: List<IncomingShareUploadPresentation>,
     onOpen: (String) -> Unit,
 ) {
-    val request = requests.primaryIncomingShareRecovery() ?: return
+    if (requests.isEmpty()) return
+    val ordered = requests.filter(IncomingShareUploadPresentation::incomingShareRecoveryNeedsAttention) +
+        requests.filterNot(IncomingShareUploadPresentation::incomingShareRecoveryNeedsAttention)
+    var pageIndex by remember(ordered.map(IncomingShareUploadPresentation::id)) {
+        mutableIntStateOf(0)
+    }
+    val selectedIndex = pageIndex.coerceIn(ordered.indices)
+    val request = ordered[selectedIndex]
     val needsAttention = request.state in setOf(
         IncomingShareUploadState.Failed,
         IncomingShareUploadState.OutcomeUnknown,
@@ -84,26 +95,62 @@ internal fun IncomingShareRecoveryCard(
         },
         shape = MaterialTheme.shapes.medium,
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (needsAttention) "Shared upload needs review" else "Shared upload in progress",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "${request.completedFiles} of ${request.files.size} files confirmed.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(onClick = { onOpen(request.id) }) { Text("Open") }
+            }
+            if (ordered.size > 1) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        enabled = selectedIndex > 0,
+                        onClick = { pageIndex = selectedIndex - 1 },
+                    ) { Text("Previous") }
+                    Text(
+                        "${selectedIndex + 1} of ${ordered.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(
+                        enabled = selectedIndex < ordered.lastIndex,
+                        onClick = { pageIndex = selectedIndex + 1 },
+                    ) { Text("Next") }
+                }
+            } else {
                 Text(
-                    if (needsAttention) "Shared upload needs review" else "Shared upload in progress",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    "${request.completedFiles} of ${request.files.size} files confirmed" +
-                        if (requests.size == 1) "." else "; ${requests.size} recoverable shares total.",
+                    "1 recoverable share",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Button(onClick = { onOpen(request.id) }) { Text("Open") }
         }
     }
 }
+
+private fun IncomingShareUploadPresentation.incomingShareRecoveryNeedsAttention(): Boolean =
+    state in setOf(
+        IncomingShareUploadState.Failed,
+        IncomingShareUploadState.OutcomeUnknown,
+        IncomingShareUploadState.Canceled,
+    )
 
 internal fun List<IncomingShareUploadPresentation>.primaryIncomingShareRecovery():
     IncomingShareUploadPresentation? = firstOrNull { candidate ->

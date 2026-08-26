@@ -481,6 +481,7 @@ class AndroidIncomingShareStateTest {
             canceled.copy(accountId = "another-account")
                 .requiresIncomingShareRecovery("account-1"),
         )
+        assertFalse(canceled.copy(accountId = null).requiresIncomingShareRecovery("account-1"))
         assertTrue(
             canceled.copy(message = "Upload canceled before a transfer was active.")
                 .requiresIncomingShareRecovery("account-1"),
@@ -629,5 +630,6 @@ class AndroidIncomingShareStateTest {
             ),
         ),
         state = state,
+        accountId = "account-1",
     )
 }

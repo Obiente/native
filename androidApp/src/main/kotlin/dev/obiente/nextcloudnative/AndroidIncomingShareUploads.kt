@@ -105,7 +105,8 @@ internal sealed interface AndroidIncomingShareSource {
 internal class AndroidIncomingShareStore(private val context: Context) {
     private val root = File(context.filesDir, "incoming-share")
 
-    suspend fun stage(intent: Intent): AndroidIncomingShareRequest = withContext(Dispatchers.IO) {
+    suspend fun stage(intent: Intent, accountId: String): AndroidIncomingShareRequest = withContext(Dispatchers.IO) {
+        require(accountId.isNotBlank())
         require(!hasMalformedIncomingShareStreamExtra(intent)) {
             "The share contained an invalid file reference."
         }
@@ -187,6 +188,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                 id = requestId,
                 files = files,
                 state = AndroidIncomingShareState.Staged,
+                accountId = accountId,
             ).also(::save).also { stagingMarker.delete() }
         } catch (failure: Throwable) {
             requestDirectory.deleteRecursively()
@@ -220,14 +222,12 @@ internal class AndroidIncomingShareStore(private val context: Context) {
             .asSequence()
             .filter(File::isDirectory)
             .sortedByDescending(File::lastModified)
-            .take(MAX_INCOMING_SHARE_RECOVERY_SCAN)
             .mapNotNull { directory ->
                 val id = directory.name.takeIf { runCatching { UUID.fromString(it) }.isSuccess }
                     ?: return@mapNotNull null
                 (loadResult(id) as? AndroidIncomingShareLoadResult.Available)?.request
             }
             .filter { request -> request.requiresIncomingShareRecovery(accountId) }
-            .take(MAX_INCOMING_SHARE_FILES)
             .toList()
     }
 
@@ -573,7 +573,6 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         const val MAX_SHARE_TOTAL_BYTES = 16L * 1024L * 1024L * 1024L
         const val MIN_STAGING_FREE_BYTES = 64L * 1024L * 1024L
         const val STAGING_MARKER_NAME = ".staging"
-        const val MAX_INCOMING_SHARE_RECOVERY_SCAN = 1_000
     }
 }
 
@@ -602,6 +601,9 @@ internal fun prepareIncomingShareRequestForQueue(
         "Nextcloud is still cleaning up the previous upload attempt. Try again shortly."
     }
     require(accountId.isNotBlank() && userId.isNotBlank())
+    require(current.accountId == accountId) {
+        "This staged share belongs to another local account."
+    }
     val destination = canonicalIncomingShareDestinationPath(destinationPath)
     val hasDurableProgress = current.completedFiles > 0 || current.chunkSession != null
     require(

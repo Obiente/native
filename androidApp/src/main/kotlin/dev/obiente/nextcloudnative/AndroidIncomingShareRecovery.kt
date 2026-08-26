@@ -266,7 +266,7 @@ internal fun AndroidIncomingShareRequest.canExpireIncomingShareRecovery(): Boole
     state == AndroidIncomingShareState.Completed || discardRequested
 
 internal fun AndroidIncomingShareRequest.requiresIncomingShareRecovery(accountId: String): Boolean {
-    if (this.accountId != null && this.accountId != accountId) return false
+    if (this.accountId != accountId) return false
     return state in setOf(
         AndroidIncomingShareState.Staged,
         AndroidIncomingShareState.Queued,

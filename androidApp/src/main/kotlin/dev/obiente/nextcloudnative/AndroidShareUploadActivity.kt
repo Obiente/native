@@ -68,6 +68,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 .build(),
             applicationContext.cloudMutationGate(),
         )
+        folderPickerVisible = savedInstanceState?.getBoolean(KEY_FOLDER_PICKER_VISIBLE) == true
         setContent {
             NextcloudNativeTheme {
                 NextcloudAppBackground {
@@ -153,6 +154,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         request?.id?.let { outState.putString(KEY_REQUEST_ID, it) }
+        outState.putBoolean(KEY_FOLDER_PICKER_VISIBLE, folderPickerVisible)
         super.onSaveInstanceState(outState)
     }
 
@@ -176,7 +178,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 val staged = withContext(Dispatchers.IO) {
                     val restored = validatedRequestId?.let { requestId ->
                         store.requireAvailable(requestId)
-                    } ?: store.stage(sourceIntent).also { newlyStaged ->
+                    } ?: store.stage(
+                        sourceIntent,
+                        NextcloudDocumentIds.accountKey(activeSession),
+                    ).also { newlyStaged ->
                         unclaimedStagedRequestId = newlyStaged.id
                     }
                     uploads.ensureQueuedRequestScheduled(restored)
@@ -357,6 +362,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
 
     internal companion object {
         const val KEY_REQUEST_ID = "incoming_share_request_id"
+        const val KEY_FOLDER_PICKER_VISIBLE = "incoming_share_folder_picker_visible"
         val ACTIVE_SHARE_STATES = setOf(
             AndroidIncomingShareState.Queued,
             AndroidIncomingShareState.Uploading,

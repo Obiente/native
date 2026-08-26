@@ -35,6 +35,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_STREAM, fixtureUri("one.txt"))
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            "account-1",
         )
         try {
             assertEquals(listOf("one.txt"), single.files.map(AndroidIncomingShareFile::displayName))
@@ -54,6 +55,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
             Intent(Intent.ACTION_SEND)
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, "A URL or selected text shared from another app"),
+            "account-1",
         )
         try {
             assertEquals("shared-text.txt", sharedText.files.single().displayName)
@@ -78,6 +80,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
                     }
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 },
+            "account-1",
         )
         try {
             assertEquals(listOf("one.txt", "large.bin"), multiple.files.map(AndroidIncomingShareFile::displayName))
@@ -107,7 +110,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
             )
 
         try {
-            AndroidIncomingShareStore(context).stage(intent)
+            AndroidIncomingShareStore(context).stage(intent, "account-1")
             fail("Expected the malformed stream extra to be rejected")
         } catch (failure: IllegalArgumentException) {
             assertTrue(failure.message.orEmpty().contains("invalid file reference"))
@@ -122,6 +125,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_STREAM, fixtureUri("one.txt"))
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            "account-1",
         )
         try {
             val uploading = staged.copy(
@@ -190,6 +194,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_STREAM, fixtureUri("release.txt"))
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            "account-1",
         )
         assertFalse(store.removeIfMatchingReleasable(releasable.id, "not-the-presented-state"))
         assertTrue(store.loadResult(releasable.id) is AndroidIncomingShareLoadResult.Available)
