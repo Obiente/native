@@ -9,6 +9,9 @@ import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncCenterSupport
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
+import dev.obiente.nextcloudnative.app.FileSyncConflictResolution
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncExecutionCommand
@@ -22,20 +25,27 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.addFileSyncPair
+import dev.obiente.nextcloudnative.app.applyFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
 import dev.obiente.nextcloudnative.app.completeFileSyncOperation
+import dev.obiente.nextcloudnative.app.currentFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.failFileSyncOperation
+import dev.obiente.nextcloudnative.app.fileSyncContentVerificationCandidates
 import dev.obiente.nextcloudnative.app.removeFileSyncPair
-import dev.obiente.nextcloudnative.app.resolveFileSyncDecision
+import dev.obiente.nextcloudnative.app.resolveFileSyncDecisions
 import dev.obiente.nextcloudnative.app.retryFileSyncOperation
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
+import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatchResults
+import dev.obiente.nextcloudnative.app.retainsResolvedFileSyncDecisions
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -352,8 +362,13 @@ internal class AndroidFileSyncEngine(context: Context) {
         session: NextcloudSession,
         userId: String,
         pairId: String,
+        expectedResolvedWorkIds: Set<Long> = emptySet(),
+        rejectedResolutionBaseline: FileSyncCoordinatorState? = null,
+        startingCoordinatorOverride: FileSyncCoordinatorState? = null,
     ): FileSyncCenterActionResult {
-        var persisted = store.load()
+        var persisted = store.load().let { loaded ->
+            startingCoordinatorOverride?.let { loaded.copy(coordinator = it) } ?: loaded
+        }
         val initialPair = persisted.coordinator.pairs.firstOrNull { it.id == pairId }
             ?: return FileSyncCenterActionResult.Rejected(
                 "The folder sync pair no longer exists.",
@@ -382,63 +397,84 @@ internal class AndroidFileSyncEngine(context: Context) {
         val includes: (String, SyncEntryKind) -> Boolean = { relativePath, kind ->
             configuration.includesSyncPath(relativePath, kind)
         }
-        var remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
-        val contentHashPaths = remoteEntries
-            .asSequence()
-            .filter { it.kind == SyncEntryKind.File && it.contentHash != null }
-            .mapTo(mutableSetOf()) { it.relativePath }
-        val local = createAndroidFileSyncLocalTree(
-            appContext.contentResolver,
-            initialPair.localRootId,
-            contentHashPaths,
+        val remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
+        val local = createAndroidFileSyncLocalTree(appContext.contentResolver, initialPair.localRootId)
+        val contentReadBudget = AndroidFileSyncContentReadBudget()
+        val scannedLocalEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry)
+        val localEntries = verifyAndroidRemoteDeletionContent(
+            localEntries = scannedLocalEntries,
+            remoteEntries = remoteEntries,
+            baselines = initialPair.baselines,
+            direction = configuration.direction,
+            local = local,
+            budget = contentReadBudget,
         )
-        var localEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry)
-        val baselineByPath = initialPair.baselines.associateBy(FileSyncBaseline::relativePath)
-        val remoteByPath = remoteEntries.associateBy { it.relativePath }
-        val verifiedContentPaths = localEntries
-            .asSequence()
-            .filter { localEntry ->
-                val remoteEntry = remoteByPath[localEntry.relativePath]
-                    localEntry.kind == SyncEntryKind.File &&
-                    localEntry.contentHash != null &&
-                    localEntry.contentHash == remoteEntry?.contentHash &&
-                    (remoteEntry?.size ?: Long.MAX_VALUE) <= ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES
-            }
-            .filter { localEntry ->
-                val remoteEntry = requireNotNull(remoteByPath[localEntry.relativePath])
-                val baseline = baselineByPath[localEntry.relativePath]
-                baseline == null ||
-                    localEntry.revision != baseline.localRevision ||
-                    remoteEntry.etag != baseline.remoteEtag
-            }
-            .filter { localEntry ->
-                val remoteEntry = requireNotNull(remoteByPath[localEntry.relativePath])
-                runCatching {
-                    remote.verifyContentHash(
-                        relativePath = localEntry.relativePath,
-                        expectedRemoteEtag = remoteEntry.etag,
-                        expectedContentHash = requireNotNull(localEntry.contentHash),
-                    )
-                }.getOrDefault(false)
-            }
-            .mapTo(mutableSetOf()) { it.relativePath }
-        localEntries = localEntries.map { entry ->
-            entry.copy(contentHash = entry.contentHash.takeIf { entry.relativePath in verifiedContentPaths })
-        }
-        remoteEntries = remoteEntries.map { entry ->
-            entry.copy(contentHash = entry.contentHash.takeIf { entry.relativePath in verifiedContentPaths })
-        }
+        val currentCachedMismatchResults = currentFileSyncContentVerificationResults(
+            localEntries,
+            remoteEntries,
+            initialPair.knownFileSyncContentMismatchResults(),
+        )
+        val cachedMismatchResults = validateAndroidCachedMismatchContent(
+            currentCachedMismatchResults,
+            local,
+            contentReadBudget,
+        )
+        val candidates = fileSyncContentVerificationCandidates(
+            localEntries,
+            remoteEntries,
+            initialPair.baselines,
+            cachedMismatchResults.map(FileSyncContentVerificationResult::candidate),
+            requireContentBackedBaseline = true,
+        )
+        val verificationResults = cachedMismatchResults + verifyAndroidFileSyncCandidates(
+            candidates = candidates,
+            maximumResults = initialPair.availableAndroidContentVerificationSlots(),
+        ) { candidate -> verifyAndroidFileSyncContent(candidate, local, remote, contentReadBudget) }
+        val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
+            .map(FileSyncContentVerificationResult::candidate)
+        val verifiedMismatchHashes = verificationResults
+            .filter { it.matchingContentHash == null }
+            .associate { it.candidate.relativePath to it.localContentHash }
+        val contentIdentity = applyFileSyncContentVerificationResults(localEntries, remoteEntries, verificationResults)
+        val reconciledLocalEntries = contentIdentity.localEntries
+        val reconciledRemoteEntries = contentIdentity.remoteEntries
         persisted = persisted.copy(
             coordinator = scanFileSyncPair(
                 persisted.coordinator,
                 pairId,
-                localEntries,
-                remoteEntries,
+                reconciledLocalEntries,
+                reconciledRemoteEntries,
                 System.currentTimeMillis(),
                 maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
                 reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+                verifiedContentMismatches = verifiedMismatches,
+                verifiedContentMismatchHashes = verifiedMismatchHashes,
             ),
         )
+        val scannedPair = persisted.coordinator.pairs.first { it.id == pairId }
+        if (!scannedPair.retainsResolvedFileSyncDecisions(expectedResolvedWorkIds)) {
+            val baseline = requireNotNull(rejectedResolutionBaseline) {
+                "A rejected conflict batch is missing its pre-decision state."
+            }
+            persisted = persisted.copy(
+                coordinator = scanFileSyncPair(
+                    baseline,
+                    pairId,
+                    reconciledLocalEntries,
+                    reconciledRemoteEntries,
+                    System.currentTimeMillis(),
+                    maximumWorkItems = ANDROID_FILE_SYNC_MAX_WORK_ITEMS,
+                    reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
+                    verifiedContentMismatches = verifiedMismatches,
+                    verifiedContentMismatchHashes = verifiedMismatchHashes,
+                ),
+            )
+            store.save(persisted)
+            return@withAndroidMediaBackupLedger FileSyncCenterActionResult.Rejected(
+                "The conflict changed while you reviewed it. Review the latest device and " +
+                    "Nextcloud details before choosing again.",
+            )
+        }
         persisted.coordinator.pairs.first { it.id == pairId }.workItems
             .filter {
                 it.state == FileSyncExecutionState.Failed &&
@@ -456,8 +492,8 @@ internal class AndroidFileSyncEngine(context: Context) {
         store.save(persisted)
         mediaLedger?.recordVerifiedBaselines(
             baselines = persisted.coordinator.pairs.first { it.id == pairId }.baselines,
-            localEntries = localEntries,
-            remoteEntries = remoteEntries,
+            localEntries = reconciledLocalEntries,
+            remoteEntries = reconciledRemoteEntries,
             nowEpochMillis = System.currentTimeMillis(),
         )
         mediaLedger?.recordPlanned(
@@ -481,7 +517,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 .first { it.id == command.workId }
             mediaLedger?.recordPlanned(listOf(claimedWork), System.currentTimeMillis())
             val execution = runCatching {
-                execute(command, persisted.coordinator, local, remote)
+                execute(command, persisted.coordinator, local, remote, contentReadBudget)
             }
             val failure = execution.exceptionOrNull()
             if (failure == null) {
@@ -540,12 +576,63 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
     }
 
+    private fun verifyAndroidFileSyncContent(
+        candidate: FileSyncContentVerificationCandidate,
+        local: AndroidFileSyncLocalTree,
+        remote: AndroidFileSyncRemoteTree,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
+    ): FileSyncContentVerificationResult? {
+        val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
+        if (!contentReadBudget.reserve(expectedBytes)) return null
+        val readCeiling = maxOf(1L, expectedBytes)
+        val hashRead = local.contentHashRead(
+            path = candidate.relativePath,
+            expectedLocalRevision = candidate.localRevision,
+            expectedBytes = expectedBytes,
+            maximumBytes = readCeiling,
+        )
+        val localHash = hashRead.contentHash
+        if (localHash == null) {
+            contentReadBudget.refundUnconsumed(expectedBytes, hashRead.bytesRead)
+            return null
+        }
+        val matches = remote.verifyContentHash(
+                relativePath = candidate.relativePath,
+                expectedRemoteEtag = candidate.remoteEtag,
+                expectedContentHash = localHash,
+                expectedBytes = expectedBytes,
+                maximumBytes = readCeiling,
+            )
+        return FileSyncContentVerificationResult(candidate, localHash, localHash.takeIf { matches })
+    }
+
+    private fun FileSyncPair.availableAndroidContentVerificationSlots(): Int {
+        val retainedNonExecutable = workItems.count { work ->
+            work.state == FileSyncExecutionState.AwaitingDecision ||
+                work.state == FileSyncExecutionState.Failed ||
+                work.state == FileSyncExecutionState.Skipped
+        }
+        return (ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE - retainedNonExecutable).coerceAtLeast(0)
+    }
+
     suspend fun resolveConflictAndRun(
         session: NextcloudSession,
         userId: String,
         pairId: String,
         workId: Long,
         choice: FileSyncDecisionChoice,
+    ): FileSyncCenterActionResult = resolveConflictsAndRun(
+        session = session,
+        userId = userId,
+        pairId = pairId,
+        resolutions = listOf(FileSyncConflictResolution(workId, choice)),
+    )
+
+    suspend fun resolveConflictsAndRun(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
     ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
         val current = store.load()
         val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -558,7 +645,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             )
         }
         val resolved = runCatching {
-            resolveFileSyncDecision(current.coordinator, pairId, workId, choice)
+            resolveFileSyncDecisions(current.coordinator, pairId, resolutions)
         }.getOrElse { failure ->
             return@withLock FileSyncCenterActionResult.Rejected(
                 safeFailureMessage(
@@ -567,8 +654,14 @@ internal class AndroidFileSyncEngine(context: Context) {
                 ),
             )
         }
-        store.save(current.copy(coordinator = resolved))
-        runPairLocked(session, userId, pairId)
+        runPairLocked(
+            session = session,
+            userId = userId,
+            pairId = pairId,
+            expectedResolvedWorkIds = resolutions.mapTo(mutableSetOf(), FileSyncConflictResolution::workId),
+            rejectedResolutionBaseline = current.coordinator,
+            startingCoordinatorOverride = resolved,
+        )
     }
 
     private fun execute(
@@ -576,6 +669,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         state: FileSyncCoordinatorState,
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
     ): FileSyncExecutionSuccess {
         val pair = state.pairs.first { it.id == command.pairId }
         val work = pair.workItems.first { it.id == command.workId }
@@ -601,7 +695,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                         remote.writeFile(operation.relativePath, staged, expectedRemote)
                     }
                 }
-                synchronizedResult(operation.relativePath, local, remote)
+                synchronizedResult(operation.relativePath, local, remote, contentReadBudget)
             }
             is FileSyncOperation.Download -> {
                 val source = requireNotNull(work.observedRemote)
@@ -626,7 +720,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                         local.writeFile(operation.relativePath, staged, expectedLocal)
                     }
                 }
-                synchronizedResult(operation.relativePath, local, remote)
+                synchronizedResult(operation.relativePath, local, remote, contentReadBudget)
             }
             is FileSyncOperation.DeleteLocal -> {
                 local.delete(operation.relativePath, operation.expectedLocalRevision)
@@ -640,7 +734,13 @@ internal class AndroidFileSyncEngine(context: Context) {
                 require(remote.resolve(operation.relativePath) == null)
                 FileSyncExecutionSuccess(removedRelativePaths = listOf(operation.relativePath))
             }
-            is FileSyncOperation.KeepBoth -> executeKeepBoth(operation, work, local, remote)
+            is FileSyncOperation.KeepBoth -> executeKeepBoth(
+                operation,
+                work,
+                local,
+                remote,
+                contentReadBudget,
+            )
             is FileSyncOperation.NeedsDecision,
             is FileSyncOperation.Skipped,
             -> error("Non-executable sync work was claimed.")
@@ -652,6 +752,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         work: dev.obiente.nextcloudnative.app.FileSyncWorkItem,
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
     ): FileSyncExecutionSuccess {
         val localSource = requireNotNull(work.observedLocal)
         val remoteSource = requireNotNull(work.observedRemote)
@@ -676,9 +777,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
         return FileSyncExecutionSuccess(
             synchronizedBaselines = listOf(
-                verifiedBaseline(operation.relativePath, local, remote),
-                verifiedBaseline(operation.localConflictPath, local, remote),
-                verifiedBaseline(operation.remoteConflictPath, local, remote),
+                verifiedBaseline(operation.relativePath, local, remote, contentReadBudget),
+                verifiedBaseline(operation.localConflictPath, local, remote, contentReadBudget),
+                verifiedBaseline(operation.remoteConflictPath, local, remote, contentReadBudget),
             ),
         )
     }
@@ -687,18 +788,25 @@ internal class AndroidFileSyncEngine(context: Context) {
         path: String,
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
     ): FileSyncExecutionSuccess =
-        FileSyncExecutionSuccess(synchronizedBaselines = listOf(verifiedBaseline(path, local, remote)))
+        FileSyncExecutionSuccess(
+            synchronizedBaselines = listOf(verifiedBaseline(path, local, remote, contentReadBudget)),
+        )
 
     private fun verifiedBaseline(
         path: String,
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
     ): FileSyncBaseline {
         val localEntry = requireNotNull(local.resolve(path)) { "The local result could not be verified." }.entry
         val remoteEntry = requireNotNull(remote.resolve(path)) { "The server result could not be verified." }.entry
         require(localEntry.kind == remoteEntry.kind) { "The synchronized item types do not match." }
-        return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag)
+        val contentHash = localEntry.size
+            ?.takeIf { localEntry.kind == SyncEntryKind.File && contentReadBudget.reserve(it) }
+            ?.let { size -> local.contentHash(path, localEntry.revision, size, maxOf(1L, size)) }
+        return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, contentHash)
     }
 
     private inline fun <T> withStagingFile(prefix: String, block: (File) -> T): T {
@@ -734,118 +842,4 @@ internal class AndroidFileSyncEngine(context: Context) {
         const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
         val ENGINE_LOCK = Mutex()
     }
-}
-
-internal const val ANDROID_FILE_SYNC_MAX_WORK_ITEMS = 10_000
-internal const val ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE = 1_000
-
-internal fun supportsAndroidFileSyncDirection(
-    localRootId: String,
-    direction: FileSyncDirection,
-): Boolean =
-    !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || direction == FileSyncDirection.UploadOnly
-
-internal fun isAndroidFileSyncExecutionAllowed(
-    localRootId: String,
-    operation: FileSyncOperation,
-): Boolean =
-    !localRootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX) || operation is FileSyncOperation.Upload
-
-internal suspend fun runWhenFileSyncIdle(
-    lock: Mutex,
-    action: suspend () -> Unit,
-): Boolean {
-    if (!lock.tryLock()) return false
-    return try {
-        action()
-        true
-    } finally {
-        lock.unlock()
-    }
-}
-
-internal fun deferFileSyncActionUntilIdle(
-    lock: Mutex,
-    scope: CoroutineScope,
-    action: suspend () -> Unit,
-): Job = scope.launch {
-    lock.withLock {
-        action()
-    }
-}
-
-/**
- * Runs [action] only when both the engine and its WorkManager sources are idle.
- *
- * Source state is inspected while [lock] is held. A running worker is then awaited without the
- * engine lock so it can finish, after which current persisted sources are loaded and checked again.
- */
-internal suspend fun runFileSyncActionWhenSourceWorkIdle(
-    lock: Mutex,
-    runningSourceIds: suspend () -> Set<String>,
-    awaitSourcesNotRunning: suspend (Set<String>) -> Unit,
-    action: suspend () -> Unit,
-) {
-    while (true) {
-        var completed = false
-        val running = lock.withLock {
-            runningSourceIds().also { activeSourceIds ->
-                if (activeSourceIds.isEmpty()) {
-                    action()
-                    completed = true
-                }
-            }
-        }
-        if (completed) return
-        awaitSourcesNotRunning(running)
-    }
-}
-
-internal fun <T> deferFileSyncSnapshotActionUntilIdle(
-    lock: Mutex,
-    scope: CoroutineScope,
-    load: () -> T,
-    onFinished: () -> Unit = {},
-    action: (T) -> Unit,
-): Job {
-    val job = scope.launch {
-        lock.withLock {
-            action(load())
-        }
-    }
-    job.invokeOnCompletion { onFinished() }
-    return job
-}
-
-/**
- * Reads a complete atomic snapshot without waiting for active execution.
- *
- * Scheduling is allowed only from a snapshot loaded after acquiring [lock], so a concurrent pair
- * removal cannot be followed by stale work being re-enqueued. A busy read requests a deferred
- * post-idle reload rather than scheduling from the displayed, potentially stale snapshot.
- */
-internal fun <T> loadFileSyncPresentationSnapshot(
-    lock: Mutex,
-    load: () -> T,
-    scheduleWhenIdle: (T) -> Unit,
-    scheduleAfterIdle: () -> Unit = {},
-): T {
-    if (!lock.tryLock()) {
-        return load().also { scheduleAfterIdle() }
-    }
-    return try {
-        load().also(scheduleWhenIdle)
-    } finally {
-        lock.unlock()
-    }
-}
-
-internal suspend fun removeConfiguredFileSyncPair(
-    cleanLedger: suspend () -> Unit,
-    persistRemoval: suspend () -> Unit,
-    cancelSchedule: suspend () -> Unit,
-) {
-    cleanLedger()
-    persistRemoval()
-    cancelSchedule()
 }

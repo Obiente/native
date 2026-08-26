@@ -61,6 +61,7 @@ data class LocalSyncEntry(
     val size: Long? = null,
     val contentHash: String? = null,
     val modifiedEpochMillis: Long? = null,
+    val contentIdentityUnverified: Boolean = false,
 ) {
     init {
         requireValidSyncPath(relativePath)
@@ -73,6 +74,7 @@ data class LocalSyncEntry(
         require(contentHash == null || normalizeSyncSha256(contentHash) == contentHash) {
             "The local sync content hash is invalid."
         }
+        require(!contentIdentityUnverified || kind == SyncEntryKind.File)
     }
 }
 
@@ -122,10 +124,13 @@ data class FileSyncBaseline(
     val kind: SyncEntryKind,
     val localRevision: String?,
     val remoteEtag: String?,
+    val contentHash: String? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
         require(localRevision != null || remoteEtag != null)
+        require(contentHash == null || kind == SyncEntryKind.File)
+        require(contentHash == null || normalizeSyncSha256(contentHash) == contentHash)
     }
 }
 
@@ -352,7 +357,8 @@ private fun planSyncPath(
         return planFirstSync(path, local, remote, configuration)
     }
 
-    val localChanged = local?.revision != baseline.localRevision
+    val localContentChanged = local?.contentHash != null && local.contentHash != baseline.contentHash
+    val localChanged = local?.revision != baseline.localRevision || localContentChanged
     val remoteChanged = remote?.etag != baseline.remoteEtag
     return when {
         !localChanged && !remoteChanged -> null
@@ -479,6 +485,9 @@ private fun planRemoteDeletion(
 ): FileSyncOperation? {
     if (configuration.direction == FileSyncDirection.UploadOnly) {
         return FileSyncOperation.Upload(path, null)
+    }
+    if (local.contentIdentityUnverified) {
+        return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.RemoteDeletion)
     }
     if (localChanged) {
         return if (configuration.direction == FileSyncDirection.DownloadOnly) {

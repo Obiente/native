@@ -68,43 +68,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal fun talkMessageHistoryPath(
-    token: String,
-    olderCursor: Long?,
-    limit: Int,
-): String {
-    require(limit in 1..MAX_TALK_MESSAGE_PAGE_SIZE) {
-        "Talk message page size must be between 1 and $MAX_TALK_MESSAGE_PAGE_SIZE."
-    }
-    require(olderCursor == null || olderCursor >= 0L) {
-        "Talk history cursor must not be negative."
-    }
-    val encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8).replace("+", "%20")
-    return "/ocs/v2.php/apps/spreed/api/v1/chat/$encodedToken" +
-        "?format=json&lookIntoFuture=0&limit=$limit&lastKnownMessageId=${olderCursor ?: 0L}" +
-        "&includeLastKnown=0&setReadMarker=0&markNotificationsAsRead=0&noStatusUpdate=1"
-}
-
-internal const val NOTES_LIST_RELATIVE_PATH = "/index.php/apps/notes/api/v1/notes?exclude=content"
-
-internal fun <T> invokeOnSwingEventThread(action: () -> T): T {
-    if (SwingUtilities.isEventDispatchThread()) return action()
-    val outcome = AtomicReference<Result<T>>()
-    SwingUtilities.invokeAndWait { outcome.set(runCatching(action)) }
-    return outcome.get().getOrThrow()
-}
-
-internal fun notesDetailRelativePath(noteId: Long): String {
-    require(noteId >= 0L) { "The note ID is invalid." }
-    return "/index.php/apps/notes/api/v1/notes/$noteId"
-}
-
-internal fun notesConditionalHeaders(expectedEtag: String?): Map<String, String> =
-    expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-None-Match" to it) }.orEmpty()
-
-internal fun resolvedNoteEtag(responseEtag: String?, documentEtag: String?): String? =
-    responseEtag?.takeIf(String::isNotBlank) ?: documentEtag?.takeIf(String::isNotBlank)
-
 internal const val DIRECT_EDITING_INFO_RELATIVE_PATH =
     "/ocs/v2.php/apps/files/api/v1/directEditing?format=json"
 
@@ -2818,6 +2781,52 @@ class DesktopNextcloudServices(
             }
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.conflict-resolve", diagnosticFields, result)
+        }
+    }
+
+    override suspend fun resolveFileSyncConflicts(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountId = desktopFileCacheAccountId(session)
+        val diagnosticFields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
+        )
+        diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve-batch", diagnosticFields) {
+            fileSyncRunLock.withLock {
+                if (isFileSyncPaused()) {
+                    return@withLock FileSyncCenterActionResult.Rejected(
+                        "Desktop syncing is paused. Resume it from the system tray first.",
+                    )
+                }
+                mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
+                    phase = DesktopFileSyncTrayPhase.Syncing,
+                    message = "Resolving ${resolutions.size} sync conflicts",
+                )
+                try {
+                    fileSyncEngine.resolveConflictsAndRun(
+                        session = session,
+                        userId = userId,
+                        pairId = pairId,
+                        resolutions = resolutions,
+                        onProgress = { event -> publishFileSyncProgress(accountId, event) },
+                        shouldContinue = { !isFileSyncPaused() },
+                        onDiagnostic = { event -> publishFileSyncRunDiagnostic(accountId, event) },
+                    )
+                } finally {
+                    runCatching {
+                        publishFileSyncTraySnapshot(
+                            loadDesktopFileSyncCenter(session),
+                            fileSyncEngine.loadTrayActivities(session),
+                        )
+                    }
+                }
+            }
+        }.also { result ->
+            recordDesktopFileSyncResult(accountId, "sync.conflict-resolve-batch", diagnosticFields, result)
         }
     }
 

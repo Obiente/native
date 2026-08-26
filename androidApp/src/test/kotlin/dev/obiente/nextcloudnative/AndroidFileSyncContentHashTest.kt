@@ -7,6 +7,14 @@ import kotlin.test.assertNull
 
 class AndroidFileSyncContentHashTest {
     @Test
+    fun zeroByteContentUsesAPositiveReadCeiling() {
+        assertEquals(
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            sha256SyncContentHash(ByteArrayInputStream(byteArrayOf()), expectedBytes = 0L, maximumBytes = 1L),
+        )
+    }
+
+    @Test
     fun `bounded content identity detects same-size note edits`() {
         val first = sha256SyncContentHash(
             ByteArrayInputStream("alpha note".encodeToByteArray()),

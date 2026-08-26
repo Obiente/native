@@ -63,6 +63,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFileSearchHttpException
 import dev.obiente.nextcloudnative.app.parseDavStatusCode
 import dev.obiente.nextcloudnative.app.NextcloudFileListingSource
 import dev.obiente.nextcloudnative.app.FileVersionDavRecord
+import dev.obiente.nextcloudnative.app.FileSyncConflictResolution
 import dev.obiente.nextcloudnative.app.FileVersionHistory
 import dev.obiente.nextcloudnative.app.FileVersionRestoreHttpResult
 import dev.obiente.nextcloudnative.app.NextcloudFileVersion
@@ -247,11 +248,9 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -426,33 +425,6 @@ internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
         }
     }
     check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
-}
-
-@OptIn(InternalCoroutinesApi::class)
-internal class CoroutineDocumentRequestCancellation(
-    private val job: Job,
-) : DocumentRequestCancellation, AutoCloseable {
-    private val cancelAction = AtomicReference<(() -> Unit)?>(null)
-    private val completion = job.invokeOnCompletion(
-        onCancelling = true,
-        invokeImmediately = true,
-    ) { failure ->
-        if (failure != null) cancelAction.getAndSet(null)?.invoke()
-    }
-
-    override fun throwIfCancelled() {
-        job.ensureActive()
-    }
-
-    override fun setOnCancelAction(action: (() -> Unit)?) {
-        cancelAction.set(action)
-        if (!job.isActive) cancelAction.getAndSet(null)?.invoke()
-    }
-
-    override fun close() {
-        cancelAction.set(null)
-        completion.dispose()
-    }
 }
 
 internal class AndroidNextcloudServices(
@@ -1880,6 +1852,29 @@ internal class AndroidNextcloudServices(
         diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
             fileSyncEngine.resolveConflictAndRun(session, userId, pairId, workId, choice)
         }.also { result -> recordFileSyncResult(accountIdentity, "sync.conflict-resolve", fields, result) }
+    }
+
+    override suspend fun resolveFileSyncConflicts(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+        resolutions: List<FileSyncConflictResolution>,
+    ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
+        val fields = listOf(
+            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
+            SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
+        )
+        diagnoseSupportFailure(
+            accountIdentity,
+            SupportDiagnosticComponent.Sync,
+            "sync.conflict-resolve-batch",
+            fields,
+        ) {
+            fileSyncEngine.resolveConflictsAndRun(session, userId, pairId, resolutions)
+        }.also { result ->
+            recordFileSyncResult(accountIdentity, "sync.conflict-resolve-batch", fields, result)
+        }
     }
 
     override suspend fun removeFileSyncPair(

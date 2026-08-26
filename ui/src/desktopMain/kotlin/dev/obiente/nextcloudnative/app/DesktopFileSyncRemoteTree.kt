@@ -4,10 +4,10 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.io.FilterInputStream
 import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
@@ -138,6 +138,60 @@ internal class DesktopFileSyncRemoteTree(
         val after = requireNotNull(resolve(relativePath)) { "The server file disappeared while downloading." }
         require(after.entry.etag == expectedRemoteEtag) { "The server file changed while downloading." }
         return after.entry
+    }
+
+    /** Streams one exact ETag generation into a digest without staging the remote file on disk. */
+    fun verifyContentHash(
+        relativePath: String,
+        expectedRemoteEtag: String,
+        expectedBytes: Long,
+        expectedContentHash: String,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean,
+    ): Boolean {
+        require(expectedBytes in 0L..maximumBytes)
+        require(normalizeSyncSha256(expectedContentHash) == expectedContentHash)
+        val request = requestBuilder(fileUrl(fullPath(relativePath)))
+            .header("Accept", "application/octet-stream")
+            .header("If-Match", safeEtag(expectedRemoteEtag))
+            .get()
+            .build()
+        val digest = MessageDigest.getInstance("SHA-256")
+        var total = 0L
+        client.newCall(request).execute().use { response ->
+            require(response.code == 200) {
+                "The server rejected file content verification with HTTP ${response.code}."
+            }
+            val declared = response.body.contentLength()
+            require(declared == -1L || declared == expectedBytes) {
+                "The server file size changed during content verification."
+            }
+            response.header("ETag")?.let { returned ->
+                require(returned == expectedRemoteEtag) {
+                    "The server file changed during content verification."
+                }
+            }
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            response.body.byteStream().use { input ->
+                while (true) {
+                    if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= maximumBytes) { "The server file exceeds the sync size limit." }
+                    digest.update(buffer, 0, count)
+                }
+            }
+        }
+        require(total == expectedBytes) { "The server returned truncated content during verification." }
+        val after = requireNotNull(resolve(relativePath)) {
+            "The server file disappeared during content verification."
+        }
+        require(after.entry.etag == expectedRemoteEtag && !after.isDirectory) {
+            "The server file changed during content verification."
+        }
+        val actual = "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        return actual == expectedContentHash
     }
 
     fun createDirectory(relativePath: String, expectedRemoteEtag: String?) {
@@ -717,135 +771,6 @@ private class DesktopDavResponseBuilder {
     }
 }
 
-private class BoundedInputStream(
-    input: InputStream,
-    private val maximumBytes: Long,
-) : FilterInputStream(input) {
-    private var consumed = 0L
-
-    override fun read(): Int = super.read().also { value ->
-        if (value >= 0) count(1L)
-    }
-
-    override fun read(destination: ByteArray, offset: Int, length: Int): Int =
-        super.read(destination, offset, length).also { read ->
-            if (read > 0) count(read.toLong())
-        }
-
-    override fun skip(requested: Long): Long {
-        if (requested <= 0L) return 0L
-        val buffer = ByteArray(minOf(requested, 64L * 1024L).toInt())
-        var skipped = 0L
-        while (skipped < requested) {
-            val read = read(buffer, 0, minOf(buffer.size.toLong(), requested - skipped).toInt())
-            if (read < 0) break
-            skipped += read
-        }
-        return skipped
-    }
-
-    private fun count(bytes: Long) {
-        consumed += bytes
-        require(consumed <= maximumBytes) { "The server response exceeds its safe size limit." }
-    }
-}
-
-private class GuardedXmlInputStream(input: InputStream) : FilterInputStream(input) {
-    private var insideMarkup = false
-    private var markupBytes = 0
-    private var quote: Byte? = null
-    private var previous: Byte? = null
-    private var markupCount = 0
-    private var cdataPrefixIndex = -1
-    private var insideCdata = false
-    private var cdataClosingBrackets = 0
-
-    override fun read(): Int = super.read().also { value ->
-        if (value >= 0) inspect(value.toByte())
-    }
-
-    override fun read(destination: ByteArray, offset: Int, length: Int): Int =
-        super.read(destination, offset, length).also { read ->
-            if (read > 0) {
-                for (index in offset until offset + read) inspect(destination[index])
-            }
-        }
-
-    override fun skip(requested: Long): Long {
-        if (requested <= 0L) return 0L
-        val buffer = ByteArray(minOf(requested, 64L * 1024L).toInt())
-        var skipped = 0L
-        while (skipped < requested) {
-            val read = read(buffer, 0, minOf(buffer.size.toLong(), requested - skipped).toInt())
-            if (read < 0) break
-            skipped += read
-        }
-        return skipped
-    }
-
-    private fun inspect(value: Byte) {
-        if (insideCdata) {
-            when {
-                value == ']'.code.toByte() -> cdataClosingBrackets = (cdataClosingBrackets + 1).coerceAtMost(2)
-                value == '>'.code.toByte() && cdataClosingBrackets == 2 -> {
-                    insideCdata = false
-                    cdataClosingBrackets = 0
-                }
-                else -> cdataClosingBrackets = 0
-            }
-            return
-        }
-        if (!insideMarkup) {
-            if (value == '<'.code.toByte()) {
-                insideMarkup = true
-                markupBytes = 1
-                markupCount += 1
-            }
-            previous = value
-            return
-        }
-        markupBytes += 1
-        require(markupBytes <= MAX_XML_MARKUP_BYTES) { "A DAV XML token is too large." }
-        if (cdataPrefixIndex >= 0) {
-            require(value == CDATA_PREFIX[cdataPrefixIndex].code.toByte()) {
-                "DAV XML declarations are not supported."
-            }
-            cdataPrefixIndex += 1
-            if (cdataPrefixIndex == CDATA_PREFIX.length) {
-                cdataPrefixIndex = -1
-                insideMarkup = false
-                insideCdata = true
-                markupBytes = 0
-            }
-            previous = value
-            return
-        }
-        if (previous == '<'.code.toByte()) {
-            if (value == '!'.code.toByte()) {
-                cdataPrefixIndex = 0
-                previous = value
-                return
-            }
-            require(value != '?'.code.toByte() || markupCount == 1) {
-                "DAV XML processing instructions are not supported."
-            }
-        }
-        if (quote == null && (value == '\''.code.toByte() || value == '"'.code.toByte())) {
-            quote = value
-        } else if (quote == value) {
-            quote = null
-        } else if (quote == null && value == '>'.code.toByte()) {
-            insideMarkup = false
-            markupBytes = 0
-        }
-        previous = value
-    }
-
-    private companion object {
-        const val CDATA_PREFIX = "[CDATA["
-    }
-}
-
 internal fun parseDesktopSyncDavTimestamp(value: String): Long? = runCatching {
     ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
         .takeIf { it >= 0L }
@@ -878,6 +803,5 @@ private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .build()
 
 private const val MAX_DAV_PROPERTY_CHARS = 16_384
-private const val MAX_XML_MARKUP_BYTES = 16_384
 private const val MAX_PARSED_DAV_DOCUMENTS = 50_032
 private const val DAV_NAMESPACE = "DAV:"

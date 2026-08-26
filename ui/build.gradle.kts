@@ -406,6 +406,40 @@ tasks.register<JavaExec>("captureFileSyncTrayVisualQa") {
     workingDir(rootProject.projectDir)
 }
 
+fun registerFileSyncWorkspaceVisualQa(name: String, width: Int, height: Int, fileName: String) =
+    tasks.register<JavaExec>(name) {
+        group = "verification"
+        description = "Captures the responsive folder-sync workspace with isolated conflicts."
+        dependsOn(desktopCaptureCompilation.compileTaskProvider)
+        classpath(
+            desktopCaptureCompilation.output.allOutputs,
+            desktopCaptureCompilation.runtimeDependencyFiles,
+        )
+        mainClass.set(
+            "dev.obiente.nextcloudnative.nativeui.preview.FileSyncWorkspaceVisualQaMainKt",
+        )
+        environment(
+            "NEXTCLOUD_NATIVE_FILESYNC_QA_OUTPUT",
+            layout.buildDirectory.file("visual-qa/$fileName").get().asFile.absolutePath,
+        )
+        environment("NEXTCLOUD_NATIVE_FILESYNC_QA_WIDTH", width.toString())
+        environment("NEXTCLOUD_NATIVE_FILESYNC_QA_HEIGHT", height.toString())
+        workingDir(rootProject.projectDir)
+    }
+
+registerFileSyncWorkspaceVisualQa(
+    name = "captureFileSyncWorkspaceDesktopVisualQa",
+    width = 1_180,
+    height = 800,
+    fileName = "filesync-workspace-desktop.png",
+)
+registerFileSyncWorkspaceVisualQa(
+    name = "captureFileSyncWorkspacePhoneVisualQa",
+    width = 420,
+    height = 860,
+    fileName = "filesync-workspace-phone.png",
+)
+
 tasks.register<JavaExec>("captureDesktopBackgroundSettingsVisualQa") {
     group = "verification"
     description = "Captures desktop background and startup settings with isolated synthetic state."

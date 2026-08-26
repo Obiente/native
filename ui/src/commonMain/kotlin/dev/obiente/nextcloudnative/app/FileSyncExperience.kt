@@ -59,7 +59,6 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
-import kotlin.time.Instant
 
 internal enum class FileSyncListFilter(val title: String) {
     All("All"),
@@ -94,10 +93,14 @@ internal fun FileSyncWorkspace(
     snapshot: FileSyncCenterSnapshot?,
     loading: Boolean,
     busyPairId: String?,
+    busyPairIds: Set<String> = busyPairId?.let(::setOf).orEmpty(),
+    addEnabled: Boolean = true,
     onAdd: () -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
     onRemove: (FileSyncPairSummary) -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit =
+        { _, _, _ -> },
     initialSelectedPairId: String? = null,
     modifier: Modifier = Modifier.fillMaxWidth(),
     fillAvailableHeight: Boolean = false,
@@ -125,7 +128,7 @@ internal fun FileSyncWorkspace(
             FileSyncWorkspaceHeader(
                 pairs = pairs,
                 loading = loading,
-                actionsEnabled = busyPairId == null,
+                actionsEnabled = addEnabled,
                 onAdd = onAdd,
                 compact = !desktop,
             )
@@ -136,7 +139,11 @@ internal fun FileSyncWorkspace(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             if (!loading && pairs.isEmpty()) {
-                FileSyncEmptyState(onAdd = onAdd, fillAvailableHeight = fillAvailableHeight)
+                FileSyncEmptyState(
+                    onAdd = onAdd,
+                    enabled = addEnabled,
+                    fillAvailableHeight = fillAvailableHeight,
+                )
             } else if (pairs.isNotEmpty()) {
                 FileSyncFilters(
                     selected = filter,
@@ -159,8 +166,8 @@ internal fun FileSyncWorkspace(
                         FileSyncMapTable(
                             pairs = visiblePairs,
                             selectedPairId = inspectedPair?.id,
-                            busyPairId = busyPairId,
-                            actionsEnabled = busyPairId == null,
+                            busyPairIds = busyPairIds,
+                            actionsEnabled = true,
                             onSelect = { selectedPairId = it.id },
                             onRun = onRun,
                             modifier = if (fillAvailableHeight) {
@@ -171,11 +178,12 @@ internal fun FileSyncWorkspace(
                         )
                         FileSyncPairInspector(
                             pair = inspectedPair,
-                            busy = inspectedPair?.id == busyPairId,
-                            actionsEnabled = busyPairId == null,
+                            busy = inspectedPair?.id in busyPairIds,
+                            actionsEnabled = inspectedPair?.id !in busyPairIds,
                             onRun = { inspectedPair?.let(onRun) },
                             onRemove = { inspectedPair?.let(onRemove) },
                             onResolve = onResolve,
+                            onResolveBatch = onResolveBatch,
                             modifier = if (fillAvailableHeight) {
                                 Modifier.widthIn(min = 308.dp, max = 372.dp).fillMaxHeight()
                             } else {
@@ -190,14 +198,15 @@ internal fun FileSyncWorkspace(
                             FileSyncMobilePairCard(
                                 pair = pair,
                                 expanded = pair.id == selectedPairId,
-                                busy = pair.id == busyPairId,
-                                actionsEnabled = busyPairId == null,
+                                busy = pair.id in busyPairIds,
+                                actionsEnabled = pair.id !in busyPairIds,
                                 onSelect = {
                                     selectedPairId = if (selectedPairId == pair.id) null else pair.id
                                 },
                                 onRun = { onRun(pair) },
                                 onRemove = { onRemove(pair) },
                                 onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
+                                onResolveBatch = { conflicts, choice -> onResolveBatch(pair, conflicts, choice) },
                             )
                         }
                     }
@@ -320,7 +329,7 @@ private fun FileSyncFilters(
 private fun FileSyncMapTable(
     pairs: List<FileSyncPairSummary>,
     selectedPairId: String?,
-    busyPairId: String?,
+    busyPairIds: Set<String>,
     actionsEnabled: Boolean,
     onSelect: (FileSyncPairSummary) -> Unit,
     onRun: (FileSyncPairSummary) -> Unit,
@@ -420,7 +429,7 @@ private fun FileSyncMapTable(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
                         )
-                        if (pair.id == busyPairId) {
+                        if (pair.id in busyPairIds) {
                             Box(Modifier.width(44.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                             }
@@ -510,6 +519,7 @@ private fun FileSyncMobilePairCard(
     onRun: () -> Unit,
     onRemove: () -> Unit,
     onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    onResolveBatch: (List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -556,6 +566,7 @@ private fun FileSyncMobilePairCard(
                     onRun = onRun,
                     onRemove = onRemove,
                     onResolve = onResolve,
+                    onResolveBatch = onResolveBatch,
                     compact = true,
                 )
             }
@@ -571,6 +582,7 @@ private fun FileSyncPairInspector(
     onRun: () -> Unit,
     onRemove: () -> Unit,
     onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedTabName by rememberSaveable(pair?.id) {
@@ -628,6 +640,7 @@ private fun FileSyncPairInspector(
                             onRun = onRun,
                             onRemove = onRemove,
                             onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
+                            onResolveBatch = { conflicts, choice -> onResolveBatch(pair, conflicts, choice) },
                             compact = false,
                         )
                         FileSyncInspectorTab.Activity -> FileSyncInspectorActivity(pair)
@@ -733,6 +746,7 @@ private fun FileSyncPairDetails(
     onRun: () -> Unit,
     onRemove: () -> Unit,
     onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+    onResolveBatch: (List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
     compact: Boolean,
 ) {
     Column(
@@ -740,7 +754,7 @@ private fun FileSyncPairDetails(
         verticalArrangement = Arrangement.spacedBy(if (compact) NextcloudSpacing.Medium else NextcloudSpacing.Small),
     ) {
         if (compact) {
-            FileSyncConflictBlock(pair, actionsEnabled, onResolve)
+            FileSyncConflictBlock(pair, actionsEnabled, onResolve, onResolveBatch)
             FileSyncPrimaryActions(
                 compact = true,
                 busy = busy,
@@ -756,7 +770,7 @@ private fun FileSyncPairDetails(
                 onRun = onRun,
                 onRemove = onRemove,
             )
-            FileSyncConflictBlock(pair, actionsEnabled, onResolve)
+            FileSyncConflictBlock(pair, actionsEnabled, onResolve, onResolveBatch)
         }
         FileSyncDetailBlock("Mapping") {
             Row(
@@ -824,72 +838,6 @@ private fun FileSyncPairDetails(
 }
 
 @Composable
-private fun FileSyncConflictBlock(
-    pair: FileSyncPairSummary,
-    actionsEnabled: Boolean,
-    onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
-) {
-    pair.conflicts.firstOrNull()?.let { conflict ->
-        FileSyncDetailBlock("Conflict: ${conflict.relativePath}", attention = true) {
-            Text(
-                conflict.reason.syncDecisionReasonTitle(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-            FileSyncConflictSideRow("This device", conflict.local)
-            FileSyncConflictSideRow("Nextcloud", conflict.remote)
-            Text(
-                "The selected source can use its latest version only while the other side stays unchanged.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                conflict.choices.sortedBy(FileSyncDecisionChoice::ordinal).chunked(2).forEach { choices ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        choices.forEach { choice ->
-                            OutlinedButton(
-                                enabled = actionsEnabled,
-                                onClick = { onResolve(conflict, choice) },
-                                modifier = Modifier.weight(1f),
-                            ) { Text(choice.syncDecisionTitle(), maxLines = 1) }
-                        }
-                        if (choices.size == 1) Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileSyncConflictSideRow(
-    label: String,
-    side: FileSyncConflictSideSummary?,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(
-            label,
-            modifier = Modifier.width(88.dp),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            side?.syncConflictSideDescription() ?: "Missing",
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
 private fun FileSyncPrimaryActions(
     compact: Boolean,
     busy: Boolean,
@@ -943,7 +891,7 @@ private fun FileSyncLocationCard(
 }
 
 @Composable
-private fun FileSyncDetailBlock(
+internal fun FileSyncDetailBlock(
     title: String,
     attention: Boolean = false,
     content: @Composable () -> Unit,
@@ -1070,7 +1018,7 @@ private fun FileSyncNotice(message: String) {
 }
 
 @Composable
-private fun FileSyncEmptyState(onAdd: () -> Unit, fillAvailableHeight: Boolean) {
+private fun FileSyncEmptyState(onAdd: () -> Unit, enabled: Boolean, fillAvailableHeight: Boolean) {
     Surface(
         modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
         color = NextcloudTheme.colors.appTile,
@@ -1089,7 +1037,7 @@ private fun FileSyncEmptyState(onAdd: () -> Unit, fillAvailableHeight: Boolean) 
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onAdd) { Text("Add your first sync") }
+            Button(enabled = enabled, onClick = onAdd) { Text("Add your first sync") }
         }
     }
 }
@@ -2055,38 +2003,4 @@ private fun FileSyncPowerPolicy.syncPowerTitle(): String = when (this) {
     FileSyncPowerPolicy.AnyPower -> "Any battery level"
     FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
     FileSyncPowerPolicy.Charging -> "Only while charging"
-}
-
-private fun FileSyncDecisionReason.syncDecisionReasonTitle(): String = when (this) {
-    FileSyncDecisionReason.FirstSyncCollision -> "Both folders already contain this path."
-    FileSyncDecisionReason.SimultaneousEdit -> "Both copies changed since the last completed sync."
-    FileSyncDecisionReason.LocalDeletion -> "The device copy was deleted."
-    FileSyncDecisionReason.RemoteDeletion -> "The Nextcloud copy was deleted."
-    FileSyncDecisionReason.TypeChanged -> "One side is a file and the other is a folder."
-}
-
-private fun FileSyncDecisionChoice.syncDecisionTitle(): String = when (this) {
-    FileSyncDecisionChoice.UseLocal -> "Use device copy"
-    FileSyncDecisionChoice.UseRemote -> "Use Nextcloud copy"
-    FileSyncDecisionChoice.KeepBoth -> "Keep both copies"
-    FileSyncDecisionChoice.PropagateDeletion -> "Delete other copy"
-    FileSyncDecisionChoice.RestoreMissing -> "Restore missing copy"
-    FileSyncDecisionChoice.Skip -> "Skip this version"
-}
-
-private fun FileSyncConflictSideSummary.syncConflictSideDescription(): String = buildString {
-    append(if (kind == SyncEntryKind.File) "File" else "Folder")
-    sizeBytes?.let { append(" | ").append(it.fileSyncBytes()) }
-    modifiedEpochMillis?.let { append(" | Modified ").append(it.fileSyncModifiedTime()) }
-}
-
-private fun Long.fileSyncModifiedTime(): String = runCatching {
-    Instant.fromEpochMilliseconds(this).toString().replace('T', ' ').take(16) + " UTC"
-}.getOrDefault("Unknown time")
-
-private fun Long.fileSyncBytes(): String = when {
-    this >= 1024L * 1024L * 1024L -> "${this / (1024L * 1024L * 1024L)} GB"
-    this >= 1024L * 1024L -> "${this / (1024L * 1024L)} MB"
-    this >= 1024L -> "${this / 1024L} KB"
-    else -> "$this B"
 }

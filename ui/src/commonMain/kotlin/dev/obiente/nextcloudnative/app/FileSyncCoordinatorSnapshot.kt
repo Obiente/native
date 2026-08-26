@@ -111,6 +111,7 @@ private data class FileSyncBaselineSnapshotV1(
     val kind: String,
     val localRevision: String?,
     val remoteEtag: String?,
+    val contentHash: String? = null,
 )
 
 @Serializable
@@ -121,6 +122,7 @@ private data class LocalSyncEntrySnapshotV1(
     val size: Long?,
     val contentHash: String? = null,
     val modifiedEpochMillis: Long? = null,
+    val contentIdentityUnverified: Boolean = false,
 )
 
 @Serializable
@@ -146,6 +148,8 @@ private data class FileSyncWorkSnapshotV1(
     val attemptCount: Int,
     val lastAttemptEpochMillis: Long?,
     val failureMessage: String?,
+    val contentMismatchVerified: Boolean = false,
+    val contentMismatchLocalHash: String? = null,
 )
 
 @Serializable
@@ -213,6 +217,7 @@ private fun FileSyncBaseline.toSnapshot(): FileSyncBaselineSnapshotV1 = FileSync
     kind = kind.name,
     localRevision = localRevision,
     remoteEtag = remoteEtag,
+    contentHash = contentHash,
 )
 
 private fun FileSyncBaselineSnapshotV1.toDomain(): FileSyncBaseline = FileSyncBaseline(
@@ -220,6 +225,7 @@ private fun FileSyncBaselineSnapshotV1.toDomain(): FileSyncBaseline = FileSyncBa
     kind = enumValueOf(kind),
     localRevision = localRevision,
     remoteEtag = remoteEtag,
+    contentHash = contentHash,
 )
 
 private fun LocalSyncEntry.toSnapshot(): LocalSyncEntrySnapshotV1 = LocalSyncEntrySnapshotV1(
@@ -229,6 +235,7 @@ private fun LocalSyncEntry.toSnapshot(): LocalSyncEntrySnapshotV1 = LocalSyncEnt
     size = size,
     contentHash = contentHash,
     modifiedEpochMillis = modifiedEpochMillis,
+    contentIdentityUnverified = contentIdentityUnverified,
 )
 
 private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry(
@@ -238,6 +245,7 @@ private fun LocalSyncEntrySnapshotV1.toDomain(): LocalSyncEntry = LocalSyncEntry
     size = size,
     contentHash = contentHash,
     modifiedEpochMillis = modifiedEpochMillis,
+    contentIdentityUnverified = contentIdentityUnverified,
 )
 
 private fun RemoteSyncEntry.toSnapshot(): RemoteSyncEntrySnapshotV1 = RemoteSyncEntrySnapshotV1(
@@ -270,6 +278,8 @@ private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWork
     attemptCount = attemptCount,
     lastAttemptEpochMillis = lastAttemptEpochMillis,
     failureMessage = failureMessage,
+    contentMismatchVerified = contentMismatchVerified,
+    contentMismatchLocalHash = contentMismatchLocalHash,
 )
 
 private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkItem(
@@ -284,6 +294,8 @@ private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkIt
     attemptCount = attemptCount,
     lastAttemptEpochMillis = lastAttemptEpochMillis,
     failureMessage = failureMessage,
+    contentMismatchVerified = contentMismatchVerified,
+    contentMismatchLocalHash = contentMismatchLocalHash,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

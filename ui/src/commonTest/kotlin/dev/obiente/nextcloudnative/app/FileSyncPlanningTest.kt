@@ -55,6 +55,30 @@ class FileSyncPlanningTest {
     }
 
     @Test
+    fun contentEvidenceDetectsAnEditWhenThePlatformRevisionDidNotChange() {
+        val baselineDigest = "sha256:" + "11".repeat(32)
+        val localDigest = "sha256:" + "22".repeat(32)
+        val operation = planFileSync(
+            listOf(local("vault/a.md", "local-1", contentHash = localDigest)),
+            listOf(remote("vault/a.md", "remote-2")),
+            listOf(FileSyncBaseline("vault/a.md", SyncEntryKind.File, "local-1", "remote-1", baselineDigest)),
+            config,
+        ).operations.single()
+
+        assertEquals(
+            FileSyncDecisionReason.SimultaneousEdit,
+            assertIs<FileSyncOperation.NeedsDecision>(operation).reason,
+        )
+        val remoteDeletion = planFileSync(
+            listOf(local("vault/a.md", "local-1", contentHash = localDigest)),
+            emptyList(),
+            listOf(FileSyncBaseline("vault/a.md", SyncEntryKind.File, "local-1", "remote-1", baselineDigest)),
+            config.copy(deletionPolicy = FileSyncDeletionPolicy.Propagate),
+        ).operations.single()
+        assertIs<FileSyncOperation.Upload>(remoteDeletion)
+    }
+
+    @Test
     fun firstSyncCollisionIsExplicitEvenWhenNamesAndSizesMatch() {
         val operation = planFileSync(
             listOf(local("vault/a.md", "local", size = 42)),
@@ -122,6 +146,37 @@ class FileSyncPlanningTest {
             config.copy(deletionPolicy = FileSyncDeletionPolicy.Propagate),
         ).operations.single()
         assertEquals("remote-1", assertIs<FileSyncOperation.DeleteRemote>(propagate).expectedRemoteEtag)
+    }
+
+    @Test
+    fun unverifiedLocalContentCannotBeDeletedByPropagation() {
+        val local = LocalSyncEntry(
+            "vault/large.bin",
+            SyncEntryKind.File,
+            "local-1",
+            size = null,
+            contentIdentityUnverified = true,
+        )
+        val baseline = baseline("vault/large.bin", "local-1", "remote-1")
+
+        val bidirectional = planFileSync(
+            listOf(local),
+            emptyList(),
+            listOf(baseline),
+            config.copy(deletionPolicy = FileSyncDeletionPolicy.Propagate),
+        ).operations.single()
+        assertEquals(
+            FileSyncDecisionReason.RemoteDeletion,
+            assertIs<FileSyncOperation.NeedsDecision>(bidirectional).reason,
+        )
+
+        val uploadOnly = planFileSync(
+            listOf(local),
+            emptyList(),
+            listOf(baseline),
+            config.copy(direction = FileSyncDirection.UploadOnly),
+        ).operations.single()
+        assertIs<FileSyncOperation.Upload>(uploadOnly)
     }
 
     @Test

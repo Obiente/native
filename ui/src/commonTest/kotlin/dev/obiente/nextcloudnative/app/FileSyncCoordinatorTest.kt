@@ -9,6 +9,124 @@ import kotlin.test.assertTrue
 
 class FileSyncCoordinatorTest {
     @Test
+    fun `verified content mismatch survives unchanged scans without another read`() {
+        val local = LocalSyncEntry("same-name.md", SyncEntryKind.File, "local-1", size = 42L)
+        val remote = RemoteSyncEntry("same-name.md", SyncEntryKind.File, "remote-1", size = 42L)
+        val mismatch = FileSyncContentVerificationCandidate("same-name.md", "local-1", "remote-1", 42L)
+        val localDigest = "sha256:" + "44".repeat(32)
+
+        var scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local),
+            listOf(remote),
+            nowEpochMillis = 10L,
+            verifiedContentMismatches = listOf(mismatch),
+            verifiedContentMismatchHashes = mapOf(mismatch.relativePath to localDigest),
+        )
+
+        assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(localDigest, scanned.pair().workItems.single().contentMismatchLocalHash)
+        assertEquals(listOf(mismatch), scanned.pair().knownFileSyncContentMismatches())
+        assertEquals(
+            listOf(FileSyncContentVerificationResult(mismatch, localDigest, null)),
+            scanned.pair().knownFileSyncContentMismatchResults(),
+        )
+        assertEquals(
+            emptyList(),
+            fileSyncContentVerificationCandidates(
+                listOf(local),
+                listOf(remote),
+                emptyList(),
+                scanned.pair().knownFileSyncContentMismatches(),
+            ),
+        )
+
+        scanned = decodeFileSyncCoordinatorSnapshot(encodeFileSyncCoordinatorSnapshot(scanned))
+        scanned = scanFileSyncPair(scanned, PAIR_ID, listOf(local), listOf(remote), nowEpochMillis = 20L)
+        assertTrue(scanned.pair().workItems.single().contentMismatchVerified)
+        assertEquals(
+            listOf(mismatch.copy(remoteEtag = "remote-2")),
+            fileSyncContentVerificationCandidates(
+                listOf(local),
+                listOf(remote.copy(etag = "remote-2")),
+                emptyList(),
+                scanned.pair().knownFileSyncContentMismatches(),
+            ),
+        )
+    }
+
+    @Test
+    fun `conflict batch validates every choice before changing coordinator state`() {
+        val scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("one.md", "local-1"), local("two.md", "local-2")),
+            listOf(remote("one.md", "remote-1"), remote("two.md", "remote-2")),
+            nowEpochMillis = 10L,
+        )
+        val conflicts = scanned.pair().workItems
+        val resolved = resolveFileSyncDecisions(
+            scanned,
+            PAIR_ID,
+            conflicts.map { work ->
+                FileSyncConflictResolution(work.id, FileSyncDecisionChoice.UseLocal)
+            },
+        )
+
+        assertTrue(resolved.pair().workItems.all { it.state == FileSyncExecutionState.Ready })
+        assertTrue(resolved.pair().workItems.all { it.operation is FileSyncOperation.Upload })
+
+        val invalid = listOf(
+            FileSyncConflictResolution(conflicts.first().id, FileSyncDecisionChoice.UseLocal),
+            FileSyncConflictResolution(conflicts.last().id, FileSyncDecisionChoice.PropagateDeletion),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            resolveFileSyncDecisions(scanned, PAIR_ID, invalid)
+        }
+        assertTrue(scanned.pair().workItems.all { it.state == FileSyncExecutionState.AwaitingDecision })
+    }
+
+    @Test
+    fun `rejected stale batch can be rescanned from the pre-decision state`() {
+        val original = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local("one.md", "local-1"), local("two.md", "local-1")),
+            listOf(remote("one.md", "remote-1"), remote("two.md", "remote-1")),
+            nowEpochMillis = 10L,
+        )
+        val workIds = original.pair().workItems.mapTo(mutableSetOf(), FileSyncWorkItem::id)
+        val resolved = resolveFileSyncDecisions(
+            original,
+            PAIR_ID,
+            workIds.map { FileSyncConflictResolution(it, FileSyncDecisionChoice.UseLocal) },
+        )
+        val latestLocal = listOf(local("one.md", "local-2"), local("two.md", "local-1"))
+        val latestRemote = listOf(remote("one.md", "remote-2"), remote("two.md", "remote-1"))
+        val partiallyRetained = scanFileSyncPair(
+            resolved,
+            PAIR_ID,
+            latestLocal,
+            latestRemote,
+            nowEpochMillis = 20L,
+        )
+
+        assertTrue(!partiallyRetained.pair().retainsResolvedFileSyncDecisions(workIds))
+        assertTrue(partiallyRetained.pair().workItems.any { it.state == FileSyncExecutionState.Ready })
+
+        val rejected = scanFileSyncPair(
+            original,
+            PAIR_ID,
+            latestLocal,
+            latestRemote,
+            nowEpochMillis = 20L,
+        )
+        assertTrue(rejected.pair().workItems.all { it.state == FileSyncExecutionState.AwaitingDecision })
+        assertTrue(rejected.pair().workItems.all { it.decision?.state == FileSyncDecisionState.Pending })
+    }
+
+    @Test
     fun `conflict decision becomes guarded command and baseline advances only after verification`() {
         val baseline = baseline("Vault/today.md", "local-1", "remote-1")
         var state = state(baselines = listOf(baseline))
@@ -384,7 +502,7 @@ class FileSyncCoordinatorTest {
         )
         assertEquals(emptyList(), state.pair().workItems)
         assertEquals(
-            listOf(baseline("Vault/today.md", "local-1", "remote-1")),
+            listOf(baseline("Vault/today.md", "local-1", "remote-1", digest)),
             state.pair().baselines,
         )
 
@@ -397,7 +515,7 @@ class FileSyncCoordinatorTest {
         )
         assertEquals(emptyList(), state.pair().workItems)
         assertEquals(
-            listOf(baseline("Vault/today.md", "local-2", "remote-2")),
+            listOf(baseline("Vault/today.md", "local-2", "remote-2", digest)),
             state.pair().baselines,
         )
     }
@@ -866,8 +984,12 @@ class FileSyncCoordinatorTest {
     private fun remote(path: String, etag: String, contentHash: String? = null) =
         RemoteSyncEntry(path, SyncEntryKind.File, etag, contentHash = contentHash)
 
-    private fun baseline(path: String, localRevision: String, remoteEtag: String) =
-        FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag)
+    private fun baseline(
+        path: String,
+        localRevision: String,
+        remoteEtag: String,
+        contentHash: String? = null,
+    ) = FileSyncBaseline(path, SyncEntryKind.File, localRevision, remoteEtag, contentHash)
 
     private companion object {
         const val PAIR_ID = "obsidian-notes"

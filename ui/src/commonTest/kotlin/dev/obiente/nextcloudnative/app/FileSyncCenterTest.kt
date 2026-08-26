@@ -203,6 +203,50 @@ class FileSyncCenterTest {
     }
 
     @Test
+    fun `summary presents a bounded conflict page while retaining the total`() {
+        val conflicts = (1L..8L).map { id ->
+            FileSyncWorkItem(
+                id = id,
+                relativePath = "conflict-$id.txt",
+                observedLocal = LocalSyncEntry("conflict-$id.txt", SyncEntryKind.File, "local-$id"),
+                observedRemote = RemoteSyncEntry("conflict-$id.txt", SyncEntryKind.File, "remote-$id"),
+                observedBaseline = null,
+                operation = FileSyncOperation.NeedsDecision(
+                    "conflict-$id.txt",
+                    FileSyncDecisionReason.FirstSyncCollision,
+                ),
+                state = FileSyncExecutionState.AwaitingDecision,
+                decision = FileSyncDecision(
+                    FileSyncDecisionReason.FirstSyncCollision,
+                    setOf(
+                        FileSyncDecisionChoice.UseLocal,
+                        FileSyncDecisionChoice.UseRemote,
+                        FileSyncDecisionChoice.KeepBoth,
+                        FileSyncDecisionChoice.Skip,
+                    ),
+                ),
+            )
+        }
+        val summary = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Documents",
+            configuration = FileSyncConfiguration(deviceLabel = "phone"),
+            workItems = conflicts,
+            nextWorkId = 9,
+        ).toCenterSummary(
+            localDisplayName = "Documents",
+            runState = FileSyncPairRunState.Active,
+            networkState = FileSyncNetworkState.Available,
+        )
+
+        assertEquals(8, summary.conflictCount)
+        assertEquals(MAX_PRESENTED_FILE_SYNC_CONFLICTS, summary.conflicts.size)
+        assertEquals((1L..5L).toList(), summary.conflicts.map(FileSyncConflictSummary::workId))
+    }
+
+    @Test
     fun `summary exposes why skipped work is paused`() {
         val reason = "Directory deletion is paused because selective or ignored items may exist below it."
         val pair = FileSyncPair(

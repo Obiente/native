@@ -9,6 +9,13 @@ import kotlin.test.assertFailsWith
 
 class NextcloudFileSyncWorkerTest {
     @Test
+    fun `conflict notification preserves totals beyond the review page`() {
+        assertEquals("1 sync conflict needs review.", syncConflictNotificationDetail(1))
+        assertEquals("8 sync conflicts need review.", syncConflictNotificationDetail(8))
+        assertFailsWith<IllegalArgumentException> { syncConflictNotificationDetail(0) }
+    }
+
+    @Test
     fun `run failures receive only bounded immediate retries`() {
         assertEquals(BackgroundSyncWorkerDisposition.Retry, backgroundSyncFailureDisposition(0))
         assertEquals(BackgroundSyncWorkerDisposition.Retry, backgroundSyncFailureDisposition(1))

@@ -18,10 +18,34 @@ internal data class AndroidLocalSyncDocument(
     val displayName: String,
 )
 
+internal data class AndroidFileSyncContentHashRead(
+    val contentHash: String?,
+    val bytesRead: Long,
+) {
+    init {
+        require(bytesRead >= 0L)
+    }
+}
+
 internal interface AndroidFileSyncLocalTree {
     fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
     ): List<AndroidLocalSyncDocument>
+    fun contentHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): String?
+    fun contentHashRead(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): AndroidFileSyncContentHashRead = AndroidFileSyncContentHashRead(
+        contentHash(path, expectedLocalRevision, expectedBytes, maximumBytes),
+        expectedBytes,
+    )
     fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
@@ -38,7 +62,6 @@ internal interface AndroidFileSyncLocalTree {
 internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
-    private val contentHashPaths: Set<String> = emptySet(),
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -72,6 +95,34 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }
         return result.sortedBy { it.entry.relativePath }
+    }
+
+    override fun contentHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): String? = contentHashRead(path, expectedLocalRevision, expectedBytes, maximumBytes).contentHash
+
+    override fun contentHashRead(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        maximumBytes: Long,
+    ): AndroidFileSyncContentHashRead {
+        val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision) {
+            "The local file changed before content verification."
+        }
+        require(before.entry.size == expectedBytes) { "The local file size changed before content verification." }
+        val hashRead = resolver.openInputStream(before.uri)?.use { input ->
+            sha256SyncContentHashRead(input, expectedBytes, maximumBytes)
+        } ?: return AndroidFileSyncContentHashRead(null, 0L)
+        val after = requireNotNull(resolve(path)) { "The local file disappeared during content verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
+            "The local file changed during content verification."
+        }
+        return hashRead
     }
 
     override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
@@ -247,24 +298,7 @@ internal class AndroidSafFileSyncLocalTree(
                                 kind = kind,
                                 revision = revision(documentId, mimeType, modified, size),
                                 size = if (kind == SyncEntryKind.File) size else null,
-                                contentHash = if (
-                                    kind == SyncEntryKind.File &&
-                                    path in contentHashPaths &&
-                                    size != null &&
-                                    size <= ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES
-                                ) {
-                                    runCatching {
-                                        resolver.openInputStream(documentUri)?.use { input ->
-                                            sha256SyncContentHash(
-                                                input,
-                                                expectedBytes = size,
-                                                maximumBytes = ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES,
-                                            )
-                                        }
-                                    }.getOrNull()
-                                } else {
-                                    null
-                                },
+                                modifiedEpochMillis = knownAndroidFileSyncModifiedEpochMillis(modified),
                             ),
                             uri = documentUri,
                             displayName = name,
@@ -309,16 +343,22 @@ internal class AndroidSafFileSyncLocalTree(
     }
 }
 
-internal const val ANDROID_SYNC_CONTENT_IDENTITY_MAX_BYTES = 64L * 1024L * 1024L
+internal fun knownAndroidFileSyncModifiedEpochMillis(value: Long): Long? = value.takeIf { it > 0L }
 
 internal fun sha256SyncContentHash(
     input: InputStream,
     expectedBytes: Long,
     maximumBytes: Long,
-): String? {
+): String? = sha256SyncContentHashRead(input, expectedBytes, maximumBytes).contentHash
+
+internal fun sha256SyncContentHashRead(
+    input: InputStream,
+    expectedBytes: Long,
+    maximumBytes: Long,
+): AndroidFileSyncContentHashRead {
     require(expectedBytes >= 0L)
     require(maximumBytes > 0L)
-    if (expectedBytes > maximumBytes) return null
+    if (expectedBytes > maximumBytes) return AndroidFileSyncContentHashRead(null, 0L)
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(64 * 1024)
     var total = 0L
@@ -326,9 +366,12 @@ internal fun sha256SyncContentHash(
         val read = input.read(buffer)
         if (read < 0) break
         total += read
-        if (total > maximumBytes) return null
+        if (total > maximumBytes) return AndroidFileSyncContentHashRead(null, total)
         digest.update(buffer, 0, read)
     }
-    if (total != expectedBytes) return null
-    return "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    if (total != expectedBytes) return AndroidFileSyncContentHashRead(null, total)
+    return AndroidFileSyncContentHashRead(
+        "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) },
+        total,
+    )
 }
