@@ -220,10 +220,8 @@ internal fun canCreateMissingRemoteFolderDestination(
         )
 
 @Composable
-internal fun RemoteFolderPickerDialog(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    userId: String,
+fun RemoteFolderPickerDialog(
+    operations: RemoteFolderPickerOperations,
     initialPath: String,
     selectionError: String? = null,
     onDismiss: () -> Unit,
@@ -231,56 +229,53 @@ internal fun RemoteFolderPickerDialog(
 ) {
     val safeInitialPath = remember(initialPath) { normalizeRemoteFolderInput(initialPath).orEmpty() }
     var currentPath by rememberSaveable(
-        session.serverUrl,
-        session.loginName,
-        userId,
+        operations.identity,
         safeInitialPath,
     ) {
         mutableStateOf(safeInitialPath)
     }
-    var files by remember(session, userId) { mutableStateOf<List<NextcloudFile>?>(null) }
-    var listingSource by remember(session, userId) {
+    var files by remember(operations.identity) { mutableStateOf<List<NextcloudFile>?>(null) }
+    var listingSource by remember(operations.identity) {
         mutableStateOf<NextcloudFileListingSource?>(null)
     }
-    var networkConfirmedPath by remember(session, userId) { mutableStateOf<String?>(null) }
-    var displayedPath by remember(session, userId) { mutableStateOf<String?>(null) }
-    var loading by remember(session, userId) { mutableStateOf(true) }
-    var refreshing by remember(session, userId) { mutableStateOf(false) }
-    var error by remember(session, userId) { mutableStateOf<String?>(null) }
-    var query by rememberSaveable(session.serverUrl, session.loginName, userId) { mutableStateOf("") }
-    var loadAttempt by rememberSaveable(session.serverUrl, session.loginName, userId) {
+    var networkConfirmedPath by remember(operations.identity) { mutableStateOf<String?>(null) }
+    var networkConfirmedDirectoryCreationPath by remember(operations.identity) { mutableStateOf<String?>(null) }
+    var displayedPath by remember(operations.identity) { mutableStateOf<String?>(null) }
+    var loading by remember(operations.identity) { mutableStateOf(true) }
+    var refreshing by remember(operations.identity) { mutableStateOf(false) }
+    var error by remember(operations.identity) { mutableStateOf<String?>(null) }
+    var query by rememberSaveable(operations.identity) { mutableStateOf("") }
+    var loadAttempt by rememberSaveable(operations.identity) {
         mutableStateOf(0)
     }
-    var createVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
+    var createVisible by rememberSaveable(operations.identity) {
         mutableStateOf(false)
     }
-    var createName by rememberSaveable(session.serverUrl, session.loginName, userId) {
+    var createName by rememberSaveable(operations.identity) {
         mutableStateOf("")
     }
-    var createError by remember(session, userId) { mutableStateOf<String?>(null) }
-    var createRunning by remember(session, userId) { mutableStateOf(false) }
-    var manualVisible by rememberSaveable(session.serverUrl, session.loginName, userId) {
+    var createError by remember(operations.identity) { mutableStateOf<String?>(null) }
+    var createRunning by remember(operations.identity) { mutableStateOf(false) }
+    var manualVisible by rememberSaveable(operations.identity) {
         mutableStateOf(false)
     }
-    var manualPath by rememberSaveable(session.serverUrl, session.loginName, userId) {
+    var manualPath by rememberSaveable(operations.identity) {
         mutableStateOf(safeInitialPath)
     }
-    var manualError by remember(session, userId) { mutableStateOf<String?>(null) }
+    var manualError by remember(operations.identity) { mutableStateOf<String?>(null) }
     var recoveryTarget by rememberSaveable(
-        session.serverUrl,
-        session.loginName,
-        userId,
+        operations.identity,
         safeInitialPath,
     ) {
         mutableStateOf(safeInitialPath.takeIf(String::isNotEmpty))
     }
-    var missingDestination by remember(session, userId, safeInitialPath) {
+    var missingDestination by remember(operations.identity, safeInitialPath) {
         mutableStateOf<MissingRemoteFolderDestination?>(null)
     }
     val scope = rememberCoroutineScope()
-
-    LaunchedEffect(session, userId, currentPath, loadAttempt) {
+    LaunchedEffect(operations, currentPath, loadAttempt) {
         networkConfirmedPath = null
+        networkConfirmedDirectoryCreationPath = null
         val retainingCurrentPath = files != null && displayedPath == currentPath
         if (!retainingCurrentPath) {
             files = null
@@ -292,7 +287,7 @@ internal fun RemoteFolderPickerDialog(
         error = null
         missingDestination = null
         val cached = runCatching {
-            services.listFilesCachedWithSource(session, userId, currentPath)
+            operations.listCached(currentPath)
         }.rethrowRemoteFolderCancellation().getOrNull()
         if (cached != null) {
             files = cached.files
@@ -301,20 +296,25 @@ internal fun RemoteFolderPickerDialog(
             loading = false
             refreshing = true
         }
-        runCatching { services.listFilesWithSource(session, userId, currentPath) }
+        runCatching { operations.listNetwork(currentPath) }
             .rethrowRemoteFolderCancellation()
             .onSuccess { listing ->
+                val selectionAccess = operations.confirmSelectionAccess(currentPath, listing.source)
                 files = listing.files
                 listingSource = listing.source
                 displayedPath = currentPath
                 networkConfirmedPath = currentPath.takeIf {
-                    listing.source == NextcloudFileListingSource.Network
+                    listing.source == NextcloudFileListingSource.Network &&
+                        selectionAccess == RemoteFolderSelectionAccess.Allowed
+                }
+                networkConfirmedDirectoryCreationPath = currentPath.takeIf {
+                    listing.source == NextcloudFileListingSource.Network &&
+                        selectionAccess !is RemoteFolderSelectionAccess.Denied
                 }
                 loading = false
                 refreshing = false
-                if (listing.source != NextcloudFileListingSource.Network) {
-                    error = "Connect to Nextcloud to confirm this destination."
-                } else {
+                error = (selectionAccess as? RemoteFolderSelectionAccess.Denied)?.message
+                if (selectionAccess !is RemoteFolderSelectionAccess.Denied) {
                     missingDestination = recoveryTarget?.let { intended ->
                         missingRemoteFolderDestination(intended, currentPath)
                     }
@@ -554,7 +554,7 @@ internal fun RemoteFolderPickerDialog(
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                     ) {
                         OutlinedButton(
-                            enabled = !createRunning && networkConfirmedPath == currentPath,
+                            enabled = !createRunning && networkConfirmedDirectoryCreationPath == currentPath,
                             onClick = {
                                 recoveryTarget = null
                                 missingDestination = null
@@ -611,7 +611,7 @@ internal fun RemoteFolderPickerDialog(
                                     createError = null
                                     scope.launch {
                                         runCatching {
-                                            services.createDirectoryIfAbsent(session, userId, target)
+                                            operations.createDirectoryIfAbsent(target)
                                         }.rethrowRemoteFolderCancellation().onSuccess {
                                             createVisible = false
                                             createName = ""
@@ -699,7 +699,7 @@ internal fun RemoteFolderPickerDialog(
             Button(
                 enabled = canConfirm || canCreateMissingRemoteFolderDestination(
                     missingDestination = missingDestination,
-                    networkConfirmedPath = networkConfirmedPath,
+                    networkConfirmedPath = networkConfirmedDirectoryCreationPath,
                     currentPath = currentPath,
                     manualPathVisible = manualVisible,
                     manualPathDraft = manualPath,
@@ -716,9 +716,7 @@ internal fun RemoteFolderPickerDialog(
                     scope.launch {
                         try {
                             runCatching {
-                                destination.pathsToCreate.forEach { path ->
-                                    services.createDirectoryIfAbsent(session, userId, path)
-                                }
+                                operations.createAndConfirmDestination(destination)
                             }.rethrowRemoteFolderCancellation().onSuccess {
                                 recoveryTarget = null
                                 missingDestination = null

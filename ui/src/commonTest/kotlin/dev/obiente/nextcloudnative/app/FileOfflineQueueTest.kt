@@ -28,7 +28,7 @@ class FileOfflineQueueTest {
         val request = pin(etag = "\"remote-1\"")
         val queued = planFileOfflineRequest(FileOfflineQueueState(), request, 10)
         val available = recordFileOfflineJobResult(
-            markFileOfflineJobRunning(queued, queued.jobs.single().id),
+            markFileOfflineJobRunning(queued, queued.jobs.single().id, nowEpochMillis = 11),
             queued.jobs.single().id,
             FileOfflineJobResult.Downloaded("sha256:local-1", "\"remote-1\""),
             nowEpochMillis = 30,
@@ -121,7 +121,7 @@ class FileOfflineQueueTest {
     fun retryStateAndAttemptsAreExplicitAndPersistable() {
         val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
         val jobId = queued.jobs.single().id
-        val running = markFileOfflineJobRunning(queued, jobId)
+        val running = markFileOfflineJobRunning(queued, jobId, nowEpochMillis = 11)
         val waiting = recordFileOfflineJobResult(
             running,
             jobId,
@@ -136,12 +136,37 @@ class FileOfflineQueueTest {
     }
 
     @Test
+    fun serverRetryDeadlineBlocksEarlyOfflineExecution() {
+        val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
+        val jobId = queued.jobs.single().id
+        val running = markFileOfflineJobRunning(queued, jobId, nowEpochMillis = 11)
+        val waiting = recordFileOfflineJobResult(
+            running,
+            jobId,
+            FileOfflineJobResult.RetryableFailure(
+                "Nextcloud asked this download to wait.",
+                retryNotBeforeEpochMillis = 120_000L,
+            ),
+            nowEpochMillis = 20,
+        )
+
+        assertEquals(120_000L, waiting.jobs.single().retryNotBeforeEpochMillis)
+        assertFailsWith<IllegalArgumentException> {
+            markFileOfflineJobRunning(waiting, jobId, nowEpochMillis = 119_999L)
+        }
+        assertNull(
+            markFileOfflineJobRunning(waiting, jobId, nowEpochMillis = 120_000L)
+                .jobs.single().retryNotBeforeEpochMillis,
+        )
+    }
+
+    @Test
     fun restartingAnInterruptedRunningJobIsIdempotent() {
         val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
         val jobId = queued.jobs.single().id
-        val running = markFileOfflineJobRunning(queued, jobId)
+        val running = markFileOfflineJobRunning(queued, jobId, nowEpochMillis = 11)
 
-        assertEquals(running, markFileOfflineJobRunning(running, jobId))
+        assertEquals(running, markFileOfflineJobRunning(running, jobId, nowEpochMillis = 12))
         assertEquals(1, running.jobs.single().attemptCount)
     }
 

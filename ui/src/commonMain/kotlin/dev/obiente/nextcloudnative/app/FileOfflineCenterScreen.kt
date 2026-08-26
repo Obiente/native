@@ -94,6 +94,7 @@ internal fun FileOfflineCenterScreen(
     var actionMessage by remember(session, userId) { mutableStateOf<String?>(null) }
     var removeTarget by remember(session, userId) { mutableStateOf<FileOfflineCenterItem?>(null) }
     var syncSnapshot by remember(session, userId) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
+    val incomingShareRecoveryPager = rememberIncomingShareRecoveryPager(services, session, userId, refreshAttempt)
     var syncLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
@@ -544,6 +545,13 @@ internal fun FileOfflineCenterScreen(
                 actionMessage?.let { message ->
                     OfflineCenterMessageCard(message, errorTone = false)
                 }
+                IncomingShareRecoveryCard(
+                    page = incomingShareRecoveryPager.page,
+                    pageNumber = incomingShareRecoveryPager.pageNumber,
+                    onOpen = services::openIncomingShareRecovery,
+                    onPreviousPage = incomingShareRecoveryPager::previous,
+                    onNextPage = incomingShareRecoveryPager::next,
+                )
                 when (selectedWorkspaceSection) {
                     FileOfflineWorkspaceSection.FolderSync -> {
                         if (services.supportsBidirectionalFileSync) {
@@ -693,6 +701,17 @@ internal fun FileOfflineCenterScreen(
                     }
                     actionMessage?.let { message ->
                         item { OfflineCenterMessageCard(message, errorTone = false) }
+                    }
+                    if (incomingShareRecoveryPager.isVisible) {
+                        item {
+                            IncomingShareRecoveryCard(
+                                page = incomingShareRecoveryPager.page,
+                                pageNumber = incomingShareRecoveryPager.pageNumber,
+                                onOpen = services::openIncomingShareRecovery,
+                                onPreviousPage = incomingShareRecoveryPager::previous,
+                                onNextPage = incomingShareRecoveryPager::next,
+                            )
+                        }
                     }
                     when (selectedWorkspaceSection) {
                         FileOfflineWorkspaceSection.FolderSync -> {

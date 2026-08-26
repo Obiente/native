@@ -963,6 +963,16 @@ interface NextcloudPlatformServices {
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
     suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
 
+    /** Lists durable share-sheet uploads that still need progress or user review. */
+    suspend fun loadIncomingShareRecoveries(
+        session: NextcloudSession,
+        userId: String,
+        cursor: String?,
+    ): IncomingShareRecoveryPage = IncomingShareRecoveryPage()
+
+    /** Opens the platform-owned recovery surface for one durable share-sheet upload. */
+    fun openIncomingShareRecovery(requestId: String) = Unit
+
     suspend fun discoverMediaSyncFolders(): MediaSyncFolderDiscovery = MediaSyncFolderDiscovery(
         support = MediaSyncFolderDiscoverySupport.Unsupported,
         suggestions = emptyList(),

@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
+import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -14,6 +15,11 @@ import java.time.format.DateTimeFormatter
 internal data class AndroidRemoteSyncDocument(
     val entry: RemoteSyncEntry,
     val isDirectory: Boolean,
+)
+
+internal data class AndroidRemoteChildNameSnapshot(
+    val names: Set<String>,
+    val complete: Boolean,
 )
 
 /** Recursive, bounded and revision-guarded view of one Nextcloud Files subtree. */
@@ -193,6 +199,107 @@ internal class AndroidFileSyncRemoteTree(
             )
         }
     }
+
+    /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
+    fun rootChildNames(): AndroidRemoteChildNameSnapshot {
+        val listing = try {
+            webDav.listDirectory(session, userId, fullPath(""), MAX_CHILDREN)
+        } catch (failure: DocumentWebDavException) {
+            if (failure.error == DocumentWebDavError.TooLarge) {
+                return AndroidRemoteChildNameSnapshot(emptySet(), complete = false)
+            }
+            throw failure
+        }
+        return AndroidRemoteChildNameSnapshot(
+            names = listing.files.mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
+            complete = !listing.limited,
+        )
+    }
+
+    fun resourceExists(
+        relativePath: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): Boolean = webDav.resourceExists(session, userId, fullPath(relativePath), cancellation)
+
+    /** Performs a conditional create without inferring absence from a directory listing. */
+    fun createFileIfAbsent(
+        relativePath: String,
+        source: File,
+        onRequestStarted: () -> Unit,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ) {
+        require(safeIncomingShareFileName(relativePath, 0) == relativePath) {
+            "The incoming share filename is invalid."
+        }
+        webDav.createFile(
+            session = session,
+            userId = userId,
+            path = fullPath(relativePath),
+            source = source,
+            onRequestStarted = onRequestStarted,
+            cancellation = cancellation,
+        )
+    }
+
+    fun directoryAccess(
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): DocumentDirectoryAccess = webDav.inspectDirectoryAccess(session, userId, fullPath(""), cancellation)
+
+    fun createChunkUpload(
+        uploadId: String,
+        relativePath: String,
+        allowExistingSession: Boolean,
+        cancellation: DocumentRequestCancellation,
+    ): Boolean = webDav.createChunkUpload(
+        session,
+        userId,
+        uploadId,
+        fullPath(relativePath),
+        allowExistingSession,
+        cancellation,
+    )
+
+    fun uploadChunk(
+        uploadId: String,
+        relativePath: String,
+        source: File,
+        offset: Long,
+        length: Long,
+        chunkNumber: Int,
+        cancellation: DocumentRequestCancellation,
+    ) = webDav.uploadChunk(
+        session,
+        userId,
+        uploadId,
+        fullPath(relativePath),
+        source,
+        offset,
+        length,
+        source.length(),
+        chunkNumber,
+        cancellation,
+    )
+
+    fun deleteChunkUpload(
+        uploadId: String,
+        cancellation: DocumentRequestCancellation,
+    ) = webDav.deleteChunkUpload(session, userId, uploadId, cancellation)
+
+    fun commitChunkUpload(
+        uploadId: String,
+        relativePath: String,
+        sourceLength: Long,
+        cancellation: DocumentRequestCancellation,
+        onRequestStarted: () -> Unit,
+    ) = webDav.commitChunkUpload(
+        session,
+        userId,
+        uploadId,
+        fullPath(relativePath),
+        sourceLength,
+        cancellation,
+        onRequestStarted,
+    )
 
     fun delete(relativePath: String, expectedRemoteEtag: String) {
         val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }

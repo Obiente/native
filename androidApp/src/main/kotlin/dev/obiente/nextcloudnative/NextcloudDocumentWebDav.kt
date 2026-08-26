@@ -12,48 +12,14 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.UUID
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
-
-internal enum class DocumentWebDavError {
-    Authentication,
-    Permission,
-    NotFound,
-    AlreadyExists,
-    Conflict,
-    Locked,
-    InsufficientStorage,
-    TooLarge,
-    Server,
-}
-
-internal class DocumentWebDavException(
-    val error: DocumentWebDavError,
-    val status: Int,
-    message: String,
-) : Exception(message)
-
-internal data class DocumentMutationResult(val etag: String?)
-
-internal data class DocumentReadResult(
-    val byteCount: Long,
-    val contentType: String?,
-    val etag: String?,
-)
-
-internal data class DocumentSearchResult(
-    val files: List<NextcloudFile>,
-    val query: String,
-    val limited: Boolean,
-)
-
-internal data class DocumentDirectoryResult(
-    val files: List<NextcloudFile>,
-    val limited: Boolean,
-)
 
 /**
  * Android's [android.os.CancellationSignal] is deliberately kept out of this transport so the
@@ -249,8 +215,10 @@ internal class NextcloudDocumentWebDav(
         userId: String,
         path: String,
         source: File,
+        onRequestStarted: () -> Unit = {},
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
     ): DocumentMutationResult {
-        val checksum = source.sha256ChecksumForDav()
+        val checksum = source.sha256ChecksumForDav(cancellation)
         return execute(
             request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))
             .header("If-None-Match", "*")
@@ -258,8 +226,140 @@ internal class NextcloudDocumentWebDav(
             .put(source.asRequestBody(OCTET_STREAM))
             .build(),
             operation = "create file",
+            onRequestStarted = onRequestStarted,
+            cancellation = cancellation,
+            requiredSuccessStatus = 201,
         )
     }
+
+    fun inspectDirectoryAccess(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): DocumentDirectoryAccess {
+        val request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))
+            .header("Accept", "application/xml")
+            .header("Depth", "0")
+            .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
+            .build()
+        val bytes = executeDavRead(request, "inspect folder", cancellation)
+        val response = SafeXmlParser.parse(bytes).getElementsByTagNameNS(DOCUMENT_SEARCH_DAV, "response").item(0)
+            ?: throw DocumentWebDavException(DocumentWebDavError.NotFound, 404, "The folder no longer exists.")
+        val isDirectory = response.searchCount(DOCUMENT_SEARCH_DAV, "collection") > 0
+        val permissions = response.searchText(DOCUMENT_SEARCH_OC, "permissions")
+        require(isDirectory) { "The selected upload destination is not a folder." }
+        return DocumentDirectoryAccess(
+            canCreateFiles = permissions?.contains('C') == true,
+            canCreateDirectories = permissions?.contains('K') == true,
+        )
+    }
+
+    /** Checks one exact destination without enumerating its potentially very large parent. */
+    fun resourceExists(
+        session: NextcloudSession,
+        userId: String,
+        path: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+    ): Boolean {
+        val request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))
+            .header("Accept", "application/xml")
+            .header("Depth", "0")
+            .method("PROPFIND", RESOURCE_TYPE_PROPERTY.toRequestBody(XML_CONTENT_TYPE))
+            .build()
+        return try {
+            executeDavRead(request, "inspect upload destination", cancellation)
+            true
+        } catch (failure: DocumentWebDavException) {
+            if (failure.error == DocumentWebDavError.NotFound) false else throw failure
+        }
+    }
+
+    fun createChunkUpload(
+        session: NextcloudSession,
+        userId: String,
+        uploadId: String,
+        destinationPath: String,
+        allowExistingSession: Boolean,
+        cancellation: DocumentRequestCancellation,
+    ): Boolean = try {
+        execute(
+            requestBuilder(session, chunkUploadUrl(session, userId, uploadId))
+                .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
+                .header("If-None-Match", "*")
+                .method("MKCOL", EMPTY_BODY)
+                .build(),
+            "start chunked upload",
+            cancellation = cancellation,
+        )
+        true
+    } catch (failure: DocumentWebDavException) {
+        if (allowExistingSession && failure.status == 405) false else throw failure
+    }
+
+    fun uploadChunk(
+        session: NextcloudSession,
+        userId: String,
+        uploadId: String,
+        destinationPath: String,
+        source: File,
+        offset: Long,
+        length: Long,
+        totalLength: Long,
+        chunkNumber: Int,
+        cancellation: DocumentRequestCancellation,
+    ) {
+        require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && offset + length <= source.length())
+        val body = fileRangeRequestBody(source, offset, length, cancellation)
+        execute(
+            requestBuilder(session, chunkUploadUrl(session, userId, uploadId) + "/${chunkNumber.toString().padStart(5, '0')}")
+                .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
+                .header("OC-Total-Length", totalLength.toString())
+                .put(body)
+                .build(),
+            "upload file chunk",
+            cancellation = cancellation,
+        )
+    }
+
+    fun deleteChunkUpload(
+        session: NextcloudSession,
+        userId: String,
+        uploadId: String,
+        cancellation: DocumentRequestCancellation,
+    ) {
+        try {
+            execute(
+                requestBuilder(session, chunkUploadUrl(session, userId, uploadId)).delete().build(),
+                "remove rejected chunked upload",
+                cancellation = cancellation,
+            )
+        } catch (failure: DocumentWebDavException) {
+            if (failure.status != 404) throw failure
+        }
+    }
+
+    fun commitChunkUpload(
+        session: NextcloudSession,
+        userId: String,
+        uploadId: String,
+        destinationPath: String,
+        totalLength: Long,
+        cancellation: DocumentRequestCancellation,
+        onRequestStarted: () -> Unit,
+    ): DocumentMutationResult = execute(
+        requestBuilder(session, chunkUploadUrl(session, userId, uploadId) + "/.file")
+            .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
+            .header("OC-Total-Length", totalLength.toString())
+            .header("Overwrite", "F")
+            .method("MOVE", EMPTY_BODY)
+            .build(),
+        "assemble chunked upload",
+        onRequestStarted,
+        cancellation,
+        timeoutMillis = CHUNK_COMMIT_TIMEOUT_MILLIS,
+        requiredSuccessStatus = 201,
+    )
 
     fun replaceFile(
         session: NextcloudSession,
@@ -379,14 +479,86 @@ internal class NextcloudDocumentWebDav(
         execute(builder.delete().build(), "clean up staged upload")
     }
 
-    private fun execute(request: Request, operation: String): DocumentMutationResult {
+    private fun execute(
+        request: Request,
+        operation: String,
+        onRequestStarted: () -> Unit = {},
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+        timeoutMillis: Long? = null,
+        requiredSuccessStatus: Int? = null,
+    ): DocumentMutationResult {
         check(cloudMutationsAllowed()) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
-        return client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw response.toDocumentException(operation)
-            DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))
+        cancellation.throwIfCancelled()
+        val operationClient = timeoutMillis?.let { timeout ->
+            require(timeout > 0L)
+            client.newBuilder()
+                .readTimeout(timeout, TimeUnit.MILLISECONDS)
+                .callTimeout(timeout, TimeUnit.MILLISECONDS)
+                .build()
+        } ?: client
+        val requestClient = operationClient.newBuilder()
+            .eventListener(
+                object : EventListener() {
+                    override fun requestHeadersStart(call: Call) {
+                        onRequestStarted()
+                    }
+                },
+            )
+            .build()
+        val call = requestClient.newCall(request)
+        cancellation.setOnCancelAction(call::cancel)
+        try {
+            return call.execute().use { response ->
+                if (!response.isSuccessful) throw response.toDocumentException(operation)
+                if (requiredSuccessStatus != null && response.code != requiredSuccessStatus) {
+                    throw DocumentWebDavException(
+                        DocumentWebDavError.Server,
+                        response.code,
+                        "Nextcloud did not confirm that it created a new remote file for $operation " +
+                            "(HTTP ${response.code}).",
+                    )
+                }
+                DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))
+            }
+        } catch (failure: IOException) {
+            cancellation.throwIfCancelled()
+            throw failure
+        } finally {
+            cancellation.setOnCancelAction(null)
         }
+    }
+
+    private fun executeDavRead(
+        request: Request,
+        operation: String,
+        cancellation: DocumentRequestCancellation,
+    ): ByteArray {
+        cancellation.throwIfCancelled()
+        val call = client.newCall(request)
+        cancellation.setOnCancelAction(call::cancel)
+        try {
+            return call.execute().use { response ->
+                if (response.code != 207) throw response.toDocumentException(operation)
+                response.body.byteStream().readBoundedResponse(
+                    MAX_DIRECTORY_RESPONSE_BYTES,
+                    cancellation,
+                    "The folder metadata response is too large.",
+                )
+            }
+        } catch (failure: IOException) {
+            cancellation.throwIfCancelled()
+            throw failure
+        } finally {
+            cancellation.setOnCancelAction(null)
+        }
+    }
+
+    private fun chunkUploadUrl(session: NextcloudSession, userId: String, uploadId: String): String {
+        require(runCatching { UUID.fromString(uploadId) }.isSuccess)
+        return session.serverUrl.trimEnd('/') + "/remote.php/dav/uploads/" +
+            encodeDocumentSearchPathSegment(userId) + "/" + encodeDocumentSearchPathSegment(uploadId)
     }
 
     private fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
@@ -398,33 +570,9 @@ internal class NextcloudDocumentWebDav(
             .header("User-Agent", USER_AGENT)
     }
 
-    private fun okhttp3.Response.toDocumentException(operation: String): DocumentWebDavException {
-        val error = when (code) {
-            401 -> DocumentWebDavError.Authentication
-            403 -> DocumentWebDavError.Permission
-            404 -> DocumentWebDavError.NotFound
-            405, 409 -> DocumentWebDavError.AlreadyExists
-            412 -> DocumentWebDavError.Conflict
-            423 -> DocumentWebDavError.Locked
-            507 -> DocumentWebDavError.InsufficientStorage
-            else -> DocumentWebDavError.Server
-        }
-        val message = when (error) {
-            DocumentWebDavError.Authentication -> "Sign in again before trying to $operation."
-            DocumentWebDavError.Permission -> "Nextcloud did not allow this account to $operation."
-            DocumentWebDavError.NotFound -> "The document no longer exists."
-            DocumentWebDavError.AlreadyExists -> "A document with that name already exists."
-            DocumentWebDavError.Conflict -> "The document changed on the server. Refresh before trying again."
-            DocumentWebDavError.Locked -> "The document is currently locked by another operation."
-            DocumentWebDavError.InsufficientStorage -> "The Nextcloud server does not have enough free storage."
-            DocumentWebDavError.TooLarge -> "The document is larger than the current provider limit."
-            DocumentWebDavError.Server -> "Nextcloud could not $operation (HTTP $code)."
-        }
-        return DocumentWebDavException(error, code, message)
-    }
-
     private companion object {
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android DocumentsProvider)"
+        const val CHUNK_COMMIT_TIMEOUT_MILLIS = 30L * 60L * 1_000L
         const val READ_BUFFER_BYTES = 32 * 1024
         const val DEFAULT_SEARCH_RESULT_LIMIT = 50
         const val MAX_SEARCH_RESULT_LIMIT = 100
@@ -440,9 +588,13 @@ internal class NextcloudDocumentWebDav(
             <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
               <d:prop>
                 <d:displayname/><d:resourcetype/><d:getcontenttype/><d:getlastmodified/>
-                <d:getcontentlength/><d:getetag/><oc:fileid/><oc:size/><oc:checksums/><nc:has-preview/>
+                <d:getcontentlength/><d:getetag/><oc:fileid/><oc:size/><oc:permissions/><oc:checksums/><nc:has-preview/>
               </d:prop>
             </d:propfind>
+        """.trimIndent()
+        val RESOURCE_TYPE_PROPERTY = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>
         """.trimIndent()
     }
 }
@@ -522,6 +674,7 @@ private fun parseDocumentDavResponse(
                     fileId = response.searchText(DOCUMENT_SEARCH_OC, "fileid")?.toLongOrNull(),
                     hasPreview = response.searchText(DOCUMENT_SEARCH_NC, "has-preview") == "true",
                     etag = response.searchText(DOCUMENT_SEARCH_DAV, "getetag"),
+                    permissions = response.searchText(DOCUMENT_SEARCH_OC, "permissions"),
                     checksums = response.searchTexts(DOCUMENT_SEARCH_OC, "checksum"),
                 ),
             )
@@ -585,13 +738,16 @@ private fun org.w3c.dom.Node.searchTexts(namespace: String, localName: String): 
     }
 }
 
-private fun File.sha256ChecksumForDav(): String? {
+private fun File.sha256ChecksumForDav(
+    cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
+): String? {
     if (!isFile || length() !in 0..MAX_DAV_CHECKSUM_FILE_BYTES) return null
     val digest = MessageDigest.getInstance("SHA-256")
     FileInputStream(this).use { input ->
         val buffer = ByteArray(CHECKSUM_BUFFER_BYTES)
         var total = 0L
         while (true) {
+            cancellation.throwIfCancelled()
             val read = input.read(buffer)
             if (read < 0) break
             total += read

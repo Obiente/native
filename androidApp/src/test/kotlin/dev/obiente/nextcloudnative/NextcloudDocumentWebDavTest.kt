@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.ByteArrayOutputStream
+import java.net.ServerSocket
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -9,12 +10,14 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.Headers.Companion.headersOf
+import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
@@ -187,7 +190,15 @@ class NextcloudDocumentWebDavTest {
         val source = Files.createTempFile("ncn-create-", ".txt").toFile()
         try {
             source.writeText("hello")
-            val result = NextcloudDocumentWebDav().createFile(server.session, "alice", "Documents/report.txt", source)
+            var requestStarted = false
+            val result = NextcloudDocumentWebDav().createFile(
+                server.session,
+                "alice",
+                "Documents/report.txt",
+                source,
+                onRequestStarted = { requestStarted = true },
+            )
+            assertTrue(requestStarted)
             assertEquals("\"created-1\"", result.etag)
             val request = server.request(0)
             assertEquals("PUT", request.method)
@@ -202,6 +213,330 @@ class NextcloudDocumentWebDavTest {
         } finally {
             source.delete()
         }
+    }
+
+    @Test
+    fun createFileRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
+        server.enqueue(204)
+        val source = Files.createTempFile("ncn-create-unconfirmed-", ".txt").toFile()
+        try {
+            source.writeText("preserve me")
+
+            val failure = assertFailsWith<DocumentWebDavException> {
+                NextcloudDocumentWebDav().createFile(
+                    server.session,
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                )
+            }
+
+            assertEquals(DocumentWebDavError.Server, failure.error)
+            assertEquals(204, failure.status)
+            assertTrue(failure.message.orEmpty().contains("did not confirm"))
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun createFileClassifiesPayloadTooLargeAsDefiniteRejection() = RecordingServer().use { server ->
+        server.enqueue(413)
+        val source = Files.createTempFile("ncn-create-too-large-", ".txt").toFile()
+        try {
+            source.writeText("too large according to server policy")
+
+            val failure = assertFailsWith<DocumentWebDavException> {
+                NextcloudDocumentWebDav().createFile(
+                    server.session,
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                )
+            }
+
+            assertEquals(DocumentWebDavError.TooLarge, failure.error)
+            assertEquals(413, failure.status)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun createFileDoesNotMarkRequestStartedWhenMutationGateRejectsPreflight() = RecordingServer().use { server ->
+        val source = Files.createTempFile("ncn-create-gated-", ".txt").toFile()
+        try {
+            source.writeText("hello")
+            var requestStarted = false
+            assertFailsWith<IllegalStateException> {
+                NextcloudDocumentWebDav(cloudMutationsAllowed = { false }).createFile(
+                    server.session,
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                    onRequestStarted = { requestStarted = true },
+                )
+            }
+            assertTrue(!requestStarted)
+            assertEquals(0, server.requestCount)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun connectionFailureDoesNotMarkAConditionalPutAsServerVisible() {
+        val unusedPort = ServerSocket(0).use { it.localPort }
+        val source = Files.createTempFile("ncn-connect-failure-", ".txt").toFile()
+        try {
+            source.writeText("not sent")
+            var requestStarted = false
+            val client = NextcloudDocumentWebDav(
+                OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS).build(),
+            )
+
+            assertFailsWith<java.io.IOException> {
+                client.createFile(
+                    NextcloudSession("http://127.0.0.1:$unusedPort", "alice", "app-password"),
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                    onRequestStarted = { requestStarted = true },
+                )
+            }
+            assertFalse(requestStarted)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun createFileCancellationAbortsTheInflightPut() = RecordingServer().use { server ->
+        server.enqueue(MockResponse.Builder().code(201).headersDelay(30, TimeUnit.SECONDS).build())
+        val source = Files.createTempFile("ncn-cancel-put-", ".txt").toFile()
+        val cancellation = TestCancellation()
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            source.writeText("cancel me")
+            val future = executor.submit<Unit> {
+                NextcloudDocumentWebDav().createFile(
+                    server.session,
+                    "alice",
+                    "Documents/cancel.txt",
+                    source,
+                    cancellation = cancellation,
+                )
+            }
+            assertTrue(cancellation.attached.await(2, TimeUnit.SECONDS))
+            cancellation.cancel()
+            val failure = assertFailsWith<java.util.concurrent.ExecutionException> {
+                future.get(2, TimeUnit.SECONDS)
+            }
+            assertTrue(failure.cause is TestCancelledException)
+            assertTrue(cancellation.detached.await(2, TimeUnit.SECONDS))
+        } finally {
+            executor.shutdownNow()
+            source.delete()
+        }
+    }
+
+    @Test
+    fun chunkedUploadUsesOfficialV2HeadersAndNeverOverwritesDestination() = RecordingServer().use { server ->
+        server.enqueue(201)
+        server.enqueue(201)
+        server.enqueue(201)
+        val source = Files.createTempFile("ncn-chunk-", ".bin").toFile()
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        try {
+            source.writeText("0123456789")
+            var commitReadTimeoutMillis: Int? = null
+            val httpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    if (chain.request().method == "MOVE") commitReadTimeoutMillis = chain.readTimeoutMillis()
+                    chain.proceed(chain.request())
+                }
+                .build()
+            val client = NextcloudDocumentWebDav(httpClient)
+            assertTrue(
+                client.createChunkUpload(
+                    server.session,
+                    "alice",
+                    uploadId,
+                    "Shared/archive.bin",
+                    allowExistingSession = false,
+                    cancellation = TestCancellation(),
+                ),
+            )
+            client.uploadChunk(
+                server.session,
+                "alice",
+                uploadId,
+                "Shared/archive.bin",
+                source,
+                offset = 2,
+                length = 5,
+                totalLength = 10,
+                chunkNumber = 1,
+                cancellation = TestCancellation(),
+            )
+            client.commitChunkUpload(
+                server.session,
+                "alice",
+                uploadId,
+                "Shared/archive.bin",
+                totalLength = 10,
+                cancellation = TestCancellation(),
+                onRequestStarted = {},
+            )
+
+            val destination = server.baseUrl + "/remote.php/dav/files/alice/Shared/archive.bin"
+            assertEquals("MKCOL", server.request(0).method)
+            assertEquals(destination, server.request(0).header("Destination"))
+            assertEquals("PUT", server.request(1).method)
+            assertEquals("23456", server.request(1).body?.utf8())
+            assertEquals("10", server.request(1).header("OC-Total-Length"))
+            assertTrue(server.request(1).path.endsWith("/$uploadId/00001"))
+            assertEquals("MOVE", server.request(2).method)
+            assertEquals("F", server.request(2).header("Overwrite"))
+            assertEquals(destination, server.request(2).header("Destination"))
+            assertTrue(server.request(2).path.endsWith("/$uploadId/.file"))
+            assertEquals(30 * 60 * 1_000, commitReadTimeoutMillis)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun chunkCommitRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
+        server.enqueue(204)
+
+        val failure = assertFailsWith<DocumentWebDavException> {
+            NextcloudDocumentWebDav().commitChunkUpload(
+                server.session,
+                "alice",
+                "01234567-89ab-cdef-0123-456789abcdef",
+                "Shared/archive.bin",
+                totalLength = 10,
+                cancellation = TestCancellation(),
+                onRequestStarted = {},
+            )
+        }
+
+        assertEquals(DocumentWebDavError.Server, failure.error)
+        assertEquals(204, failure.status)
+        assertTrue(failure.message.orEmpty().contains("did not confirm"))
+        assertEquals("F", server.request(0).header("Overwrite"))
+    }
+
+    @Test
+    fun oversizedRootNameListingFallsBackToConditionalCreates() = RecordingServer().use { server ->
+        server.enqueue(207, body = " ".repeat(4 * 1024 * 1024 + 1))
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Shared",
+            NextcloudDocumentWebDav(),
+        )
+
+        val snapshot = remote.rootChildNames()
+
+        assertEquals(emptySet(), snapshot.names)
+        assertFalse(snapshot.complete)
+    }
+
+    @Test
+    fun exactResourceProbeAvoidsEnumeratingAnIncompleteParent() = RecordingServer().use { server ->
+        server.enqueue(404)
+        server.enqueue(207, body = "<d:multistatus xmlns:d=\"DAV:\"/>")
+        val client = NextcloudDocumentWebDav()
+
+        assertFalse(client.resourceExists(server.session, "alice", "Shared/archive.bin"))
+        assertTrue(client.resourceExists(server.session, "alice", "Shared/archive (1).bin"))
+        repeat(2) { index ->
+            assertEquals("PROPFIND", server.request(index).method)
+            assertEquals("0", server.request(index).header("Depth"))
+        }
+    }
+
+    @Test
+    fun retryAfterAcceptsSecondsAndHttpDatesWithinOneDay() {
+        assertEquals(17L, parseDocumentRetryAfterSeconds("17", nowEpochMillis = 0L))
+        assertEquals(
+            120L,
+            parseDocumentRetryAfterSeconds("Thu, 1 Jan 1970 00:02:00 GMT", nowEpochMillis = 0L),
+        )
+        assertEquals(
+            86_400L,
+            parseDocumentRetryAfterSeconds("Sat, 3 Jan 1970 00:00:00 GMT", nowEpochMillis = 0L),
+        )
+        assertEquals(null, parseDocumentRetryAfterSeconds("not-a-delay", nowEpochMillis = 0L))
+    }
+
+    @Test
+    fun chunkCollectionDistinguishesUnsupportedFreshExistingAndMissingParent() = RecordingServer().use { server ->
+        server.enqueue(405)
+        server.enqueue(405)
+        server.enqueue(409)
+        val client = NextcloudDocumentWebDav()
+
+        val unsupported = assertFailsWith<DocumentWebDavException> {
+            client.createChunkUpload(
+                server.session,
+                "alice",
+                "01234567-89ab-cdef-0123-456789abcdef",
+                "Shared/archive.bin",
+                allowExistingSession = false,
+                cancellation = TestCancellation(),
+            )
+        }
+        assertEquals(405, unsupported.status)
+        assertFalse(
+            client.createChunkUpload(
+                server.session,
+                "alice",
+                "11234567-89ab-cdef-0123-456789abcdef",
+                "Shared/archive.bin",
+                allowExistingSession = true,
+                cancellation = TestCancellation(),
+            ),
+        )
+        val failure = assertFailsWith<DocumentWebDavException> {
+            client.createChunkUpload(
+                server.session,
+                "alice",
+                "21234567-89ab-cdef-0123-456789abcdef",
+                "Missing/archive.bin",
+                allowExistingSession = false,
+                cancellation = TestCancellation(),
+            )
+        }
+        assertEquals(409, failure.status)
+    }
+
+    @Test
+    fun directoryCreatePermissionAndRateLimitAreTyped() = RecordingServer().use { server ->
+        server.enqueue(
+            207,
+            body = """
+                <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response>
+                  <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype>
+                    <oc:permissions>RGDNVCK</oc:permissions>
+                  </d:prop></d:propstat>
+                </d:response></d:multistatus>
+            """.trimIndent(),
+        )
+        server.enqueue(429, headers = mapOf("Retry-After" to "17"))
+        val client = NextcloudDocumentWebDav()
+
+        val access = client.inspectDirectoryAccess(server.session, "alice", "Shared")
+        assertTrue(access.canCreateFiles)
+        assertTrue(access.canCreateDirectories)
+        assertEquals("0", server.request(0).header("Depth"))
+        val failure = assertFailsWith<DocumentWebDavException> {
+            client.createFolder(server.session, "alice", "Shared/New")
+        }
+        assertEquals(DocumentWebDavError.Throttled, failure.error)
+        assertEquals(17L, failure.retryAfterSeconds)
     }
 
     @Test

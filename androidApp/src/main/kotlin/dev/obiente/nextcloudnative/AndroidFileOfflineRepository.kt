@@ -270,7 +270,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
             ) {
                 return FileOfflineCenterActionResult.Rejected("This offline item is not waiting for a retry.")
             }
-            val retried = existing.copy(status = FileOfflineJobStatus.Queued, failureMessage = null)
+            val retried = prepareFileOfflineCenterManualRetry(existing)
             val nextQueue = current.queue.copy(
                 jobs = current.queue.jobs.map { if (it.id == retried.id) retried else it },
             )
@@ -418,7 +418,11 @@ internal class AndroidFileOfflineRepository(context: Context) {
             val job = current.queue.jobs.firstOrNull { it.id == jobId && it.key.accountId == expectedAccountId }
                 ?: return AndroidOfflineExecutionOutcome.Complete
             if (!job.status.isRunnable()) return AndroidOfflineExecutionOutcome.Complete
-            val nextQueue = markFileOfflineJobRunning(current.queue, jobId)
+            val nowEpochMillis = System.currentTimeMillis()
+            if ((job.retryNotBeforeEpochMillis ?: 0L) > nowEpochMillis) {
+                return AndroidOfflineExecutionOutcome.Retry
+            }
+            val nextQueue = markFileOfflineJobRunning(current.queue, jobId, nowEpochMillis)
             store.save(current.copy(queue = nextQueue))
             StartedJob(nextQueue.jobs.single { it.id == jobId }, requireNotNull(nextQueue.record(job.key)))
         }
@@ -498,6 +502,13 @@ internal class AndroidFileOfflineRepository(context: Context) {
                         )
                         AndroidOfflineExecutionOutcome.Complete
                     }
+                    DocumentWebDavError.Throttled -> retry(
+                        job.id,
+                        failure.message ?: "Nextcloud asked this download to wait.",
+                        failure.retryAfterSeconds?.let { seconds ->
+                            System.currentTimeMillis() + seconds * 1_000L
+                        },
+                    )
                     DocumentWebDavError.Locked, DocumentWebDavError.Server ->
                         retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
                     else -> {
@@ -553,8 +564,15 @@ internal class AndroidFileOfflineRepository(context: Context) {
         )
     }
 
-    private fun retry(jobId: Long, message: String): AndroidOfflineExecutionOutcome {
-        finish(jobId, FileOfflineJobResult.RetryableFailure(message.take(512)))
+    private fun retry(
+        jobId: Long,
+        message: String,
+        retryNotBeforeEpochMillis: Long? = null,
+    ): AndroidOfflineExecutionOutcome {
+        finish(
+            jobId,
+            FileOfflineJobResult.RetryableFailure(message.take(512), retryNotBeforeEpochMillis),
+        )
         return AndroidOfflineExecutionOutcome.Retry
     }
 
@@ -658,6 +676,17 @@ internal class AndroidFileOfflineRepository(context: Context) {
 
         fun workName(accountId: String, jobId: Long) = "nextcloud-native-offline-$accountId-$jobId"
     }
+}
+
+internal fun prepareFileOfflineCenterManualRetry(existing: FileOfflineJob): FileOfflineJob {
+    require(
+        existing.operation == FileOfflineJobOperation.Download &&
+            existing.status in setOf(FileOfflineJobStatus.Failed, FileOfflineJobStatus.WaitingForNetwork),
+    )
+    return existing.copy(
+        status = FileOfflineJobStatus.Queued,
+        failureMessage = null,
+    )
 }
 
 private fun List<String>.sumOfKnownSizes(

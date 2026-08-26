@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -9,6 +10,32 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RemoteFolderPickerTest {
+    @Test
+    fun `created destination is rechecked for file upload permission`() {
+        val created = mutableListOf<String>()
+        var access: RemoteFolderSelectionAccess = RemoteFolderSelectionAccess.Allowed
+        val operations = RemoteFolderPickerOperations(
+            identity = "test",
+            listCached = { error("unused") },
+            listNetwork = { error("unused") },
+            createDirectoryIfAbsent = { created += it },
+            selectionAccess = { access },
+        )
+        val destination = MissingRemoteFolderDestination(
+            intendedPath = "Photos/Camera",
+            accessibleParentPath = "",
+            pathsToCreate = listOf("Photos", "Photos/Camera"),
+        )
+
+        runBlocking { operations.createAndConfirmDestination(destination) }
+        assertEquals(listOf("Photos", "Photos/Camera"), created)
+
+        access = RemoteFolderSelectionAccess.DirectoryCreationOnly
+        assertFailsWith<IllegalStateException> {
+            runBlocking { operations.createAndConfirmDestination(destination) }
+        }
+    }
+
     @Test
     fun `selective sync identities are resolved relative to the mapped remote root`() {
         assertEquals(
