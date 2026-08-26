@@ -6,9 +6,11 @@ import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
+import dev.obiente.nextcloudnative.app.skipExactJvmFileSyncBytes
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.channels.Channels
@@ -159,14 +161,24 @@ internal class AndroidSafFileSyncLocalTree(
         val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision)
         require(before.entry.size == expectedBytes)
-        val hash = runCatching {
-            requireNotNull(resolver.openFileDescriptor(before.uri, "r")).use { descriptor ->
+        val shouldContinue = { !Thread.currentThread().isInterrupted }
+        val hash = try {
+            requireNotNull(resolver.openFileDescriptor(before.uri, "r")) {
+                "The local file provider did not expose readable content."
+            }.use { descriptor ->
                 FileInputStream(descriptor.fileDescriptor).channel.use { channel ->
                     channel.position(offset)
-                    hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length)
+                    hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length, shouldContinue)
                 }
             }
-        }.getOrNull() ?: return null
+        } catch (_: IOException) {
+            requireNotNull(resolver.openInputStream(before.uri)) {
+                "The local file provider did not expose readable content."
+            }.use { input ->
+                skipExactJvmFileSyncBytes(input, offset, shouldContinue)
+                hashExactJvmFileSyncSlice(input, length, shouldContinue)
+            }
+        }
         val after = requireNotNull(resolve(path)) { "The local file disappeared during verification." }
         require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
             "The local file changed during content verification."
@@ -420,6 +432,9 @@ internal fun sha256SyncContentHashRead(
     val buffer = ByteArray(64 * 1024)
     var total = 0L
     while (true) {
+        if (Thread.currentThread().isInterrupted) {
+            throw kotlinx.coroutines.CancellationException("File identity verification cancelled.")
+        }
         val read = input.read(buffer)
         if (read < 0) break
         total += read

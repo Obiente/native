@@ -4,6 +4,8 @@ import java.io.ByteArrayInputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CancellationException
 
 class JvmFileSyncContentSlicesTest {
     @Test
@@ -34,5 +36,24 @@ class JvmFileSyncContentSlicesTest {
         val result = requireNotNull(completeJvmFileSyncContentSlice(slice, local, remote).result)
 
         assertEquals(null, result.matchingContentHash)
+    }
+
+    @Test
+    fun `sequential range fallback skips exact bytes without seek support`() {
+        val input = ByteArrayInputStream(byteArrayOf(1, 2, 3, 4, 5, 6))
+
+        skipExactJvmFileSyncBytes(input, 3L)
+
+        assertEquals(
+            hashExactJvmFileSyncSlice(ByteArrayInputStream(byteArrayOf(4, 5)), 2),
+            hashExactJvmFileSyncSlice(input, 2),
+        )
+    }
+
+    @Test
+    fun `sequential range fallback preserves cancellation`() {
+        assertFailsWith<CancellationException> {
+            skipExactJvmFileSyncBytes(ByteArrayInputStream(byteArrayOf(1)), 1L) { false }
+        }
     }
 }

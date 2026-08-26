@@ -445,6 +445,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
 internal data class AndroidDetachedDownload(
     val byteCount: Long,
     val mimeType: String?,
+    val etag: String? = null,
 )
 
 internal data class AndroidExternalFileIntentPlan(

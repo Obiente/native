@@ -25,6 +25,22 @@ fun hashExactJvmFileSyncSlice(
     return digest.digest().toSyncSha256()
 }
 
+fun skipExactJvmFileSyncBytes(
+    input: InputStream,
+    byteCount: Long,
+    shouldContinue: () -> Boolean = { true },
+) {
+    require(byteCount >= 0L)
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var remaining = byteCount
+    while (remaining > 0L) {
+        if (!shouldContinue()) throw CancellationException("File identity verification cancelled.")
+        val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+        check(read >= 0) { "The file ended before the requested verification range." }
+        remaining -= read
+    }
+}
+
 fun advanceJvmFileSyncContentAggregate(previousHash: String, chunkHash: String): String {
     require(normalizeSyncSha256(previousHash) == previousHash)
     require(normalizeSyncSha256(chunkHash) == chunkHash)

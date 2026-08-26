@@ -40,7 +40,7 @@ fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorStat
 }
 
 internal fun encodeFileSyncPairRecord(pair: FileSyncPair): ByteArray {
-    require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
+    require(pair.baselines.isEmpty() && pair.contentVerificationProgress.isEmpty() && pair.workItems.isEmpty())
     return syncCoordinatorJson.encodeToString(pair.toSnapshot()).encodeToByteArray().also { encoded ->
         require(encoded.size <= MAX_FILE_SYNC_PAIR_RECORD_BYTES) { "The sync pair record is too large." }
     }
@@ -52,6 +52,21 @@ internal fun decodeFileSyncPairRecord(bytes: ByteArray): FileSyncPair {
     return syncCoordinatorJson.decodeFromString<FileSyncPairSnapshotV1>(text).toDomain().also { pair ->
         require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
     }
+}
+
+internal fun encodeFileSyncContentVerificationProgressRecord(
+    progress: FileSyncContentVerificationProgress,
+): ByteArray = syncCoordinatorJson.encodeToString(progress.toSnapshot()).encodeToByteArray().also { encoded ->
+    require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync verification record is too large." }
+}
+
+internal fun decodeFileSyncContentVerificationProgressRecord(
+    bytes: ByteArray,
+): FileSyncContentVerificationProgress {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    return syncCoordinatorJson
+        .decodeFromString<FileSyncContentVerificationProgressSnapshotV1>(strictSyncRecordText(bytes))
+        .toDomain()
 }
 
 internal fun encodeFileSyncBaselineRecord(baseline: FileSyncBaseline): ByteArray =

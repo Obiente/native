@@ -237,6 +237,26 @@ class DesktopExternalFileHandoffTest {
         }
     }
 
+    @Test
+    fun `same-filesystem export moves the staged copy without requiring duplicate capacity`() {
+        val root = Files.createTempDirectory("nextcloud-desktop-export-").toFile()
+        try {
+            val staged = root.resolve("staged.bin").apply {
+                writeBytes(byteArrayOf(1, 2, 3, 4))
+                assertTrue(setWritable(false, false) || !canWrite())
+            }
+            val destination = root.resolve("exported.bin")
+
+            assertEquals(DesktopStagedFileExport.Exported, publishDesktopStagedFile(staged, destination))
+
+            assertFalse(staged.exists())
+            assertEquals(listOf<Byte>(1, 2, 3, 4), destination.readBytes().toList())
+            assertTrue(destination.canWrite())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun capability(vararg actions: ExternalFileHandoffAction) = ExternalFileHandoffCapability(
         supportedActions = actions.toSet().ifEmpty { setOf(ExternalFileHandoffAction.OpenWith) },
         maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,

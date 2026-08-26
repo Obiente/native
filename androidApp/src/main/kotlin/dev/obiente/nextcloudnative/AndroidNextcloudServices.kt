@@ -1202,7 +1202,7 @@ internal class AndroidNextcloudServices(
             check(result.etag == null || result.etag == expectedEtag) {
                 "The server file changed while it was being prepared for another app."
             }
-            AndroidDetachedDownload(result.byteCount, result.contentType)
+            AndroidDetachedDownload(result.byteCount, result.contentType, expectedEtag)
         } finally {
             cancellation.close()
         }
@@ -2666,12 +2666,22 @@ internal class AndroidNextcloudServices(
         )
         val fileId = requireMatchingFileVersion(file, version)
         val specification = fileVersionContentRequest(userId, fileId, version.id)
+        val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
+        val listedVersionEtag = version.etag
         return externalFileHandoff.launchStreamedRemote(historicalCopy, action, capability) { output, maximumBytes ->
             downloadAndroidDetachedFile(
                 noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
                 output, maximumBytes, USER_AGENT,
                 failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
                 limitMessage = "The historical version exceeds the platform byte representation.",
+                handoffEtag = expectedHandoffEtag,
+                validateResponseEtag = { returnedEtag ->
+                    if (listedVersionEtag != null && returnedEtag != null) {
+                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(listedVersionEtag)) {
+                            "The historical version changed while it was being exported."
+                        }
+                    }
+                },
                 onNetworkFailure = { started, attempt, failure ->
                     recordStreamingFailure(session, "file_version", started, attempt, failure)
                 },

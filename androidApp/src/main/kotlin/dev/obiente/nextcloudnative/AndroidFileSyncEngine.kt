@@ -10,7 +10,6 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncCenterSupport
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
-import dev.obiente.nextcloudnative.app.FileSyncContentVerificationProgress
 import dev.obiente.nextcloudnative.app.FileSyncConflictResolution
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
@@ -35,7 +34,6 @@ import dev.obiente.nextcloudnative.app.applyFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
 import dev.obiente.nextcloudnative.app.completeFileSyncOperation
 import dev.obiente.nextcloudnative.app.currentFileSyncContentVerificationResults
-import dev.obiente.nextcloudnative.app.currentFileSyncContentVerificationProgress
 import dev.obiente.nextcloudnative.app.failFileSyncOperation
 import dev.obiente.nextcloudnative.app.fileSyncContentVerificationCandidates
 import dev.obiente.nextcloudnative.app.removeFileSyncPair
@@ -48,7 +46,6 @@ import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
 import dev.obiente.nextcloudnative.app.knownFileSyncContentMismatchResults
 import dev.obiente.nextcloudnative.app.markPendingFileSyncContentVerification
-import dev.obiente.nextcloudnative.app.planFileSyncContentVerificationSlices
 import dev.obiente.nextcloudnative.app.retainsResolvedFileSyncDecisions
 import java.io.File
 import java.util.UUID
@@ -426,27 +423,31 @@ internal class AndroidFileSyncEngine(context: Context) {
             cachedMismatchResults.map(FileSyncContentVerificationResult::candidate),
             requireContentBackedBaseline = true,
         )
-        val currentProgress = currentFileSyncContentVerificationProgress(
-            candidates,
-            initialPair.contentVerificationProgress,
-        )
-        val progressByPath = currentProgress.associateByTo(mutableMapOf()) { it.candidate.relativePath }
-        val completedSlices = planFileSyncContentVerificationSlices(candidates, currentProgress).mapNotNull { slice ->
-            val outcome = verifyAndroidFileSyncSlice(slice, local, remote)
-            if (outcome == null) {
-                progressByPath[slice.candidate.relativePath] = FileSyncContentVerificationProgress(
-                    slice.candidate,
-                    slice.offset,
-                    slice.aggregateHash,
-                )
-                return@mapNotNull null
-            }
-            outcome.also {
-                progressByPath.remove(slice.candidate.relativePath)
-                it.progress?.let { progress -> progressByPath[progress.candidate.relativePath] = progress }
-            }
+        // Android SAF revisions are metadata hints, not durable content generations. Verify one
+        // complete candidate per background scan instead of reusing slices across weak revisions.
+        val completedGeneration = candidates.firstOrNull()?.let { candidate ->
+            verifyAndroidFileSyncGeneration(
+                candidate = candidate,
+                readLocal = { expectedBytes, maximumBytes ->
+                    local.contentHashRead(
+                        path = candidate.relativePath,
+                        expectedLocalRevision = candidate.localRevision,
+                        expectedBytes = expectedBytes,
+                        maximumBytes = maximumBytes,
+                    )
+                },
+                verifyRemote = { expectedHash, expectedBytes, maximumBytes ->
+                    remote.verifyContentHash(
+                        relativePath = candidate.relativePath,
+                        expectedRemoteEtag = candidate.remoteEtag,
+                        expectedContentHash = expectedHash,
+                        expectedBytes = expectedBytes,
+                        maximumBytes = maximumBytes,
+                    )
+                },
+            )
         }
-        val verificationResults = cachedMismatchResults + completedSlices.mapNotNull { it.result }
+        val verificationResults = cachedMismatchResults + listOfNotNull(completedGeneration)
         val verifiedPaths = verificationResults.mapTo(mutableSetOf()) { it.candidate.relativePath }
         val pendingCandidates = candidates.filterNot { it.relativePath in verifiedPaths }
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
@@ -471,7 +472,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
                 verifiedContentMismatches = verifiedMismatches,
                 verifiedContentMismatchHashes = verifiedMismatchHashes,
-                contentVerificationProgress = progressByPath.values.sortedBy { it.candidate.relativePath },
+                contentVerificationProgress = emptyList(),
             ),
         )
         val scannedPair = persisted.coordinator.pairs.first { it.id == pairId }
@@ -490,7 +491,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     reservedNonExecutableWorkItems = ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE,
                     verifiedContentMismatches = verifiedMismatches,
                     verifiedContentMismatchHashes = verifiedMismatchHashes,
-                    contentVerificationProgress = progressByPath.values.sortedBy { it.candidate.relativePath },
+                    contentVerificationProgress = emptyList(),
                 ),
             )
             store.save(persisted)

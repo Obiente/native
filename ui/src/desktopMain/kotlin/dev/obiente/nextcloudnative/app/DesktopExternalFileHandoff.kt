@@ -286,17 +286,42 @@ private fun exportDesktopStagedFile(file: File): DesktopStagedFileExport {
     if (GraphicsEnvironment.isHeadless()) return DesktopStagedFileExport.Unavailable
     val destination = chooseDesktopDetachedExportDestination(file.name)
         ?: return DesktopStagedFileExport.Cancelled
+    return publishDesktopStagedFile(file, destination.absoluteFile)
+}
+
+internal fun publishDesktopStagedFile(
+    file: File,
+    destination: File,
+    reservations: JvmStagingSpaceReservations = sharedJvmStagingSpaceReservations,
+): DesktopStagedFileExport {
     val parent = destination.absoluteFile.parentFile
         ?.takeIf(File::isDirectory)
         ?: return DesktopStagedFileExport.Unavailable
-    val temporary = File.createTempFile(".nextcloud-native-export-", ".tmp", parent)
-    return try {
-        Files.copy(file.toPath(), temporary.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        RandomAccessFile(temporary, "rw").use { staged -> staged.fd.sync() }
-        moveAtomicallyOrReplace(temporary, destination.absoluteFile, replaceExisting = true)
-        DesktopStagedFileExport.Exported
-    } finally {
-        temporary.delete()
+    val sourceStore = Files.getFileStore(file.toPath())
+    val destinationStore = Files.getFileStore(parent.toPath())
+    if (sourceStore == destinationStore) {
+        moveAtomicallyOrReplace(file, destination.absoluteFile, replaceExisting = true)
+        check(destination.setWritable(true, true) || destination.canWrite()) {
+            "Could not make the exported file writable."
+        }
+        return DesktopStagedFileExport.Exported
+    }
+    val reservation = reservations.reserve(
+        storageKey = "${destinationStore.name()}:${destinationStore.type()}",
+        usableBytes = parent.usableSpace.coerceAtLeast(0L),
+        declaredByteCount = file.length(),
+        reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+    )
+    return reservation.use {
+        val temporary = File.createTempFile(".nextcloud-native-export-", ".tmp", parent)
+        try {
+            Files.copy(file.toPath(), temporary.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            RandomAccessFile(temporary, "rw").use { staged -> staged.fd.sync() }
+            moveAtomicallyOrReplace(temporary, destination.absoluteFile, replaceExisting = true)
+            DesktopStagedFileExport.Exported
+        } finally {
+            temporary.delete()
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
@@ -9,9 +10,9 @@ import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.io.ByteArrayOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -26,6 +27,35 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
+    @Test
+    fun weakSafRevisionVerificationCompletesOneUnboundedGenerationWithoutDurableSlices() {
+        val candidate = FileSyncContentVerificationCandidate(
+            relativePath = "Archive/large.bin",
+            localRevision = "metadata-only-revision",
+            remoteEtag = "\"remote-generation\"",
+            expectedSizeBytes = Long.MAX_VALUE,
+        )
+        var observedMaximum = 0L
+
+        val result = verifyAndroidFileSyncGeneration(
+            candidate = candidate,
+            readLocal = { expectedBytes, maximumBytes ->
+                assertEquals(Long.MAX_VALUE, expectedBytes)
+                observedMaximum = maximumBytes
+                AndroidFileSyncContentHashRead("sha256:${"a".repeat(64)}", Long.MAX_VALUE)
+            },
+            verifyRemote = { hash, expectedBytes, maximumBytes ->
+                assertEquals("sha256:${"a".repeat(64)}", hash)
+                assertEquals(Long.MAX_VALUE, expectedBytes)
+                assertEquals(Long.MAX_VALUE, maximumBytes)
+                true
+            },
+        )
+
+        assertEquals(Long.MAX_VALUE, observedMaximum)
+        assertEquals(result.localContentHash, result.matchingContentHash)
+    }
+
     @Test
     fun downloadsStreamIntoTheProtectedLocalStageWithoutACacheDuplicate() {
         val destination = ByteArrayOutputStream()

@@ -289,8 +289,68 @@ class DesktopFileSyncStoreTest {
                         while (statement.step()) add(statement.getText(1))
                     }
                 }
-                assertEquals("3", version)
+                assertEquals("4", version)
                 assertTrue(setOf("state", "relative_path", "detail").all { it in columns })
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `verification progress is stored in rows instead of the bounded pair record`() {
+        val directory = Files.createTempDirectory("desktop-sync-progress-rows-").toFile()
+        try {
+            val progress = (0 until 5_000).map { index ->
+                FileSyncContentVerificationProgress(
+                    candidate = FileSyncContentVerificationCandidate(
+                        relativePath = "Archive/$index-${"x".repeat(900)}.bin",
+                        localRevision = "local-$index",
+                        remoteEtag = "remote-$index",
+                        expectedSizeBytes = 16L * 1024L * 1024L,
+                    ),
+                    verifiedBytes = 8L * 1024L * 1024L,
+                    aggregateHash = EMPTY_FILE_SYNC_IDENTITY_AGGREGATE,
+                )
+            }
+            val pair = FileSyncPair(
+                id = "progress-pair",
+                accountId = "account",
+                localRootId = "progress-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                contentVerificationProgress = progress,
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Archive")
+            val database = File(directory, "state.db")
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+
+            store.savePair(
+                DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)),
+                pair.id,
+            )
+
+            assertEquals(
+                progress.sortedBy { it.candidate.relativePath },
+                store.loadPair(pair.id).coordinator.pairs.single().contentVerificationProgress,
+            )
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                val pairRecordBytes = connection.prepare(
+                    "SELECT length(record) FROM sync_pairs WHERE id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                val progressRows = connection.prepare(
+                    "SELECT COUNT(*) FROM sync_content_verification WHERE pair_id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                assertTrue(pairRecordBytes < 64L * 1024L)
+                assertEquals(progress.size.toLong(), progressRows)
             }
         } finally {
             directory.deleteRecursively()

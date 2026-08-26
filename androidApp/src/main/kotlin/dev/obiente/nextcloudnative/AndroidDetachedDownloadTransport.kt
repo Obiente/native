@@ -21,6 +21,8 @@ internal suspend fun downloadAndroidDetachedFile(
     limitMessage: String,
     accept: String = "application/octet-stream",
     requestHeaders: Map<String, String> = emptyMap(),
+    handoffEtag: String? = null,
+    validateResponseEtag: (String?) -> Unit = {},
     onNetworkFailure: (Long, JvmNetworkRequestAttempt, Throwable) -> Unit,
 ): AndroidDetachedDownload {
     require(maximumBytes > 0L)
@@ -48,15 +50,19 @@ internal suspend fun downloadAndroidDetachedFile(
             val body = response.body
             val contentLength = body.contentLength()
             check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }
+            val copied = body.byteStream().copyBoundedNetworkResponseTo(
+                output = output,
+                maxBytes = maximumBytes,
+                onLimitExceeded = { error(limitMessage) },
+                onNetworkReadFailure = { failure -> onNetworkFailure(started, attempt, failure) },
+                shouldContinue = shouldContinue,
+            )
+            val responseEtag = response.header("ETag") ?: response.header("OC-Etag")
+            validateResponseEtag(responseEtag)
             AndroidDetachedDownload(
-                byteCount = body.byteStream().copyBoundedNetworkResponseTo(
-                    output = output,
-                    maxBytes = maximumBytes,
-                    onLimitExceeded = { error(limitMessage) },
-                    onNetworkReadFailure = { failure -> onNetworkFailure(started, attempt, failure) },
-                    shouldContinue = shouldContinue,
-                ),
+                byteCount = copied,
                 mimeType = body.contentType()?.toString(),
+                etag = handoffEtag ?: responseEtag,
             )
         }
     }

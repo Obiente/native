@@ -21,6 +21,43 @@ import okhttp3.OkHttpClient
 
 class AndroidDetachedDownloadTransportTest {
     @Test
+    fun `detached download exposes and validates the response etag`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .addHeader("ETag", "\"version-2\"")
+                    .body("historical")
+                    .build(),
+            )
+            server.start()
+            val destination = Files.createTempFile("ncn-detached-etag-", ".tmp").toFile()
+            try {
+                val result = FileOutputStream(destination).use { output ->
+                    downloadAndroidDetachedFile(
+                        client = OkHttpClient(),
+                        session = NextcloudSession(server.url("/").toString(), "alice", "secret"),
+                        url = server.url("/version.bin").toString(),
+                        output = output,
+                        maximumBytes = Long.MAX_VALUE,
+                        userAgent = "test",
+                        failureMessage = { status -> "HTTP $status" },
+                        limitMessage = "Too large",
+                        handoffEtag = "\"listed-version\"",
+                        validateResponseEtag = { returned -> assertEquals("\"version-2\"", returned) },
+                        onNetworkFailure = { _, _, _ -> },
+                    )
+                }
+
+                assertEquals("\"listed-version\"", result.etag)
+                assertEquals("historical", destination.readText())
+            } finally {
+                destination.delete()
+            }
+        }
+    }
+
+    @Test
     fun `coroutine cancellation cancels an in-flight detached download`() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(
