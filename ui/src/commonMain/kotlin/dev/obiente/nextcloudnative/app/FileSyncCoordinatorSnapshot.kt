@@ -89,7 +89,7 @@ internal fun decodeFileSyncWorkRecord(bytes: ByteArray): FileSyncWorkItem {
     return syncCoordinatorJson.decodeFromString<FileSyncWorkSnapshotV1>(strictSyncRecordText(bytes)).toDomain()
 }
 
-internal fun encodeFileSyncPendingUploadCleanupRecord(
+fun encodeFileSyncPendingUploadCleanupRecord(
     cleanup: FileSyncPendingUploadCleanup,
 ): ByteArray = syncCoordinatorJson.encodeToString(
     FileSyncPendingUploadCleanupSnapshotV1(
@@ -101,7 +101,7 @@ internal fun encodeFileSyncPendingUploadCleanupRecord(
     require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
 }
 
-internal fun decodeFileSyncPendingUploadCleanupRecord(
+fun decodeFileSyncPendingUploadCleanupRecord(
     bytes: ByteArray,
 ): FileSyncPendingUploadCleanup {
     require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)

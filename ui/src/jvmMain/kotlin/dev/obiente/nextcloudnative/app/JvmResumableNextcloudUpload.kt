@@ -48,6 +48,8 @@ interface JvmResumableNextcloudUploadRemote {
         expectedStageEtag: String?,
     ): String
 
+    fun ownedStageEtag(uploadId: String, relativePath: String): String?
+
     fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
@@ -115,9 +117,32 @@ fun jvmResumableNextcloudUpload(
     }
     require(plan is NextcloudUploadTransferPlan.Chunked)
 
-    val resumable = checkpoint?.takeIf {
-        it.localRevision == localRevision && it.transferPlan == plan && !it.commitInFlight
+    val matchingCheckpoint = checkpoint?.takeIf {
+        it.localRevision == localRevision && it.transferPlan == plan
     }
+    if (matchingCheckpoint?.commitInFlight == true) {
+        val stageEtag = remote.ownedStageEtag(matchingCheckpoint.uploadId, relativePath)
+        if (stageEtag != null) {
+            val verifiedStageEtag = remote.verifyOwnedStage(
+                matchingCheckpoint.uploadId,
+                relativePath,
+                source,
+                matchingCheckpoint.assembledStageEtag ?: stageEtag,
+            )
+            if (matchingCheckpoint.assembledStageEtag != verifiedStageEtag) {
+                persistCheckpoint(matchingCheckpoint.copy(assembledStageEtag = verifiedStageEtag))
+            }
+            ensureActive()
+            return remote.publishOwnedStage(
+                matchingCheckpoint.uploadId,
+                relativePath,
+                verifiedStageEtag,
+                expectedRemoteEtag,
+            )
+        }
+    }
+
+    val resumable = matchingCheckpoint?.takeIf { !it.commitInFlight }
     if (checkpoint != null && resumable == null) {
         check(remote.discardOwnedUpload(checkpoint.uploadId, relativePath, checkpoint.assembledStageEtag)) {
             "An unverified upload stage still requires recovery."

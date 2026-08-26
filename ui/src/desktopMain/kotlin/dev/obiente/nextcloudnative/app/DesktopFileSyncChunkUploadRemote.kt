@@ -182,6 +182,9 @@ internal class DesktopFileSyncChunkUploadRemote(
         return stage.entry.etag
     }
 
+    override fun ownedStageEtag(uploadId: String, relativePath: String): String? =
+        tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
+
     override fun publishOwnedStage(
         uploadId: String,
         relativePath: String,

@@ -150,6 +150,38 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
+    fun `ambiguous assembly verifies and publishes its durable owned stage`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+        )
+        val remote = RecordingUploadRemote(
+            collectionCreated = false,
+            assembledStageEtag = "recovered-stage",
+            ownedStageEtag = "recovered-stage",
+        )
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            val uploaded = jvmResumableNextcloudUpload(
+                source, "large.bin", "local-1", null, checkpoint,
+                newUploadId = { error("Recovery must retain the durable upload ID.") },
+                persistCheckpoint = persisted::add,
+                remote = remote,
+            )
+
+            assertEquals("remote-etag", uploaded.etag)
+            assertEquals("verified-stage-etag", persisted.single().assembledStageEtag)
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
+            assertEquals(listOf("verify", "publish"), remote.finalizationEvents)
+            assertEquals(0, remote.discardCount)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `cleanup retains ownership while an unverified stage still exists`() {
         val cleanup = FileSyncPendingUploadCleanup(UPLOAD_ID, "large.bin")
         val pair = FileSyncPair(
@@ -188,9 +220,11 @@ class JvmResumableNextcloudUploadTest {
         private val assembledStageEtag: String? = "verified-stage-etag",
         private val directUpload: Boolean = false,
         private val cleanupComplete: Boolean = true,
+        private val ownedStageEtag: String? = null,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val finalizationEvents = mutableListOf<String>()
+        var discardCount = 0
 
         override fun uploadDirect(
             source: File,
@@ -249,6 +283,8 @@ class JvmResumableNextcloudUploadTest {
             return "verified-stage-etag"
         }
 
+        override fun ownedStageEtag(uploadId: String, relativePath: String): String? = ownedStageEtag
+
         override fun publishOwnedStage(
             uploadId: String,
             relativePath: String,
@@ -264,7 +300,10 @@ class JvmResumableNextcloudUploadTest {
             uploadId: String,
             relativePath: String,
             assembledStageEtag: String?,
-        ): Boolean = cleanupComplete
+        ): Boolean {
+            discardCount += 1
+            return cleanupComplete
+        }
     }
 
     private companion object {

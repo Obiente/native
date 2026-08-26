@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.FileSyncPendingUploadCleanup
 import dev.obiente.nextcloudnative.app.FileSyncPriorityRule
 import java.io.File
 import java.nio.file.Files
@@ -87,6 +88,71 @@ class AndroidFileSyncStoreTest {
             reads.get(20, TimeUnit.SECONDS)
         } finally {
             executor.shutdownNow()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `abandoned upload ownership is stored outside the bounded snapshot`() {
+        val directory = Files.createTempDirectory("file-sync-cleanup-rows-").toFile()
+        try {
+            val stateFile = File(directory, "state.bin")
+            val store = AndroidFileSyncStore(stateFile)
+            val cleanups = (0 until 512).map { index ->
+                FileSyncPendingUploadCleanup(
+                    uploadId = "00000000-0000-0000-0000-${index.toString(16).padStart(12, '0')}",
+                    relativePath = "Archive/${index.toString().padStart(4, '0')}-${"x".repeat(3_000)}.bin",
+                    assembledStageEtag = "stage-$index",
+                )
+            }
+            val pair = pair().copy(pendingUploadCleanups = cleanups)
+            val expected = AndroidFileSyncPersistedState(
+                FileSyncCoordinatorState(listOf(pair)),
+                mapOf(pair.id to "Vault"),
+            )
+
+            store.save(expected)
+
+            assertTrue(stateFile.length() < 64L * 1024L)
+            val cleanupDirectory = File(directory, "state.bin.upload-cleanups")
+            assertTrue(cleanupDirectory.isDirectory)
+            assertEquals(cleanups.size, cleanupDirectory.listFiles().orEmpty().count { it.extension == "row" })
+            assertEquals(expected, store.load())
+
+            val cleanedPair = pair.copy(pendingUploadCleanups = emptyList())
+            val cleaned = expected.copy(coordinator = FileSyncCoordinatorState(listOf(cleanedPair)))
+            store.save(cleaned)
+
+            assertEquals(0, cleanupDirectory.listFiles().orEmpty().count { it.extension == "row" })
+            assertEquals(cleaned, store.load())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `new cleanup ownership is durable even when the coordinator snapshot is rejected`() {
+        val directory = Files.createTempDirectory("file-sync-cleanup-first-").toFile()
+        try {
+            val cleanup = FileSyncPendingUploadCleanup(
+                uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                relativePath = "Archive/large.bin",
+            )
+            val pair = pair().copy(pendingUploadCleanups = listOf(cleanup))
+            val stateFile = File(directory, "state.bin")
+            val store = AndroidFileSyncStore(stateFile, maximumSnapshotBytes = 1)
+
+            assertFailsWith<IllegalStateException> {
+                store.save(AndroidFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair))))
+            }
+
+            assertTrue(!stateFile.exists())
+            assertEquals(
+                listOf(cleanup),
+                AndroidFileSyncUploadCleanupStore(File(directory, "state.bin.upload-cleanups"))
+                    .read().getValue(pair.id),
+            )
+        } finally {
             directory.deleteRecursively()
         }
     }

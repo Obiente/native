@@ -365,6 +365,9 @@ internal class AndroidFileSyncRemoteTree(
         return stage.entry.etag
     }
 
+    override fun ownedStageEtag(uploadId: String, relativePath: String): String? =
+        resolveIncludingOwnedStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
+
     override fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
