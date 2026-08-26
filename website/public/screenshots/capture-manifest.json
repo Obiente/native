@@ -356,7 +356,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExifOrientation.kt": "028cb9c99b0b64b690c705935e4ec4ae263078340f4af77978f4d8cdd461698d",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareEditDraft.kt": "df5c2b3ef90a8a7d0ea02d6587b563ebde8e84d471073f718a7d901f2c0a65fb",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExistingFileShareManager.kt": "fc7f8ac5ffb094da9d9a9f05bb2d072b13ff9da9281708f247b546258e0fc2e2",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExternalFileHandoff.kt": "9e6df718774fc849ea84a7ff974332f4ee180aa312be105804036ccd724f5160",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ExternalFileHandoff.kt": "7981abbf6882bd1bbf5a5a8e0b9c1d47aeb333d05ea1c006f3ff60dbb64d09b7",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileActionPlanning.kt": "ed5c79fe258be1345db74afc458e88cf8f62e8002df874895a2e328619fdbbc2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileActions.kt": "697405dcc0290fb5bfd9a9786ec7740ec156168735a9d4efe0f84a0db4839d77",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileBrowserPresentation.kt": "3d584f00eb89967047f7891f9fdd16f3452db6fc55df851146effa233a70f6c4",
