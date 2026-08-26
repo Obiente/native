@@ -156,6 +156,40 @@ class DesktopFileSyncEngineTest {
     }
 
     @Test
+    fun `desktop pause releases its attempt while retaining replacement stage ownership`() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+        )
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("cover.jpg", SyncEntryKind.File, "local-1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val claim = claimNextFileSyncOperation(planned, pair.id, nowEpochMillis = 20L)
+        val workId = requireNotNull(claim.command).workId
+        val cleanup = FileSyncPendingUploadCleanup(
+            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+            relativePath = "cover.jpg",
+            assembledStageEtag = "stage-1",
+        )
+        val owned = retainFileSyncUploadCleanup(claim.state, pair.id, cleanup)
+
+        val released = releaseCancelledFileSyncOperation(owned, pair.id, workId)
+        val releasedPair = released.pairs.single()
+        val releasedWork = releasedPair.workItems.single()
+
+        assertEquals(FileSyncExecutionState.Ready, releasedWork.state)
+        assertEquals(0, releasedWork.attemptCount)
+        assertEquals(cleanup, releasedPair.pendingUploadCleanups.single())
+    }
+
+    @Test
     fun `remote mutation paths include the configured pair root`() {
         assertEquals(
             "Photography/Albums/2026/cover.jpg",

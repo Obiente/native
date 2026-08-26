@@ -333,41 +333,6 @@ internal class DesktopFileSyncRemoteTree(
             .firstOrNull { it.entry.relativePath == fullStagePath }
     }
 
-    fun replaceWithFile(relativePath: String, source: File, expectedRemoteEtag: String): RemoteSyncEntry {
-        require(source.isFile)
-        val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
-        require(current.entry.etag == expectedRemoteEtag && current.isDirectory) {
-            "The server item changed after the sync scan."
-        }
-        val destinationPath = fullPath(relativePath)
-        val parent = destinationPath.substringBeforeLast('/', "")
-        val token = UUID.randomUUID().toString()
-        val stagingPath = listOf(parent, ".nextcloud-native-$token.upload")
-            .filter(String::isNotBlank).joinToString("/")
-        val backupPath = replacementBackupPath(destinationPath)
-        val stagedEtag = createFile(stagingPath, source)
-        var protected = false
-        try {
-            moveRemoteDocument(current.withPath(destinationPath), backupPath, relativePath)
-            protected = true
-            moveRemotePath(
-                sourcePath = stagingPath,
-                destinationPath = destinationPath,
-                sourceEtag = stagedEtag,
-                sourceIsDirectory = false,
-                mutationRelativePaths = arrayOf(relativePath),
-            )
-            val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
-            require(!after.isDirectory) { "The uploaded server item is not a file." }
-            deleteRemoteBackup(backupPath)
-            return after.entry
-        } catch (failure: Throwable) {
-            if (protected) restoreRemoteBackup(destinationPath, backupPath, relativePath)
-            deleteRemoteStage(stagingPath, stagedEtag)
-            throw failure
-        }
-    }
-
     fun delete(relativePath: String, expectedRemoteEtag: String) {
         val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
         require(current.entry.etag == expectedRemoteEtag) { "The server item changed after the sync scan." }
@@ -480,14 +445,14 @@ internal class DesktopFileSyncRemoteTree(
     private fun DesktopRemoteSyncDocument.withPath(path: String): DesktopRemoteSyncDocument =
         copy(entry = entry.copy(relativePath = path))
 
-    private fun replacementBackupPath(destinationPath: String): String {
+    internal fun replacementBackupPath(destinationPath: String): String {
         val parent = destinationPath.substringBeforeLast('/', "")
         val name = destinationPath.substringAfterLast('/')
         return listOf(parent, ".$name$BACKUP_MARKER${UUID.randomUUID()}")
             .filter(String::isNotBlank).joinToString("/")
     }
 
-    private fun moveRemoteDocument(
+    internal fun moveRemoteDocument(
         source: DesktopRemoteSyncDocument,
         destinationPath: String,
         vararg mutationRelativePaths: String,
@@ -501,7 +466,7 @@ internal class DesktopFileSyncRemoteTree(
         )
     }
 
-    private fun moveRemotePath(
+    internal fun moveRemotePath(
         sourcePath: String,
         destinationPath: String,
         sourceEtag: String?,
@@ -519,7 +484,7 @@ internal class DesktopFileSyncRemoteTree(
         executeMutation(builder.method("MOVE", EMPTY_BODY).build(), "move item", *mutationRelativePaths)
     }
 
-    private fun restoreRemoteBackup(
+    internal fun restoreRemoteBackup(
         destinationPath: String,
         backupPath: String,
         vararg mutationRelativePaths: String,
@@ -533,19 +498,11 @@ internal class DesktopFileSyncRemoteTree(
         }
     }
 
-    private fun deleteRemoteBackup(backupPath: String) {
+    internal fun deleteRemoteBackup(backupPath: String) {
         runCatching {
             rawListDirectory(backupPath.substringBeforeLast('/', ""))
                 .firstOrNull { it.entry.relativePath == backupPath }
                 ?.let(::deleteRemoteDocument)
-        }
-    }
-
-    private fun deleteRemoteStage(stagingPath: String, stagedEtag: String?) {
-        runCatching {
-            val builder = requestBuilder(fileUrl(stagingPath))
-            stagedEtag?.let { builder.header("If-Match", safeEtag(it)) }
-            execute(builder.delete().build(), "remove staged upload")
         }
     }
 
@@ -586,7 +543,7 @@ internal class DesktopFileSyncRemoteTree(
         )
     }
 
-    private fun executeMutationForEtag(
+    internal fun executeMutationForEtag(
         request: Request,
         operation: String,
         vararg mutationRelativePaths: String,
@@ -626,7 +583,7 @@ internal class DesktopFileSyncRemoteTree(
         response.body.byteStream().readBounded(maximumResponseBytes)
     }
 
-    private fun requestBuilder(url: String): Request.Builder {
+    internal fun requestBuilder(url: String): Request.Builder {
         val authorization = Base64.getEncoder().encodeToString(
             "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
         )
@@ -635,9 +592,9 @@ internal class DesktopFileSyncRemoteTree(
             .header("User-Agent", USER_AGENT)
     }
 
-    private fun fileUrl(path: String): String = buildNextcloudFileUrl(session.serverUrl, userId, path)
+    internal fun fileUrl(path: String): String = buildNextcloudFileUrl(session.serverUrl, userId, path)
 
-    private fun fullPath(relativePath: String): String =
+    internal fun fullPath(relativePath: String): String =
         listOf(rootPath, relativePath.trim('/')).filter(String::isNotBlank).joinToString("/")
 
     private fun toRelativePath(fullPath: String): String? {
@@ -660,7 +617,7 @@ internal class DesktopFileSyncRemoteTree(
             .forEach { path -> runCatching { callback(path) } }
     }
 
-    private fun safeEtag(value: String): String = value.also {
+    internal fun safeEtag(value: String): String = value.also {
         require(it.isNotBlank() && '\r' !in it && '\n' !in it) { "The server revision is invalid." }
     }
 

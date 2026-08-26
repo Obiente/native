@@ -19,6 +19,22 @@ internal class DesktopFileSyncCheckpointPersistence(
         val work = state.coordinator.pairs.single().workItems.single()
         store.saveExecutionTransition(state, pairId, workId, work)
     }
+
+    fun retainCleanup(cleanup: FileSyncPendingUploadCleanup) {
+        state = state.copy(
+            coordinator = retainFileSyncUploadCleanup(state.coordinator, pairId, cleanup),
+        )
+        val work = state.coordinator.pairs.single().workItems.single()
+        store.saveExecutionTransition(state, pairId, workId, work)
+    }
+
+    fun completeCleanup(uploadId: String) {
+        state = state.copy(
+            coordinator = completeFileSyncUploadCleanup(state.coordinator, pairId, uploadId),
+        )
+        val work = state.coordinator.pairs.single().workItems.single()
+        store.saveExecutionTransition(state, pairId, workId, work)
+    }
 }
 
 internal fun resumeDesktopFileSyncUpload(
@@ -41,3 +57,22 @@ internal fun resumeDesktopFileSyncUpload(
     remote = remote.resumableUploadRemote(shouldContinue),
     shouldContinue = shouldContinue,
 )
+
+internal fun replaceDesktopFileSyncRemoteType(
+    source: File,
+    relativePath: String,
+    expectedRemoteEtag: String,
+    remote: DesktopFileSyncRemoteTree,
+    retainCleanup: (FileSyncPendingUploadCleanup) -> Unit,
+    completeCleanup: (String) -> Unit,
+    shouldContinue: () -> Boolean,
+): RemoteSyncEntry {
+    val uploadId = UUID.randomUUID().toString()
+    val ownership = FileSyncPendingUploadCleanup(uploadId, relativePath)
+    retainCleanup(ownership)
+    return remote.replaceWithFile(
+        relativePath, source, expectedRemoteEtag, uploadId, shouldContinue,
+    ) { stageEtag ->
+        retainCleanup(ownership.copy(assembledStageEtag = stageEtag))
+    }.also { completeCleanup(uploadId) }
+}

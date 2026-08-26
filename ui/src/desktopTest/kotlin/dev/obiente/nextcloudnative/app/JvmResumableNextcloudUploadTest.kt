@@ -149,6 +149,32 @@ class JvmResumableNextcloudUploadTest {
         }
     }
 
+    @Test
+    fun `cleanup retains ownership while an unverified stage still exists`() {
+        val cleanup = FileSyncPendingUploadCleanup(UPLOAD_ID, "large.bin")
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Vault",
+            configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            pendingUploadCleanups = listOf(cleanup),
+        )
+        val initial = FileSyncCoordinatorState(listOf(pair))
+        var stateChangeCount = 0
+
+        val after = cleanupJvmFileSyncOwnedUploads(
+            remote = RecordingUploadRemote(collectionCreated = true, cleanupComplete = false),
+            state = initial,
+            pairId = pair.id,
+            uploads = listOf(cleanup),
+            onStateChanged = { stateChangeCount += 1 },
+        )
+
+        assertEquals(initial, after)
+        assertEquals(0, stateChangeCount)
+    }
+
     private fun sparseFile(sizeBytes: Long): File =
         File.createTempFile("nextcloud-native-resume-", ".bin").also { file ->
             RandomAccessFile(file, "rw").use { it.setLength(sizeBytes) }
@@ -161,6 +187,7 @@ class JvmResumableNextcloudUploadTest {
         private val afterChunkUploaded: () -> Unit = {},
         private val assembledStageEtag: String? = "verified-stage-etag",
         private val directUpload: Boolean = false,
+        private val cleanupComplete: Boolean = true,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val finalizationEvents = mutableListOf<String>()
@@ -233,7 +260,11 @@ class JvmResumableNextcloudUploadTest {
             return RemoteSyncEntry(relativePath, SyncEntryKind.File, "remote-etag", 25L * 1024L * 1024L)
         }
 
-        override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) = Unit
+        override fun discardOwnedUpload(
+            uploadId: String,
+            relativePath: String,
+            assembledStageEtag: String?,
+        ): Boolean = cleanupComplete
     }
 
     private companion object {

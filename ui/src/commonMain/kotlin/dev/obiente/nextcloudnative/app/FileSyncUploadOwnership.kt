@@ -43,6 +43,20 @@ fun completeFileSyncUploadCleanup(
     )
 }
 
+fun retainFileSyncUploadCleanup(
+    state: FileSyncCoordinatorState,
+    pairId: String,
+    cleanup: FileSyncPendingUploadCleanup,
+): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
+    require(pair.workItems.none { it.uploadCheckpoint?.uploadId == cleanup.uploadId }) {
+        "Active upload progress and replacement-stage cleanup must remain distinct."
+    }
+    pair.copy(
+        pendingUploadCleanups = pair.pendingUploadCleanups
+            .filterNot { it.uploadId == cleanup.uploadId } + cleanup,
+    )
+}
+
 internal fun retainFileSyncUploadOwnership(
     previous: FileSyncPair,
     currentWork: List<FileSyncWorkItem>,

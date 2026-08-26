@@ -473,13 +473,20 @@ internal class DesktopFileSyncEngine(
                     stage = DesktopFileSyncProgressStage.Started,
                 ),
             )
+            val checkpoints = DesktopFileSyncCheckpointPersistence(
+                execution, store, pairId, command.workId,
+            )
             try {
                 requireDesktopFileSyncBaselineCapacity(command.operation, baselinePaths)
-                val checkpoints = DesktopFileSyncCheckpointPersistence(
-                    execution, store, pairId, command.workId,
-                )
                 val success = execute(
-                    command, runningWork, local, remote, checkpoints::persist, shouldContinue,
+                    command = command,
+                    work = runningWork,
+                    local = local,
+                    remote = remote,
+                    persistUploadCheckpoint = checkpoints::persist,
+                    retainUploadCleanup = checkpoints::retainCleanup,
+                    completeUploadCleanup = checkpoints::completeCleanup,
+                    shouldContinue = shouldContinue,
                 )
                 execution = checkpoints.state
                 execution = execution.copy(
@@ -517,12 +524,21 @@ internal class DesktopFileSyncEngine(
                     ),
                 )
             } catch (cancellation: CancellationException) {
+                execution = checkpoints.state.copy(
+                    coordinator = releaseCancelledFileSyncOperation(
+                        checkpoints.state.coordinator,
+                        pairId,
+                        command.workId,
+                    ),
+                )
+                val releasedWork = execution.coordinator.pairs.single().workItems.single()
+                store.saveExecutionTransition(execution, pairId, command.workId, releasedWork)
                 throw cancellation
             } catch (failure: Throwable) {
                 val safeMessage = safeFailureMessage(failure, "The sync operation failed.")
-                execution = execution.copy(
+                execution = checkpoints.state.copy(
                     coordinator = failFileSyncOperation(
-                        execution.coordinator,
+                        checkpoints.state.coordinator,
                         pairId,
                         command.workId,
                         safeMessage,
@@ -570,6 +586,8 @@ internal class DesktopFileSyncEngine(
         local: DesktopFileSyncLocalTree,
         remote: DesktopFileSyncRemoteTree,
         persistUploadCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
+        retainUploadCleanup: (FileSyncPendingUploadCleanup) -> Unit,
+        completeUploadCleanup: (String) -> Unit,
         shouldContinue: () -> Boolean,
     ): FileSyncExecutionSuccess {
         require(work.id == command.workId && work.operation == command.operation)
@@ -590,10 +608,9 @@ internal class DesktopFileSyncEngine(
                     withStagingFile("upload", source.size) { staged, maximumBytes ->
                         exactLocal = local.stageForUpload(operation.relativePath, staged, maximumBytes)
                         val uploaded = if (replacingType) {
-                            remote.replaceWithFile(
-                                operation.relativePath,
-                                staged,
-                                requireNotNull(operation.expectedRemoteEtag),
+                            replaceDesktopFileSyncRemoteType(
+                                staged, operation.relativePath, requireNotNull(operation.expectedRemoteEtag), remote,
+                                retainUploadCleanup, completeUploadCleanup, shouldContinue,
                             )
                         } else {
                             resumeDesktopFileSyncUpload(

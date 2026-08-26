@@ -55,7 +55,8 @@ interface JvmResumableNextcloudUploadRemote {
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry
 
-    fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?)
+    /** Returns false when an unverified stage must remain durably owned and hidden. */
+    fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?): Boolean
 }
 
 fun cleanupJvmFileSyncOwnedUploads(
@@ -67,9 +68,10 @@ fun cleanupJvmFileSyncOwnedUploads(
 ): FileSyncCoordinatorState {
     var updated = state
     uploads.forEach { cleanup ->
-        remote.discardOwnedUpload(cleanup.uploadId, cleanup.relativePath, cleanup.assembledStageEtag)
-        updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
-        onStateChanged(updated)
+        if (remote.discardOwnedUpload(cleanup.uploadId, cleanup.relativePath, cleanup.assembledStageEtag)) {
+            updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
+            onStateChanged(updated)
+        }
     }
     return updated
 }
@@ -102,7 +104,11 @@ fun jvmResumableNextcloudUpload(
     require(localRevision.isNotBlank())
     val plan = nextcloudUploadTransferPlan(source.length())
     if (plan is NextcloudUploadTransferPlan.Direct) {
-        checkpoint?.let { remote.discardOwnedUpload(it.uploadId, relativePath, it.assembledStageEtag) }
+        checkpoint?.let {
+            check(remote.discardOwnedUpload(it.uploadId, relativePath, it.assembledStageEtag)) {
+                "An unverified upload stage still requires recovery."
+            }
+        }
         val uploaded = remote.uploadDirect(source, relativePath, expectedRemoteEtag)
         ensureActive()
         return remote.verifyDirectUpload(source, relativePath, uploaded)
@@ -113,7 +119,9 @@ fun jvmResumableNextcloudUpload(
         it.localRevision == localRevision && it.transferPlan == plan && !it.commitInFlight
     }
     if (checkpoint != null && resumable == null) {
-        remote.discardOwnedUpload(checkpoint.uploadId, relativePath, checkpoint.assembledStageEtag)
+        check(remote.discardOwnedUpload(checkpoint.uploadId, relativePath, checkpoint.assembledStageEtag)) {
+            "An unverified upload stage still requires recovery."
+        }
     }
     val resumed = resumable != null
     var progress = resumable ?: newFileSyncUploadCheckpoint(newUploadId(), localRevision, plan)

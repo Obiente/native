@@ -207,13 +207,19 @@ internal class DesktopFileSyncChunkUploadRemote(
             .also { require(!it.isDirectory) }.entry
     }
 
-    override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) {
+    override fun discardOwnedUpload(
+        uploadId: String,
+        relativePath: String,
+        assembledStageEtag: String?,
+    ): Boolean {
         execute(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId)).delete().build(),
             "discard chunked upload",
             accepted = { it in 200..299 || it == 404 },
         )
-        assembledStageEtag ?: return
+        if (assembledStageEtag == null) {
+            return tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId)) == null
+        }
         execute(
             requestBuilder(fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
                 .header("If-Match", safeEtag(assembledStageEtag))
@@ -221,6 +227,7 @@ internal class DesktopFileSyncChunkUploadRemote(
             "discard assembled upload",
             accepted = { it in 200..299 || it == 404 || it == 412 },
         )
+        return true
     }
 
     private fun execute(

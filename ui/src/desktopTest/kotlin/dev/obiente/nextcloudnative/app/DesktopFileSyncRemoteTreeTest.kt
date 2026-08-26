@@ -19,6 +19,45 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
+    fun `cleanup keeps an unverified replacement stage durably owned`() {
+        val requests = mutableListOf<Request>()
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val stageName = ".nextcloud-native-$uploadId.upload"
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "DELETE" -> response(chain.request(), 404)
+                "PROPFIND" -> response(
+                    chain.request(),
+                    207,
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/alice/Vault/$stageName</d:href>
+                      <d:propstat><d:prop><d:getetag>unknown-stage</d:getetag>
+                        <d:getcontentlength>7</d:getcontentlength><d:resourcetype/>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                )
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "Vault",
+            client = client,
+            ownedUploadIds = setOf(uploadId),
+        )
+
+        val completed = tree.resumableUploadRemote()
+            .discardOwnedUpload(uploadId, "large.bin", assembledStageEtag = null)
+
+        assertFalse(completed)
+        assertEquals(listOf("DELETE", "PROPFIND"), requests.map { it.method })
+    }
+
+    @Test
     fun `cleanup deletes only the recorded stage generation and accepts its replacement`() {
         val requests = mutableListOf<Request>()
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
@@ -34,7 +73,10 @@ class DesktopFileSyncRemoteTreeTest {
             ownedUploadIds = setOf(uploadId),
         )
 
-        tree.resumableUploadRemote().discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag")
+        assertTrue(
+            tree.resumableUploadRemote()
+                .discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag"),
+        )
 
         assertEquals(listOf("DELETE", "DELETE"), requests.map { it.method })
         assertTrue(requests[0].url.encodedPath.endsWith("/uploads/alice/$uploadId"))

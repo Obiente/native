@@ -385,15 +385,22 @@ internal class AndroidFileSyncRemoteTree(
         return after.entry
     }
 
-    override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) {
+    override fun discardOwnedUpload(
+        uploadId: String,
+        relativePath: String,
+        assembledStageEtag: String?,
+    ): Boolean {
         deleteChunkUpload(uploadId, transferCancellation)
-        assembledStageEtag ?: return
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
+        if (assembledStageEtag == null) {
+            return resolveIncludingOwnedStage(stagePath) == null
+        }
         try {
             webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
         } catch (failure: DocumentWebDavException) {
             if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
         }
+        return true
     }
 
     /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
