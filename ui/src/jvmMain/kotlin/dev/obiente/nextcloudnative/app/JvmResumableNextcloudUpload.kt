@@ -33,10 +33,16 @@ interface JvmResumableNextcloudUploadRemote {
 
     fun uploadChunk(uploadId: String, relativePath: String, source: File, chunk: NextcloudUploadChunk)
 
-    fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long)
+    /** Returns the stage ETag supplied by the successful assembly response, when available. */
+    fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String?
 
-    /** Returns the exact stage ETag whose bytes matched [source]. */
-    fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String
+    /** Compares one exact resolved stage generation with [source]. */
+    fun verifyOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        source: File,
+        expectedStageEtag: String?,
+    ): String
 
     fun publishOwnedStage(
         uploadId: String,
@@ -45,7 +51,7 @@ interface JvmResumableNextcloudUploadRemote {
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry
 
-    fun discardOwnedUpload(uploadId: String, relativePath: String)
+    fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?)
 }
 
 fun cleanupJvmFileSyncOwnedUploads(
@@ -57,7 +63,7 @@ fun cleanupJvmFileSyncOwnedUploads(
 ): FileSyncCoordinatorState {
     var updated = state
     uploads.forEach { cleanup ->
-        remote.discardOwnedUpload(cleanup.uploadId, cleanup.relativePath)
+        remote.discardOwnedUpload(cleanup.uploadId, cleanup.relativePath, cleanup.assembledStageEtag)
         updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
         onStateChanged(updated)
     }
@@ -87,7 +93,7 @@ fun jvmResumableNextcloudUpload(
     require(localRevision.isNotBlank())
     val plan = nextcloudUploadTransferPlan(source.length())
     if (plan is NextcloudUploadTransferPlan.Direct) {
-        checkpoint?.let { remote.discardOwnedUpload(it.uploadId, relativePath) }
+        checkpoint?.let { remote.discardOwnedUpload(it.uploadId, relativePath, it.assembledStageEtag) }
         return remote.uploadDirect(source, relativePath, expectedRemoteEtag)
     }
     require(plan is NextcloudUploadTransferPlan.Chunked)
@@ -96,7 +102,7 @@ fun jvmResumableNextcloudUpload(
         it.localRevision == localRevision && it.transferPlan == plan && !it.commitInFlight
     }
     if (checkpoint != null && resumable == null) {
-        remote.discardOwnedUpload(checkpoint.uploadId, relativePath)
+        remote.discardOwnedUpload(checkpoint.uploadId, relativePath, checkpoint.assembledStageEtag)
     }
     val resumed = resumable != null
     var progress = resumable ?: newFileSyncUploadCheckpoint(newUploadId(), localRevision, plan)
@@ -127,7 +133,13 @@ fun jvmResumableNextcloudUpload(
 
     progress = progress.copy(commitInFlight = true)
     persistCheckpoint(progress)
-    remote.commitChunksToOwnedStage(progress.uploadId, relativePath, source.length())
-    val verifiedStageEtag = remote.verifyOwnedStage(progress.uploadId, relativePath, source)
+    val assembledStageEtag = remote.commitChunksToOwnedStage(progress.uploadId, relativePath, source.length())
+    if (assembledStageEtag != null) {
+        progress = progress.copy(assembledStageEtag = assembledStageEtag)
+        persistCheckpoint(progress)
+    }
+    val verifiedStageEtag = remote.verifyOwnedStage(
+        progress.uploadId, relativePath, source, assembledStageEtag,
+    )
     return remote.publishOwnedStage(progress.uploadId, relativePath, verifiedStageEtag, expectedRemoteEtag)
 }

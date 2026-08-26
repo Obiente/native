@@ -289,23 +289,30 @@ internal class AndroidFileSyncRemoteTree(
     override fun deleteChunk(uploadId: String, chunkNumber: Int) =
         webDav.deleteChunk(session, userId, uploadId, chunkNumber, NoDocumentRequestCancellation)
 
-    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) {
+    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? =
         commitChunkUpload(
             uploadId,
             jvmOwnedUploadStagePath(relativePath, uploadId),
             sizeBytes,
             NoDocumentRequestCancellation,
             onRequestStarted = {},
-        )
-    }
+        ).etag
 
-    override fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String {
+    override fun verifyOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        source: File,
+        expectedStageEtag: String?,
+    ): String {
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stage = requireNotNull(resolveIncludingOwnedStage(stagePath)) {
             "The assembled upload stage disappeared."
         }
         require(!stage.isDirectory && stage.entry.size == source.length()) {
             "The assembled upload stage has an unexpected size."
+        }
+        require(expectedStageEtag == null || stage.entry.etag == expectedStageEtag) {
+            "The assembled upload stage changed before verification."
         }
         JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
             webDav.readFile(
@@ -341,11 +348,14 @@ internal class AndroidFileSyncRemoteTree(
         return after.entry
     }
 
-    override fun discardOwnedUpload(uploadId: String, relativePath: String) {
+    override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) {
         deleteChunkUpload(uploadId, NoDocumentRequestCancellation)
+        assembledStageEtag ?: return
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
-        resolveIncludingOwnedStage(stagePath)?.let { stage ->
-            webDav.delete(session, userId, fullPath(stagePath), stage.entry.etag, stage.isDirectory)
+        try {
+            webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
+        } catch (failure: DocumentWebDavException) {
+            if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
         }
     }
 

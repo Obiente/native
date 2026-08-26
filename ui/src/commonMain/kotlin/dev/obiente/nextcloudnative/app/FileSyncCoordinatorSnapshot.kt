@@ -126,6 +126,7 @@ private data class FileSyncPairSnapshotV1(
 private data class FileSyncPendingUploadCleanupSnapshotV1(
     val uploadId: String,
     val relativePath: String,
+    val assembledStageEtag: String? = null,
 )
 
 @Serializable
@@ -195,6 +196,7 @@ private data class FileSyncUploadCheckpointSnapshotV1(
     val chunkCount: Int,
     val uploadedChunks: Int,
     val commitInFlight: Boolean,
+    val assembledStageEtag: String? = null,
 )
 
 @Serializable
@@ -236,7 +238,7 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
     workItems = workItems.sortedBy(FileSyncWorkItem::id).map(FileSyncWorkItem::toSnapshot),
     pendingUploadCleanups = pendingUploadCleanups
         .sortedBy(FileSyncPendingUploadCleanup::uploadId)
-        .map { FileSyncPendingUploadCleanupSnapshotV1(it.uploadId, it.relativePath) },
+        .map { FileSyncPendingUploadCleanupSnapshotV1(it.uploadId, it.relativePath, it.assembledStageEtag) },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )
@@ -262,7 +264,7 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
         .map(FileSyncContentVerificationProgressSnapshotV1::toDomain),
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
     pendingUploadCleanups = pendingUploadCleanups.map {
-        FileSyncPendingUploadCleanup(it.uploadId, it.relativePath)
+        FileSyncPendingUploadCleanup(it.uploadId, it.relativePath, it.assembledStageEtag)
     },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
@@ -379,6 +381,7 @@ private fun FileSyncUploadCheckpoint.toSnapshot() = FileSyncUploadCheckpointSnap
     chunkCount,
     uploadedChunks,
     commitInFlight,
+    assembledStageEtag,
 )
 
 private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckpoint(
@@ -389,6 +392,7 @@ private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckp
     chunkCount,
     uploadedChunks,
     commitInFlight,
+    assembledStageEtag,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

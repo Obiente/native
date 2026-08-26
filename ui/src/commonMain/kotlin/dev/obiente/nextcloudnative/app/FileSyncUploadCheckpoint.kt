@@ -9,6 +9,7 @@ data class FileSyncUploadCheckpoint(
     val chunkCount: Int,
     val uploadedChunks: Int = 0,
     val commitInFlight: Boolean = false,
+    val assembledStageEtag: String? = null,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
@@ -16,6 +17,9 @@ data class FileSyncUploadCheckpoint(
         val plan = transferPlan
         require(uploadedChunks in 0..plan.chunkCount)
         require(!commitInFlight || uploadedChunks == plan.chunkCount)
+        require(assembledStageEtag == null || commitInFlight)
+        require(assembledStageEtag == null || assembledStageEtag.isNotBlank())
+        require(assembledStageEtag == null || assembledStageEtag.none { it == '\r' || it == '\n' })
     }
 
     val transferPlan: NextcloudUploadTransferPlan.Chunked

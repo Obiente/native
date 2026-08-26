@@ -83,26 +83,36 @@ internal class DesktopFileSyncChunkUploadRemote(
         )
     }
 
-    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) {
-        execute(
+    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? =
+        client.newCall(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
                 .header("Destination", fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
                 .header("OC-Total-Length", sizeBytes.toString())
                 .header("Overwrite", "F")
                 .method("MOVE", EMPTY_BODY)
                 .build(),
-            "assemble chunked upload",
-            accepted = { it == 201 },
-        )
-    }
+        ).execute().use { response ->
+            if (response.code != 201) {
+                throw DesktopFileSyncHttpStatusException(response.code, "assemble chunked upload")
+            }
+            response.header("ETag") ?: response.header("OC-Etag")
+        }
 
-    override fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String {
+    override fun verifyOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        source: File,
+        expectedStageEtag: String?,
+    ): String {
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stage = requireNotNull(tree.resolveOwnedUploadStage(stagePath)) {
             "The assembled upload stage disappeared."
         }
         require(!stage.isDirectory && stage.entry.size == source.length()) {
             "The assembled upload stage has an unexpected size."
+        }
+        require(expectedStageEtag == null || safeEtag(stage.entry.etag) == safeEtag(expectedStageEtag)) {
+            "The assembled upload stage changed before verification."
         }
         client.newCall(
             requestBuilder(fileUrl(stagePath))
@@ -151,19 +161,19 @@ internal class DesktopFileSyncChunkUploadRemote(
             .also { require(!it.isDirectory) }.entry
     }
 
-    override fun discardOwnedUpload(uploadId: String, relativePath: String) {
+    override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) {
         execute(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId)).delete().build(),
             "discard chunked upload",
             accepted = { it in 200..299 || it == 404 },
         )
-        val stage = tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId)) ?: return
+        assembledStageEtag ?: return
         execute(
             requestBuilder(fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
-                .header("If-Match", safeEtag(stage.entry.etag))
+                .header("If-Match", safeEtag(assembledStageEtag))
                 .delete().build(),
             "discard assembled upload",
-            accepted = { it in 200..299 || it == 404 },
+            accepted = { it in 200..299 || it == 404 || it == 412 },
         )
     }
 

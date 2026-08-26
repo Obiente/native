@@ -677,7 +677,13 @@ class FileSyncCoordinatorTest {
                 "01234567-89ab-cdef-0123-456789abcdef",
                 local.revision,
                 nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
-            ),
+            ).let { checkpoint ->
+                checkpoint.copy(
+                    uploadedChunks = checkpoint.chunkCount,
+                    commitInFlight = true,
+                    assembledStageEtag = "stage-etag",
+                )
+            },
         )
         coordinator = failFileSyncOperation(coordinator, PAIR_ID, workId, "Interrupted upload")
 
@@ -691,6 +697,7 @@ class FileSyncCoordinatorTest {
 
         val cleanup = coordinator.pair().pendingUploadCleanups.single()
         assertEquals("large.bin", cleanup.relativePath)
+        assertEquals("stage-etag", cleanup.assembledStageEtag)
         assertEquals(cleanup, fileSyncOwnedUploads(coordinator.pair()).single())
         assertFailsWith<IllegalArgumentException> { removeFileSyncPair(coordinator, PAIR_ID) }
 

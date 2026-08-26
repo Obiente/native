@@ -19,6 +19,30 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
+    fun `cleanup deletes only the recorded stage generation and accepts its replacement`() {
+        val requests = mutableListOf<Request>()
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            if (requests.size == 1) response(chain.request(), 404) else response(chain.request(), 412)
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "Vault",
+            client = client,
+            ownedUploadIds = setOf(uploadId),
+        )
+
+        tree.resumableUploadRemote().discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag")
+
+        assertEquals(listOf("DELETE", "DELETE"), requests.map { it.method })
+        assertTrue(requests[0].url.encodedPath.endsWith("/uploads/alice/$uploadId"))
+        assertTrue(requests[1].url.encodedPath.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
+        assertEquals("owned-stage-etag", requests[1].header("If-Match"))
+    }
+
+    @Test
     fun `scan hides only upload stages durably owned by this sync pair`() {
         val ownedId = "01234567-89ab-cdef-0123-456789abcdef"
         val userId = "fedcba98-7654-3210-fedc-ba9876543210"
@@ -62,7 +86,7 @@ class DesktopFileSyncRemoteTreeTest {
             requests += chain.request()
             when (chain.request().method) {
                 "MKCOL", "PUT" -> response(chain.request(), 201)
-                "MOVE" -> response(chain.request(), 201)
+                "MOVE" -> response(chain.request(), 201).newBuilder().header("ETag", "etag-1").build()
                 "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
                 "PROPFIND" -> {
                     propfindCount += 1
@@ -108,6 +132,7 @@ class DesktopFileSyncRemoteTreeTest {
             assertTrue(requests[7].header("Destination")!!.endsWith("/Vault/large.bin"))
             assertEquals("F", requests[7].header("Overwrite"))
             assertTrue(checkpoints.last().commitInFlight)
+            assertEquals("etag-1", checkpoints.last().assembledStageEtag)
         } finally {
             source.delete()
         }

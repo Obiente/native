@@ -4,17 +4,20 @@ package dev.obiente.nextcloudnative.app
 data class FileSyncPendingUploadCleanup(
     val uploadId: String,
     val relativePath: String,
+    val assembledStageEtag: String? = null,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
         requireValidSyncPath(relativePath)
+        require(assembledStageEtag == null || assembledStageEtag.isNotBlank())
+        require(assembledStageEtag == null || assembledStageEtag.none { it == '\r' || it == '\n' })
     }
 }
 
 fun fileSyncOwnedUploads(pair: FileSyncPair): List<FileSyncPendingUploadCleanup> =
     (pair.pendingUploadCleanups + pair.workItems.mapNotNull { work ->
         work.uploadCheckpoint?.let { checkpoint ->
-            FileSyncPendingUploadCleanup(checkpoint.uploadId, work.relativePath)
+            FileSyncPendingUploadCleanup(checkpoint.uploadId, work.relativePath, checkpoint.assembledStageEtag)
         }
     }).distinctBy(FileSyncPendingUploadCleanup::uploadId)
 
@@ -47,7 +50,7 @@ internal fun retainFileSyncUploadOwnership(
     val retainedUploadIds = currentWork.mapNotNullTo(mutableSetOf()) { it.uploadCheckpoint?.uploadId }
     val abandonedUploads = previous.workItems.mapNotNull { work ->
         work.uploadCheckpoint?.takeIf { it.uploadId !in retainedUploadIds }?.let { checkpoint ->
-            FileSyncPendingUploadCleanup(checkpoint.uploadId, work.relativePath)
+            FileSyncPendingUploadCleanup(checkpoint.uploadId, work.relativePath, checkpoint.assembledStageEtag)
         }
     }
     return (previous.pendingUploadCleanups + abandonedUploads)

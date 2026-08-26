@@ -28,9 +28,10 @@ class JvmResumableNextcloudUploadTest {
             )
 
             assertEquals(listOf(2, 3), remote.uploadedChunkNumbers)
-            assertEquals(listOf(2, 3, 3), persisted.map(FileSyncUploadCheckpoint::uploadedChunks))
+            assertEquals(listOf(2, 3, 3, 3), persisted.map(FileSyncUploadCheckpoint::uploadedChunks))
             assertFalse(persisted[0].commitInFlight)
             assertTrue(persisted.last().commitInFlight)
+            assertEquals("verified-stage-etag", persisted.last().assembledStageEtag)
             assertEquals("remote-etag", uploaded.etag)
             assertEquals(listOf("commit", "verify", "publish"), remote.finalizationEvents)
         } finally {
@@ -118,12 +119,19 @@ class JvmResumableNextcloudUploadTest {
             uploadedChunkNumbers += chunk.number
         }
 
-        override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) {
+        override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String {
             finalizationEvents += "commit"
+            return "verified-stage-etag"
         }
 
-        override fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String {
+        override fun verifyOwnedStage(
+            uploadId: String,
+            relativePath: String,
+            source: File,
+            expectedStageEtag: String?,
+        ): String {
             finalizationEvents += "verify"
+            check(expectedStageEtag == "verified-stage-etag")
             check(!failVerification) { "The assembled stage differs." }
             return "verified-stage-etag"
         }
@@ -139,7 +147,7 @@ class JvmResumableNextcloudUploadTest {
             return RemoteSyncEntry(relativePath, SyncEntryKind.File, "remote-etag", 25L * 1024L * 1024L)
         }
 
-        override fun discardOwnedUpload(uploadId: String, relativePath: String) = Unit
+        override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) = Unit
     }
 
     private companion object {

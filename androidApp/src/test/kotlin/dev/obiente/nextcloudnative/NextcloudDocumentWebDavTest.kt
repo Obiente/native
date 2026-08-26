@@ -23,6 +23,31 @@ import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
+    fun ownedUploadCleanupAcceptsMissingCollectionAndAReplacedStageWithoutListingItsParent() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(404)
+            server.enqueue(412)
+            val remote = AndroidFileSyncRemoteTree(
+                server.session,
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+            )
+
+            remote.discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag")
+
+            val collectionDelete = server.request(0)
+            val stageDelete = server.request(1)
+            assertEquals("DELETE", collectionDelete.method)
+            assertTrue(collectionDelete.path.endsWith("/uploads/alice/$uploadId"))
+            assertEquals("DELETE", stageDelete.method)
+            assertTrue(stageDelete.path.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
+            assertEquals("owned-stage-etag", stageDelete.header("If-Match"))
+        }
+
+    @Test
     fun remoteSyncScanHidesOnlyUploadStagesDurablyOwnedByThisPair() = RecordingServer().use { server ->
         val ownedId = "01234567-89ab-cdef-0123-456789abcdef"
         val userId = "fedcba98-7654-3210-fedc-ba9876543210"
