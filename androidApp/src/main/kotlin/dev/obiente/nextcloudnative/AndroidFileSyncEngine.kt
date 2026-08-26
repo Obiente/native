@@ -363,8 +363,10 @@ internal class AndroidFileSyncEngine(context: Context) {
         session: NextcloudSession,
         userId: String,
         pairId: String,
-    ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
-        runPairLocked(session, userId, pairId)
+    ): FileSyncCenterActionResult = withAndroidFileSyncRunCancellation { cancellation ->
+        ENGINE_LOCK.withLock {
+            runPairLocked(session, userId, pairId, transferCancellation = cancellation)
+        }
     }
 
     private suspend fun runPairLocked(
@@ -374,6 +376,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         expectedResolvedWorkIds: Set<Long> = emptySet(),
         rejectedResolutionBaseline: FileSyncCoordinatorState? = null,
         startingCoordinatorOverride: FileSyncCoordinatorState? = null,
+        transferCancellation: DocumentRequestCancellation,
     ): FileSyncCenterActionResult {
         var persisted = store.load().let { loaded ->
             startingCoordinatorOverride?.let { loaded.copy(coordinator = it) } ?: loaded
@@ -402,6 +405,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             initialPair.remoteRootPath,
             webDav,
             fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
+            transferCancellation,
         )
         cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,
@@ -564,7 +568,9 @@ internal class AndroidFileSyncEngine(context: Context) {
             }
             persisted = checkpoints.state
             val failure = execution.exceptionOrNull()
-            rethrowAndroidFileSyncCancellation(failure)
+            persisted = persistAndRethrowAndroidFileSyncCancellation(
+                persisted, store, pairId, command.workId, failure,
+            )
             if (failure == null) {
                 val success = execution.getOrThrow()
                 persisted = persisted.copy(
@@ -639,7 +645,8 @@ internal class AndroidFileSyncEngine(context: Context) {
         userId: String,
         pairId: String,
         resolutions: List<FileSyncConflictResolution>,
-    ): FileSyncCenterActionResult = ENGINE_LOCK.withLock {
+    ): FileSyncCenterActionResult = withAndroidFileSyncRunCancellation { cancellation ->
+        ENGINE_LOCK.withLock {
         val current = store.load()
         val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
             ?: return@withLock FileSyncCenterActionResult.Rejected(
@@ -667,7 +674,9 @@ internal class AndroidFileSyncEngine(context: Context) {
             expectedResolvedWorkIds = resolutions.mapTo(mutableSetOf(), FileSyncConflictResolution::workId),
             rejectedResolutionBaseline = current.coordinator,
             startingCoordinatorOverride = resolved,
+            transferCancellation = cancellation,
         )
+        }
     }
 
     private fun execute(
@@ -697,11 +706,11 @@ internal class AndroidFileSyncEngine(context: Context) {
                 if (source.kind == SyncEntryKind.Directory) {
                     remote.createDirectory(operation.relativePath, expectedRemote)
                 } else {
-                    withStagingFile("upload") { staged ->
+                    withAndroidFileSyncStagingFile(stagingRoot, "upload") { staged ->
                         val exactLocal = local.stageForUpload(
                             operation.relativePath,
                             staged,
-                            stagingTransferLimit(source.size),
+                            androidFileSyncStagingTransferLimit(stagingRoot, source.size),
                         )
                         resumeAndroidFileSyncUpload(
                             staged, operation.relativePath, exactLocal, expectedRemote,
@@ -773,18 +782,18 @@ internal class AndroidFileSyncEngine(context: Context) {
         require(localSource.kind == SyncEntryKind.File && remoteSource.kind == SyncEntryKind.File) {
             "Keep both currently supports file conflicts only."
         }
-        withStagingFile("keep-local") { localBytes ->
-            withStagingFile("keep-remote") { remoteBytes ->
+        withAndroidFileSyncStagingFile(stagingRoot, "keep-local") { localBytes ->
+            withAndroidFileSyncStagingFile(stagingRoot, "keep-remote") { remoteBytes ->
                 local.stageForUpload(
                     operation.relativePath,
                     localBytes,
-                    stagingTransferLimit(localSource.size),
+                    androidFileSyncStagingTransferLimit(stagingRoot, localSource.size),
                 )
                 remote.stageDownload(
                     operation.relativePath,
                     remoteSource.etag,
                     remoteBytes,
-                    stagingTransferLimit(remoteSource.size),
+                            androidFileSyncStagingTransferLimit(stagingRoot, remoteSource.size),
                 )
                 remote.writeFile(operation.localConflictPath, localBytes, expectedRemoteEtag = null)
                 local.writeFile(operation.localConflictPath, localBytes, expectedLocalRevision = null)
@@ -827,23 +836,6 @@ internal class AndroidFileSyncEngine(context: Context) {
         return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, contentHash)
     }
 
-    private inline fun <T> withStagingFile(prefix: String, block: (File) -> T): T {
-        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
-        val file = File.createTempFile("$prefix-", ".tmp", stagingRoot)
-        return try {
-            block(file)
-        } finally {
-            file.delete()
-        }
-    }
-
-    private fun stagingTransferLimit(declaredByteCount: Long?): Long {
-        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
-        return stagedFileTransferLimit(
-            availableBytes = stagingRoot.usableSpace.coerceAtLeast(0L),
-            declaredByteCount = declaredByteCount,
-        )
-    }
     private companion object {
         val ENGINE_LOCK = Mutex()
     }

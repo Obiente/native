@@ -11,6 +11,25 @@ import kotlinx.coroutines.CancellationException
 
 class JvmResumableNextcloudUploadTest {
     @Test
+    fun `direct upload is byte verified before its result is returned`() {
+        val source = sparseFile(1024L)
+        val remote = RecordingUploadRemote(collectionCreated = true, directUpload = true)
+        try {
+            val uploaded = jvmResumableNextcloudUpload(
+                source, "small.bin", "local-1", null, null,
+                newUploadId = { error("A direct upload must not allocate a chunk collection.") },
+                persistCheckpoint = {},
+                remote = remote,
+            )
+
+            assertEquals("direct-etag", uploaded.etag)
+            assertEquals(listOf("direct-upload", "direct-verify"), remote.finalizationEvents)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `resume continues after the last durable chunk`() {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
@@ -141,6 +160,7 @@ class JvmResumableNextcloudUploadTest {
         private val failVerification: Boolean = false,
         private val afterChunkUploaded: () -> Unit = {},
         private val assembledStageEtag: String? = "verified-stage-etag",
+        private val directUpload: Boolean = false,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val finalizationEvents = mutableListOf<String>()
@@ -149,7 +169,21 @@ class JvmResumableNextcloudUploadTest {
             source: File,
             relativePath: String,
             expectedRemoteEtag: String?,
-        ): RemoteSyncEntry = error("The test file must use chunking.")
+        ): RemoteSyncEntry {
+            check(directUpload)
+            finalizationEvents += "direct-upload"
+            return RemoteSyncEntry(relativePath, SyncEntryKind.File, "direct-etag", source.length())
+        }
+
+        override fun verifyDirectUpload(
+            source: File,
+            relativePath: String,
+            uploaded: RemoteSyncEntry,
+        ): RemoteSyncEntry {
+            check(directUpload && uploaded.etag == "direct-etag")
+            finalizationEvents += "direct-verify"
+            return uploaded
+        }
 
         override fun createChunkCollection(
             uploadId: String,

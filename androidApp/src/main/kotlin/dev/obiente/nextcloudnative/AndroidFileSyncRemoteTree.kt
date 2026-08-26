@@ -17,7 +17,6 @@ import java.io.OutputStream
 import java.security.MessageDigest
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.CancellationException
 
 internal data class AndroidRemoteSyncDocument(
     val entry: RemoteSyncEntry,
@@ -36,19 +35,19 @@ internal class AndroidFileSyncRemoteTree(
     remoteRootPath: String,
     private val webDav: NextcloudDocumentWebDav,
     private val ownedUploadIds: Set<String> = emptySet(),
-    private val shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    private val transferCancellation: DocumentRequestCancellation = AndroidFileSyncRunCancellation {
+        !Thread.currentThread().isInterrupted
+    },
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
-    private val transferCancellation = object : DocumentRequestCancellation {
-        override fun throwIfCancelled() {
-            if (!shouldContinue()) throw CancellationException("Sync upload cancelled.")
-        }
-
-        override fun setOnCancelAction(action: (() -> Unit)?) = Unit
-    }
 
     init {
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
+    }
+
+    fun shouldContinueTransfer(): Boolean {
+        transferCancellation.throwIfCancelled()
+        return true
     }
 
     fun scan(
@@ -241,7 +240,10 @@ internal class AndroidFileSyncRemoteTree(
         val current = resolve(relativePath)
         if (expectedRemoteEtag == null) {
             require(current == null) { "The server file appeared after the sync scan." }
-            webDav.createFile(session, userId, fullPath(relativePath), source)
+            webDav.createFile(
+                session, userId, fullPath(relativePath), source,
+                cancellation = transferCancellation,
+            )
         } else {
             require(current?.entry?.etag == expectedRemoteEtag) {
                 "The server file changed after the sync scan."
@@ -253,6 +255,7 @@ internal class AndroidFileSyncRemoteTree(
                 fullPath(relativePath),
                 source,
                 expectedRemoteEtag,
+                transferCancellation,
             )
         }
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
@@ -265,6 +268,30 @@ internal class AndroidFileSyncRemoteTree(
         relativePath: String,
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry = writeFile(relativePath, source, expectedRemoteEtag)
+
+    override fun verifyDirectUpload(
+        source: File,
+        relativePath: String,
+        uploaded: RemoteSyncEntry,
+    ): RemoteSyncEntry {
+        val exact = requireNotNull(resolve(relativePath)) { "The directly uploaded file disappeared." }
+        require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
+            "The directly uploaded file changed before verification."
+        }
+        JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+            webDav.readFile(
+                session = session,
+                userId = userId,
+                path = fullPath(relativePath),
+                destination = comparison,
+                maximumBytes = source.length().coerceAtLeast(1L),
+                expectedEtag = exact.entry.etag,
+                cancellation = transferCancellation,
+            )
+            comparison.requireComplete()
+        }
+        return exact.entry
+    }
 
     override fun createChunkCollection(
         uploadId: String,

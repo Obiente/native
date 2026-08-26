@@ -25,6 +25,9 @@ fun jvmOwnedUploadId(relativePath: String): String? {
 interface JvmResumableNextcloudUploadRemote {
     fun uploadDirect(source: File, relativePath: String, expectedRemoteEtag: String?): RemoteSyncEntry
 
+    /** Byte-compares the exact generation returned by a successful direct PUT with [source]. */
+    fun verifyDirectUpload(source: File, relativePath: String, uploaded: RemoteSyncEntry): RemoteSyncEntry
+
     /** Returns true when a new collection was created and false when an owned one already existed. */
     fun createChunkCollection(uploadId: String, relativePath: String, allowExisting: Boolean): Boolean
 
@@ -100,7 +103,9 @@ fun jvmResumableNextcloudUpload(
     val plan = nextcloudUploadTransferPlan(source.length())
     if (plan is NextcloudUploadTransferPlan.Direct) {
         checkpoint?.let { remote.discardOwnedUpload(it.uploadId, relativePath, it.assembledStageEtag) }
-        return remote.uploadDirect(source, relativePath, expectedRemoteEtag)
+        val uploaded = remote.uploadDirect(source, relativePath, expectedRemoteEtag)
+        ensureActive()
+        return remote.verifyDirectUpload(source, relativePath, uploaded)
     }
     require(plan is NextcloudUploadTransferPlan.Chunked)
 

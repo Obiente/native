@@ -615,8 +615,8 @@ internal class DesktopFileSyncEngine(
                                 }
                             }
                         } else {
-                            // The resumable path byte-compares the exact staged generation before
-                            // its guarded MOVE, then resolves the published destination revision.
+                            // Both direct and chunked plans byte-compare their exact remote
+                            // generation before the synchronized baseline is recorded.
                             exactRemote = uploaded
                         }
                     }

@@ -10,6 +10,8 @@ import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
+import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
+import dev.obiente.nextcloudnative.app.releaseCancelledFileSyncOperation
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -39,6 +41,45 @@ class AndroidFileSyncEngineInvariantTest {
             },
         )
         rethrowAndroidFileSyncCancellation(IllegalStateException("ordinary operation failure"))
+    }
+
+    @Test
+    fun cancellationCancelsTheActiveTransportCall() {
+        var transportCancelled = false
+        val cancellation = AndroidFileSyncRunCancellation { true }
+        cancellation.setOnCancelAction { transportCancelled = true }
+
+        cancellation.cancel()
+
+        assertTrue(transportCancelled)
+        assertFailsWith<CancellationException> { cancellation.throwIfCancelled() }
+    }
+
+    @Test
+    fun cancelledWorkReturnsToReadyWithoutConsumingItsAttempt() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+        )
+        val planned = scanFileSyncPair(
+            FileSyncCoordinatorState(listOf(pair)),
+            pair.id,
+            localEntries = listOf(LocalSyncEntry("large.bin", SyncEntryKind.File, "local-1")),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 1L,
+        )
+        val claim = claimNextFileSyncOperation(planned, pair.id, nowEpochMillis = 2L)
+        val workId = requireNotNull(claim.command).workId
+
+        val released = releaseCancelledFileSyncOperation(claim.state, pair.id, workId)
+            .pairs.single().workItems.single()
+
+        assertEquals(dev.obiente.nextcloudnative.app.FileSyncExecutionState.Ready, released.state)
+        assertEquals(0, released.attemptCount)
+        assertEquals(null, released.lastAttemptEpochMillis)
     }
 
     @Test

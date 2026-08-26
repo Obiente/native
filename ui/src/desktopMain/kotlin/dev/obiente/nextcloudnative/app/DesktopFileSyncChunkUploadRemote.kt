@@ -26,6 +26,43 @@ internal class DesktopFileSyncChunkUploadRemote(
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry = tree.writeFile(relativePath, source, expectedRemoteEtag)
 
+    override fun verifyDirectUpload(
+        source: File,
+        relativePath: String,
+        uploaded: RemoteSyncEntry,
+    ): RemoteSyncEntry {
+        val exact = requireNotNull(tree.resolve(relativePath)) { "The directly uploaded file disappeared." }
+        require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
+            "The directly uploaded file changed before verification."
+        }
+        client.newCall(
+            requestBuilder(fileUrl(relativePath))
+                .header("Accept", "application/octet-stream")
+                .header("If-Match", safeEtag(exact.entry.etag))
+                .get()
+                .build(),
+        ).execute().use { response ->
+            if (response.code != 200) {
+                throw DesktopFileSyncHttpStatusException(response.code, "verify direct upload")
+            }
+            val declaredBytes = response.body.contentLength()
+            require(declaredBytes == -1L || declaredBytes == source.length()) {
+                "The directly uploaded file has an unexpected response size."
+            }
+            JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+                response.body.byteStream().copyBoundedNetworkResponseTo(
+                    output = comparison,
+                    maxBytes = source.length().coerceAtLeast(1L),
+                    onLimitExceeded = { error("The directly uploaded file is larger than expected.") },
+                    onNetworkReadFailure = {},
+                    shouldContinue = shouldContinue,
+                )
+                comparison.requireComplete()
+            }
+        }
+        return exact.entry
+    }
+
     override fun createChunkCollection(
         uploadId: String,
         relativePath: String,

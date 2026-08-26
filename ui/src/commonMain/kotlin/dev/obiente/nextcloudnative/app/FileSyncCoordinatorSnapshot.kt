@@ -89,6 +89,28 @@ internal fun decodeFileSyncWorkRecord(bytes: ByteArray): FileSyncWorkItem {
     return syncCoordinatorJson.decodeFromString<FileSyncWorkSnapshotV1>(strictSyncRecordText(bytes)).toDomain()
 }
 
+internal fun encodeFileSyncPendingUploadCleanupRecord(
+    cleanup: FileSyncPendingUploadCleanup,
+): ByteArray = syncCoordinatorJson.encodeToString(
+    FileSyncPendingUploadCleanupSnapshotV1(
+        cleanup.uploadId,
+        cleanup.relativePath,
+        cleanup.assembledStageEtag,
+    ),
+).encodeToByteArray().also { encoded ->
+    require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
+}
+
+internal fun decodeFileSyncPendingUploadCleanupRecord(
+    bytes: ByteArray,
+): FileSyncPendingUploadCleanup {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    val snapshot = syncCoordinatorJson.decodeFromString<FileSyncPendingUploadCleanupSnapshotV1>(
+        strictSyncRecordText(bytes),
+    )
+    return FileSyncPendingUploadCleanup(snapshot.uploadId, snapshot.relativePath, snapshot.assembledStageEtag)
+}
+
 private fun strictSyncRecordText(bytes: ByteArray): String = bytes.decodeToString().also { text ->
     require(text.encodeToByteArray().contentEquals(bytes)) { "The sync database record is not valid UTF-8." }
 }

@@ -358,6 +358,58 @@ class DesktopFileSyncStoreTest {
     }
 
     @Test
+    fun `abandoned upload ownership is stored in rows outside the bounded pair record`() {
+        val directory = Files.createTempDirectory("desktop-sync-cleanup-rows-").toFile()
+        try {
+            val cleanups = (0 until 2_000).map { index ->
+                FileSyncPendingUploadCleanup(
+                    uploadId = "00000000-0000-0000-0000-${index.toString(16).padStart(12, '0')}",
+                    relativePath = "Archive/${index.toString().padStart(4, '0')}-${"x".repeat(3_000)}.bin",
+                    assembledStageEtag = "stage-$index",
+                )
+            }
+            val pair = FileSyncPair(
+                id = "cleanup-pair",
+                accountId = "account",
+                localRootId = "cleanup-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                pendingUploadCleanups = cleanups,
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Archive")
+            val database = File(directory, "state.db")
+            val store = DesktopFileSyncStore(database, legacyStateFile = null)
+
+            store.savePair(
+                DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root)),
+                pair.id,
+            )
+
+            assertEquals(cleanups, store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups)
+            BundledSQLiteDriver().open(database.absolutePath).use { connection ->
+                val pairRecordBytes = connection.prepare(
+                    "SELECT length(record) FROM sync_pairs WHERE id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                val cleanupRows = connection.prepare(
+                    "SELECT COUNT(*) FROM sync_upload_cleanups WHERE pair_id = ?",
+                ).use { statement ->
+                    statement.bindText(1, pair.id)
+                    assertTrue(statement.step())
+                    statement.getLong(0)
+                }
+                assertTrue(pairRecordBytes < 64L * 1024L)
+                assertEquals(cleanups.size.toLong(), cleanupRows)
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `execution transitions update only their durable work and baseline rows`() {
         val directory = Files.createTempDirectory("desktop-sync-transition-").toFile()
         try {

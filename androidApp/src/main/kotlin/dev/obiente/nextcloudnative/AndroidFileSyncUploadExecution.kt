@@ -5,12 +5,85 @@ import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.checkpointFileSyncUpload
 import dev.obiente.nextcloudnative.app.jvmResumableNextcloudUpload
+import dev.obiente.nextcloudnative.app.releaseCancelledFileSyncOperation
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 
 internal fun rethrowAndroidFileSyncCancellation(failure: Throwable?) {
     if (failure is CancellationException) throw failure
+}
+
+internal fun persistAndRethrowAndroidFileSyncCancellation(
+    persisted: AndroidFileSyncPersistedState,
+    store: AndroidFileSyncStore,
+    pairId: String,
+    workId: Long,
+    failure: Throwable?,
+): AndroidFileSyncPersistedState {
+    if (failure !is CancellationException) return persisted
+    val released = persisted.copy(
+        coordinator = releaseCancelledFileSyncOperation(persisted.coordinator, pairId, workId),
+    )
+    store.save(released)
+    throw failure
+}
+
+internal class AndroidFileSyncRunCancellation(
+    private val shouldContinue: () -> Boolean,
+) : DocumentRequestCancellation {
+    private val cancelled = AtomicBoolean(false)
+    private val activeCallCancellation = AtomicReference<(() -> Unit)?>(null)
+
+    override fun throwIfCancelled() {
+        if (cancelled.get() || !shouldContinue()) {
+            cancel()
+            throw CancellationException("Sync transfer cancelled.")
+        }
+    }
+
+    override fun setOnCancelAction(action: (() -> Unit)?) {
+        activeCallCancellation.set(action)
+        if (action != null && (cancelled.get() || !shouldContinue())) {
+            cancel()
+            throw CancellationException("Sync transfer cancelled.")
+        }
+    }
+
+    fun cancel() {
+        cancelled.set(true)
+        activeCallCancellation.get()?.invoke()
+    }
+}
+
+internal suspend fun <T> withAndroidFileSyncRunCancellation(
+    block: suspend (AndroidFileSyncRunCancellation) -> T,
+): T = coroutineScope {
+    val parentJob = currentCoroutineContext()[Job]
+    val cancellation = AndroidFileSyncRunCancellation {
+        parentJob?.isActive != false && !Thread.currentThread().isInterrupted
+    }
+    val monitor = launch(start = CoroutineStart.UNDISPATCHED) {
+        try {
+            awaitCancellation()
+        } finally {
+            if (parentJob?.isActive == false) cancellation.cancel()
+        }
+    }
+    try {
+        block(cancellation)
+    } finally {
+        monitor.cancelAndJoin()
+    }
 }
 
 internal class AndroidFileSyncCheckpointPersistence(
@@ -47,4 +120,5 @@ internal fun resumeAndroidFileSyncUpload(
     newUploadId = { UUID.randomUUID().toString() },
     persistCheckpoint = persistCheckpoint,
     remote = remote,
+    shouldContinue = remote::shouldContinueTransfer,
 )
