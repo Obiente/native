@@ -184,6 +184,9 @@ class AndroidShareUploadActivity : ComponentActivity() {
                     ).also { newlyStaged ->
                         unclaimedStagedRequestId = newlyStaged.id
                     }
+                    require(restored.accountId == NextcloudDocumentIds.accountKey(activeSession)) {
+                        "Switch back to the account that received this share before reviewing it."
+                    }
                     uploads.ensureQueuedRequestScheduled(restored)
                     restored
                 }
@@ -257,6 +260,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
             current?.state in setOf(
                 AndroidIncomingShareState.Staged,
                 AndroidIncomingShareState.Failed,
+                AndroidIncomingShareState.OutcomeUnknown,
                 AndroidIncomingShareState.Canceled,
             )
         ) {

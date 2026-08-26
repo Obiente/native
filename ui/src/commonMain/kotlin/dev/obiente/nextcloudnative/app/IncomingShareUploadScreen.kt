@@ -410,34 +410,17 @@ private fun IncomingShareActions(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Button(onClick = onDone) { Text("Done") }
             }
-        IncomingShareUploadState.OutcomeUnknown ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(enabled = !queueing, onClick = onDone) { Text("Close") }
-                Button(enabled = !queueing && request.canVerifyOutcome, onClick = onVerifyOutcome) {
-                    if (queueing) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text("Verify result")
-                }
-            }
+        IncomingShareUploadState.OutcomeUnknown -> AmbiguousIncomingShareActions(
+            request,
+            queueing,
+            onVerifyOutcome,
+            onCancel,
+            onDone,
+        )
         IncomingShareUploadState.Canceled -> {
             val outcomeUnknown = request.files.any { it.status == IncomingShareUploadFileStatus.OutcomeUnknown }
             if (outcomeUnknown) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(enabled = !queueing, onClick = onDone) { Text("Close") }
-                    Button(enabled = !queueing && request.canVerifyOutcome, onClick = onVerifyOutcome) {
-                        Text("Verify result")
-                    }
-                }
+                AmbiguousIncomingShareActions(request, queueing, onVerifyOutcome, onCancel, onDone)
             } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -447,6 +430,39 @@ private fun IncomingShareActions(
                     TextButton(enabled = !queueing, onClick = onCancel) { Text("Discard...") }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AmbiguousIncomingShareActions(
+    request: IncomingShareUploadPresentation,
+    queueing: Boolean,
+    onVerifyOutcome: () -> Unit,
+    onDiscard: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+    ) {
+        Button(
+            enabled = !queueing && request.canVerifyOutcome,
+            onClick = onVerifyOutcome,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (queueing) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.size(8.dp))
+            }
+            Text("Verify result")
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+        ) {
+            TextButton(enabled = !queueing, onClick = onClose) { Text("Close") }
+            TextButton(enabled = !queueing, onClick = onDiscard) { Text("Discard...") }
         }
     }
 }
