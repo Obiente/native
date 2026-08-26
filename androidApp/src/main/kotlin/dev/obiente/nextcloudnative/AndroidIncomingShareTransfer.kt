@@ -1,9 +1,11 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.incomingShareUploadNameCandidates
-import java.io.IOException
+import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CancellationException
@@ -14,24 +16,6 @@ internal fun Throwable.isRetryableIncomingShareTransferFailure(): Boolean {
         (dav?.error == DocumentWebDavError.Server && dav.status >= 500)
 }
 
-internal fun incomingShareChunkSize(sizeBytes: Long): Long? {
-    require(sizeBytes > DIRECT_INCOMING_SHARE_UPLOAD_BYTES)
-    val minimumForProtocol = ((sizeBytes - 1L) / MAX_NEXTCLOUD_UPLOAD_CHUNKS) + 1L
-    return maxOf(INCOMING_SHARE_CHUNK_BYTES, minimumForProtocol)
-        .takeIf { it <= MAX_COMPATIBLE_INCOMING_SHARE_CHUNK_BYTES }
-}
-
-internal fun incomingShareChunkCount(sizeBytes: Long, chunkBytes: Long): Int {
-    require(sizeBytes > DIRECT_INCOMING_SHARE_UPLOAD_BYTES && chunkBytes > 0L)
-    return (((sizeBytes - 1L) / chunkBytes) + 1L).toInt().also {
-        require(it in 2..MAX_NEXTCLOUD_UPLOAD_CHUNKS)
-    }
-}
-
-internal const val DIRECT_INCOMING_SHARE_UPLOAD_BYTES = 20L * 1024L * 1024L
-internal const val INCOMING_SHARE_CHUNK_BYTES = 10L * 1024L * 1024L
-internal const val MAX_COMPATIBLE_INCOMING_SHARE_CHUNK_BYTES = 100L * 1024L * 1024L
-internal const val MAX_NEXTCLOUD_UPLOAD_CHUNKS = 10_000
 internal const val MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS = 5
 
 internal class AndroidIncomingShareFileTransfer(
@@ -50,11 +34,8 @@ internal class AndroidIncomingShareFileTransfer(
         val source = request.files[fileIndex]
         val stagedFile = store.stagedFile(requestId, source)
         requireValidIncomingShareStagedFile(stagedFile, source, cancellation)
-        val chunkBytes = stagedFile.length()
-            .takeIf { it > DIRECT_INCOMING_SHARE_UPLOAD_BYTES }
-            ?.let(::incomingShareChunkSize)
-        return if (chunkBytes == null) {
-            uploadDirect(
+        return when (val plan = nextcloudUploadTransferPlan(stagedFile.length())) {
+            NextcloudUploadTransferPlan.Direct -> uploadDirect(
                 requestId,
                 fileIndex,
                 source.displayName,
@@ -63,8 +44,7 @@ internal class AndroidIncomingShareFileTransfer(
                 destinationSnapshotComplete,
                 setMutationInFlight,
             )
-        } else {
-            uploadChunked(
+            is NextcloudUploadTransferPlan.Chunked -> uploadChunked(
                 requestId,
                 fileIndex,
                 source.displayName,
@@ -72,7 +52,7 @@ internal class AndroidIncomingShareFileTransfer(
                 occupiedNames,
                 destinationSnapshotComplete,
                 setMutationInFlight,
-                chunkBytes,
+                plan,
             )
         }
     }
@@ -124,7 +104,7 @@ internal class AndroidIncomingShareFileTransfer(
         occupiedNames: MutableSet<String>,
         destinationSnapshotComplete: Boolean,
         setMutationInFlight: (Boolean, String?) -> Unit,
-        chunkBytes: Long,
+        plan: NextcloudUploadTransferPlan.Chunked,
     ): AndroidIncomingShareRequest {
         var current = store.requireAvailable(requestId)
         while (true) {
@@ -182,10 +162,9 @@ internal class AndroidIncomingShareFileTransfer(
                 }
             }
             var upload = requireNotNull(current.chunkSession)
-            val chunkCount = incomingShareChunkCount(stagedFile.length(), chunkBytes)
-            for (chunkIndex in upload.uploadedChunks until chunkCount) {
-                val offset = Math.multiplyExact(chunkIndex.toLong(), chunkBytes)
-                val length = minOf(chunkBytes, stagedFile.length() - offset)
+            for (chunkIndex in upload.uploadedChunks until plan.chunkCount) {
+                val offset = Math.multiplyExact(chunkIndex.toLong(), plan.chunkBytes)
+                val length = minOf(plan.chunkBytes, stagedFile.length() - offset)
                 remote.uploadChunk(
                     upload.uploadId,
                     upload.targetName,

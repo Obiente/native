@@ -1,12 +1,16 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.MAX_NEXTCLOUD_UPLOAD_CHUNKS
+import dev.obiente.nextcloudnative.app.NextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
+import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import java.nio.file.Files
 import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -178,13 +182,19 @@ class AndroidIncomingShareStateTest {
 
     @Test
     fun largeFilesUseBoundedOfficialChunkSizes() {
-        val ordinarySize = DIRECT_INCOMING_SHARE_UPLOAD_BYTES + INCOMING_SHARE_CHUNK_BYTES
-        val ordinaryChunk = requireNotNull(incomingShareChunkSize(ordinarySize))
-        assertEquals(3, incomingShareChunkCount(ordinarySize, ordinaryChunk))
+        val ordinarySize = 30L * 1024L * 1024L
+        val ordinary = assertIs<NextcloudUploadTransferPlan.Chunked>(
+            nextcloudUploadTransferPlan(ordinarySize),
+        )
+        assertEquals(3, ordinary.chunkCount)
         val multiGigabyteSize = 120L * 1024L * 1024L * 1024L
-        val scaledChunk = requireNotNull(incomingShareChunkSize(multiGigabyteSize))
-        assertTrue(incomingShareChunkCount(multiGigabyteSize, scaledChunk) <= MAX_NEXTCLOUD_UPLOAD_CHUNKS)
-        assertEquals(null, incomingShareChunkSize(2L * 1024L * 1024L * 1024L * 1024L))
+        val scaled = assertIs<NextcloudUploadTransferPlan.Chunked>(
+            nextcloudUploadTransferPlan(multiGigabyteSize),
+        )
+        assertTrue(scaled.chunkCount <= MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+        assertIs<NextcloudUploadTransferPlan.Chunked>(
+            nextcloudUploadTransferPlan(2L * 1024L * 1024L * 1024L * 1024L),
+        )
         assertTrue(java.io.IOException("offline").isRetryableIncomingShareTransferFailure())
         assertTrue(
             DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")
