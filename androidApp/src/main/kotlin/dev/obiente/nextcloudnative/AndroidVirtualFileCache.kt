@@ -122,7 +122,7 @@ internal class AndroidVirtualFileCache(context: Context) {
         staging.delete()
     }
 
-    fun canCacheHydration(sizeBytes: Long): Boolean = sizeBytes in 0L..MAX_VIRTUAL_FILE_BYTES
+    fun canCacheHydration(sizeBytes: Long): Boolean = sizeBytes >= 0L
 
     fun prepareHydration(
         session: dev.obiente.nextcloudnative.app.NextcloudSession,
@@ -163,7 +163,7 @@ internal class AndroidVirtualFileCache(context: Context) {
         require(!file.isDirectory)
         require(nowEpochMillis >= 0L)
         val remoteEtag = file.etag?.takeIf(String::isNotBlank) ?: return false
-        if (!staging.isFile || staging.length() > MAX_VIRTUAL_FILE_BYTES) return false
+        if (!staging.isFile) return false
         val accountId = NextcloudDocumentIds.accountKey(session)
         val directory = accountDirectory(accountId).apply {
             check(isDirectory || mkdirs()) { "Could not create the Android virtual file cache." }
@@ -518,7 +518,7 @@ internal class AndroidVirtualFileCache(context: Context) {
             require(localRevision.startsWith("sha256:") && localRevision.length == 71)
             require(localRevision.removePrefix("sha256:").all { it in '0'..'9' || it in 'a'..'f' })
             require(mimeType == null || mimeType.toByteArray().size <= MAX_STRING_BYTES)
-            require(sizeBytes in 0L..MAX_VIRTUAL_FILE_BYTES)
+            require(sizeBytes >= 0L)
             require(blobName.length == 69 && blobName.endsWith(".blob"))
             require(blobName.removeSuffix(".blob").all { it in '0'..'9' || it in 'a'..'f' })
             require(cachedAtEpochMillis >= 0L)
@@ -544,7 +544,6 @@ internal class AndroidVirtualFileCache(context: Context) {
         const val MAX_ENTRIES = 20_000
         const val MAX_INDEX_BYTES = 8L * 1024L * 1024L
         const val MAX_STRING_BYTES = 16 * 1024
-        const val MAX_VIRTUAL_FILE_BYTES = 2L * 1024L * 1024L * 1024L
     }
 }
 

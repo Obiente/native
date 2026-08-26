@@ -16,6 +16,7 @@ import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.JvmStagingSpaceReservations
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -26,6 +27,21 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 class AndroidExternalFileHandoffTest {
+    @Test
+    fun `streamed Android handoffs cannot claim the same cache bytes`() {
+        val reservations = JvmStagingSpaceReservations()
+        val first = reservations.reserve("android-cache", 1_000L, 600L, reserveBytes = 100L)
+        val second = reservations.reserve("android-cache", 1_000L, 300L, reserveBytes = 100L)
+        try {
+            assertFailsWith<IllegalStateException> {
+                reservations.reserve("android-cache", 1_000L, 1L, reserveBytes = 100L)
+            }
+        } finally {
+            first.close()
+            second.close()
+        }
+    }
+
     @Test
     fun `share and open intents have distinct least privilege payload plans`() {
         val share = androidExternalFileIntentPlan(ExternalFileHandoffAction.Share)
@@ -62,6 +78,23 @@ class AndroidExternalFileHandoffTest {
             pruneExternalShareCache(root, requiredBytes = 1L, nowMillis = now)
 
             assertFalse(old.exists())
+            assertTrue(recent.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `cache pressure preserves newly handed off files`() {
+        val root = Files.createTempDirectory("nextcloud-handoff-test-").toFile()
+        try {
+            val recent = root.resolve("recent").apply { mkdir() }
+            recent.resolve("payload.bin").writeBytes(byteArrayOf(1, 2, 3))
+            val now = 10L * 60L * 60L * 1000L
+            recent.setLastModified(now)
+
+            pruneExternalShareCache(root, requiredBytes = Long.MAX_VALUE, nowMillis = now)
+
             assertTrue(recent.exists())
         } finally {
             root.deleteRecursively()

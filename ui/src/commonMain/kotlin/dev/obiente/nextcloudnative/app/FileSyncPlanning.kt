@@ -345,6 +345,13 @@ private fun planSyncPath(
     if (
         local?.kind == SyncEntryKind.File &&
         remote?.kind == SyncEntryKind.File &&
+        local.contentIdentityUnverified
+    ) {
+        return FileSyncOperation.Skipped(path, "Exact content verification is continuing in the background.")
+    }
+    if (
+        local?.kind == SyncEntryKind.File &&
+        remote?.kind == SyncEntryKind.File &&
         local.contentHash != null &&
         local.contentHash == remote.contentHash
     ) {
@@ -508,7 +515,9 @@ private fun resolveEditConflict(
     local: LocalSyncEntry,
     remote: RemoteSyncEntry,
     configuration: FileSyncConfiguration,
-): FileSyncOperation = resolveConflict(
+): FileSyncOperation = if (local.contentIdentityUnverified) {
+    FileSyncOperation.Skipped(path, "Exact content verification is continuing in the background.")
+} else resolveConflict(
     path,
     local,
     remote,

@@ -1705,8 +1705,11 @@ class DesktopNextcloudServices(
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
-            supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
-            maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            supportedActions = setOf(
+                ExternalFileHandoffAction.OpenWith,
+                ExternalFileHandoffAction.Share,
+            ),
+            maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
         ),
     )
 
@@ -3924,8 +3927,19 @@ class DesktopNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
-            downloadFile(session, userId, file.path, maximumBytes)
+        return externalFileHandoff.launchStreamed(file, action, capability) { output, maximumBytes ->
+            val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
+                limitMessage = "The file exceeds the platform byte representation.",
+                requestHeaders = mapOf("If-Match" to expectedEtag),
+                handoffEtag = expectedEtag,
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -3945,62 +3959,17 @@ class DesktopNextcloudServices(
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val authorization = Base64.getEncoder().encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                )
-                val started = System.nanoTime()
-                val networkAttempt = JvmNetworkRequestAttempt()
-                val request = Request.Builder()
-                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
-                    .get()
-                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    .header("Accept", "*/*")
-                    .header("OCS-APIRequest", "true")
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                val response = try {
-                    noRedirectHttpClient.newCall(request).execute()
-                } catch (failure: Throwable) {
-                    recordDesktopStreamingFailure(
-                        session = session,
-                        streamKind = "deck_attachment",
-                        startedNanos = started,
-                        attempt = networkAttempt,
-                        failure = failure,
-                    )
-                    throw failure
-                }
-                response.use {
-                    check(response.isSuccessful) {
-                        "Opening the Deck attachment failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength <= maximumBytes || contentLength == -1L) {
-                        "The Deck attachment is larger than the external handoff limit."
-                    }
-                    DesktopDetachedDownload(
-                        responseBody.byteStream().copyBoundedNetworkResponseTo(
-                            output = output,
-                            maxBytes = maximumBytes,
-                            onLimitExceeded = {
-                                error("The Deck attachment is larger than the external handoff limit.")
-                            },
-                            onNetworkReadFailure = { failure ->
-                                recordDesktopStreamingFailure(
-                                    session = session,
-                                    streamKind = "deck_attachment",
-                                    startedNanos = started,
-                                    attempt = networkAttempt,
-                                    failure = failure,
-                                )
-                            },
-                        ),
-                    )
-                }
-            }
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                accept = "*/*",
+                requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -4722,6 +4691,43 @@ class DesktopNextcloudServices(
                 }
             }
             is FileVersionRestoreHttpResult.Rejected -> error(result.message)
+        }
+    }
+
+    override suspend fun handoffFileVersionToExternalApp(
+        session: NextcloudSession,
+        userId: String,
+        file: NextcloudFile,
+        version: NextcloudFileVersion,
+        action: ExternalFileHandoffAction,
+    ): ExternalFileHandoffResult {
+        val fileId = requireMatchingFileVersion(file, version)
+        val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
+        val historicalCopy = file.copy(
+            name = historicalFileCopyName(file.name, version.id),
+            size = version.sizeBytes,
+            etag = version.etag ?: "version-${version.id}",
+        )
+        val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
+        val specification = fileVersionContentRequest(userId, fileId, version.id)
+        return externalFileHandoff.launchStreamed(historicalCopy, action, capability) { output, maximumBytes ->
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                limitMessage = "The historical version exceeds the platform byte representation.",
+                handoffEtag = expectedHandoffEtag,
+                validateResponseEtag = { returnedEtag ->
+                    if (version.etag != null && returnedEtag != null) {
+                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
+                            "The historical version changed while it was being exported."
+                        }
+                    }
+                },
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
+                },
+            )
         }
     }
 

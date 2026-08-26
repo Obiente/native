@@ -232,7 +232,7 @@ fun NextcloudMediaViewer(
             }.onSuccess { result ->
                 externalOpening = false
                 externalError = when (result) {
-                    is ExternalFileHandoffResult.Launched -> null
+                    is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled -> null
                     is ExternalFileHandoffResult.NoCompatibleApplication ->
                         "No installed app can play or display this format."
                     is ExternalFileHandoffResult.Rejected -> result.message

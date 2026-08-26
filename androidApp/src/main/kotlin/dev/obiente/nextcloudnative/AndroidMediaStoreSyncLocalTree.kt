@@ -5,10 +5,14 @@ import android.net.Uri
 import android.os.Environment
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 
 internal fun createAndroidFileSyncLocalTree(
@@ -76,6 +80,26 @@ internal class AndroidMediaStoreSyncLocalTree(
         require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
             "The local file changed during content verification."
         }
+        return hash
+    }
+
+    override fun contentRangeHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+    ): String {
+        require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
+        val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision)
+        require(before.entry.size == expectedBytes)
+        val hash = FileChannel.open(before.uri.toFile().toPath(), StandardOpenOption.READ).use { channel ->
+            channel.position(offset)
+            hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length)
+        }
+        val after = requireNotNull(resolve(path)) { "The local file disappeared during verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes)
         return hash
     }
 

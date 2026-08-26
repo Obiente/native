@@ -38,6 +38,24 @@ class FileSyncCoordinatorSnapshotTest {
             first.pairs.single { it.id == "pair-b" }.workItems.single().id,
             FileSyncDecisionChoice.UseLocal,
         )
+        first = first.copy(
+            pairs = first.pairs.map { pair ->
+                if (pair.id != "pair-b") pair else pair.copy(
+                    contentVerificationProgress = listOf(
+                        FileSyncContentVerificationProgress(
+                            candidate = FileSyncContentVerificationCandidate(
+                                "archive.bin",
+                                "local-archive",
+                                "remote-archive",
+                                10_000L,
+                            ),
+                            verifiedBytes = 4_096L,
+                            aggregateHash = "sha256:" + "44".repeat(32),
+                        ),
+                    ),
+                )
+            },
+        )
         val second = first.copy(pairs = first.pairs.reversed())
 
         val encoded = encodeFileSyncCoordinatorSnapshot(first)

@@ -40,7 +40,7 @@ fun decodeFileSyncCoordinatorSnapshot(bytes: ByteArray): FileSyncCoordinatorStat
 }
 
 internal fun encodeFileSyncPairRecord(pair: FileSyncPair): ByteArray {
-    require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
+    require(pair.baselines.isEmpty() && pair.contentVerificationProgress.isEmpty() && pair.workItems.isEmpty())
     return syncCoordinatorJson.encodeToString(pair.toSnapshot()).encodeToByteArray().also { encoded ->
         require(encoded.size <= MAX_FILE_SYNC_PAIR_RECORD_BYTES) { "The sync pair record is too large." }
     }
@@ -52,6 +52,21 @@ internal fun decodeFileSyncPairRecord(bytes: ByteArray): FileSyncPair {
     return syncCoordinatorJson.decodeFromString<FileSyncPairSnapshotV1>(text).toDomain().also { pair ->
         require(pair.baselines.isEmpty() && pair.workItems.isEmpty())
     }
+}
+
+internal fun encodeFileSyncContentVerificationProgressRecord(
+    progress: FileSyncContentVerificationProgress,
+): ByteArray = syncCoordinatorJson.encodeToString(progress.toSnapshot()).encodeToByteArray().also { encoded ->
+    require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync verification record is too large." }
+}
+
+internal fun decodeFileSyncContentVerificationProgressRecord(
+    bytes: ByteArray,
+): FileSyncContentVerificationProgress {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    return syncCoordinatorJson
+        .decodeFromString<FileSyncContentVerificationProgressSnapshotV1>(strictSyncRecordText(bytes))
+        .toDomain()
 }
 
 internal fun encodeFileSyncBaselineRecord(baseline: FileSyncBaseline): ByteArray =
@@ -100,9 +115,20 @@ private data class FileSyncPairSnapshotV1(
     val ignoredPatterns: List<String> = emptyList(),
     val priorityPatterns: List<String> = emptyList(),
     val baselines: List<FileSyncBaselineSnapshotV1>,
+    val contentVerificationProgress: List<FileSyncContentVerificationProgressSnapshotV1> = emptyList(),
     val workItems: List<FileSyncWorkSnapshotV1>,
     val nextWorkId: Long,
     val lastScanEpochMillis: Long?,
+)
+
+@Serializable
+private data class FileSyncContentVerificationProgressSnapshotV1(
+    val relativePath: String,
+    val localRevision: String,
+    val remoteEtag: String,
+    val expectedSizeBytes: Long,
+    val verifiedBytes: Long,
+    val aggregateHash: String,
 )
 
 @Serializable
@@ -185,6 +211,9 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
     ignoredPatterns = configuration.ignoredPatterns,
     priorityPatterns = configuration.priorityRules.map(FileSyncPriorityRule::pattern),
     baselines = baselines.sortedBy(FileSyncBaseline::relativePath).map(FileSyncBaseline::toSnapshot),
+    contentVerificationProgress = contentVerificationProgress
+        .sortedBy { it.candidate.relativePath }
+        .map(FileSyncContentVerificationProgress::toSnapshot),
     workItems = workItems.sortedBy(FileSyncWorkItem::id).map(FileSyncWorkItem::toSnapshot),
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
@@ -207,9 +236,26 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
         priorityRules = priorityPatterns.map(::FileSyncPriorityRule),
     ),
     baselines = baselines.map(FileSyncBaselineSnapshotV1::toDomain),
+    contentVerificationProgress = contentVerificationProgress
+        .map(FileSyncContentVerificationProgressSnapshotV1::toDomain),
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
+)
+
+private fun FileSyncContentVerificationProgress.toSnapshot() = FileSyncContentVerificationProgressSnapshotV1(
+    relativePath = candidate.relativePath,
+    localRevision = candidate.localRevision,
+    remoteEtag = candidate.remoteEtag,
+    expectedSizeBytes = requireNotNull(candidate.expectedSizeBytes),
+    verifiedBytes = verifiedBytes,
+    aggregateHash = aggregateHash,
+)
+
+private fun FileSyncContentVerificationProgressSnapshotV1.toDomain() = FileSyncContentVerificationProgress(
+    candidate = FileSyncContentVerificationCandidate(relativePath, localRevision, remoteEtag, expectedSizeBytes),
+    verifiedBytes = verifiedBytes,
+    aggregateHash = aggregateHash,
 )
 
 private fun FileSyncBaseline.toSnapshot(): FileSyncBaselineSnapshotV1 = FileSyncBaselineSnapshotV1(

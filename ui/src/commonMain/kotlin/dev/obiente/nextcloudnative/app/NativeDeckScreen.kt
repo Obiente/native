@@ -1909,13 +1909,13 @@ private fun DeckAttachment.toDeckUiAttachment(
         createdBy,
     ).joinToString(" - ").ifBlank { null },
         canOpen = handoffCapability != null &&
-            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions &&
-            (byteCount == null || byteCount <= handoffCapability.maximumFileBytes),
+            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions,
         canDelete = canEdit,
     )
 
 private fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? = when (this) {
     is ExternalFileHandoffResult.Launched -> null
+    is ExternalFileHandoffResult.Cancelled -> null
     is ExternalFileHandoffResult.NoCompatibleApplication ->
         "No installed app can open this attachment."
     is ExternalFileHandoffResult.Rejected -> message

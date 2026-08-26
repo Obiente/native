@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 
 class FileSyncContentIdentityTest {
     @Test
@@ -192,6 +193,54 @@ class FileSyncContentIdentityTest {
             ),
         )
         assertEquals(emptyList(), candidates.withinFileSyncContentVerificationBudget(maximumCandidates = 0))
+
+        val nineGiB = FileSyncContentVerificationCandidate(
+            "large-video.mkv",
+            "local-large",
+            "remote-large",
+            9L * 1024L * 1024L * 1024L,
+        )
+        assertEquals(emptyList(), listOf(nineGiB).withinFileSyncContentVerificationBudget())
+    }
+
+    @Test
+    fun `large identity checks advance in fair bounded slices without becoming conflicts`() {
+        val large = FileSyncContentVerificationCandidate(
+            "large-video.mkv",
+            "local-large",
+            "remote-large",
+            9L * 1024L * 1024L * 1024L,
+        )
+        val small = FileSyncContentVerificationCandidate("notes.txt", "local-small", "remote-small", 12L)
+        val progress = FileSyncContentVerificationProgress(
+            large,
+            verifiedBytes = 8L * 1024L * 1024L,
+            aggregateHash = "sha256:" + "01".repeat(32),
+        )
+
+        val slices = planFileSyncContentVerificationSlices(
+            candidates = listOf(large, small),
+            progress = listOf(progress),
+            maximumSliceBytes = 1024,
+            maximumTotalBytes = 2048L,
+            maximumSlices = 2,
+        )
+
+        assertEquals(listOf("notes.txt", "large-video.mkv"), slices.map { it.candidate.relativePath })
+        assertEquals(listOf(0L, progress.verifiedBytes), slices.map(FileSyncContentVerificationSlice::offset))
+        assertEquals(12, slices.first().length)
+
+        val largeBytes = requireNotNull(large.expectedSizeBytes)
+        val pending = markPendingFileSyncContentVerification(
+            FileSyncContentIdentitySnapshot(
+                localEntries = listOf(fileOnDevice(large.relativePath, large.localRevision, largeBytes)),
+                remoteEntries = listOf(fileOnServer(large.relativePath, large.remoteEtag, largeBytes)),
+            ),
+            listOf(large),
+        )
+        val operation = planFileSync(pending.localEntries, pending.remoteEntries, emptyList(), CONFIGURATION)
+            .operations.single()
+        assertIs<FileSyncOperation.Skipped>(operation)
     }
 
     private fun fileOnDevice(path: String, revision: String, size: Long, hash: String? = null) =

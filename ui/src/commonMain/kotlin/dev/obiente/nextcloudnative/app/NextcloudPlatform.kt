@@ -1202,7 +1202,7 @@ interface NextcloudPlatformServices {
         session: NextcloudSession,
         userId: String,
         path: String,
-        maxBytes: Long = DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES,
+        maxBytes: Long = MAX_IN_MEMORY_FILE_CONTENT_BYTES,
     ): NextcloudFileContent
 
     /**
@@ -1641,8 +1641,8 @@ interface NextcloudPlatformServices {
 const val DEFAULT_PREVIEW_DIMENSION = 512
 const val MIN_PREVIEW_DIMENSION = 32
 const val MAX_PREVIEW_DIMENSION = 2048
-const val DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES = 64L * 1024L * 1024L
-const val MAX_OFFLINE_FILE_BYTES = 512L * 1024L * 1024L
+/** Safety budget for APIs that intentionally return a detached ByteArray, never a transfer limit. */
+const val MAX_IN_MEMORY_FILE_CONTENT_BYTES = 64L * 1024L * 1024L
 const val MAX_EDITABLE_TEXT_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_ACTIVITY_LIMIT = 50
 const val DEFAULT_TALK_MESSAGE_PAGE_SIZE = 100
@@ -1668,7 +1668,7 @@ fun NextcloudApiRequest.requireSafe(): NextcloudApiRequest {
     val maximumAllowedResponse = if (
         relativePath.matches(Regex("^/index\\.php/apps/memories/api/image/decodable/[1-9][0-9]*$"))
     ) {
-        DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES
+        MAX_IN_MEMORY_FILE_CONTENT_BYTES
     } else {
         MAX_DYNAMIC_API_RESPONSE_LIMIT_BYTES
     }

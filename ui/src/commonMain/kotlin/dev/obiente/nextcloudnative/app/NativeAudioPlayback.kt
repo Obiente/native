@@ -14,8 +14,6 @@ import dev.obiente.nextcloudnative.nativeui.runtime.nativeAudioTrack
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMediaPresentation
 import kotlinx.coroutines.flow.StateFlow
 
-internal const val MAX_STAGED_AUDIO_BYTES = 512L * 1024L * 1024L
-
 internal data class NativeAudioSourceCapability(
     private val fileDownloadPrefix: String,
     private val albumCoverTemplate: String? = null,
@@ -325,9 +323,7 @@ internal data class NativeAudioPlaybackSource(
         require(mimeType.startsWith("audio/") && mimeType.length <= 128) {
             "Playback sources require a bounded audio MIME type."
         }
-        require(knownSize == null || knownSize in 1..MAX_STAGED_AUDIO_BYTES) {
-            "Playback source size exceeds the supported limit."
-        }
+        require(knownSize == null || knownSize > 0L) { "Playback source size must be positive." }
         listOfNotNull(title, artist, album).forEach { metadata ->
             require(metadata.length <= 512 && metadata.none(Char::isISOControl)) {
                 "Playback metadata must be bounded display text."

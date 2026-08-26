@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.ServerSocket
 import java.nio.file.Files
@@ -20,6 +22,12 @@ import okhttp3.Headers.Companion.headersOf
 import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
+    @Test
+    fun largeDavUploadsSkipOnlyTheOptionalPrecomputedChecksumPass() {
+        assertTrue(shouldPrecomputeDavChecksum(byteCount = 64L * 1024L * 1024L))
+        assertFalse(shouldPrecomputeDavChecksum(byteCount = 12L * 1024L * 1024L * 1024L))
+    }
+
     @Test
     fun readStreamsContentWithMetadataAndEncodedPath() = RecordingServer().use { server ->
         server.enqueue(
@@ -72,6 +80,29 @@ class NextcloudDocumentWebDavTest {
                 assertTrue(output.size() <= 5)
             }
         }
+    }
+
+    @Test
+    fun contentIdentityRangeIsEtagPinnedAndStrictlyBounded() = RecordingServer().use { server ->
+        server.enqueue(
+            206,
+            mapOf("ETag" to "\"large-1\"", "Content-Range" to "bytes 2-4/8"),
+            body = "cde",
+        )
+
+        val hash = NextcloudDocumentWebDav().readFileRangeHash(
+            session = server.session,
+            userId = "alice",
+            path = "large.bin",
+            expectedEtag = "\"large-1\"",
+            expectedBytes = 8L,
+            offset = 2L,
+            length = 3,
+        )
+
+        assertEquals(hashExactJvmFileSyncSlice(ByteArrayInputStream("cde".encodeToByteArray()), 3), hash)
+        assertEquals("bytes=2-4", server.request(0).header("Range"))
+        assertEquals("\"large-1\"", server.request(0).header("If-Match"))
     }
 
     @Test

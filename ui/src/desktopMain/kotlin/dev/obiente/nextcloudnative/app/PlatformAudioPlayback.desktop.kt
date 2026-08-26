@@ -197,10 +197,10 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                     throw IOException("Audio download failed with HTTP ${response.code}.")
                 }
                 val body = response.body
-                val advertisedSize = body.contentLength()
-                if (advertisedSize > MAX_STAGED_AUDIO_BYTES) {
-                    throw IOException("This audio file exceeds the 512 MiB desktop playback limit.")
-                }
+                val maximumBytes = stagedFileTransferLimit(
+                    availableBytes = Files.getFileStore(destination).usableSpace.coerceAtLeast(0L),
+                    declaredByteCount = body.contentLength().takeIf { it >= 0L },
+                )
                 body.byteStream().use { input ->
                     Files.newOutputStream(destination, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
                         val buffer = ByteArray(DEFAULT_AUDIO_COPY_BUFFER_BYTES)
@@ -208,9 +208,9 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                         while (true) {
                             val read = input.read(buffer)
                             if (read < 0) break
-                            total += read
-                            if (total > MAX_STAGED_AUDIO_BYTES) {
-                                throw IOException("This audio file exceeds the 512 MiB desktop playback limit.")
+                            total = Math.addExact(total, read.toLong())
+                            check(total <= maximumBytes) {
+                                "There is not enough free storage to stage this audio file."
                             }
                             output.write(buffer, 0, read)
                         }

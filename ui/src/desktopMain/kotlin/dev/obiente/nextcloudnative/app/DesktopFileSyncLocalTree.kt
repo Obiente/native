@@ -252,6 +252,29 @@ internal class DesktopFileSyncLocalTree(
         return after.entry
     }
 
+    fun contentRangeHash(
+        relativePath: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+        shouldContinue: () -> Boolean,
+    ): String {
+        require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
+        val before = requireNotNull(resolve(relativePath)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision)
+        require(before.entry.size == expectedBytes)
+        val hash = FileChannel.open(before.path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
+            channel.position(offset)
+            hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length, shouldContinue)
+        }
+        val after = requireNotNull(resolve(relativePath)) { "The local file disappeared during verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
+            "The local file changed during content verification."
+        }
+        return hash
+    }
+
     fun createDirectory(relativePath: String, expectedLocalRevision: String?) {
         val current = resolve(relativePath)
         if (expectedLocalRevision == null) {

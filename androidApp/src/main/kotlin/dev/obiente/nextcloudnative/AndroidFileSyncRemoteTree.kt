@@ -108,18 +108,24 @@ internal class AndroidFileSyncRemoteTree(
         expectedRemoteEtag: String,
         destination: File,
         maximumBytes: Long,
+    ): RemoteSyncEntry = FileOutputStream(destination).use { output ->
+        streamDownload(relativePath, expectedRemoteEtag, output, maximumBytes).also { output.fd.sync() }
+    }
+
+    fun streamDownload(
+        relativePath: String,
+        expectedRemoteEtag: String,
+        destination: OutputStream,
+        maximumBytes: Long,
     ): RemoteSyncEntry {
-        FileOutputStream(destination).use { output ->
-            webDav.readFile(
-                session = session,
-                userId = userId,
-                path = fullPath(relativePath),
-                destination = output,
-                maximumBytes = maximumBytes,
-                expectedEtag = expectedRemoteEtag,
-            )
-            output.fd.sync()
-        }
+        webDav.readFile(
+            session = session,
+            userId = userId,
+            path = fullPath(relativePath),
+            destination = destination,
+            maximumBytes = maximumBytes,
+            expectedEtag = expectedRemoteEtag,
+        )
         val after = requireNotNull(resolve(relativePath)) { "The server file disappeared while downloading." }
         require(after.entry.etag == expectedRemoteEtag) {
             "The server file changed while downloading."
@@ -165,6 +171,31 @@ internal class AndroidFileSyncRemoteTree(
         }
         val actual = "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         return actual == expectedContentHash
+    }
+
+    fun contentRangeHash(
+        relativePath: String,
+        expectedRemoteEtag: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+    ): String {
+        val hash = webDav.readFileRangeHash(
+            session = session,
+            userId = userId,
+            path = fullPath(relativePath),
+            expectedEtag = expectedRemoteEtag,
+            expectedBytes = expectedBytes,
+            offset = offset,
+            length = length,
+        )
+        val after = requireNotNull(resolve(relativePath)) {
+            "The server file disappeared during content verification."
+        }
+        require(after.entry.etag == expectedRemoteEtag && after.entry.size == expectedBytes && !after.isDirectory) {
+            "The server file changed during content verification."
+        }
+        return hash
     }
 
     fun createDirectory(relativePath: String, expectedRemoteEtag: String?) {

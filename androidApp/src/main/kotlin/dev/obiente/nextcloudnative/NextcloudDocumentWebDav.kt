@@ -38,7 +38,7 @@ internal object NoDocumentRequestCancellation : DocumentRequestCancellation {
 
 /** Bounded read and conflict-aware mutation WebDAV client for the Android DocumentsProvider. */
 internal class NextcloudDocumentWebDav(
-    private val client: OkHttpClient = OkHttpClient(),
+    internal val client: OkHttpClient = OkHttpClient(),
     private val cloudMutationsAllowed: () -> Boolean = { true },
 ) {
     fun readFile(
@@ -309,7 +309,8 @@ internal class NextcloudDocumentWebDav(
         chunkNumber: Int,
         cancellation: DocumentRequestCancellation,
     ) {
-        require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && offset + length <= source.length())
+        val end = Math.addExact(offset, length)
+        require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && end <= source.length())
         val body = fileRangeRequestBody(source, offset, length, cancellation)
         execute(
             requestBuilder(session, chunkUploadUrl(session, userId, uploadId) + "/${chunkNumber.toString().padStart(5, '0')}")
@@ -561,7 +562,7 @@ internal class NextcloudDocumentWebDav(
             encodeDocumentSearchPathSegment(userId) + "/" + encodeDocumentSearchPathSegment(uploadId)
     }
 
-    private fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
+    internal fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
         val credentials = "${session.loginName}:${session.appPassword}"
         val basic = Base64.getEncoder().encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
         return Request.Builder()
@@ -741,21 +742,30 @@ private fun org.w3c.dom.Node.searchTexts(namespace: String, localName: String): 
 private fun File.sha256ChecksumForDav(
     cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
 ): String? {
-    if (!isFile || length() !in 0..MAX_DAV_CHECKSUM_FILE_BYTES) return null
+    if (!isFile || !shouldPrecomputeDavChecksum(length())) return null
     val digest = MessageDigest.getInstance("SHA-256")
     FileInputStream(this).use { input ->
         val buffer = ByteArray(CHECKSUM_BUFFER_BYTES)
-        var total = 0L
         while (true) {
             cancellation.throwIfCancelled()
             val read = input.read(buffer)
             if (read < 0) break
-            total += read
-            if (total > MAX_DAV_CHECKSUM_FILE_BYTES) return null
             digest.update(buffer, 0, read)
         }
     }
     return "SHA256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+}
+
+/**
+ * The checksum header is optional and must be known before OkHttp starts the request. Avoid a
+ * second complete local read for large streamed uploads; transfer eligibility is unaffected.
+ */
+internal fun shouldPrecomputeDavChecksum(
+    byteCount: Long,
+    localReadBudgetBytes: Long = OPTIONAL_DAV_CHECKSUM_LOCAL_READ_BUDGET_BYTES,
+): Boolean {
+    require(byteCount >= 0L && localReadBudgetBytes >= 0L)
+    return byteCount <= localReadBudgetBytes
 }
 
 private fun encodeDocumentSearchPathSegment(value: String): String = buildString {
@@ -786,5 +796,5 @@ private const val DOCUMENT_SEARCH_OC = "http://owncloud.org/ns"
 private const val DOCUMENT_SEARCH_NC = "http://nextcloud.org/ns"
 private const val MAX_DAV_CHECKSUMS_PER_FILE = 8
 private const val MAX_DAV_CHECKSUM_LENGTH = 256
-private const val MAX_DAV_CHECKSUM_FILE_BYTES = 64L * 1024L * 1024L
 private const val CHECKSUM_BUFFER_BYTES = 32 * 1024
+private const val OPTIONAL_DAV_CHECKSUM_LOCAL_READ_BUDGET_BYTES = 64L * 1024L * 1024L

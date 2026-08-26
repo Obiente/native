@@ -7731,7 +7731,7 @@ private fun FilesScreen(
                         )
                     }.onSuccess { result ->
                         when (result) {
-                            is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled -> handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message
@@ -7764,7 +7764,8 @@ private fun FilesScreen(
                         )
                     }.onSuccess { result ->
                         when (result) {
-                            is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Launched, is ExternalFileHandoffResult.Cancelled ->
+                                handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message
@@ -8738,7 +8739,7 @@ internal fun FileActionMenu(
                     externalHandoffCapability?.supportedActions.orEmpty(),
                 offlineStorage = offlineStorageSupported,
                 platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
-                maximumExternalFileBytes = externalHandoffCapability?.maximumFileBytes,
+                maximumInMemoryExternalFileBytes = externalHandoffCapability?.maximumInMemoryFileBytes,
                 seekableExternalFileStreaming =
                     externalHandoffCapability?.supportsSeekableRemoteStreaming == true,
             ),

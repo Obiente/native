@@ -129,13 +129,13 @@ class FileVersionHistoryTest {
             "opaque-user",
             42L,
             "1730000000",
-            MAX_FILE_VERSION_DOWNLOAD_BYTES,
+            MAX_FILE_VERSION_IN_MEMORY_BYTES,
         )
         assertEquals(
-            "bytes=0-${MAX_FILE_VERSION_DOWNLOAD_BYTES - 1L}",
+            "bytes=0-${MAX_FILE_VERSION_IN_MEMORY_BYTES - 1L}",
             export.headers.getValue("Range"),
         )
-        assertEquals(MAX_FILE_VERSION_DOWNLOAD_BYTES, export.maximumResponseBytes)
+        assertEquals(MAX_FILE_VERSION_IN_MEMORY_BYTES, export.maximumResponseBytes)
         val knownSmall = boundedFileVersionContentRequest(
             "opaque-user",
             42L,
@@ -150,7 +150,7 @@ class FileVersionHistoryTest {
                 "opaque-user",
                 42L,
                 "1730000000",
-                MAX_FILE_VERSION_DOWNLOAD_BYTES + 1L,
+                MAX_FILE_VERSION_IN_MEMORY_BYTES + 1L,
             )
         }
     }
@@ -234,20 +234,20 @@ class FileVersionHistoryTest {
         val capability = ExternalFileHandoffSupport.Available(
             ExternalFileHandoffCapability(
                 supportedActions = setOf(ExternalFileHandoffAction.Share),
-                maximumFileBytes = MAX_FILE_VERSION_DOWNLOAD_BYTES,
+                maximumInMemoryFileBytes = MAX_FILE_VERSION_IN_MEMORY_BYTES,
             ),
         )
 
         assertEquals(12L, versionPreviewByteLimit(small))
         assertEquals(MAX_FILE_VERSION_PREVIEW_BYTES, versionPreviewByteLimit(unknown))
         assertTrue(canExportFileVersion(capability, small))
-        assertFalse(
+        assertTrue(
             canExportFileVersion(
                 capability,
                 version(
                     fileId = 42L,
                     id = "1710000000",
-                    sizeBytes = MAX_FILE_VERSION_DOWNLOAD_BYTES + 1L,
+                    sizeBytes = MAX_FILE_VERSION_IN_MEMORY_BYTES + 1L,
                 ),
             ),
         )
@@ -298,7 +298,7 @@ class FileVersionHistoryTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            FileVersionByteRange(0L, MAX_FILE_VERSION_DOWNLOAD_BYTES)
+            FileVersionByteRange(0L, MAX_FILE_VERSION_IN_MEMORY_BYTES)
         }
     }
 

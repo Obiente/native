@@ -20,13 +20,15 @@ import dev.obiente.nextcloudnative.app.FileOfflineJobStatus
 import dev.obiente.nextcloudnative.app.FileOfflineKey
 import dev.obiente.nextcloudnative.app.FileOfflineRequest
 import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
-import dev.obiente.nextcloudnative.app.MAX_OFFLINE_FILE_BYTES
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.markFileOfflineJobRunning
+import dev.obiente.nextcloudnative.app.jvmStagingStorageKey
 import dev.obiente.nextcloudnative.app.planFileOfflineRequest
 import dev.obiente.nextcloudnative.app.recordFileOfflineJobResult
+import dev.obiente.nextcloudnative.app.sharedJvmStagingSpaceReservations
+import dev.obiente.nextcloudnative.app.STAGED_FILE_FREE_SPACE_RESERVE_BYTES
 import dev.obiente.nextcloudnative.app.fileOfflineCenterSnapshot
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import okhttp3.OkHttpClient
@@ -162,9 +164,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
             return setFolderAvailable(session, userId, file, available)
         }
         val fileSize = file.size
-        require(fileSize == null || fileSize <= MAX_OFFLINE_FILE_BYTES) {
-            "This file is larger than the ${MAX_OFFLINE_FILE_BYTES / (1024 * 1024)} MiB offline limit."
-        }
+        require(fileSize == null || fileSize >= 0L) { "The file has an invalid size." }
         val accountId = NextcloudDocumentIds.accountKey(session)
         val key = FileOfflineKey(accountId, file.path)
         val update = synchronized(STATE_LOCK) {
@@ -445,87 +445,109 @@ internal class AndroidFileOfflineRepository(context: Context) {
             finish(job.id, FileOfflineJobResult.PermanentFailure("Could not prepare offline storage."))
             return AndroidOfflineExecutionOutcome.Complete
         }
-        val temporary = File.createTempFile("offline-", ".part", accountDirectory)
-        return try {
-            val digest = MessageDigest.getInstance("SHA-256")
-            val response = FileOutputStream(temporary).use { fileOutput ->
-                val destination = DigestOutputStream(BufferedOutputStream(fileOutput), digest)
-                val read = webDav.readFile(
-                    session = session,
-                    userId = userId,
-                    path = job.key.relativePath,
-                    destination = destination,
-                    maximumBytes = MAX_OFFLINE_FILE_BYTES,
-                    expectedEtag = expectedEtag,
-                    cancellation = cancellation,
-                )
-                destination.flush()
-                fileOutput.fd.sync()
-                read
-            }
-            if (response.etag != null && response.etag != expectedEtag) {
-                temporary.delete()
-                finish(
-                    job.id,
-                    FileOfflineJobResult.NeedsAttention(
-                        FileSyncDecisionReason.SimultaneousEdit,
-                        "The server file changed while its offline copy was downloading.",
-                    ),
-                )
-                return AndroidOfflineExecutionOutcome.Complete
-            }
-            val revision = "sha256:${digest.digest().toHex()}"
-            val destination = contentFile(job.key, revision)
-            publishGeneration(temporary, destination)
-            val committed = finish(
-                job.id,
-                FileOfflineJobResult.Downloaded(revision, expectedEtag),
+        val reservation = try {
+            sharedJvmStagingSpaceReservations.reserve(
+                storageKey = jvmStagingStorageKey(accountDirectory),
+                usableBytes = accountDirectory.usableSpace.coerceAtLeast(0L),
+                declaredByteCount = started.record.descriptor.size,
+                reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
             )
-            if (committed) notifyOfflineChanged(session, job.key.relativePath)
-            if (!committed && !generationIsReferenced(job.key, revision)) destination.delete()
-            started.record.localRevision
-                ?.takeIf { it != revision }
-                ?.let { contentFile(job.key, it).delete() }
-            AndroidOfflineExecutionOutcome.Complete
-        } catch (failure: Throwable) {
-            temporary.delete()
-            when (failure) {
-                is IOException -> retry(job.id, "Network interrupted while downloading this file.")
-                is DocumentWebDavException -> when (failure.error) {
-                    DocumentWebDavError.Conflict -> {
+        } catch (_: IllegalStateException) {
+            finish(
+                job.id,
+                FileOfflineJobResult.PermanentFailure(
+                    "There is not enough free storage for this offline file.",
+                ),
+            )
+            return AndroidOfflineExecutionOutcome.Complete
+        }
+        return reservation.use {
+            val temporary = File.createTempFile("offline-", ".part", accountDirectory)
+            try {
+                val digest = MessageDigest.getInstance("SHA-256")
+                val response = FileOutputStream(temporary).use { fileOutput ->
+                    val destination = DigestOutputStream(BufferedOutputStream(fileOutput), digest)
+                    val read = webDav.readFile(
+                        session = session,
+                        userId = userId,
+                        path = job.key.relativePath,
+                        destination = destination,
+                        maximumBytes = reservation.maximumBytes,
+                        expectedEtag = expectedEtag,
+                        cancellation = cancellation,
+                    )
+                    destination.flush()
+                    fileOutput.fd.sync()
+                    read
+                }
+                if (response.etag != null && response.etag != expectedEtag) {
+                    temporary.delete()
+                    finish(
+                        job.id,
+                        FileOfflineJobResult.NeedsAttention(
+                            FileSyncDecisionReason.SimultaneousEdit,
+                            "The server file changed while its offline copy was downloading.",
+                        ),
+                    )
+                    return AndroidOfflineExecutionOutcome.Complete
+                }
+                val revision = "sha256:${digest.digest().toHex()}"
+                val destination = contentFile(job.key, revision)
+                publishGeneration(temporary, destination)
+                val committed = finish(
+                    job.id,
+                    FileOfflineJobResult.Downloaded(revision, expectedEtag),
+                )
+                if (committed) notifyOfflineChanged(session, job.key.relativePath)
+                if (!committed && !generationIsReferenced(job.key, revision)) destination.delete()
+                started.record.localRevision
+                    ?.takeIf { it != revision }
+                    ?.let { contentFile(job.key, it).delete() }
+                AndroidOfflineExecutionOutcome.Complete
+            } catch (failure: Throwable) {
+                temporary.delete()
+                when (failure) {
+                    is kotlinx.coroutines.CancellationException -> throw failure
+                    is IOException -> retry(job.id, "Network interrupted while downloading this file.")
+                    is DocumentWebDavException -> when (failure.error) {
+                        DocumentWebDavError.Conflict -> {
+                            finish(
+                                job.id,
+                                FileOfflineJobResult.NeedsAttention(
+                                    FileSyncDecisionReason.SimultaneousEdit,
+                                    "The server file changed before the offline download could start.",
+                                ),
+                            )
+                            AndroidOfflineExecutionOutcome.Complete
+                        }
+                        DocumentWebDavError.Throttled -> retry(
+                            job.id,
+                            failure.message ?: "Nextcloud asked this download to wait.",
+                            failure.retryAfterSeconds?.let { seconds ->
+                                System.currentTimeMillis() + seconds * 1_000L
+                            },
+                        )
+                        DocumentWebDavError.Locked, DocumentWebDavError.Server ->
+                            retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
+                        else -> {
+                            finish(
+                                job.id,
+                                FileOfflineJobResult.PermanentFailure(
+                                    failure.message ?: "Could not download this file for offline use.",
+                                ),
+                            )
+                            AndroidOfflineExecutionOutcome.Complete
+                        }
+                    }
+                    else -> {
                         finish(
                             job.id,
-                            FileOfflineJobResult.NeedsAttention(
-                                FileSyncDecisionReason.SimultaneousEdit,
-                                "The server file changed before the offline download could start.",
+                            FileOfflineJobResult.PermanentFailure(
+                                failure.message?.take(512) ?: "Could not store the offline file.",
                             ),
                         )
                         AndroidOfflineExecutionOutcome.Complete
                     }
-                    DocumentWebDavError.Throttled -> retry(
-                        job.id,
-                        failure.message ?: "Nextcloud asked this download to wait.",
-                        failure.retryAfterSeconds?.let { seconds ->
-                            System.currentTimeMillis() + seconds * 1_000L
-                        },
-                    )
-                    DocumentWebDavError.Locked, DocumentWebDavError.Server ->
-                        retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
-                    else -> {
-                        finish(job.id, FileOfflineJobResult.PermanentFailure(
-                            failure.message ?: "Could not download this file for offline use.",
-                        ))
-                        AndroidOfflineExecutionOutcome.Complete
-                    }
-                }
-                else -> {
-                    finish(
-                        job.id,
-                        FileOfflineJobResult.PermanentFailure(
-                            failure.message?.take(512) ?: "Could not store the offline file.",
-                        ),
-                    )
-                    AndroidOfflineExecutionOutcome.Complete
                 }
             }
         }

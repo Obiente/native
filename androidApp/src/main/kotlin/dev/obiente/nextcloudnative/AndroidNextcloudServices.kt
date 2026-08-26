@@ -109,7 +109,7 @@ import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffResult
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffSupport
-import dev.obiente.nextcloudnative.app.MAX_EXTERNAL_FILE_HANDOFF_BYTES
+import dev.obiente.nextcloudnative.app.MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES
 import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.NextcloudFileMutation
 import dev.obiente.nextcloudnative.app.NextcloudFileMutationResult
@@ -189,6 +189,7 @@ import dev.obiente.nextcloudnative.app.boundedFileVersionContentRequest
 import dev.obiente.nextcloudnative.app.encodedFormBody
 import dev.obiente.nextcloudnative.app.fileOperationException
 import dev.obiente.nextcloudnative.app.fileVersionHistoryRequest
+import dev.obiente.nextcloudnative.app.fileVersionContentRequest
 import dev.obiente.nextcloudnative.app.fileVersionRestoreRequest
 import dev.obiente.nextcloudnative.app.historicalFileCopyName
 import dev.obiente.nextcloudnative.app.isExactHttpByteContentRange
@@ -504,7 +505,7 @@ internal class AndroidNextcloudServices(
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
             supportedActions = ExternalFileHandoffAction.entries.toSet(),
-            maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
             supportsSeekableRemoteStreaming = true,
         ),
     )
@@ -1102,7 +1103,7 @@ internal class AndroidNextcloudServices(
                     capability = capability,
                 )
             }
-            if (fileSize != null && fileSize > capability.maximumFileBytes) {
+            if (fileSize != null && fileSize > capability.maximumInMemoryFileBytes) {
                 return externalFileHandoff.launchLargeStagedRemote(
                     session = session,
                     file = file,
@@ -1114,9 +1115,24 @@ internal class AndroidNextcloudServices(
                         userId = userId,
                         file = file,
                         output = output,
-                        expectedBytes = expectedBytes,
+                        maximumBytes = expectedBytes,
                     )
                 }
+            }
+        }
+        if (fileSize == null) {
+            return externalFileHandoff.launchStreamedRemote(
+                file = file,
+                action = action,
+                capability = capability,
+            ) { output, maximumBytes ->
+                downloadExternalHandoffCopy(
+                    session = session,
+                    userId = userId,
+                    file = file,
+                    output = output,
+                    maximumBytes = maximumBytes,
+                )
             }
         }
         return externalFileHandoff.launch(file, action, capability) { maximumBytes ->
@@ -1161,9 +1177,9 @@ internal class AndroidNextcloudServices(
         userId: String,
         file: NextcloudFile,
         output: FileOutputStream,
-        expectedBytes: Long,
+        maximumBytes: Long,
     ): AndroidDetachedDownload = withContext(Dispatchers.IO) {
-        require(expectedBytes > 0L)
+        require(maximumBytes > 0L)
         val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
         val cancellation = CoroutineDocumentRequestCancellation(
             requireNotNull(currentCoroutineContext()[Job]),
@@ -1174,17 +1190,19 @@ internal class AndroidNextcloudServices(
                 userId = userId,
                 path = file.path,
                 destination = output,
-                maximumBytes = expectedBytes,
+                maximumBytes = maximumBytes,
                 expectedEtag = expectedEtag,
                 cancellation = cancellation,
             )
-            check(result.byteCount == expectedBytes) {
-                "The server returned an incomplete external-file copy."
+            file.size?.let { expectedBytes ->
+                check(result.byteCount == expectedBytes) {
+                    "The server returned an incomplete external-file copy."
+                }
             }
             check(result.etag == null || result.etag == expectedEtag) {
                 "The server file changed while it was being prepared for another app."
             }
-            AndroidDetachedDownload(result.byteCount, result.contentType)
+            AndroidDetachedDownload(result.byteCount, result.contentType, expectedEtag)
         } finally {
             cancellation.close()
         }
@@ -1206,64 +1224,17 @@ internal class AndroidNextcloudServices(
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val authorization = Base64.encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                    Base64.NO_WRAP,
-                )
-                val started = System.nanoTime()
-                val networkAttempt = JvmNetworkRequestAttempt()
-                val request = Request.Builder()
-                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
-                    .get()
-                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    .header("Accept", "*/*")
-                    .header("OCS-APIRequest", "true")
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                val response = try {
-                    noRedirectHttpClient.newCall(request).execute()
-                } catch (failure: Throwable) {
-                    recordStreamingFailure(
-                        session = session,
-                        streamKind = "deck_attachment",
-                        startedNanos = started,
-                        attempt = networkAttempt,
-                        failure = failure,
-                    )
-                    throw failure
-                }
-                response.use {
-                    check(response.isSuccessful) {
-                        "Opening the Deck attachment failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength <= maximumBytes || contentLength == -1L) {
-                        "The Deck attachment is larger than the external handoff limit."
-                    }
-                    AndroidDetachedDownload(
-                        byteCount = responseBody.byteStream().copyBoundedNetworkResponseTo(
-                            output = output,
-                            maxBytes = maximumBytes,
-                            onLimitExceeded = {
-                                error("The Deck attachment is larger than the external handoff limit.")
-                            },
-                            onNetworkReadFailure = { failure ->
-                                recordStreamingFailure(
-                                    session = session,
-                                    streamKind = "deck_attachment",
-                                    startedNanos = started,
-                                    attempt = networkAttempt,
-                                    failure = failure,
-                                )
-                            },
-                        ),
-                        mimeType = responseBody.contentType()?.toString(),
-                    )
-                }
-            }
+            downloadAndroidDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                accept = "*/*",
+                requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                onNetworkFailure = { started, attempt, failure ->
+                    recordStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -2691,10 +2662,30 @@ internal class AndroidNextcloudServices(
         val historicalCopy = file.copy(
             name = historicalFileCopyName(file.name, version.id),
             size = version.sizeBytes,
-            etag = version.etag,
+            etag = version.etag ?: "version-${version.id}",
         )
-        return externalFileHandoff.launch(historicalCopy, action, capability) { maximumBytes ->
-            downloadFileVersion(session, userId, file, version, maximumBytes)
+        val fileId = requireMatchingFileVersion(file, version)
+        val specification = fileVersionContentRequest(userId, fileId, version.id)
+        val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
+        val listedVersionEtag = version.etag
+        return externalFileHandoff.launchStreamedRemote(historicalCopy, action, capability) { output, maximumBytes ->
+            downloadAndroidDetachedFile(
+                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                limitMessage = "The historical version exceeds the platform byte representation.",
+                handoffEtag = expectedHandoffEtag,
+                validateResponseEtag = { returnedEtag ->
+                    if (listedVersionEtag != null && returnedEtag != null) {
+                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(listedVersionEtag)) {
+                            "The historical version changed while it was being exported."
+                        }
+                    }
+                },
+                onNetworkFailure = { started, attempt, failure ->
+                    recordStreamingFailure(session, "file_version", started, attempt, failure)
+                },
+            )
         }
     }
 

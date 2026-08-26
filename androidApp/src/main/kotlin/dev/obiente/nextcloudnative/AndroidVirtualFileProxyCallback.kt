@@ -219,9 +219,6 @@ internal class AndroidWritableFileProxyCallback(
         }
         val end = runCatching { Math.addExact(offset, requestedSize.toLong()) }
             .getOrElse { throw ErrnoException("document writeback write", OsConstants.EFBIG) }
-        if (end > MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) {
-            throw ErrnoException("document writeback write", OsConstants.EFBIG)
-        }
         val available = staging.parentFile?.usableSpace?.coerceAtLeast(0L) ?: 0L
         if (!androidDocumentWriteFitsCapacity(random.length(), end, available)) {
             throw ErrnoException("document writeback write", OsConstants.ENOSPC)
@@ -268,8 +265,6 @@ internal fun androidDocumentWriteFitsCapacity(
     reserveBytes: Long = MIN_ANDROID_DOCUMENT_FREE_BYTES,
 ): Boolean {
     if (currentBytes < 0L || writeEnd < 0L || availableBytes < 0L || reserveBytes < 0L) return false
-    if (currentBytes > MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) return false
-    if (writeEnd > MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) return false
     val growth = (writeEnd - currentBytes).coerceAtLeast(0L)
     return availableBytes >= growth && availableBytes - growth >= reserveBytes
 }

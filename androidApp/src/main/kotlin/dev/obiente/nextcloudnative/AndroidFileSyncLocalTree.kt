@@ -5,10 +5,15 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
+import dev.obiente.nextcloudnative.app.skipExactJvmFileSyncBytes
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
+import java.nio.channels.Channels
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -46,9 +51,29 @@ internal interface AndroidFileSyncLocalTree {
         contentHash(path, expectedLocalRevision, expectedBytes, maximumBytes),
         expectedBytes,
     )
+    fun contentRangeHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+    ): String? = null
     fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
+    fun writeFileFromStream(
+        path: String,
+        expectedLocalRevision: String?,
+        write: (OutputStream) -> Unit,
+    ) {
+        val temporary = File.createTempFile("nextcloud-native-local-stream-", ".tmp")
+        try {
+            FileOutputStream(temporary).use(write)
+            writeFile(path, temporary, expectedLocalRevision)
+        } finally {
+            temporary.delete()
+        }
+    }
     fun delete(path: String, expectedLocalRevision: String)
     fun resolve(path: String): AndroidLocalSyncDocument?
 }
@@ -125,6 +150,42 @@ internal class AndroidSafFileSyncLocalTree(
         return hashRead
     }
 
+    override fun contentRangeHash(
+        path: String,
+        expectedLocalRevision: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+    ): String? {
+        require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
+        val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(before.entry.kind == SyncEntryKind.File && before.entry.revision == expectedLocalRevision)
+        require(before.entry.size == expectedBytes)
+        val shouldContinue = { !Thread.currentThread().isInterrupted }
+        val hash = try {
+            requireNotNull(resolver.openFileDescriptor(before.uri, "r")) {
+                "The local file provider did not expose readable content."
+            }.use { descriptor ->
+                FileInputStream(descriptor.fileDescriptor).channel.use { channel ->
+                    channel.position(offset)
+                    hashExactJvmFileSyncSlice(Channels.newInputStream(channel), length, shouldContinue)
+                }
+            }
+        } catch (_: IOException) {
+            requireNotNull(resolver.openInputStream(before.uri)) {
+                "The local file provider did not expose readable content."
+            }.use { input ->
+                skipExactJvmFileSyncBytes(input, offset, shouldContinue)
+                hashExactJvmFileSyncSlice(input, length, shouldContinue)
+            }
+        }
+        val after = requireNotNull(resolve(path)) { "The local file disappeared during verification." }
+        require(after.entry.revision == expectedLocalRevision && after.entry.size == expectedBytes) {
+            "The local file changed during content verification."
+        }
+        return hash
+    }
+
     override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
         val document = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(document.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
@@ -174,6 +235,16 @@ internal class AndroidSafFileSyncLocalTree(
 
     override fun writeFile(path: String, source: File, expectedLocalRevision: String?) {
         require(source.isFile)
+        writeFileFromStream(path, expectedLocalRevision) { output ->
+            FileInputStream(source).use { input -> input.copyTo(output, BUFFER_BYTES) }
+        }
+    }
+
+    override fun writeFileFromStream(
+        path: String,
+        expectedLocalRevision: String?,
+        write: (OutputStream) -> Unit,
+    ) {
         val current = resolve(path)
         if (expectedLocalRevision == null) {
             require(current == null) { "The local file appeared after the sync scan." }
@@ -197,7 +268,7 @@ internal class AndroidSafFileSyncLocalTree(
         ) { "A staged local file could not be created." }
         var backup: Uri? = null
         try {
-            writeDocument(staged, source)
+            writeDocument(staged, write)
             if (current != null) {
                 backup = requireNotNull(
                     DocumentsContract.renameDocument(
@@ -309,16 +380,14 @@ internal class AndroidSafFileSyncLocalTree(
         }.orEmpty()
     }
 
-    private fun writeDocument(uri: Uri, source: File) {
+    private fun writeDocument(uri: Uri, write: (OutputStream) -> Unit) {
         val descriptor = requireNotNull(resolver.openFileDescriptor(uri, "rwt")) {
             "The staged local file could not be opened."
         }
         descriptor.use {
-            FileInputStream(source).use { input ->
-                FileOutputStream(it.fileDescriptor).use { output ->
-                    input.copyTo(output, BUFFER_BYTES)
-                    output.fd.sync()
-                }
+            FileOutputStream(it.fileDescriptor).use { output ->
+                write(output)
+                output.fd.sync()
             }
         }
     }
@@ -363,6 +432,9 @@ internal fun sha256SyncContentHashRead(
     val buffer = ByteArray(64 * 1024)
     var total = 0L
     while (true) {
+        if (Thread.currentThread().isInterrupted) {
+            throw kotlinx.coroutines.CancellationException("File identity verification cancelled.")
+        }
         val read = input.read(buffer)
         if (read < 0) break
         total += read
