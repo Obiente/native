@@ -40,3 +40,22 @@ internal fun streamAndroidFileSyncDownload(
     val maximumBytes = declaredByteCount?.coerceAtLeast(1L) ?: Long.MAX_VALUE
     writeLocal { destination -> readRemote(destination, maximumBytes) }
 }
+
+internal fun normalizeRemoteRoot(path: String): String {
+    val normalized = path.trim().trim('/')
+    if (normalized.isEmpty()) return ""
+    require(normalized.length <= 8_192)
+    require(normalized.split('/').all {
+        it.isNotBlank() && it !in setOf(".", "..") && it.none(Char::isISOControl)
+    }) { "The Nextcloud folder path is invalid." }
+    return normalized
+}
+
+internal fun safeFailureMessage(failure: Throwable, fallback: String): String =
+    failure.message
+        ?.map { if (it.isISOControl()) ' ' else it }
+        ?.joinToString("")
+        ?.trim()
+        ?.take(1_024)
+        ?.takeIf(String::isNotBlank)
+        ?: fallback

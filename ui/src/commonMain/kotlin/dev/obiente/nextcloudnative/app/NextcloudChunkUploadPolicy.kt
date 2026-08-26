@@ -32,6 +32,8 @@ data class NextcloudUploadChunk(
         get() = number.toString().padStart(NEXTCLOUD_CHUNK_NAME_DIGITS, '0')
 }
 
+fun isValidNextcloudChunkUploadId(value: String): Boolean = NEXTCLOUD_CHUNK_UPLOAD_ID.matches(value)
+
 /**
  * Plans a Nextcloud chunking-v2 upload without a product-level maximum file size.
  * Direct is also returned when the protocol's 10,000 chunks cannot represent the file.
@@ -86,3 +88,5 @@ const val MIN_NEXTCLOUD_CHUNK_BYTES = 5L * 1024L * 1024L
 const val MAX_NEXTCLOUD_CHUNK_BYTES = 5L * 1024L * 1024L * 1024L
 const val MAX_NEXTCLOUD_UPLOAD_CHUNKS = 10_000
 private const val NEXTCLOUD_CHUNK_NAME_DIGITS = 5
+private val NEXTCLOUD_CHUNK_UPLOAD_ID =
+    Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")

@@ -74,4 +74,20 @@ class NextcloudChunkUploadPolicyTest {
             nextcloudUploadChunk(plan, originalSize, uploadedChunks = plan.chunkCount)
         }
     }
+
+    @Test
+    fun `file sync checkpoint preserves the exact chunk plan`() {
+        val size = 25L * 1024L * 1024L
+        val plan = assertIs<NextcloudUploadTransferPlan.Chunked>(nextcloudUploadTransferPlan(size))
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            "local-revision",
+            plan,
+        ).copy(uploadedChunks = plan.chunkCount, commitInFlight = true)
+
+        assertEquals(plan, checkpoint.transferPlan)
+        assertFailsWith<IllegalArgumentException> {
+            checkpoint.copy(uploadedChunks = plan.chunkCount - 1, commitInFlight = true)
+        }
+    }
 }

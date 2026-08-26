@@ -310,6 +310,23 @@ internal class DesktopFileSyncRemoteTree(
         return after.entry
     }
 
+    fun resumableUploadRemote(): JvmResumableNextcloudUploadRemote = DesktopFileSyncChunkUploadRemote(
+        session = session,
+        userId = userId,
+        rootPath = rootPath,
+        client = client,
+        tree = this,
+        onMutationCommitted = onMutationCommitted,
+        onAmbiguousMutationResult = onAmbiguousMutationResult,
+    )
+
+    internal fun resolveOwnedUploadStage(relativePath: String): DesktopRemoteSyncDocument? {
+        require(isJvmOwnedUploadStagePath(relativePath))
+        val fullStagePath = fullPath(relativePath)
+        return rawListDirectory(fullStagePath.substringBeforeLast('/', ""))
+            .firstOrNull { it.entry.relativePath == fullStagePath }
+    }
+
     fun replaceWithFile(relativePath: String, source: File, expectedRemoteEtag: String): RemoteSyncEntry {
         require(source.isFile)
         val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
@@ -663,10 +680,7 @@ internal class DesktopFileSyncRemoteTree(
 }
 
 internal fun isDesktopOwnedUploadStage(relativePath: String): Boolean {
-    val name = relativePath.substringAfterLast('/')
-    if (!name.startsWith(".nextcloud-native-") || !name.endsWith(".upload")) return false
-    val token = name.removePrefix(".nextcloud-native-").removeSuffix(".upload")
-    return runCatching { UUID.fromString(token) }.isSuccess
+    return isJvmOwnedUploadStagePath(relativePath)
 }
 
 internal fun desktopOwnedBackupDestination(relativePath: String): String? {

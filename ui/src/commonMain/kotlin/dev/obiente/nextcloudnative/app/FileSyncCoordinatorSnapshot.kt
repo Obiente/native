@@ -176,6 +176,18 @@ private data class FileSyncWorkSnapshotV1(
     val failureMessage: String?,
     val contentMismatchVerified: Boolean = false,
     val contentMismatchLocalHash: String? = null,
+    val uploadCheckpoint: FileSyncUploadCheckpointSnapshotV1? = null,
+)
+
+@Serializable
+private data class FileSyncUploadCheckpointSnapshotV1(
+    val uploadId: String,
+    val localRevision: String,
+    val sizeBytes: Long,
+    val chunkBytes: Long,
+    val chunkCount: Int,
+    val uploadedChunks: Int,
+    val commitInFlight: Boolean,
 )
 
 @Serializable
@@ -326,6 +338,7 @@ private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWork
     failureMessage = failureMessage,
     contentMismatchVerified = contentMismatchVerified,
     contentMismatchLocalHash = contentMismatchLocalHash,
+    uploadCheckpoint = uploadCheckpoint?.toSnapshot(),
 )
 
 private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkItem(
@@ -342,6 +355,27 @@ private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkIt
     failureMessage = failureMessage,
     contentMismatchVerified = contentMismatchVerified,
     contentMismatchLocalHash = contentMismatchLocalHash,
+    uploadCheckpoint = uploadCheckpoint?.toDomain(),
+)
+
+private fun FileSyncUploadCheckpoint.toSnapshot() = FileSyncUploadCheckpointSnapshotV1(
+    uploadId,
+    localRevision,
+    sizeBytes,
+    chunkBytes,
+    chunkCount,
+    uploadedChunks,
+    commitInFlight,
+)
+
+private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckpoint(
+    uploadId,
+    localRevision,
+    sizeBytes,
+    chunkBytes,
+    chunkCount,
+    uploadedChunks,
+    commitInFlight,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

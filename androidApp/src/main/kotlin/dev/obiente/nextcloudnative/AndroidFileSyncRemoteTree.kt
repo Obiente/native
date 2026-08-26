@@ -1,8 +1,12 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.JvmResumableNextcloudUploadRemote
+import dev.obiente.nextcloudnative.app.NextcloudUploadChunk
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.isJvmOwnedUploadStagePath
+import dev.obiente.nextcloudnative.app.jvmOwnedUploadStagePath
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
 import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
 import java.io.File
@@ -28,7 +32,7 @@ internal class AndroidFileSyncRemoteTree(
     private val userId: String,
     remoteRootPath: String,
     private val webDav: NextcloudDocumentWebDav,
-) {
+) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
 
     fun scan(
@@ -49,6 +53,7 @@ internal class AndroidFileSyncRemoteTree(
             require(!listing.limited) { "A Nextcloud folder contains too many entries to sync safely." }
             listing.files.forEach { file ->
                 val relativePath = toRelativePath(file.path) ?: return@forEach
+                if (isJvmOwnedUploadStagePath(relativePath)) return@forEach
                 val kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File
                 if (!includes(relativePath, kind)) return@forEach
                 require(result.size < MAX_ENTRIES) { "The Nextcloud folder contains too many entries." }
@@ -77,6 +82,11 @@ internal class AndroidFileSyncRemoteTree(
     }
 
     fun resolve(relativePath: String): AndroidRemoteSyncDocument? {
+        if (isJvmOwnedUploadStagePath(relativePath)) return null
+        return resolveIncludingOwnedStage(relativePath)
+    }
+
+    private fun resolveIncludingOwnedStage(relativePath: String): AndroidRemoteSyncDocument? {
         val parent = relativePath.substringBeforeLast('/', "")
         val target = fullPath(relativePath)
         return webDav.listDirectory(session, userId, fullPath(parent), MAX_CHILDREN)
@@ -211,7 +221,7 @@ internal class AndroidFileSyncRemoteTree(
         }
     }
 
-    fun writeFile(relativePath: String, source: File, expectedRemoteEtag: String?) {
+    fun writeFile(relativePath: String, source: File, expectedRemoteEtag: String?): RemoteSyncEntry {
         val current = resolve(relativePath)
         if (expectedRemoteEtag == null) {
             require(current == null) { "The server file appeared after the sync scan." }
@@ -229,6 +239,82 @@ internal class AndroidFileSyncRemoteTree(
                 expectedRemoteEtag,
             )
         }
+        val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
+        require(!after.isDirectory) { "The uploaded server item is not a file." }
+        return after.entry
+    }
+
+    override fun uploadDirect(
+        source: File,
+        relativePath: String,
+        expectedRemoteEtag: String?,
+    ): RemoteSyncEntry = writeFile(relativePath, source, expectedRemoteEtag)
+
+    override fun createChunkCollection(
+        uploadId: String,
+        relativePath: String,
+        allowExisting: Boolean,
+    ): Boolean = createChunkUpload(
+        uploadId,
+        jvmOwnedUploadStagePath(relativePath, uploadId),
+        allowExisting,
+        NoDocumentRequestCancellation,
+    )
+
+    override fun uploadChunk(
+        uploadId: String,
+        relativePath: String,
+        source: File,
+        chunk: NextcloudUploadChunk,
+    ) = uploadChunk(
+        uploadId,
+        jvmOwnedUploadStagePath(relativePath, uploadId),
+        source,
+        chunk.offsetBytes,
+        chunk.sizeBytes,
+        chunk.number,
+        NoDocumentRequestCancellation,
+    )
+
+    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) {
+        commitChunkUpload(
+            uploadId,
+            jvmOwnedUploadStagePath(relativePath, uploadId),
+            sizeBytes,
+            NoDocumentRequestCancellation,
+            onRequestStarted = {},
+        )
+    }
+
+    override fun publishOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        expectedRemoteEtag: String?,
+    ): RemoteSyncEntry {
+        val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
+        val stage = requireNotNull(resolveIncludingOwnedStage(stagePath)) {
+            "The assembled upload stage disappeared."
+        }
+        require(!stage.isDirectory)
+        webDav.publishChunkUploadStage(
+            session,
+            userId,
+            fullPath(stagePath),
+            fullPath(relativePath),
+            stage.entry.etag,
+            expectedRemoteEtag,
+        )
+        val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
+        require(!after.isDirectory)
+        return after.entry
+    }
+
+    override fun discardOwnedUpload(uploadId: String, relativePath: String) {
+        deleteChunkUpload(uploadId, NoDocumentRequestCancellation)
+        val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
+        resolveIncludingOwnedStage(stagePath)?.let { stage ->
+            webDav.delete(session, userId, fullPath(stagePath), stage.entry.etag, stage.isDirectory)
+        }
     }
 
     /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
@@ -242,7 +328,9 @@ internal class AndroidFileSyncRemoteTree(
             throw failure
         }
         return AndroidRemoteChildNameSnapshot(
-            names = listing.files.mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
+            names = listing.files
+                .filterNot { file -> isJvmOwnedUploadStagePath(file.path) }
+                .mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
             complete = !listing.limited,
         )
     }

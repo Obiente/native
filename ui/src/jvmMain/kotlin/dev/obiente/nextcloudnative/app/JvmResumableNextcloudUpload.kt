@@ -1,0 +1,99 @@
+package dev.obiente.nextcloudnative.app
+
+import java.io.File
+
+fun jvmOwnedUploadStagePath(relativePath: String, uploadId: String): String {
+    requireValidSyncPath(relativePath)
+    require(isValidNextcloudChunkUploadId(uploadId))
+    val parent = relativePath.substringBeforeLast('/', "")
+    val name = ".nextcloud-native-$uploadId.upload"
+    return listOf(parent, name).filter(String::isNotBlank).joinToString("/")
+}
+
+fun isJvmOwnedUploadStagePath(relativePath: String): Boolean {
+    val name = relativePath.substringAfterLast('/')
+    if (!name.startsWith(".nextcloud-native-") || !name.endsWith(".upload")) return false
+    val uploadId = name.removePrefix(".nextcloud-native-").removeSuffix(".upload")
+    return isValidNextcloudChunkUploadId(uploadId)
+}
+
+interface JvmResumableNextcloudUploadRemote {
+    fun uploadDirect(source: File, relativePath: String, expectedRemoteEtag: String?): RemoteSyncEntry
+
+    /** Returns true when a new collection was created and false when an owned one already existed. */
+    fun createChunkCollection(uploadId: String, relativePath: String, allowExisting: Boolean): Boolean
+
+    fun uploadChunk(uploadId: String, relativePath: String, source: File, chunk: NextcloudUploadChunk)
+
+    fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long)
+
+    fun publishOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        expectedRemoteEtag: String?,
+    ): RemoteSyncEntry
+
+    fun discardOwnedUpload(uploadId: String, relativePath: String)
+}
+
+/**
+ * Runs the same crash-safe chunk state machine for every JVM platform.
+ *
+ * Progress is persisted before remote ownership is created and after every accepted chunk. A
+ * process interruption can therefore repeat at most one idempotent chunk PUT. An interruption
+ * around the collection MOVE is handled by discarding only the UUID-owned stage and restarting;
+ * publishing to the visible path remains a separate generation-guarded operation.
+ */
+fun jvmResumableNextcloudUpload(
+    source: File,
+    relativePath: String,
+    localRevision: String,
+    expectedRemoteEtag: String?,
+    checkpoint: FileSyncUploadCheckpoint?,
+    newUploadId: () -> String,
+    persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
+    remote: JvmResumableNextcloudUploadRemote,
+): RemoteSyncEntry {
+    require(source.isFile)
+    requireValidSyncPath(relativePath)
+    require(localRevision.isNotBlank())
+    val plan = nextcloudUploadTransferPlan(source.length())
+    if (plan is NextcloudUploadTransferPlan.Direct) {
+        checkpoint?.let { remote.discardOwnedUpload(it.uploadId, relativePath) }
+        return remote.uploadDirect(source, relativePath, expectedRemoteEtag)
+    }
+    require(plan is NextcloudUploadTransferPlan.Chunked)
+
+    var progress = checkpoint?.takeIf {
+        it.localRevision == localRevision && it.transferPlan == plan && !it.commitInFlight
+    }
+    if (checkpoint != null && progress == null) {
+        remote.discardOwnedUpload(checkpoint.uploadId, relativePath)
+    }
+    val resumed = progress != null
+    if (progress == null) {
+        progress = newFileSyncUploadCheckpoint(newUploadId(), localRevision, plan)
+        persistCheckpoint(progress)
+    }
+
+    val collectionCreated = remote.createChunkCollection(
+        progress.uploadId,
+        relativePath,
+        allowExisting = resumed,
+    )
+    if (collectionCreated && resumed && progress.uploadedChunks > 0) {
+        progress = progress.copy(uploadedChunks = 0)
+        persistCheckpoint(progress)
+    }
+    while (progress.uploadedChunks < plan.chunkCount) {
+        val chunk = nextcloudUploadChunk(plan, source.length(), progress.uploadedChunks)
+        remote.uploadChunk(progress.uploadId, relativePath, source, chunk)
+        progress = progress.copy(uploadedChunks = progress.uploadedChunks + 1)
+        persistCheckpoint(progress)
+    }
+
+    progress = progress.copy(commitInFlight = true)
+    persistCheckpoint(progress)
+    remote.commitChunksToOwnedStage(progress.uploadId, relativePath, source.length())
+    return remote.publishOwnedStage(progress.uploadId, relativePath, expectedRemoteEtag)
+}

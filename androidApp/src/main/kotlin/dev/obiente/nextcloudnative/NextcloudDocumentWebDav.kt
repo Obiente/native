@@ -2,7 +2,6 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.NextcloudFile
-import dev.obiente.nextcloudnative.app.buildNextcloudChunkUploadUrl
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -276,98 +275,6 @@ internal class NextcloudDocumentWebDav(
         }
     }
 
-    fun createChunkUpload(
-        session: NextcloudSession,
-        userId: String,
-        uploadId: String,
-        destinationPath: String,
-        allowExistingSession: Boolean,
-        cancellation: DocumentRequestCancellation,
-    ): Boolean = try {
-        execute(
-            requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
-                .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-                .header("If-None-Match", "*")
-                .method("MKCOL", EMPTY_BODY)
-                .build(),
-            "start chunked upload",
-            cancellation = cancellation,
-        )
-        true
-    } catch (failure: DocumentWebDavException) {
-        if (allowExistingSession && failure.status == 405) false else throw failure
-    }
-
-    fun uploadChunk(
-        session: NextcloudSession,
-        userId: String,
-        uploadId: String,
-        destinationPath: String,
-        source: File,
-        offset: Long,
-        length: Long,
-        totalLength: Long,
-        chunkNumber: Int,
-        cancellation: DocumentRequestCancellation,
-    ) {
-        val end = Math.addExact(offset, length)
-        require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && end <= source.length())
-        val body = fileRangeRequestBody(source, offset, length, cancellation)
-        execute(
-            requestBuilder(
-                session,
-                buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) +
-                    "/${chunkNumber.toString().padStart(5, '0')}",
-            )
-                .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-                .header("OC-Total-Length", totalLength.toString())
-                .put(body)
-                .build(),
-            "upload file chunk",
-            cancellation = cancellation,
-        )
-    }
-
-    fun deleteChunkUpload(
-        session: NextcloudSession,
-        userId: String,
-        uploadId: String,
-        cancellation: DocumentRequestCancellation,
-    ) {
-        try {
-            execute(
-                requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
-                    .delete().build(),
-                "remove rejected chunked upload",
-                cancellation = cancellation,
-            )
-        } catch (failure: DocumentWebDavException) {
-            if (failure.status != 404) throw failure
-        }
-    }
-
-    fun commitChunkUpload(
-        session: NextcloudSession,
-        userId: String,
-        uploadId: String,
-        destinationPath: String,
-        totalLength: Long,
-        cancellation: DocumentRequestCancellation,
-        onRequestStarted: () -> Unit,
-    ): DocumentMutationResult = execute(
-        requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
-            .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-            .header("OC-Total-Length", totalLength.toString())
-            .header("Overwrite", "F")
-            .method("MOVE", EMPTY_BODY)
-            .build(),
-        "assemble chunked upload",
-        onRequestStarted,
-        cancellation,
-        timeoutMillis = CHUNK_COMMIT_TIMEOUT_MILLIS,
-        requiredSuccessStatus = 201,
-    )
-
     fun replaceFile(
         session: NextcloudSession,
         userId: String,
@@ -486,7 +393,7 @@ internal class NextcloudDocumentWebDav(
         execute(builder.delete().build(), "clean up staged upload")
     }
 
-    private fun execute(
+    internal fun execute(
         request: Request,
         operation: String,
         onRequestStarted: () -> Unit = {},
@@ -573,7 +480,6 @@ internal class NextcloudDocumentWebDav(
 
     private companion object {
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android DocumentsProvider)"
-        const val CHUNK_COMMIT_TIMEOUT_MILLIS = 30L * 60L * 1_000L
         const val READ_BUFFER_BYTES = 32 * 1024
         const val DEFAULT_SEARCH_RESULT_LIMIT = 50
         const val MAX_SEARCH_RESULT_LIMIT = 100

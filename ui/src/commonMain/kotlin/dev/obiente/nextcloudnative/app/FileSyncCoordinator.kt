@@ -89,6 +89,7 @@ data class FileSyncWorkItem(
     val failureMessage: String? = null,
     val contentMismatchVerified: Boolean = false,
     val contentMismatchLocalHash: String? = null,
+    val uploadCheckpoint: FileSyncUploadCheckpoint? = null,
 ) {
     init {
         require(id > 0)
@@ -101,6 +102,7 @@ data class FileSyncWorkItem(
         require(lastAttemptEpochMillis == null || lastAttemptEpochMillis >= 0)
         require(failureMessage == null || failureMessage.isSafeSyncText(MAX_FILE_SYNC_FAILURE_LENGTH))
         requireValidFileSyncContentMismatchEvidence(this)
+        requireValidFileSyncUploadCheckpoint(this)
         requireValidWorkState()
     }
 
@@ -836,7 +838,7 @@ private fun FileSyncOperation.executionFootprint(): Set<String> = when (this) {
     else -> setOf(relativePath)
 }
 
-private fun FileSyncPair.updateWork(
+internal fun FileSyncPair.updateWork(
     workId: Long,
     update: (FileSyncWorkItem) -> FileSyncWorkItem,
 ): FileSyncPair {
@@ -852,7 +854,7 @@ private fun FileSyncPair.requireWork(workId: Long): FileSyncWorkItem =
 internal fun FileSyncCoordinatorState.requirePair(pairId: String): FileSyncPair =
     pairs.firstOrNull { it.id == pairId } ?: error("The sync pair does not exist.")
 
-private fun FileSyncCoordinatorState.updatePair(
+internal fun FileSyncCoordinatorState.updatePair(
     pairId: String,
     update: (FileSyncPair) -> FileSyncPair,
 ): FileSyncCoordinatorState {

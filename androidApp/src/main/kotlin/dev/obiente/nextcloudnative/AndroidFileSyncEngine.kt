@@ -24,6 +24,7 @@ import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.FileSyncUploadCheckpoint
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -60,7 +61,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import okhttp3.OkHttpClient
-
 /**
  * Foreground execution engine for SAF-backed sync pairs.
  *
@@ -541,9 +541,13 @@ internal class AndroidFileSyncEngine(context: Context) {
                 .workItems
                 .first { it.id == command.workId }
             mediaLedger?.recordPlanned(listOf(claimedWork), System.currentTimeMillis())
+            val checkpoints = AndroidFileSyncCheckpointPersistence(
+                persisted, store, pairId, command.workId,
+            )
             val execution = runCatching {
-                execute(command, persisted.coordinator, local, remote, contentReadBudget)
+                execute(command, persisted.coordinator, local, remote, contentReadBudget, checkpoints::persist)
             }
+            persisted = checkpoints.state
             val failure = execution.exceptionOrNull()
             if (failure == null) {
                 val success = execution.getOrThrow()
@@ -656,6 +660,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
         contentReadBudget: AndroidFileSyncContentReadBudget,
+        persistUploadCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     ): FileSyncExecutionSuccess {
         val pair = state.pairs.first { it.id == command.pairId }
         val work = pair.workItems.first { it.id == command.workId }
@@ -677,12 +682,15 @@ internal class AndroidFileSyncEngine(context: Context) {
                     remote.createDirectory(operation.relativePath, expectedRemote)
                 } else {
                     withStagingFile("upload") { staged ->
-                        local.stageForUpload(
+                        val exactLocal = local.stageForUpload(
                             operation.relativePath,
                             staged,
                             stagingTransferLimit(source.size),
                         )
-                        remote.writeFile(operation.relativePath, staged, expectedRemote)
+                        resumeAndroidFileSyncUpload(
+                            staged, operation.relativePath, exactLocal, expectedRemote,
+                            work.uploadCheckpoint, persistUploadCheckpoint, remote,
+                        )
                     }
                 }
                 synchronizedResult(operation.relativePath, local, remote, contentReadBudget)
@@ -820,25 +828,6 @@ internal class AndroidFileSyncEngine(context: Context) {
             declaredByteCount = declaredByteCount,
         )
     }
-    private fun normalizeRemoteRoot(path: String): String {
-        val normalized = path.trim().trim('/')
-        if (normalized.isEmpty()) return ""
-        require(normalized.length <= 8_192)
-        require(normalized.split('/').all {
-            it.isNotBlank() && it !in setOf(".", "..") && it.none(Char::isISOControl)
-        }) { "The Nextcloud folder path is invalid." }
-        return normalized
-    }
-
-    private fun safeFailureMessage(failure: Throwable, fallback: String): String =
-        failure.message
-            ?.map { if (it.isISOControl()) ' ' else it }
-            ?.joinToString("")
-            ?.trim()
-            ?.take(1_024)
-            ?.takeIf(String::isNotBlank)
-            ?: fallback
-
     private companion object {
         val ENGINE_LOCK = Mutex()
     }

@@ -455,7 +455,11 @@ internal class DesktopFileSyncEngine(
             )
             try {
                 requireDesktopFileSyncBaselineCapacity(command.operation, baselinePaths)
-                val success = execute(command, runningWork, local, remote)
+                val checkpoints = DesktopFileSyncCheckpointPersistence(
+                    execution, store, pairId, command.workId,
+                )
+                val success = execute(command, runningWork, local, remote, checkpoints::persist)
+                execution = checkpoints.state
                 execution = execution.copy(
                     coordinator = completeFileSyncOperation(
                         execution.coordinator,
@@ -543,6 +547,7 @@ internal class DesktopFileSyncEngine(
         work: FileSyncWorkItem,
         local: DesktopFileSyncLocalTree,
         remote: DesktopFileSyncRemoteTree,
+        persistUploadCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     ): FileSyncExecutionSuccess {
         require(work.id == command.workId && work.operation == command.operation)
         return when (val operation = command.operation) {
@@ -568,7 +573,11 @@ internal class DesktopFileSyncEngine(
                                 requireNotNull(operation.expectedRemoteEtag),
                             )
                         } else {
-                            remote.writeFile(operation.relativePath, staged, operation.expectedRemoteEtag)
+                            resumeDesktopFileSyncUpload(
+                                staged, operation.relativePath, requireNotNull(exactLocal),
+                                operation.expectedRemoteEtag, work.uploadCheckpoint,
+                                persistUploadCheckpoint, remote,
+                            )
                         }
                         withStagingFile("verify-upload", staged.length()) { verified, verificationMaximumBytes ->
                             exactRemote = remote.stageDownload(
