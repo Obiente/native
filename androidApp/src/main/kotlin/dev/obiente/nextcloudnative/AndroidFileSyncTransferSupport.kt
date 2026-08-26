@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
