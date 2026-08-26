@@ -181,6 +181,141 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
+    fun `large directory replacement uploads resumable chunks before protected publication`() {
+        val requests = mutableListOf<Request>()
+        var propfindCount = 0
+        var uploadId: String? = null
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "MKCOL" -> {
+                    uploadId = chain.request().url.pathSegments.last()
+                    response(chain.request(), 201)
+                }
+                "PUT" -> response(chain.request(), 201)
+                "MOVE" -> response(chain.request(), 201).newBuilder().header("ETag", "stage-etag").build()
+                "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
+                "PROPFIND" -> {
+                    propfindCount += 1
+                    val body = when (propfindCount) {
+                        1 -> davDirectory("archive.bin", "directory-etag")
+                        2 -> davFile(
+                            ".nextcloud-native-${requireNotNull(uploadId)}.upload",
+                            "stage-etag",
+                            21L * 1024L * 1024L,
+                        )
+                        3 -> davDirectory("archive.bin", "directory-etag")
+                        4 -> davFile("archive.bin", "published-etag", 21L * 1024L * 1024L)
+                        5 -> "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>"
+                        else -> error("Unexpected directory listing")
+                    }
+                    response(chain.request(), 207, body)
+                }
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+        )
+        val source = Files.createTempFile("nextcloud-sync-type-replacement", ".tmp").toFile()
+        RandomAccessFile(source, "rw").use { it.setLength(21L * 1024L * 1024L) }
+        try {
+            val checkpoints = mutableListOf<FileSyncUploadCheckpoint>()
+
+            val result = executeDesktopFileSyncUpload(
+                source = source,
+                relativePath = "archive.bin",
+                exactLocal = LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", source.length()),
+                expectedRemoteEtag = "directory-etag",
+                checkpoint = null,
+                replacingType = true,
+                persistCheckpoint = checkpoints::add,
+                retainCleanup = {},
+                completeCleanup = {},
+                remote = tree,
+                shouldContinue = { true },
+            )
+
+            assertEquals("published-etag", result.etag)
+            assertEquals(3, requests.count { it.method == "PUT" })
+            assertTrue(
+                requests.filter { it.method == "PUT" }
+                    .all { requireNotNull(it.body).contentLength() <= 10L * 1024L * 1024L },
+            )
+            val moveDestinations = requests.filter { it.method == "MOVE" }.map { it.header("Destination") }
+            assertTrue(
+                moveDestinations.first()!!
+                    .endsWith("/Vault/.nextcloud-native-${requireNotNull(uploadId)}.upload"),
+            )
+            assertTrue(moveDestinations.last()!!.endsWith("/Vault/archive.bin"))
+            assertEquals("stage-etag", checkpoints.last().assembledStageEtag)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun `ambiguous large directory replacement verifies its published file before preflight`() {
+        val requests = mutableListOf<Request>()
+        var propfindCount = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
+                "PROPFIND" -> {
+                    propfindCount += 1
+                    response(
+                        chain.request(),
+                        207,
+                        if (propfindCount == 4) {
+                            "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>"
+                        } else {
+                            davFile("archive.bin", "published-etag", 21L * 1024L * 1024L)
+                        },
+                    )
+                }
+                else -> error("Recovery must not ${chain.request().method} the published file")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+        )
+        val source = Files.createTempFile("nextcloud-sync-published-replacement", ".tmp").toFile()
+        RandomAccessFile(source, "rw").use { it.setLength(21L * 1024L * 1024L) }
+        val local = LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", source.length())
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            plan,
+        ).copy(uploadedChunks = plan.chunkCount, commitInFlight = true, assembledStageEtag = "stage-etag")
+        try {
+            val result = executeDesktopFileSyncUpload(
+                source, local.relativePath, local, "directory-etag", checkpoint, true,
+                persistCheckpoint = {},
+                retainCleanup = {},
+                completeCleanup = {},
+                remote = tree,
+                shouldContinue = { true },
+            )
+
+            assertEquals("published-etag", result.etag)
+            assertEquals(
+                listOf("PROPFIND", "PROPFIND", "PROPFIND", "GET", "PROPFIND"),
+                requests.map { it.method },
+            )
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `empty range verification revalidates the listed remote generation`() {
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             response(chain.request(), 207, "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>")
@@ -786,4 +921,24 @@ class DesktopFileSyncRemoteTreeTest {
         assertEquals(false, shouldSuppressDesktopOwnedBackup(backup, setOf(backup, "Photos/today.md")))
         assertEquals(true, shouldSuppressDesktopOwnedBackup(backup, setOf(backup)))
     }
+
+    private fun davFile(name: String, etag: String, sizeBytes: Long): String =
+        """
+        <d:multistatus xmlns:d="DAV:"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault/$name</d:href>
+          <d:propstat><d:prop><d:getetag>$etag</d:getetag>
+            <d:getcontentlength>$sizeBytes</d:getcontentlength><d:resourcetype/>
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+        """.trimIndent()
+
+    private fun davDirectory(name: String, etag: String): String =
+        """
+        <d:multistatus xmlns:d="DAV:"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault/$name/</d:href>
+          <d:propstat><d:prop><d:getetag>$etag</d:getetag>
+            <d:resourcetype><d:collection/></d:resourcetype>
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+        """.trimIndent()
 }

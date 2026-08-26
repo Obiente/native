@@ -368,6 +368,9 @@ internal class AndroidFileSyncRemoteTree(
     override fun ownedStageEtag(uploadId: String, relativePath: String): String? =
         resolveIncludingOwnedStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
 
+    override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? =
+        resolve(relativePath)?.takeUnless { it.isDirectory }?.entry
+
     override fun publishOwnedStage(
         uploadId: String,
         relativePath: String,

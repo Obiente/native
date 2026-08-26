@@ -50,6 +50,8 @@ interface JvmResumableNextcloudUploadRemote {
 
     fun ownedStageEtag(uploadId: String, relativePath: String): String?
 
+    fun resolvePublishedFile(relativePath: String): RemoteSyncEntry?
+
     fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
@@ -139,6 +141,15 @@ fun jvmResumableNextcloudUpload(
                 verifiedStageEtag,
                 expectedRemoteEtag,
             )
+        }
+        remote.resolvePublishedFile(relativePath)?.let { published ->
+            ensureActive()
+            try {
+                return remote.verifyDirectUpload(source, relativePath, published)
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                ensureActive()
+            }
         }
     }
 

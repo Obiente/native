@@ -46,6 +46,7 @@ internal fun resumeDesktopFileSyncUpload(
     persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     remote: DesktopFileSyncRemoteTree,
     shouldContinue: () -> Boolean,
+    replacingDirectoryEtag: String? = null,
 ): RemoteSyncEntry = jvmResumableNextcloudUpload(
     source = staged,
     relativePath = relativePath,
@@ -54,7 +55,7 @@ internal fun resumeDesktopFileSyncUpload(
     checkpoint = checkpoint,
     newUploadId = { UUID.randomUUID().toString() },
     persistCheckpoint = persistCheckpoint,
-    remote = remote.resumableUploadRemote(shouldContinue),
+    remote = remote.resumableUploadRemote(shouldContinue, replacingDirectoryEtag),
     shouldContinue = shouldContinue,
 )
 
@@ -75,4 +76,43 @@ internal fun replaceDesktopFileSyncRemoteType(
     ) { stageEtag ->
         retainCleanup(ownership.copy(assembledStageEtag = stageEtag))
     }.also { completeCleanup(uploadId) }
+}
+
+internal fun executeDesktopFileSyncUpload(
+    source: File,
+    relativePath: String,
+    exactLocal: LocalSyncEntry,
+    expectedRemoteEtag: String?,
+    checkpoint: FileSyncUploadCheckpoint?,
+    replacingType: Boolean,
+    persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
+    retainCleanup: (FileSyncPendingUploadCleanup) -> Unit,
+    completeCleanup: (String) -> Unit,
+    remote: DesktopFileSyncRemoteTree,
+    shouldContinue: () -> Boolean,
+): RemoteSyncEntry {
+    if (!replacingType) {
+        return resumeDesktopFileSyncUpload(
+            source, relativePath, exactLocal, expectedRemoteEtag, checkpoint,
+            persistCheckpoint, remote, shouldContinue,
+        )
+    }
+    val expectedDirectoryEtag = requireNotNull(expectedRemoteEtag)
+    val transferPlan = nextcloudUploadTransferPlan(source.length())
+    if (transferPlan is NextcloudUploadTransferPlan.Chunked) {
+        val recoveringPublication = checkpoint?.let {
+            it.commitInFlight && it.localRevision == exactLocal.revision && it.transferPlan == transferPlan
+        } == true
+        if (!recoveringPublication) remote.requireDirectoryGeneration(relativePath, expectedDirectoryEtag)
+        return resumeDesktopFileSyncUpload(
+            source, relativePath, exactLocal, expectedDirectoryEtag, checkpoint,
+            persistCheckpoint, remote, shouldContinue,
+            replacingDirectoryEtag = expectedDirectoryEtag,
+        )
+    }
+    remote.requireDirectoryGeneration(relativePath, expectedDirectoryEtag)
+    return replaceDesktopFileSyncRemoteType(
+        source, relativePath, expectedDirectoryEtag, remote,
+        retainCleanup, completeCleanup, shouldContinue,
+    )
 }

@@ -15,14 +15,9 @@ internal fun DesktopFileSyncRemoteTree.replaceWithFile(
 ): RemoteSyncEntry {
     require(source.isFile)
     require(isValidNextcloudChunkUploadId(uploadId))
-    val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
-    require(current.entry.etag == expectedRemoteEtag && current.isDirectory) {
-        "The server item changed after the sync scan."
-    }
-    val destinationPath = fullPath(relativePath)
+    requireDirectoryGeneration(relativePath, expectedRemoteEtag)
     val ownedStagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
     val stagingPath = fullPath(ownedStagePath)
-    val backupPath = replacementBackupPath(destinationPath)
     val stageBody = if (source.length() == 0L) {
         source.asRequestBody("application/octet-stream".toMediaType())
     } else {
@@ -47,12 +42,39 @@ internal fun DesktopFileSyncRemoteTree.replaceWithFile(
     val stagedEtag = resumableUploadRemote(shouldContinue).verifyOwnedStage(
         uploadId, relativePath, source, staged.entry.etag,
     )
+    return publishOwnedStageReplacingDirectory(relativePath, uploadId, stagedEtag, expectedRemoteEtag)
+}
+
+internal fun DesktopFileSyncRemoteTree.requireDirectoryGeneration(
+    relativePath: String,
+    expectedRemoteEtag: String,
+) {
+    val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
+    require(current.entry.etag == expectedRemoteEtag && current.isDirectory) {
+        "The server item changed after the sync scan."
+    }
+}
+
+internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
+    relativePath: String,
+    uploadId: String,
+    verifiedStageEtag: String,
+    expectedRemoteEtag: String,
+): RemoteSyncEntry {
+    require(isValidNextcloudChunkUploadId(uploadId))
+    val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
+    require(current.entry.etag == expectedRemoteEtag && current.isDirectory) {
+        "The server item changed before replacement publication."
+    }
+    val destinationPath = fullPath(relativePath)
+    val stagingPath = fullPath(jvmOwnedUploadStagePath(relativePath, uploadId))
+    val backupPath = replacementBackupPath(destinationPath)
     var protected = false
     try {
         moveRemoteDocument(current.copy(entry = current.entry.copy(relativePath = destinationPath)), backupPath, relativePath)
         protected = true
         moveRemotePath(
-            stagingPath, destinationPath, stagedEtag, sourceIsDirectory = false,
+            stagingPath, destinationPath, verifiedStageEtag, sourceIsDirectory = false,
             mutationRelativePaths = arrayOf(relativePath),
         )
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }

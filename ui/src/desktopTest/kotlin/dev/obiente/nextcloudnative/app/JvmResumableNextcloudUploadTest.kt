@@ -182,6 +182,69 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
+    fun `ambiguous publication verifies the destination without retransmitting`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+            assembledStageEtag = "published-stage",
+        )
+        val remote = RecordingUploadRemote(
+            collectionCreated = false,
+            directUpload = true,
+            publishedFile = RemoteSyncEntry("large.bin", SyncEntryKind.File, "direct-etag", source.length()),
+        )
+        try {
+            val uploaded = jvmResumableNextcloudUpload(
+                source, "large.bin", "local-1", null, checkpoint,
+                newUploadId = { error("A published generation must not be retransmitted.") },
+                persistCheckpoint = {},
+                remote = remote,
+            )
+
+            assertEquals("direct-etag", uploaded.etag)
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
+            assertEquals(listOf("direct-verify"), remote.finalizationEvents)
+            assertEquals(0, remote.discardCount)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun `missing stage and a different destination restart the guarded upload`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+            assembledStageEtag = "lost-stage",
+        )
+        val remote = RecordingUploadRemote(
+            collectionCreated = true,
+            directUpload = true,
+            failDirectVerification = true,
+            publishedFile = RemoteSyncEntry("large.bin", SyncEntryKind.File, "different-etag", source.length()),
+        )
+        try {
+            val uploaded = jvmResumableNextcloudUpload(
+                source, "large.bin", "local-1", "different-etag", checkpoint,
+                newUploadId = { "fedcba98-7654-3210-fedc-ba9876543210" },
+                persistCheckpoint = {},
+                remote = remote,
+            )
+
+            assertEquals("remote-etag", uploaded.etag)
+            assertEquals(listOf(1, 2, 3), remote.uploadedChunkNumbers)
+            assertEquals(listOf("direct-verify", "commit", "verify", "publish"), remote.finalizationEvents)
+            assertEquals(1, remote.discardCount)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `cleanup retains ownership while an unverified stage still exists`() {
         val cleanup = FileSyncPendingUploadCleanup(UPLOAD_ID, "large.bin")
         val pair = FileSyncPair(
@@ -219,8 +282,10 @@ class JvmResumableNextcloudUploadTest {
         private val afterChunkUploaded: () -> Unit = {},
         private val assembledStageEtag: String? = "verified-stage-etag",
         private val directUpload: Boolean = false,
+        private val failDirectVerification: Boolean = false,
         private val cleanupComplete: Boolean = true,
         private val ownedStageEtag: String? = null,
+        private val publishedFile: RemoteSyncEntry? = null,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val finalizationEvents = mutableListOf<String>()
@@ -241,8 +306,10 @@ class JvmResumableNextcloudUploadTest {
             relativePath: String,
             uploaded: RemoteSyncEntry,
         ): RemoteSyncEntry {
-            check(directUpload && uploaded.etag == "direct-etag")
+            check(directUpload)
             finalizationEvents += "direct-verify"
+            check(!failDirectVerification) { "The visible destination differs." }
+            check(uploaded.etag == "direct-etag")
             return uploaded
         }
 
@@ -284,6 +351,8 @@ class JvmResumableNextcloudUploadTest {
         }
 
         override fun ownedStageEtag(uploadId: String, relativePath: String): String? = ownedStageEtag
+
+        override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? = publishedFile
 
         override fun publishOwnedStage(
             uploadId: String,

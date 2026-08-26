@@ -17,6 +17,7 @@ internal class DesktopFileSyncChunkUploadRemote(
     private val onMutationCommitted: (String) -> Unit,
     private val onAmbiguousMutationResult: (String) -> Unit,
     private val shouldContinue: () -> Boolean,
+    private val replacingDirectoryEtag: String? = null,
 ) : JvmResumableNextcloudUploadRemote {
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
 
@@ -24,7 +25,10 @@ internal class DesktopFileSyncChunkUploadRemote(
         source: File,
         relativePath: String,
         expectedRemoteEtag: String?,
-    ): RemoteSyncEntry = tree.writeFile(relativePath, source, expectedRemoteEtag)
+    ): RemoteSyncEntry {
+        check(replacingDirectoryEtag == null) { "Directory replacement must use an owned upload stage." }
+        return tree.writeFile(relativePath, source, expectedRemoteEtag)
+    }
 
     override fun verifyDirectUpload(
         source: File,
@@ -60,6 +64,7 @@ internal class DesktopFileSyncChunkUploadRemote(
                 comparison.requireComplete()
             }
         }
+        if (replacingDirectoryEtag != null) tree.deleteCompletedReplacementBackups(relativePath)
         return exact.entry
     }
 
@@ -185,12 +190,21 @@ internal class DesktopFileSyncChunkUploadRemote(
     override fun ownedStageEtag(uploadId: String, relativePath: String): String? =
         tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
 
+    override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? =
+        tree.resolve(relativePath)?.takeUnless { it.isDirectory }?.entry
+
     override fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
         verifiedStageEtag: String,
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry {
+        if (replacingDirectoryEtag != null) {
+            require(expectedRemoteEtag == replacingDirectoryEtag)
+            return tree.publishOwnedStageReplacingDirectory(
+                relativePath, uploadId, verifiedStageEtag, replacingDirectoryEtag,
+            )
+        }
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stageUrl = fileUrl(stagePath)
         val destinationUrl = fileUrl(relativePath)

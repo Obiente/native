@@ -607,18 +607,12 @@ internal class DesktopFileSyncEngine(
                 } else {
                     withStagingFile("upload", source.size) { staged, maximumBytes ->
                         exactLocal = local.stageForUpload(operation.relativePath, staged, maximumBytes)
-                        val uploaded = if (replacingType) {
-                            replaceDesktopFileSyncRemoteType(
-                                staged, operation.relativePath, requireNotNull(operation.expectedRemoteEtag), remote,
-                                retainUploadCleanup, completeUploadCleanup, shouldContinue,
-                            )
-                        } else {
-                            resumeDesktopFileSyncUpload(
-                                staged, operation.relativePath, requireNotNull(exactLocal),
-                                operation.expectedRemoteEtag, work.uploadCheckpoint,
-                                persistUploadCheckpoint, remote, shouldContinue,
-                            )
-                        }
+                        val uploaded = executeDesktopFileSyncUpload(
+                            staged, operation.relativePath, requireNotNull(exactLocal),
+                            operation.expectedRemoteEtag, work.uploadCheckpoint, replacingType,
+                            persistUploadCheckpoint, retainUploadCleanup, completeUploadCleanup,
+                            remote, shouldContinue,
+                        )
                         if (replacingType) {
                             withStagingFile("verify-upload", staged.length()) { verified, verificationMaximumBytes ->
                                 exactRemote = remote.stageDownload(

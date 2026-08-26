@@ -315,7 +315,10 @@ internal class DesktopFileSyncRemoteTree(
         return after.entry
     }
 
-    fun resumableUploadRemote(shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted }) = DesktopFileSyncChunkUploadRemote(
+    fun resumableUploadRemote(
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+        replacingDirectoryEtag: String? = null,
+    ) = DesktopFileSyncChunkUploadRemote(
         session = session,
         userId = userId,
         rootPath = rootPath,
@@ -324,6 +327,7 @@ internal class DesktopFileSyncRemoteTree(
         onMutationCommitted = onMutationCommitted,
         onAmbiguousMutationResult = onAmbiguousMutationResult,
         shouldContinue = shouldContinue,
+        replacingDirectoryEtag = replacingDirectoryEtag,
     )
 
     internal fun resolveOwnedUploadStage(relativePath: String): DesktopRemoteSyncDocument? {
@@ -504,6 +508,13 @@ internal class DesktopFileSyncRemoteTree(
                 .firstOrNull { it.entry.relativePath == backupPath }
                 ?.let(::deleteRemoteDocument)
         }
+    }
+
+    internal fun deleteCompletedReplacementBackups(relativePath: String) {
+        val destinationPath = fullPath(relativePath)
+        rawListDirectory(destinationPath.substringBeforeLast('/', ""))
+            .filter { desktopOwnedBackupDestination(it.entry.relativePath) == destinationPath }
+            .forEach { deleteRemoteBackup(it.entry.relativePath) }
     }
 
     private fun deleteRemoteDocument(document: DesktopRemoteSyncDocument) {
