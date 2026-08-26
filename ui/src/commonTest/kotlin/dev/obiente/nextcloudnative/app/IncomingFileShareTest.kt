@@ -64,6 +64,8 @@ class IncomingFileShareTest {
         assertEquals(uncertain, listOf(active, uncertain).primaryIncomingShareRecovery())
         assertEquals(active, listOf(active).primaryIncomingShareRecovery())
         assertEquals(null, emptyList<IncomingShareUploadPresentation>().primaryIncomingShareRecovery())
+        assertEquals(2_000L, incomingShareRecoveryRefreshMillis(hasRecoveries = true))
+        assertEquals(5_000L, incomingShareRecoveryRefreshMillis(hasRecoveries = false))
     }
 
     private fun recovery(id: String, state: IncomingShareUploadState) = IncomingShareUploadPresentation(

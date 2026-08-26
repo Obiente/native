@@ -39,7 +39,15 @@ internal class AndroidIncomingShareFileTransfer(
         val source = request.files[fileIndex]
         val stagedFile = store.stagedFile(requestId, source)
         return if (stagedFile.length() <= DIRECT_INCOMING_SHARE_UPLOAD_BYTES) {
-            uploadDirect(requestId, fileIndex, source.displayName, stagedFile, occupiedNames, setMutationInFlight)
+            uploadDirect(
+                requestId,
+                fileIndex,
+                source.displayName,
+                stagedFile,
+                occupiedNames,
+                destinationSnapshotComplete,
+                setMutationInFlight,
+            )
         } else {
             uploadChunked(
                 requestId,
@@ -59,9 +67,17 @@ internal class AndroidIncomingShareFileTransfer(
         displayName: String,
         stagedFile: File,
         occupiedNames: MutableSet<String>,
+        destinationSnapshotComplete: Boolean,
         setMutationInFlight: (Boolean) -> Unit,
     ): AndroidIncomingShareRequest {
-        val targetName = incomingShareCandidates(displayName, occupiedNames).firstNotNullOfOrNull { candidate ->
+        var targetName: String
+        while (true) {
+            val candidate = selectIncomingShareTransferTarget(
+                displayName,
+                occupiedNames,
+                destinationSnapshotComplete,
+            ) { name -> remote.resourceExists(name, cancellation) }
+                ?: error("No safe available name remains for $displayName.")
             try {
                 remote.createFileIfAbsent(
                     candidate,
@@ -69,14 +85,14 @@ internal class AndroidIncomingShareFileTransfer(
                     onRequestStarted = { setMutationInFlight(true) },
                     cancellation = cancellation,
                 )
-                candidate
+                targetName = candidate
+                break
             } catch (failure: DocumentWebDavException) {
                 if (!failure.isIncomingShareNameCollision()) throw failure
                 setMutationInFlight(false)
                 occupiedNames += candidate
-                null
             }
-        } ?: error("No safe available name remains for $displayName.")
+        }
         val updated = store.recordUploadedFile(requestId, fileIndex, targetName)
             ?: throw CancellationException("Incoming share upload canceled")
         setMutationInFlight(false)
@@ -103,7 +119,7 @@ internal class AndroidIncomingShareFileTransfer(
                 continue
             }
             if (existingUpload == null) {
-                val targetName = selectIncomingShareChunkTarget(
+                val targetName = selectIncomingShareTransferTarget(
                     displayName,
                     occupiedNames,
                     destinationSnapshotComplete,
@@ -191,16 +207,9 @@ internal class AndroidIncomingShareFileTransfer(
             return updated
         }
     }
-
-    private fun incomingShareCandidates(
-        displayName: String,
-        occupiedNames: Set<String>,
-    ): Sequence<String> = incomingShareUploadNameCandidates(displayName, limit = 1_000)
-        .asSequence()
-        .filterNot(occupiedNames::contains)
 }
 
-internal fun selectIncomingShareChunkTarget(
+internal fun selectIncomingShareTransferTarget(
     displayName: String,
     occupiedNames: MutableSet<String>,
     destinationSnapshotComplete: Boolean,

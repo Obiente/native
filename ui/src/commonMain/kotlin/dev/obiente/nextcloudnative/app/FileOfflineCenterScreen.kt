@@ -447,17 +447,15 @@ internal fun FileOfflineCenterScreen(
 
     LaunchedEffect(session, userId, refreshAttempt) {
         if (userId.isNotBlank()) {
-            try {
-                do {
+            while (true) {
+                try {
                     incomingShareRecoveries = services.loadIncomingShareRecoveries(session, userId)
-                    if (incomingShareRecoveries.isNotEmpty()) {
-                        delay(INCOMING_SHARE_RECOVERY_REFRESH_MILLIS)
-                    }
-                } while (incomingShareRecoveries.isNotEmpty())
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                incomingShareRecoveries = emptyList()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    incomingShareRecoveries = emptyList()
+                }
+                delay(incomingShareRecoveryRefreshMillis(incomingShareRecoveries.isNotEmpty()))
             }
         }
     }
@@ -3018,4 +3016,3 @@ internal fun fileOfflineRefreshEnabled(
 
 private const val ADD_PAIR_BUSY_ID = "__adding_sync_pair__"
 private const val MAX_VISIBLE_MEDIA_FOLDER_SUGGESTIONS = 6
-private const val INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 2_000L

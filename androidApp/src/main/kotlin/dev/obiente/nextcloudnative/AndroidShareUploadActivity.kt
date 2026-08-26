@@ -50,6 +50,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private var error by mutableStateOf<String?>(null)
     private var corruptRecoveryRequestId by mutableStateOf<String?>(null)
     private var corruptRemovalConfirmationVisible by mutableStateOf(false)
+    private var discardConfirmationVisible by mutableStateOf(false)
     private var restoreJob: Job? = null
     private var queueJob: Job? = null
     private var restoreGeneration = 0L
@@ -70,8 +71,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
         setContent {
             NextcloudNativeTheme {
                 NextcloudAppBackground {
-                    BackHandler {
-                        if (request?.state in ACTIVE_SHARE_STATES) finishAndRelease() else cancelOrDismiss()
+                    BackHandler(
+                        enabled = !discardConfirmationVisible && !corruptRemovalConfirmationVisible,
+                    ) {
+                        finishKeepingRecovery()
                     }
                     val activeSession = session
                     val activeUserId = serverInfo?.userId
@@ -95,6 +98,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                         error = error,
                         corruptRecoveryAvailable = corruptRecoveryRequestId != null,
                         corruptRemovalConfirmationVisible = corruptRemovalConfirmationVisible,
+                        discardConfirmationVisible = discardConfirmationVisible,
                         destinationReady = folderOperations != null,
                         folderPickerOperations = folderOperations,
                         folderPickerVisible = folderPickerVisible,
@@ -110,8 +114,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
                             enqueue(path)
                         },
                         onFolderPickerDismissed = { folderPickerVisible = false },
-                        onCancel = ::cancelOrDismiss,
-                        onDone = ::finishAndRelease,
+                        onCancel = ::cancelOrRequestDiscard,
+                        onDone = ::finishOrReleaseReviewedRequest,
+                        onConfirmDiscard = ::confirmDiscardAndFinish,
+                        onDismissDiscard = { discardConfirmationVisible = false },
                         onRemoveCorruptRecovery = { corruptRemovalConfirmationVisible = true },
                         onConfirmRemoveCorruptRecovery = ::removeCorruptRecoveryAndFinish,
                         onDismissRemoveCorruptRecovery = { corruptRemovalConfirmationVisible = false },
@@ -160,6 +166,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         }
         corruptRecoveryRequestId = null
         corruptRemovalConfirmationVisible = false
+        discardConfirmationVisible = false
         restoreJob = lifecycleScope.launch {
             var unclaimedStagedRequestId: String? = null
             try {
@@ -201,9 +208,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         restoreGeneration += 1
         restoreJob?.cancel()
         queueJob?.cancel()
-        request?.takeIf { current ->
-            current.state == AndroidIncomingShareState.Staged || current.canReleaseForIncomingShareReplacement()
-        }?.let { current ->
+        request?.takeIf(AndroidIncomingShareRequest::canReleaseForIncomingShareReplacement)?.let { current ->
             scheduleIncomingSharePresentedRelease(applicationContext, current)
         }
         request = null
@@ -211,6 +216,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         serverInfo = null
         corruptRecoveryRequestId = null
         corruptRemovalConfirmationVisible = false
+        discardConfirmationVisible = false
         queueing = false
         folderPickerVisible = false
     }
@@ -236,14 +242,36 @@ class AndroidShareUploadActivity : ComponentActivity() {
         }
     }
 
-    private fun cancelOrDismiss() {
+    private fun cancelOrRequestDiscard() {
         val current = request
         if (current != null && current.state in ACTIVE_SHARE_STATES) {
             uploads.cancel(current.id)
             request = store.load(current.id)
+        } else if (current?.state in setOf(AndroidIncomingShareState.Staged, AndroidIncomingShareState.Failed)) {
+            discardConfirmationVisible = true
         } else {
-            finishAndRelease()
+            finishKeepingRecovery()
         }
+    }
+
+    private fun finishOrReleaseReviewedRequest() {
+        if (request?.state == AndroidIncomingShareState.Completed) {
+            finishAndRelease()
+        } else {
+            finishKeepingRecovery()
+        }
+    }
+
+    private fun confirmDiscardAndFinish() {
+        discardConfirmationVisible = false
+        finishAndRelease()
+    }
+
+    private fun finishKeepingRecovery() {
+        restoreGeneration += 1
+        restoreJob?.cancel()
+        queueJob?.cancel()
+        finish()
     }
 
     private fun finishAndRelease() {
@@ -284,8 +312,10 @@ internal fun isValidIncomingShareRequestId(value: String): Boolean =
     runCatching { UUID.fromString(value) }.isSuccess
 
 internal fun AndroidIncomingShareRequest.canReleaseForIncomingShareReplacement(): Boolean =
-    state == AndroidIncomingShareState.Completed ||
-        state == AndroidIncomingShareState.Canceled && message != CANCELED_INCOMING_SHARE_MUTATION_WARNING
+    chunkSession == null && (
+        state == AndroidIncomingShareState.Completed ||
+            state == AndroidIncomingShareState.Canceled && message != CANCELED_INCOMING_SHARE_MUTATION_WARNING
+        )
 
 private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,

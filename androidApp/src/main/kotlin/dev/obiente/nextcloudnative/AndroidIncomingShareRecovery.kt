@@ -37,7 +37,7 @@ internal class AndroidIncomingShareCleanupWorker(
         val requestId = inputData.getString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID)
             ?: return@withContext Result.failure()
         val store = AndroidIncomingShareStore(applicationContext)
-        when (val loaded = store.loadResult(requestId)) {
+        val released = when (val loaded = store.loadResult(requestId)) {
             is AndroidIncomingShareLoadResult.Available -> {
                 val chunk = loaded.request.chunkSession
                 if (chunk != null) {
@@ -49,10 +49,14 @@ internal class AndroidIncomingShareCleanupWorker(
                     scheduleIncomingShareChunkCleanup(applicationContext, requestId)
                     return@withContext Result.retry()
                 }
-                if (loaded.request.state in TERMINAL_INCOMING_SHARE_STATES) store.remove(requestId)
+                loaded.request.state in TERMINAL_INCOMING_SHARE_STATES && store.remove(requestId)
             }
             is AndroidIncomingShareLoadResult.Corrupt -> store.remove(requestId)
-            AndroidIncomingShareLoadResult.Missing -> Unit
+            AndroidIncomingShareLoadResult.Missing -> true
+        }
+        if (released) {
+            NotificationManagerCompat.from(applicationContext)
+                .cancel(incomingShareNotificationId(requestId))
         }
         Result.success()
     }

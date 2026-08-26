@@ -484,6 +484,16 @@ class AndroidIncomingShareStateTest {
             canceled.copy(message = "Upload canceled before a transfer was active.")
                 .canReleaseForIncomingShareReplacement(),
         )
+        assertFalse(
+            canceled.copy(
+                message = "Upload canceled before a transfer was active.",
+                chunkSession = AndroidIncomingShareChunkSession(
+                    fileIndex = 0,
+                    targetName = "large.bin",
+                    uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                ),
+            ).canReleaseForIncomingShareReplacement(),
+        )
     }
 
     @Test
@@ -491,7 +501,7 @@ class AndroidIncomingShareStateTest {
         val occupied = mutableSetOf<String>()
         val probed = mutableListOf<String>()
 
-        val selected = selectIncomingShareChunkTarget(
+        val selected = selectIncomingShareTransferTarget(
             displayName = "archive.bin",
             occupiedNames = occupied,
             destinationSnapshotComplete = false,

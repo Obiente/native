@@ -122,6 +122,7 @@ fun IncomingShareUploadScreen(
     error: String?,
     corruptRecoveryAvailable: Boolean = false,
     corruptRemovalConfirmationVisible: Boolean = false,
+    discardConfirmationVisible: Boolean = false,
     destinationReady: Boolean = true,
     folderPickerOperations: RemoteFolderPickerOperations?,
     folderPickerVisible: Boolean,
@@ -130,6 +131,8 @@ fun IncomingShareUploadScreen(
     onFolderPickerDismissed: () -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
+    onConfirmDiscard: () -> Unit = {},
+    onDismissDiscard: () -> Unit = {},
     onRemoveCorruptRecovery: () -> Unit = {},
     onConfirmRemoveCorruptRecovery: () -> Unit = {},
     onDismissRemoveCorruptRecovery: () -> Unit = {},
@@ -234,6 +237,21 @@ fun IncomingShareUploadScreen(
             },
         )
     }
+    if (discardConfirmationVisible) {
+        AlertDialog(
+            onDismissRequest = onDismissDiscard,
+            title = { Text("Discard staged files?") },
+            text = {
+                Text("This permanently deletes the private recovery copy. Choose Keep for later to close without losing access to this share.")
+            },
+            confirmButton = {
+                Button(onClick = onConfirmDiscard) { Text("Discard") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissDiscard) { Text("Keep for later") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -288,40 +306,55 @@ private fun IncomingShareActions(
     onCancel: () -> Unit,
     onDone: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        when (request.state) {
-            IncomingShareUploadState.Staged,
-            IncomingShareUploadState.Failed,
-            -> {
-                TextButton(enabled = !queueing, onClick = onCancel) { Text("Cancel") }
-                Button(enabled = !queueing, onClick = onChooseDestination) {
-                    if (queueing) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.size(8.dp))
-                    }
-                    Text(
-                        when {
-                            !destinationReady -> "Retry account"
-                            request.state == IncomingShareUploadState.Failed -> "Retry"
-                            else -> "Choose folder"
-                        },
-                    )
+    when (request.state) {
+        IncomingShareUploadState.Staged,
+        IncomingShareUploadState.Failed,
+        -> Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+        ) {
+            Button(
+                enabled = !queueing,
+                onClick = onChooseDestination,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (queueing) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.size(8.dp))
                 }
+                Text(
+                    when {
+                        !destinationReady -> "Retry account"
+                        request.state == IncomingShareUploadState.Failed -> "Retry"
+                        else -> "Choose folder"
+                    },
+                )
             }
-            IncomingShareUploadState.Queued,
-            IncomingShareUploadState.Uploading,
-            -> {
-                OutlinedButton(onClick = onCancel) { Text("Cancel upload") }
-                TextButton(onClick = onDone) { Text("Run in background") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+            ) {
+                TextButton(enabled = !queueing, onClick = onDone) { Text("Keep for later") }
+                TextButton(enabled = !queueing, onClick = onCancel) { Text("Discard...") }
             }
-            IncomingShareUploadState.Completed,
-            IncomingShareUploadState.OutcomeUnknown,
-            IncomingShareUploadState.Canceled,
-            -> Button(onClick = onDone) { Text("Done") }
+        }
+        IncomingShareUploadState.Queued,
+        IncomingShareUploadState.Uploading,
+        -> Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = onCancel) { Text("Cancel upload") }
+            TextButton(onClick = onDone) { Text("Run in background") }
+        }
+        IncomingShareUploadState.Completed,
+        IncomingShareUploadState.OutcomeUnknown,
+        IncomingShareUploadState.Canceled,
+        -> Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Button(onClick = onDone) {
+                Text(if (request.state == IncomingShareUploadState.Completed) "Done" else "Close")
+            }
         }
     }
 }
@@ -332,3 +365,9 @@ private fun incomingShareFileSizeLabel(bytes: Long): String = when {
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
     else -> "$bytes bytes"
 }
+
+internal fun incomingShareRecoveryRefreshMillis(hasRecoveries: Boolean): Long =
+    if (hasRecoveries) INCOMING_SHARE_RECOVERY_REFRESH_MILLIS else EMPTY_INCOMING_SHARE_RECOVERY_REFRESH_MILLIS
+
+private const val INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 2_000L
+private const val EMPTY_INCOMING_SHARE_RECOVERY_REFRESH_MILLIS = 5_000L
