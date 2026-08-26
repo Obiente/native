@@ -83,6 +83,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.IncomingShareRecoveryPage
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
 import dev.obiente.nextcloudnative.app.VirtualFilePlatformIntegration
@@ -1789,7 +1790,8 @@ internal class AndroidNextcloudServices(
     override suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,
-    ): List<IncomingShareUploadPresentation> = loadAndroidIncomingShareRecoveries(appContext, session, userId)
+        cursor: String?,
+    ): IncomingShareRecoveryPage = loadAndroidIncomingShareRecoveries(appContext, session, userId, cursor)
 
     override fun openIncomingShareRecovery(requestId: String) =
         openAndroidIncomingShareRecovery(appContext, requestId)

@@ -18,6 +18,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import dev.obiente.nextcloudnative.app.IncomingShareRecoveryPage
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
@@ -281,13 +282,17 @@ internal suspend fun loadAndroidIncomingShareRecoveries(
     context: Context,
     session: NextcloudSession,
     userId: String,
-): List<IncomingShareUploadPresentation> = withContext(Dispatchers.IO) {
+    cursor: String?,
+): IncomingShareRecoveryPage = withContext(Dispatchers.IO) {
     require(userId.isNotBlank())
     val recoveries = AndroidIncomingShareStore(context)
-        .listRecoverable(NextcloudDocumentIds.accountKey(session))
+        .listRecoverablePage(NextcloudDocumentIds.accountKey(session), cursor)
     val uploads = AndroidIncomingShareUploads(context)
-    recoveries.forEach(uploads::ensureQueuedRequestScheduled)
-    recoveries.map(AndroidIncomingShareRequest::toPresentation)
+    recoveries.requests.forEach(uploads::ensureQueuedRequestScheduled)
+    IncomingShareRecoveryPage(
+        requests = recoveries.requests.map(AndroidIncomingShareRequest::toPresentation),
+        nextCursor = recoveries.nextCursor,
+    )
 }
 
 internal fun openAndroidIncomingShareRecovery(context: Context, requestId: String) {

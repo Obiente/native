@@ -611,6 +611,29 @@ class AndroidIncomingShareStateTest {
         )
     }
 
+    @Test
+    fun recoveryDirectoryPollingUsesStableBoundedPages() {
+        val directories = List(35) { index ->
+            IncomingShareRecoveryDirectory(
+                id = "00000000-0000-0000-0000-${index.toString().padStart(12, '0')}",
+                lastModifiedMillis = 1_000L - index,
+            )
+        }
+
+        val first = selectIncomingShareRecoveryDirectoryPage(directories, cursor = null)
+        assertEquals(INCOMING_SHARE_RECOVERY_DIRECTORY_PAGE_SIZE, first.directories.size)
+        assertEquals(directories.first(), first.directories.first())
+        assertEquals(directories[31], first.directories.last())
+        assertEquals(directories[31].encodeCursor(), first.nextCursor)
+
+        val second = selectIncomingShareRecoveryDirectoryPage(directories, cursor = first.nextCursor)
+        assertEquals(directories.drop(32), second.directories)
+        assertNull(second.nextCursor)
+        assertFailsWith<IllegalArgumentException> {
+            selectIncomingShareRecoveryDirectoryPage(directories, cursor = "not-a-cursor")
+        }
+    }
+
     private fun request(state: AndroidIncomingShareState) = AndroidIncomingShareRequest(
         id = "01234567-89ab-cdef-0123-456789abcdef",
         files = listOf(

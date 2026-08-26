@@ -2,6 +2,94 @@ package dev.obiente.nextcloudnative
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.util.UUID
+
+internal const val INCOMING_SHARE_RECOVERY_DIRECTORY_PAGE_SIZE = 32
+
+internal data class AndroidIncomingShareRecoveryPage(
+    val requests: List<AndroidIncomingShareRequest>,
+    val nextCursor: String?,
+)
+
+internal data class IncomingShareRecoveryDirectory(
+    val id: String,
+    val lastModifiedMillis: Long,
+) {
+    fun isAfter(cursor: IncomingShareRecoveryDirectory): Boolean =
+        lastModifiedMillis < cursor.lastModifiedMillis ||
+            (lastModifiedMillis == cursor.lastModifiedMillis && id < cursor.id)
+
+    fun encodeCursor(): String = "$lastModifiedMillis:$id"
+}
+
+internal data class IncomingShareRecoveryDirectoryPage(
+    val directories: List<IncomingShareRecoveryDirectory>,
+    val nextCursor: String?,
+)
+
+internal fun AndroidIncomingShareStore.listRecoverablePage(
+    accountId: String,
+    cursor: String?,
+): AndroidIncomingShareRecoveryPage {
+    require(accountId.isNotBlank())
+    val directories = synchronized(AndroidIncomingShareStore.LOCK) {
+        removeExpiredAbandonedIncomingShareStaging(
+            root,
+            INCOMING_SHARE_STAGING_MARKER_NAME,
+            ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS,
+        )
+        root.listFiles().orEmpty()
+            .asSequence()
+            .filter(File::isDirectory)
+            .mapNotNull { directory ->
+                directory.name.takeIf { runCatching { UUID.fromString(it) }.isSuccess }
+                    ?.let { id -> IncomingShareRecoveryDirectory(id, directory.lastModified()) }
+            }
+            .toList()
+    }
+    val page = selectIncomingShareRecoveryDirectoryPage(directories, cursor)
+    val requests = page.directories.asSequence()
+        .mapNotNull { directory ->
+            (loadResult(directory.id) as? AndroidIncomingShareLoadResult.Available)?.request
+        }
+        .filter { request -> request.requiresIncomingShareRecovery(accountId) }
+        .toList()
+    return AndroidIncomingShareRecoveryPage(requests, page.nextCursor)
+}
+
+internal fun selectIncomingShareRecoveryDirectoryPage(
+    directories: List<IncomingShareRecoveryDirectory>,
+    cursor: String?,
+    limit: Int = INCOMING_SHARE_RECOVERY_DIRECTORY_PAGE_SIZE,
+): IncomingShareRecoveryDirectoryPage {
+    require(limit > 0)
+    val decodedCursor = cursor?.let(::decodeIncomingShareRecoveryCursor)
+    val candidates = directories.asSequence()
+        .filter { directory -> decodedCursor == null || directory.isAfter(decodedCursor) }
+        .sortedWith(
+            compareByDescending<IncomingShareRecoveryDirectory> { it.lastModifiedMillis }
+                .thenByDescending(IncomingShareRecoveryDirectory::id),
+        )
+        .take(limit + 1)
+        .toList()
+    val selected = candidates.take(limit)
+    return IncomingShareRecoveryDirectoryPage(
+        directories = selected,
+        nextCursor = selected.lastOrNull()?.takeIf { candidates.size > selected.size }?.encodeCursor(),
+    )
+}
+
+internal fun decodeIncomingShareRecoveryCursor(value: String): IncomingShareRecoveryDirectory {
+    val separator = value.indexOf(':')
+    require(separator > 0) { "The shared-upload recovery page is no longer valid." }
+    val lastModifiedMillis = value.substring(0, separator).toLong()
+    val id = value.substring(separator + 1)
+    require(lastModifiedMillis >= 0L && runCatching { UUID.fromString(id) }.isSuccess) {
+        "The shared-upload recovery page is no longer valid."
+    }
+    return IncomingShareRecoveryDirectory(id, lastModifiedMillis)
+}
 
 internal fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
     .put("id", id)

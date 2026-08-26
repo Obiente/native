@@ -22,8 +22,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -32,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
 enum class IncomingShareUploadState {
     Staged,
@@ -68,20 +72,77 @@ data class IncomingShareUploadPresentation(
     val canVerifyOutcome: Boolean = false,
 )
 
+data class IncomingShareRecoveryPage(
+    val requests: List<IncomingShareUploadPresentation> = emptyList(),
+    val nextCursor: String? = null,
+)
+
+internal class IncomingShareRecoveryPagerState {
+    var page by mutableStateOf(IncomingShareRecoveryPage())
+    var cursors by mutableStateOf(listOf<String?>(null))
+    var pageIndex by mutableIntStateOf(0)
+    val cursor: String? get() = cursors[pageIndex]
+    val pageNumber: Int get() = pageIndex + 1
+    val isVisible: Boolean get() = page.requests.isNotEmpty() || page.nextCursor != null || pageIndex > 0
+
+    fun previous() {
+        if (pageIndex > 0) {
+            page = IncomingShareRecoveryPage()
+            pageIndex -= 1
+        }
+    }
+
+    fun next(cursor: String) {
+        val nextIndex = pageIndex + 1
+        page = IncomingShareRecoveryPage()
+        cursors = cursors.take(nextIndex) + cursor
+        pageIndex = nextIndex
+    }
+}
+
+@Composable
+internal fun rememberIncomingShareRecoveryPager(
+    services: NextcloudPlatformServices,
+    session: NextcloudSession,
+    userId: String,
+    refreshAttempt: Int,
+): IncomingShareRecoveryPagerState {
+    val pager = remember(session, userId) { IncomingShareRecoveryPagerState() }
+    LaunchedEffect(session, userId, refreshAttempt, pager.cursor) {
+        if (userId.isNotBlank()) {
+            while (true) {
+                try {
+                    pager.page = services.loadIncomingShareRecoveries(session, userId, pager.cursor)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    pager.page = IncomingShareRecoveryPage()
+                }
+                delay(incomingShareRecoveryRefreshMillis(pager.isVisible))
+            }
+        }
+    }
+    return pager
+}
+
 @Composable
 internal fun IncomingShareRecoveryCard(
-    requests: List<IncomingShareUploadPresentation>,
+    page: IncomingShareRecoveryPage,
+    pageNumber: Int,
     onOpen: (String) -> Unit,
+    onPreviousPage: () -> Unit,
+    onNextPage: (String) -> Unit,
 ) {
-    if (requests.isEmpty()) return
+    val requests = page.requests
+    if (requests.isEmpty() && pageNumber == 1 && page.nextCursor == null) return
     val ordered = requests.filter(IncomingShareUploadPresentation::incomingShareRecoveryNeedsAttention) +
         requests.filterNot(IncomingShareUploadPresentation::incomingShareRecoveryNeedsAttention)
     var pageIndex by remember(ordered.map(IncomingShareUploadPresentation::id)) {
         mutableIntStateOf(0)
     }
-    val selectedIndex = pageIndex.coerceIn(ordered.indices)
-    val request = ordered[selectedIndex]
-    val needsAttention = request.state in setOf(
+    val selectedIndex = if (ordered.isEmpty()) 0 else pageIndex.coerceIn(ordered.indices)
+    val request = ordered.getOrNull(selectedIndex)
+    val needsAttention = request?.state in setOf(
         IncomingShareUploadState.Failed,
         IncomingShareUploadState.OutcomeUnknown,
         IncomingShareUploadState.Canceled,
@@ -106,38 +167,62 @@ internal fun IncomingShareRecoveryCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        if (needsAttention) "Shared upload needs review" else "Shared upload in progress",
+                        when {
+                            request == null -> "No shared uploads on this page"
+                            needsAttention -> "Shared upload needs review"
+                            else -> "Shared upload in progress"
+                        },
                         style = MaterialTheme.typography.titleSmall,
                     )
-                    Text(
-                        "${request.completedFiles} of ${request.files.size} files confirmed.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    if (request != null) {
+                        Text(
+                            "${request.completedFiles} of ${request.files.size} files confirmed.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        Text("Continue to check older recoveries.", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                Button(onClick = { onOpen(request.id) }) { Text("Open") }
+                request?.let { selected ->
+                    Button(onClick = { onOpen(selected.id) }) { Text("Open") }
+                }
             }
-            if (ordered.size > 1) {
+            val canGoPrevious = selectedIndex > 0 || pageNumber > 1
+            val canGoNext = selectedIndex < ordered.lastIndex || page.nextCursor != null
+            if (canGoPrevious || canGoNext) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(
-                        enabled = selectedIndex > 0,
-                        onClick = { pageIndex = selectedIndex - 1 },
+                        enabled = canGoPrevious,
+                        onClick = {
+                            if (selectedIndex > 0) pageIndex = selectedIndex - 1 else onPreviousPage()
+                        },
                     ) { Text("Previous") }
                     Text(
-                        "${selectedIndex + 1} of ${ordered.size}",
+                        if (request == null) {
+                            "Recovery page $pageNumber"
+                        } else {
+                            "Page $pageNumber, ${selectedIndex + 1} of ${ordered.size}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                     TextButton(
-                        enabled = selectedIndex < ordered.lastIndex,
-                        onClick = { pageIndex = selectedIndex + 1 },
+                        enabled = canGoNext,
+                        onClick = {
+                            if (selectedIndex < ordered.lastIndex) {
+                                pageIndex = selectedIndex + 1
+                            } else {
+                                page.nextCursor?.let(onNextPage)
+                            }
+                        },
                     ) { Text("Next") }
                 }
             } else {
                 Text(
-                    "1 recoverable share",
+                    "Recovery page $pageNumber",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

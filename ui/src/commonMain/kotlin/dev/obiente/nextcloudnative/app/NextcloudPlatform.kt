@@ -967,7 +967,8 @@ interface NextcloudPlatformServices {
     suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,
-    ): List<IncomingShareUploadPresentation> = emptyList()
+        cursor: String?,
+    ): IncomingShareRecoveryPage = IncomingShareRecoveryPage()
 
     /** Opens the platform-owned recovery surface for one durable share-sheet upload. */
     fun openIncomingShareRecovery(requestId: String) = Unit

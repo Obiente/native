@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 internal const val ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS = 24L * 60L * 60L * 1_000L
+internal const val INCOMING_SHARE_STAGING_MARKER_NAME = ".staging"
 
 internal enum class AndroidIncomingShareState {
     Staged,
@@ -103,7 +104,7 @@ internal sealed interface AndroidIncomingShareSource {
 }
 
 internal class AndroidIncomingShareStore(private val context: Context) {
-    private val root = File(context.filesDir, "incoming-share")
+    internal val root = File(context.filesDir, "incoming-share")
 
     suspend fun stage(intent: Intent, accountId: String): AndroidIncomingShareRequest = withContext(Dispatchers.IO) {
         require(accountId.isNotBlank())
@@ -122,7 +123,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val requestDirectory = directory(requestId)
         check(requestDirectory.mkdirs()) { "The private upload staging folder could not be created." }
         scheduleIncomingShareAbandonedStagingCleanup(context, requestId)
-        val stagingMarker = createIncomingShareStagingMarker(requestDirectory, STAGING_MARKER_NAME)
+        val stagingMarker = createIncomingShareStagingMarker(requestDirectory, INCOMING_SHARE_STAGING_MARKER_NAME)
         try {
             var totalBytes = 0L
             val files = sources.mapIndexed { index, source ->
@@ -212,23 +213,6 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         is AndroidIncomingShareLoadResult.Available -> loaded.request
         is AndroidIncomingShareLoadResult.Corrupt -> throw CorruptIncomingShareManifestException(id)
         AndroidIncomingShareLoadResult.Missing -> error("This shared upload is no longer available.")
-    }
-
-    fun listRecoverable(accountId: String): List<AndroidIncomingShareRequest> = synchronized(LOCK) {
-        removeExpiredAbandonedIncomingShareStaging(
-            root, STAGING_MARKER_NAME, ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS,
-        )
-        root.listFiles().orEmpty()
-            .asSequence()
-            .filter(File::isDirectory)
-            .sortedByDescending(File::lastModified)
-            .mapNotNull { directory ->
-                val id = directory.name.takeIf { runCatching { UUID.fromString(it) }.isSuccess }
-                    ?: return@mapNotNull null
-                (loadResult(id) as? AndroidIncomingShareLoadResult.Available)?.request
-            }
-            .filter { request -> request.requiresIncomingShareRecovery(accountId) }
-            .toList()
     }
 
     fun save(request: AndroidIncomingShareRequest) = synchronized(LOCK) {
@@ -547,7 +531,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
             val target = directory(id)
             !target.exists() || removeExpiredAbandonedIncomingShareStagingDirectory(
                 directory = target,
-                markerName = STAGING_MARKER_NAME,
+                markerName = INCOMING_SHARE_STAGING_MARKER_NAME,
                 retentionMillis = ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS,
                 nowMillis = nowMillis,
             )
@@ -567,12 +551,11 @@ internal class AndroidIncomingShareStore(private val context: Context) {
 
     private fun manifest(id: String) = File(directory(id), "request.json")
 
-    private companion object {
+    internal companion object {
         val LOCK = Any()
         const val MAX_SHARE_FILE_BYTES = 8L * 1024L * 1024L * 1024L
         const val MAX_SHARE_TOTAL_BYTES = 16L * 1024L * 1024L * 1024L
         const val MIN_STAGING_FREE_BYTES = 64L * 1024L * 1024L
-        const val STAGING_MARKER_NAME = ".staging"
     }
 }
 

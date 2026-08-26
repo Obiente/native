@@ -39,14 +39,14 @@ class AndroidIncomingShareStoreInstrumentedTest {
         )
         try {
             assertEquals(listOf("one.txt"), single.files.map(AndroidIncomingShareFile::displayName))
-            assertTrue(store.listRecoverable("account-1").any { it.id == single.id })
+            assertTrue(store.listRecoverablePage("account-1", cursor = null).requests.any { it.id == single.id })
             assertArrayEquals(
                 IncomingShareFixtureProvider.payload("one.txt"),
                 store.stagedFile(single.id, single.files.single()).readBytes(),
             )
             assertEquals(single, AndroidIncomingShareStore(context).load(single.id))
             store.save(single.copy(state = AndroidIncomingShareState.Completed))
-            assertTrue(store.listRecoverable("account-1").none { it.id == single.id })
+            assertTrue(store.listRecoverablePage("account-1", cursor = null).requests.none { it.id == single.id })
         } finally {
             assertTrue(store.remove(single.id))
         }

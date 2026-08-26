@@ -94,9 +94,7 @@ internal fun FileOfflineCenterScreen(
     var actionMessage by remember(session, userId) { mutableStateOf<String?>(null) }
     var removeTarget by remember(session, userId) { mutableStateOf<FileOfflineCenterItem?>(null) }
     var syncSnapshot by remember(session, userId) { mutableStateOf<FileSyncCenterSnapshot?>(null) }
-    var incomingShareRecoveries by remember(session, userId) {
-        mutableStateOf<List<IncomingShareUploadPresentation>>(emptyList())
-    }
+    val incomingShareRecoveryPager = rememberIncomingShareRecoveryPager(services, session, userId, refreshAttempt)
     var syncLoading by remember(session, userId) { mutableStateOf(false) }
     var mediaFolderDiscovery by remember(session, userId) { mutableStateOf<MediaSyncFolderDiscovery?>(null) }
     var mediaDiscoveryLoading by remember(session, userId) { mutableStateOf(false) }
@@ -446,21 +444,6 @@ internal fun FileOfflineCenterScreen(
     }
 
     LaunchedEffect(session, userId, refreshAttempt) {
-        if (userId.isNotBlank()) {
-            while (true) {
-                try {
-                    incomingShareRecoveries = services.loadIncomingShareRecoveries(session, userId)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Throwable) {
-                    incomingShareRecoveries = emptyList()
-                }
-                delay(incomingShareRecoveryRefreshMillis(incomingShareRecoveries.isNotEmpty()))
-            }
-        }
-    }
-
-    LaunchedEffect(session, userId, refreshAttempt) {
         if (userId.isBlank() || !services.supportsVirtualFileStorage) return@LaunchedEffect
         virtualStorageLoading = true
         try {
@@ -563,8 +546,11 @@ internal fun FileOfflineCenterScreen(
                     OfflineCenterMessageCard(message, errorTone = false)
                 }
                 IncomingShareRecoveryCard(
-                    requests = incomingShareRecoveries,
+                    page = incomingShareRecoveryPager.page,
+                    pageNumber = incomingShareRecoveryPager.pageNumber,
                     onOpen = services::openIncomingShareRecovery,
+                    onPreviousPage = incomingShareRecoveryPager::previous,
+                    onNextPage = incomingShareRecoveryPager::next,
                 )
                 when (selectedWorkspaceSection) {
                     FileOfflineWorkspaceSection.FolderSync -> {
@@ -716,11 +702,14 @@ internal fun FileOfflineCenterScreen(
                     actionMessage?.let { message ->
                         item { OfflineCenterMessageCard(message, errorTone = false) }
                     }
-                    if (incomingShareRecoveries.isNotEmpty()) {
+                    if (incomingShareRecoveryPager.isVisible) {
                         item {
                             IncomingShareRecoveryCard(
-                                requests = incomingShareRecoveries,
+                                page = incomingShareRecoveryPager.page,
+                                pageNumber = incomingShareRecoveryPager.pageNumber,
                                 onOpen = services::openIncomingShareRecovery,
+                                onPreviousPage = incomingShareRecoveryPager::previous,
+                                onNextPage = incomingShareRecoveryPager::next,
                             )
                         }
                     }
