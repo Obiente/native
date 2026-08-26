@@ -465,6 +465,27 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun resumableUploadStreamsVerboseChunkMetadataPastTheDirectoryReadBudget() = RecordingServer().use { server ->
+        val xml = buildString {
+            append("<d:multistatus xmlns:d=\"DAV:\"><!--")
+            append("x".repeat(5 * 1024 * 1024))
+            append("--><d:response><d:href>/remote.php/dav/uploads/alice/upload/00001</d:href>")
+            append("<d:propstat><d:prop><d:getcontentlength>1</d:getcontentlength>")
+            append("</d:prop></d:propstat></d:response></d:multistatus>")
+        }
+        server.enqueue(MockResponse.Builder().code(207).body(xml).build())
+
+        val chunks = NextcloudDocumentWebDav().listChunkUpload(
+            server.session,
+            "alice",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            TestCancellation(),
+        )
+
+        assertEquals(mapOf(1 to 1L), chunks)
+    }
+
+    @Test
     fun chunkCommitRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
         server.enqueue(204)
 
