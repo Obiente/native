@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -44,5 +45,33 @@ class NextcloudChunkUploadPolicyTest {
             NextcloudUploadTransferPlan.Direct,
             nextcloudUploadTransferPlan(MAX_NEXTCLOUD_CHUNK_BYTES * MAX_NEXTCLOUD_UPLOAD_CHUNKS + 1L),
         )
+    }
+
+    @Test
+    fun `resume positions resolve to stable protocol names and byte ranges`() {
+        val size = 25L * 1024L * 1024L + 17L
+        val plan = assertIs<NextcloudUploadTransferPlan.Chunked>(nextcloudUploadTransferPlan(size))
+
+        assertEquals(
+            NextcloudUploadChunk(number = 1, offsetBytes = 0L, sizeBytes = 10L * 1024L * 1024L),
+            nextcloudUploadChunk(plan, size, uploadedChunks = 0),
+        )
+        val resumed = nextcloudUploadChunk(plan, size, uploadedChunks = 2)
+        assertEquals("00003", resumed.remoteName)
+        assertEquals(20L * 1024L * 1024L, resumed.offsetBytes)
+        assertEquals(5L * 1024L * 1024L + 17L, resumed.sizeBytes)
+    }
+
+    @Test
+    fun `stale chunk progress cannot be reused for a different file generation`() {
+        val originalSize = 30L * 1024L * 1024L
+        val plan = assertIs<NextcloudUploadTransferPlan.Chunked>(nextcloudUploadTransferPlan(originalSize))
+
+        assertFailsWith<IllegalArgumentException> {
+            nextcloudUploadChunk(plan, 21L * 1024L * 1024L, uploadedChunks = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            nextcloudUploadChunk(plan, originalSize, uploadedChunks = plan.chunkCount)
+        }
     }
 }
