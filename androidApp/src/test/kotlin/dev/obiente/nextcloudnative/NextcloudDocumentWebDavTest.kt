@@ -438,6 +438,33 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun resumableUploadReadsTheAuthoritativeServerChunkPrefix() = RecordingServer().use { server ->
+        server.enqueue(
+            MockResponse.Builder().code(207).body(
+                """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/uploads/alice/upload/</d:href></d:response>
+                  <d:response><d:href>/remote.php/dav/uploads/alice/upload/00001</d:href>
+                    <d:propstat><d:prop><d:getcontentlength>10485760</d:getcontentlength></d:prop></d:propstat>
+                  </d:response>
+                </d:multistatus>
+                """.trimIndent(),
+            ).build(),
+        )
+
+        val chunks = NextcloudDocumentWebDav().listChunkUpload(
+            server.session,
+            "alice",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            TestCancellation(),
+        )
+
+        assertEquals(mapOf(1 to 10L * 1024L * 1024L), chunks)
+        assertEquals("PROPFIND", server.request(0).method)
+        assertEquals("1", server.request(0).header("Depth"))
+    }
+
+    @Test
     fun chunkCommitRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
         server.enqueue(204)
 

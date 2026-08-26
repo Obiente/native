@@ -40,7 +40,8 @@ internal fun requireValidFileSyncUploadCheckpoint(work: FileSyncWorkItem) {
         ?: error("Only upload work can retain chunk progress.")
     val local = requireNotNull(work.observedLocal)
     require(local.kind == SyncEntryKind.File)
-    require(local.revision == checkpoint.localRevision && local.size == checkpoint.sizeBytes)
+    require(local.revision == checkpoint.localRevision)
+    require(local.size == null || local.size == checkpoint.sizeBytes)
     require(upload.relativePath == work.relativePath)
 }
 
