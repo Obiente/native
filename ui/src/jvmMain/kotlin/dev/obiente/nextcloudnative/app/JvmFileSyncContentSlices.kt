@@ -22,7 +22,7 @@ fun hashExactJvmFileSyncSlice(
         remaining -= read
     }
     if (requireExhausted) check(input.read() == -1) { "The file range exceeded the expected byte count." }
-    return digest.toSyncSha256()
+    return digest.digest().toSyncSha256()
 }
 
 fun advanceJvmFileSyncContentAggregate(previousHash: String, chunkHash: String): String {
