@@ -1,5 +1,5 @@
 category: fix
-issue: 373
+issue: 113
 pull: 423
 platforms: android, desktop
 user-facing: yes
