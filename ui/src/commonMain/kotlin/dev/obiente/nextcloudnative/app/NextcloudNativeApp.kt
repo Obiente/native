@@ -7732,6 +7732,7 @@ private fun FilesScreen(
                     }.onSuccess { result ->
                         when (result) {
                             is ExternalFileHandoffResult.Launched -> handoffNotice = null
+                            is ExternalFileHandoffResult.Cancelled -> handoffNotice = null
                             is ExternalFileHandoffResult.Rejected -> {
                                 handoffNotice = null
                                 handoffError = result.message

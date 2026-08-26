@@ -71,6 +71,7 @@ enum class ExternalFileHandoffRejection {
 
 sealed interface ExternalFileHandoffResult {
     data class Launched(val action: ExternalFileHandoffAction) : ExternalFileHandoffResult
+    data class Cancelled(val action: ExternalFileHandoffAction) : ExternalFileHandoffResult
     data class Rejected(
         val reason: ExternalFileHandoffRejection,
         val message: String,

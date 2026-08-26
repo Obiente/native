@@ -1,6 +1,5 @@
-package dev.obiente.nextcloudnative
+package dev.obiente.nextcloudnative.app
 
-import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -19,9 +18,9 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 
-class AndroidDetachedDownloadTransportTest {
+class DesktopDetachedDownloadTest {
     @Test
-    fun `coroutine cancellation cancels an in-flight detached download`() = runBlocking {
+    fun `cancellation stops the desktop request and UTF-8 credentials are preserved`() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(
                 MockResponse.Builder()
@@ -31,13 +30,14 @@ class AndroidDetachedDownloadTransportTest {
                     .build(),
             )
             server.start()
-            val destination = Files.createTempFile("ncn-detached-cancel-", ".tmp").toFile()
+            val destination = Files.createTempFile("ncn-desktop-detached-cancel-", ".tmp").toFile()
+            val session = NextcloudSession(server.url("/").toString(), "alïce", "pässword")
             try {
                 val job = launch(Dispatchers.Default) {
                     FileOutputStream(destination).use { output ->
-                        downloadAndroidDetachedFile(
+                        downloadDesktopDetachedFile(
                             client = OkHttpClient(),
-                            session = NextcloudSession(server.url("/").toString(), "alïce", "pässword"),
+                            session = session,
                             url = server.url("/large.bin").toString(),
                             output = output,
                             maximumBytes = Long.MAX_VALUE,

@@ -470,6 +470,7 @@ internal fun canRestoreFileVersion(
 
 private fun ExternalFileHandoffResult.fileVersionActionMessage(): String = when (this) {
     is ExternalFileHandoffResult.Launched -> "A detached historical copy is ready in the platform export sheet."
+    is ExternalFileHandoffResult.Cancelled -> "Export cancelled."
     is ExternalFileHandoffResult.NoCompatibleApplication -> "No app can receive this historical copy."
     is ExternalFileHandoffResult.Rejected -> message
     is ExternalFileHandoffResult.Unsupported -> reason

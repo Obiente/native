@@ -17,6 +17,7 @@ internal class DesktopFileSyncEngine(
     private val stagingRoot: File = desktopFileSyncStagingDirectory(),
     private val minimumFreeSpaceBytes: () -> Long = { 0L },
     private val folderPicker: DesktopSystemFolderPicker = DesktopSystemFolderPicker(),
+    private val stagingReservations: DesktopStagingSpaceReservations = sharedDesktopStagingSpaceReservations,
     private val onRemoteMutationCommitted: (session: NextcloudSession, userId: String, path: String) -> Unit =
         { _, _, _ -> },
 ) {
@@ -550,8 +551,8 @@ internal class DesktopFileSyncEngine(
                 } else if (source.kind == SyncEntryKind.Directory) {
                     remote.createDirectory(operation.relativePath, operation.expectedRemoteEtag)
                 } else {
-                    withStagingFile("upload") { staged ->
-                        exactLocal = local.stageForUpload(operation.relativePath, staged, MAX_SYNC_FILE_BYTES)
+                    withStagingFile("upload", source.size) { staged, maximumBytes ->
+                        exactLocal = local.stageForUpload(operation.relativePath, staged, maximumBytes)
                         val uploaded = if (replacingType) {
                             remote.replaceWithFile(
                                 operation.relativePath,
@@ -561,12 +562,12 @@ internal class DesktopFileSyncEngine(
                         } else {
                             remote.writeFile(operation.relativePath, staged, operation.expectedRemoteEtag)
                         }
-                        withStagingFile("verify-upload") { verified ->
+                        withStagingFile("verify-upload", staged.length()) { verified, verificationMaximumBytes ->
                             exactRemote = remote.stageDownload(
                                 operation.relativePath,
                                 uploaded.etag,
                                 verified,
-                                MAX_SYNC_FILE_BYTES,
+                                verificationMaximumBytes,
                             )
                             require(filesMatch(staged, verified)) {
                                 "The uploaded server file does not match the staged local generation."
@@ -602,18 +603,20 @@ internal class DesktopFileSyncEngine(
                 } else if (source.kind == SyncEntryKind.Directory) {
                     local.createDirectory(operation.relativePath, operation.expectedLocalRevision)
                 } else {
-                    source.size?.let { size -> requireDownloadCapacity(local, operation.relativePath, size) }
-                    withStagingFile("download") { staged ->
+                    val maximumDownloadBytes = source.size
+                        ?: maximumSafeDesktopDownloadBytes(local, operation.relativePath)
+                    requireDownloadCapacity(local, operation.relativePath, maximumDownloadBytes)
+                    withStagingFile("download", maximumDownloadBytes) { staged, stagingMaximumBytes ->
                         exactRemote = remote.stageDownload(
                             operation.relativePath,
                             source.etag,
                             staged,
-                            MAX_SYNC_FILE_BYTES,
+                            stagingMaximumBytes,
                         ) { declaredBytes ->
                             requireDownloadCapacity(
                                 local,
                                 operation.relativePath,
-                                declaredBytes ?: source.size ?: MAX_SYNC_FILE_BYTES,
+                                declaredBytes ?: maximumDownloadBytes,
                             )
                         }
                         exactLocal = if (replacingType) {
@@ -668,16 +671,16 @@ internal class DesktopFileSyncEngine(
         val localSource = requireNotNull(work.observedLocal)
         val remoteSource = requireNotNull(work.observedRemote)
         require(localSource.kind == SyncEntryKind.File && remoteSource.kind == SyncEntryKind.File)
-        withStagingFile("keep-local") { localBytes ->
-            withStagingFile("keep-remote") { remoteBytes ->
+        withStagingFile("keep-local", localSource.size) { localBytes, localMaximumBytes ->
+            withStagingFile("keep-remote", remoteSource.size) { remoteBytes, remoteMaximumBytes ->
                 val currentOriginal = local.resolve(operation.relativePath)
                 val preservedLocalPath = if (currentOriginal?.entry?.revision == localSource.revision) {
                     operation.relativePath
                 } else {
                     operation.localConflictPath
                 }
-                local.stageForUpload(preservedLocalPath, localBytes, MAX_SYNC_FILE_BYTES)
-                remote.stageDownload(operation.relativePath, remoteSource.etag, remoteBytes, MAX_SYNC_FILE_BYTES)
+                local.stageForUpload(preservedLocalPath, localBytes, localMaximumBytes)
+                remote.stageDownload(operation.relativePath, remoteSource.etag, remoteBytes, remoteMaximumBytes)
                 ensureLocalFile(operation.localConflictPath, localBytes, local)
                 ensureRemoteFile(operation.localConflictPath, localBytes, remote)
                 ensureLocalFile(operation.remoteConflictPath, remoteBytes, local)
@@ -710,8 +713,8 @@ internal class DesktopFileSyncEngine(
             return
         }
         require(current.entry.kind == SyncEntryKind.File) { "A conflict-copy path is not a file." }
-        withStagingFile("verify-local-conflict") { actualBytes ->
-            local.stageForUpload(path, actualBytes, MAX_SYNC_FILE_BYTES)
+        withStagingFile("verify-local-conflict", current.entry.size) { actualBytes, maximumBytes ->
+            local.stageForUpload(path, actualBytes, maximumBytes)
             require(filesMatch(actualBytes, expectedBytes)) {
                 "A conflict-copy path contains different local content."
             }
@@ -729,8 +732,8 @@ internal class DesktopFileSyncEngine(
             return
         }
         require(current.entry.kind == SyncEntryKind.File) { "A conflict-copy path is not a file." }
-        withStagingFile("verify-remote-conflict") { actualBytes ->
-            remote.stageDownload(path, current.entry.etag, actualBytes, MAX_SYNC_FILE_BYTES)
+        withStagingFile("verify-remote-conflict", current.entry.size) { actualBytes, maximumBytes ->
+            remote.stageDownload(path, current.entry.etag, actualBytes, maximumBytes)
             require(filesMatch(actualBytes, expectedBytes)) {
                 "A conflict-copy path contains different server content."
             }
@@ -749,8 +752,8 @@ internal class DesktopFileSyncEngine(
             local.writeFile(path, expectedBytes, originalRevision)
             return
         }
-        withStagingFile("verify-local-original") { actualBytes ->
-            local.stageForUpload(path, actualBytes, MAX_SYNC_FILE_BYTES)
+        withStagingFile("verify-local-original", current.entry.size) { actualBytes, maximumBytes ->
+            local.stageForUpload(path, actualBytes, maximumBytes)
             require(filesMatch(actualBytes, expectedBytes)) {
                 "The original local file changed while conflict copies were being published."
             }
@@ -777,16 +780,47 @@ internal class DesktopFileSyncEngine(
         return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, localEntry.contentHash)
     }
 
-    private inline fun <T> withStagingFile(prefix: String, block: (File) -> T): T {
+    private inline fun <T> withStagingFile(
+        prefix: String,
+        expectedBytes: Long?,
+        block: (File, maximumBytes: Long) -> T,
+    ): T {
         check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
         require(prefix in DESKTOP_FILE_SYNC_STAGE_PREFIXES)
-        val file = File(stagingRoot, "nextcloud-native-$prefix-${UUID.randomUUID()}.tmp")
-        check(file.createNewFile()) { "Could not create sync staging file." }
-        return try {
-            block(file)
-        } finally {
-            file.delete()
+        val canonicalRoot = stagingRoot.canonicalFile
+        stagingReservations.reserve(
+            root = canonicalRoot,
+            declaredByteCount = expectedBytes,
+            reserveBytes = minimumFreeSpaceBytes(),
+        ).use { reservation ->
+            val file = File(canonicalRoot, "nextcloud-native-$prefix-${UUID.randomUUID()}.tmp")
+            check(file.createNewFile()) { "Could not create sync staging file." }
+            return try {
+                block(file, reservation.maximumBytes)
+            } finally {
+                file.delete()
+            }
         }
+    }
+
+    private fun maximumSafeDesktopDownloadBytes(
+        local: DesktopFileSyncLocalTree,
+        relativePath: String,
+    ): Long {
+        val reserve = minimumFreeSpaceBytes()
+        require(reserve >= 0L)
+        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
+        val stagingStore = Files.getFileStore(stagingRoot.toPath())
+        val destinationStore = local.fileStore(relativePath)
+        val stagingSafe = (stagingStore.usableSpace - reserve).coerceAtLeast(0L)
+        val destinationSafe = (destinationStore.usableSpace - reserve).coerceAtLeast(0L)
+        val maximum = if (stagingStore == destinationStore) {
+            stagingSafe / 2L
+        } else {
+            minOf(stagingSafe, destinationSafe)
+        }
+        check(maximum > 0L) { "There is not enough free space to stage this synchronized file safely." }
+        return maximum
     }
 
     private fun requireDownloadCapacity(
@@ -794,7 +828,7 @@ internal class DesktopFileSyncEngine(
         relativePath: String,
         downloadBytes: Long,
     ) {
-        require(downloadBytes in 0L..MAX_SYNC_FILE_BYTES)
+        require(downloadBytes >= 0L)
         val reserve = minimumFreeSpaceBytes()
         require(reserve >= 0L)
         check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
@@ -829,7 +863,4 @@ internal class DesktopFileSyncEngine(
         failure.message?.map { if (it.isISOControl()) ' ' else it }?.joinToString("")
             ?.trim()?.take(MAX_FILE_SYNC_FAILURE_LENGTH)?.takeIf(String::isNotBlank) ?: fallback
 
-    private companion object {
-        const val MAX_SYNC_FILE_BYTES = Long.MAX_VALUE
-    }
 }

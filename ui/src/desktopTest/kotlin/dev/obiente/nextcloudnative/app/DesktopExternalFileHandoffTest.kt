@@ -16,10 +16,10 @@ class DesktopExternalFileHandoffTest {
         val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
         var launched: File? = null
         try {
-            val handoff = DesktopExternalFileHandoff(root) { file ->
+            val handoff = DesktopExternalFileHandoff(root, launchFile = { file ->
                 launched = file
                 true
-            }
+            })
 
             val result = handoff.launch(
                 file = file(),
@@ -46,14 +46,52 @@ class DesktopExternalFileHandoffTest {
     }
 
     @Test
+    fun `desktop share exports the staged copy instead of opening it`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-share-").toFile()
+        var exported = ""
+        var openCalls = 0
+        try {
+            val result = DesktopExternalFileHandoff(
+                root = root,
+                launchFile = {
+                    openCalls += 1
+                    true
+                },
+                exportFile = { staged ->
+                    exported = staged.readText()
+                    DesktopStagedFileExport.Exported
+                },
+            ).launch(
+                file = file(),
+                action = ExternalFileHandoffAction.Share,
+                capability = capability(ExternalFileHandoffAction.Share),
+                download = {
+                    NextcloudFileContent(
+                        bytes = "detached copy".encodeToByteArray(),
+                        mimeType = "application/pdf",
+                        etag = "\"v1\"",
+                    )
+                },
+            )
+
+            assertIs<ExternalFileHandoffResult.Launched>(result)
+            assertEquals("detached copy", exported)
+            assertEquals(0, openCalls)
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `changed generation is rejected before desktop launch or staging`() = runBlocking {
         val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
         var launchCalls = 0
         try {
-            val result = DesktopExternalFileHandoff(root) {
+            val result = DesktopExternalFileHandoff(root, launchFile = {
                 launchCalls += 1
                 true
-            }.launch(
+            }).launch(
                 file = file(),
                 action = ExternalFileHandoffAction.OpenWith,
                 capability = capability(),
@@ -82,10 +120,10 @@ class DesktopExternalFileHandoffTest {
         val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
         var launched: File? = null
         try {
-            val result = DesktopExternalFileHandoff(root) { file ->
+            val result = DesktopExternalFileHandoff(root, launchFile = { file ->
                 launched = file
                 true
-            }.launchDetached(
+            }).launchDetached(
                 attachment = attachment(byteCount = 13L),
                 action = ExternalFileHandoffAction.OpenWith,
                 capability = capability(),
@@ -111,10 +149,10 @@ class DesktopExternalFileHandoffTest {
         val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
         var launchCalls = 0
         try {
-            val result = DesktopExternalFileHandoff(root) {
+            val result = DesktopExternalFileHandoff(root, launchFile = {
                 launchCalls += 1
                 true
-            }.launchDetached(
+            }).launchDetached(
                 attachment = attachment(byteCount = null),
                 action = ExternalFileHandoffAction.OpenWith,
                 capability = ExternalFileHandoffCapability(
@@ -140,10 +178,10 @@ class DesktopExternalFileHandoffTest {
         var launchCalls = 0
         try {
             assertFailsWith<IllegalStateException> {
-                DesktopExternalFileHandoff(root) {
+                DesktopExternalFileHandoff(root, launchFile = {
                     launchCalls += 1
                     true
-                }.launchDetached(
+                }).launchDetached(
                     attachment = attachment(byteCount = 5L),
                     action = ExternalFileHandoffAction.OpenWith,
                     capability = capability(),
@@ -199,8 +237,8 @@ class DesktopExternalFileHandoffTest {
         }
     }
 
-    private fun capability() = ExternalFileHandoffCapability(
-        supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
+    private fun capability(vararg actions: ExternalFileHandoffAction) = ExternalFileHandoffCapability(
+        supportedActions = actions.toSet().ifEmpty { setOf(ExternalFileHandoffAction.OpenWith) },
         maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
     )
 

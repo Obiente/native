@@ -1915,6 +1915,7 @@ private fun DeckAttachment.toDeckUiAttachment(
 
 private fun ExternalFileHandoffResult.deckAttachmentHandoffMessage(): String? = when (this) {
     is ExternalFileHandoffResult.Launched -> null
+    is ExternalFileHandoffResult.Cancelled -> null
     is ExternalFileHandoffResult.NoCompatibleApplication ->
         "No installed app can open this attachment."
     is ExternalFileHandoffResult.Rejected -> message
