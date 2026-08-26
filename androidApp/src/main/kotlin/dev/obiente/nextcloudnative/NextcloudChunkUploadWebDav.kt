@@ -4,7 +4,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.MAX_NEXTCLOUD_UPLOAD_CHUNKS
 import dev.obiente.nextcloudnative.app.buildNextcloudChunkUploadUrl
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
-import dev.obiente.nextcloudnative.app.readBoundedNextcloudChunkCollection
+import dev.obiente.nextcloudnative.app.readNextcloudChunkCollection
 import java.io.File
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -67,15 +67,14 @@ internal fun NextcloudDocumentWebDav.listChunkUpload(
     uploadId: String,
     cancellation: DocumentRequestCancellation,
 ): Map<Int, Long> {
-    val bytes = executeDavRead(
+    return executeDavResponse(
         requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
             .header("Depth", "1")
             .method("PROPFIND", CHUNK_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
             .build(),
         "inspect chunked upload",
         cancellation,
-    )
-    return bytes.inputStream().readBoundedNextcloudChunkCollection()
+    ) { it.readNextcloudChunkCollection() }
 }
 
 internal fun NextcloudDocumentWebDav.deleteChunk(

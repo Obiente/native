@@ -52,7 +52,7 @@ internal class DesktopFileSyncChunkUploadRemote(
             if (response.code != 207) {
                 throw DesktopFileSyncHttpStatusException(response.code, "inspect chunked upload")
             }
-            response.body.byteStream().readBoundedNextcloudChunkCollection()
+            response.body.byteStream().readNextcloudChunkCollection()
         }
 
     override fun deleteChunk(uploadId: String, chunkNumber: Int) {

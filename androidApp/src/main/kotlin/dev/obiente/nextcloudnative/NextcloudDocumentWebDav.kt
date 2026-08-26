@@ -8,6 +8,7 @@ import java.io.IOException
 import java.io.File
 import java.io.OutputStream
 import java.io.FileInputStream
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.UUID
@@ -449,18 +450,27 @@ internal class NextcloudDocumentWebDav(
         request: Request,
         operation: String,
         cancellation: DocumentRequestCancellation,
-    ): ByteArray {
+    ): ByteArray = executeDavResponse(request, operation, cancellation) { response ->
+        response.readBoundedResponse(
+            MAX_DIRECTORY_RESPONSE_BYTES,
+            cancellation,
+            "The folder metadata response is too large.",
+        )
+    }
+
+    internal fun <T> executeDavResponse(
+        request: Request,
+        operation: String,
+        cancellation: DocumentRequestCancellation,
+        consume: (InputStream) -> T,
+    ): T {
         cancellation.throwIfCancelled()
         val call = client.newCall(request)
         cancellation.setOnCancelAction(call::cancel)
         try {
             return call.execute().use { response ->
                 if (response.code != 207) throw response.toDocumentException(operation)
-                response.body.byteStream().readBoundedResponse(
-                    MAX_DIRECTORY_RESPONSE_BYTES,
-                    cancellation,
-                    "The folder metadata response is too large.",
-                )
+                consume(response.body.byteStream())
             }
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()

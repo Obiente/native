@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import org.xml.sax.SAXException
 
 class JvmNextcloudChunkCollectionTest {
     @Test
@@ -26,10 +27,27 @@ class JvmNextcloudChunkCollectionTest {
 
     @Test
     fun `DAV listing rejects entity declarations before parsing`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<SAXException> {
             parseJvmNextcloudChunkCollection(
                 "<!DOCTYPE d [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><d/>".encodeToByteArray(),
             )
         }
+    }
+
+    @Test
+    fun `valid protocol-sized listing is not rejected by an aggregate byte budget`() {
+        val xml = buildString {
+            append("<d:multistatus xmlns:d=\"DAV:\">")
+            repeat(MAX_NEXTCLOUD_UPLOAD_CHUNKS) { index ->
+                append("<d:response><d:href>/remote.php/dav/uploads/alice/")
+                append("verbose-segment-".repeat(24))
+                append('/')
+                append((index + 1).toString().padStart(5, '0'))
+                append("</d:href><d:propstat><d:prop><d:getcontentlength>1</d:getcontentlength>")
+                append("</d:prop></d:propstat></d:response>")
+            }
+            append("</d:multistatus>")
+        }
+        assertEquals(MAX_NEXTCLOUD_UPLOAD_CHUNKS, parseJvmNextcloudChunkCollection(xml.encodeToByteArray()).size)
     }
 }
