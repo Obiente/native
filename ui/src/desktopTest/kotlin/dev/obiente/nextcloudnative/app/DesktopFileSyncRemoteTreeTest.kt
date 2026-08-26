@@ -67,7 +67,7 @@ class DesktopFileSyncRemoteTreeTest {
 
             assertEquals("etag-2", result.etag)
             assertEquals(listOf("MKCOL", "PUT", "PUT", "PUT", "MOVE", "PROPFIND", "MOVE", "PROPFIND"),
-                requests.map(Request::method))
+                requests.map { it.method })
             assertTrue(requests[0].header("Destination")!!.endsWith("/Vault/$stageName"))
             assertTrue(requests[4].header("Destination")!!.endsWith("/Vault/$stageName"))
             assertTrue(requests[6].header("Destination")!!.endsWith("/Vault/large.bin"))
