@@ -192,6 +192,14 @@ class FileSyncContentIdentityTest {
             ),
         )
         assertEquals(emptyList(), candidates.withinFileSyncContentVerificationBudget(maximumCandidates = 0))
+
+        val nineGiB = FileSyncContentVerificationCandidate(
+            "large-video.mkv",
+            "local-large",
+            "remote-large",
+            9L * 1024L * 1024L * 1024L,
+        )
+        assertEquals(listOf(nineGiB), listOf(nineGiB).withinFileSyncContentVerificationBudget())
     }
 
     private fun fileOnDevice(path: String, revision: String, size: Long, hash: String? = null) =

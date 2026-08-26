@@ -1643,8 +1643,6 @@ const val MIN_PREVIEW_DIMENSION = 32
 const val MAX_PREVIEW_DIMENSION = 2048
 /** Safety budget for APIs that intentionally return a detached ByteArray, never a transfer limit. */
 const val MAX_IN_MEMORY_FILE_CONTENT_BYTES = 64L * 1024L * 1024L
-/** Offline copies stream to private storage and must not impose an application file-size limit. */
-const val MAX_OFFLINE_FILE_BYTES = Long.MAX_VALUE
 const val MAX_EDITABLE_TEXT_BYTES = 4L * 1024L * 1024L
 const val DEFAULT_ACTIVITY_LIMIT = 50
 const val DEFAULT_TALK_MESSAGE_PAGE_SIZE = 100

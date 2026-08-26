@@ -20,7 +20,6 @@ import dev.obiente.nextcloudnative.app.FileOfflineJobStatus
 import dev.obiente.nextcloudnative.app.FileOfflineKey
 import dev.obiente.nextcloudnative.app.FileOfflineRequest
 import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
-import dev.obiente.nextcloudnative.app.MAX_OFFLINE_FILE_BYTES
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -161,10 +160,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
         if (file.isDirectory) {
             return setFolderAvailable(session, userId, file, available)
         }
-        val fileSize = file.size
-        require(fileSize == null || fileSize <= MAX_OFFLINE_FILE_BYTES) {
-            "This file is larger than the ${MAX_OFFLINE_FILE_BYTES / (1024 * 1024)} MiB offline limit."
-        }
+        require(file.size == null || file.size >= 0L) { "The file has an invalid size." }
         val accountId = NextcloudDocumentIds.accountKey(session)
         val key = FileOfflineKey(accountId, file.path)
         val update = synchronized(STATE_LOCK) {
@@ -455,7 +451,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
                     userId = userId,
                     path = job.key.relativePath,
                     destination = destination,
-                    maximumBytes = MAX_OFFLINE_FILE_BYTES,
+                    maximumBytes = Long.MAX_VALUE,
                     expectedEtag = expectedEtag,
                     cancellation = cancellation,
                 )

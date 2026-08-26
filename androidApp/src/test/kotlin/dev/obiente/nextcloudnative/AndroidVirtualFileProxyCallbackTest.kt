@@ -66,6 +66,14 @@ class AndroidVirtualFileProxyCallbackTest {
                 availableBytes = Long.MAX_VALUE,
             ),
         )
+        assertTrue(
+            androidDocumentWriteFitsCapacity(
+                currentBytes = 3L * 1024L * 1024L * 1024L,
+                writeEnd = 3L * 1024L * 1024L * 1024L + 1L,
+                availableBytes = 1024L,
+                reserveBytes = 512L,
+            ),
+        )
     }
 
     @Test

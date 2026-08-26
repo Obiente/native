@@ -4033,14 +4033,14 @@ class DesktopNextcloudServices(
                     val responseBody = response.body
                     val contentLength = responseBody.contentLength()
                     check(contentLength <= maximumBytes || contentLength == -1L) {
-                        "The Deck attachment is larger than the external handoff limit."
+                        "The Deck attachment exceeds the platform byte representation."
                     }
                     DesktopDetachedDownload(
                         responseBody.byteStream().copyBoundedNetworkResponseTo(
                             output = output,
                             maxBytes = maximumBytes,
                             onLimitExceeded = {
-                                error("The Deck attachment is larger than the external handoff limit.")
+                                error("The Deck attachment exceeds the platform byte representation.")
                             },
                             onNetworkReadFailure = { failure ->
                                 recordDesktopStreamingFailure(
