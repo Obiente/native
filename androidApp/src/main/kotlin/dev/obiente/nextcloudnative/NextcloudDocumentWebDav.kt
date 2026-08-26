@@ -444,7 +444,7 @@ internal class NextcloudDocumentWebDav(
         }
     }
 
-    private fun executeDavRead(
+    internal fun executeDavRead(
         request: Request,
         operation: String,
         cancellation: DocumentRequestCancellation,

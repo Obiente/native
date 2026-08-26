@@ -23,6 +23,10 @@ interface JvmResumableNextcloudUploadRemote {
     /** Returns true when a new collection was created and false when an owned one already existed. */
     fun createChunkCollection(uploadId: String, relativePath: String, allowExisting: Boolean): Boolean
 
+    fun listChunkCollection(uploadId: String): Map<Int, Long>
+
+    fun deleteChunk(uploadId: String, chunkNumber: Int)
+
     fun uploadChunk(uploadId: String, relativePath: String, source: File, chunk: NextcloudUploadChunk)
 
     fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long)
@@ -79,8 +83,15 @@ fun jvmResumableNextcloudUpload(
         relativePath,
         allowExisting = resumed,
     )
-    if (collectionCreated && resumed && progress.uploadedChunks > 0) {
-        progress = progress.copy(uploadedChunks = 0)
+    val uploadedOnServer = if (collectionCreated) {
+        0
+    } else {
+        val reconciliation = reconcileNextcloudChunkCollection(plan, remote.listChunkCollection(progress.uploadId))
+        reconciliation.staleChunkNumbers.forEach { remote.deleteChunk(progress.uploadId, it) }
+        reconciliation.uploadedChunks
+    }
+    if (progress.uploadedChunks != uploadedOnServer) {
+        progress = progress.copy(uploadedChunks = uploadedOnServer)
         persistCheckpoint(progress)
     }
     while (progress.uploadedChunks < plan.chunkCount) {

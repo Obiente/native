@@ -276,6 +276,12 @@ internal class AndroidFileSyncRemoteTree(
         NoDocumentRequestCancellation,
     )
 
+    override fun listChunkCollection(uploadId: String): Map<Int, Long> =
+        webDav.listChunkUpload(session, userId, uploadId, NoDocumentRequestCancellation)
+
+    override fun deleteChunk(uploadId: String, chunkNumber: Int) =
+        webDav.deleteChunk(session, userId, uploadId, chunkNumber, NoDocumentRequestCancellation)
+
     override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) {
         commitChunkUpload(
             uploadId,

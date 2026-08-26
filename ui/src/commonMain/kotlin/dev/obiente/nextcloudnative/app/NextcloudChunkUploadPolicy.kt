@@ -32,6 +32,17 @@ data class NextcloudUploadChunk(
         get() = number.toString().padStart(NEXTCLOUD_CHUNK_NAME_DIGITS, '0')
 }
 
+data class NextcloudChunkCollectionReconciliation(
+    val uploadedChunks: Int,
+    val staleChunkNumbers: List<Int>,
+) {
+    init {
+        require(uploadedChunks in 0..MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+        require(staleChunkNumbers == staleChunkNumbers.distinct().sorted())
+        require(staleChunkNumbers.all { it in 1..MAX_NEXTCLOUD_UPLOAD_CHUNKS })
+    }
+}
+
 fun isValidNextcloudChunkUploadId(value: String): Boolean = NEXTCLOUD_CHUNK_UPLOAD_ID.matches(value)
 
 /**
@@ -79,6 +90,27 @@ fun nextcloudUploadChunk(
         number = uploadedChunks + 1,
         offsetBytes = offset,
         sizeBytes = minOf(plan.chunkBytes, remaining),
+    )
+}
+
+/** Uses only the longest exact prefix and removes every chunk after a hole or size mismatch. */
+fun reconcileNextcloudChunkCollection(
+    plan: NextcloudUploadTransferPlan.Chunked,
+    serverChunks: Map<Int, Long>,
+): NextcloudChunkCollectionReconciliation {
+    require(serverChunks.size <= MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+    require(serverChunks.all { (number, size) ->
+        number in 1..MAX_NEXTCLOUD_UPLOAD_CHUNKS && size > 0L
+    })
+    var uploaded = 0
+    while (uploaded < plan.chunkCount) {
+        val expected = nextcloudUploadChunk(plan, plan.sizeBytes, uploaded)
+        if (serverChunks[expected.number] != expected.sizeBytes) break
+        uploaded += 1
+    }
+    return NextcloudChunkCollectionReconciliation(
+        uploadedChunks = uploaded,
+        staleChunkNumbers = serverChunks.keys.filter { it > uploaded }.sorted(),
     )
 }
 

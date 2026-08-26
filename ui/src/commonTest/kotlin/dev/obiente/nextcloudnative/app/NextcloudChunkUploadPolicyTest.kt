@@ -90,4 +90,25 @@ class NextcloudChunkUploadPolicyTest {
             checkpoint.copy(uploadedChunks = plan.chunkCount - 1, commitInFlight = true)
         }
     }
+
+    @Test
+    fun `resume keeps only the exact contiguous server prefix`() {
+        val plan = assertIs<NextcloudUploadTransferPlan.Chunked>(
+            nextcloudUploadTransferPlan(35L * 1024L * 1024L),
+        )
+
+        assertEquals(
+            NextcloudChunkCollectionReconciliation(2, listOf(3, 4, 9)),
+            reconcileNextcloudChunkCollection(
+                plan,
+                mapOf(
+                    1 to 10L * 1024L * 1024L,
+                    2 to 10L * 1024L * 1024L,
+                    3 to 9L * 1024L * 1024L,
+                    4 to 5L * 1024L * 1024L,
+                    9 to 1L,
+                ),
+            ),
+        )
+    }
 }

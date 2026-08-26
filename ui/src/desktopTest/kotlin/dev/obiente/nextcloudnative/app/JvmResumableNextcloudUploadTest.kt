@@ -13,7 +13,10 @@ class JvmResumableNextcloudUploadTest {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
         val initial = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(uploadedChunks = 1)
-        val remote = RecordingUploadRemote(collectionCreated = false)
+        val remote = RecordingUploadRemote(
+            collectionCreated = false,
+            serverChunks = mapOf(1 to 10L * 1024L * 1024L),
+        )
         val persisted = mutableListOf<FileSyncUploadCheckpoint>()
         try {
             val uploaded = jvmResumableNextcloudUpload(
@@ -62,6 +65,7 @@ class JvmResumableNextcloudUploadTest {
 
     private class RecordingUploadRemote(
         private val collectionCreated: Boolean,
+        private val serverChunks: Map<Int, Long> = emptyMap(),
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
 
@@ -76,6 +80,10 @@ class JvmResumableNextcloudUploadTest {
             relativePath: String,
             allowExisting: Boolean,
         ): Boolean = collectionCreated
+
+        override fun listChunkCollection(uploadId: String): Map<Int, Long> = serverChunks
+
+        override fun deleteChunk(uploadId: String, chunkNumber: Int) = Unit
 
         override fun uploadChunk(
             uploadId: String,

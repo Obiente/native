@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -39,6 +40,31 @@ internal class DesktopFileSyncChunkUploadRemote(
             accepted = { it in 200..299 || allowExisting && it == 405 },
         )
         return responseCode != 405
+    }
+
+    override fun listChunkCollection(uploadId: String): Map<Int, Long> =
+        client.newCall(
+            requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
+                .header("Depth", "1")
+                .method("PROPFIND", CHUNK_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
+                .build(),
+        ).execute().use { response ->
+            if (response.code != 207) {
+                throw DesktopFileSyncHttpStatusException(response.code, "inspect chunked upload")
+            }
+            response.body.byteStream().readBoundedNextcloudChunkCollection()
+        }
+
+    override fun deleteChunk(uploadId: String, chunkNumber: Int) {
+        require(chunkNumber in 1..MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+        execute(
+            requestBuilder(
+                buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) +
+                    "/${chunkNumber.toString().padStart(5, '0')}",
+            ).delete().build(),
+            "discard stale upload chunk",
+            accepted = { it in 200..299 || it == 404 },
+        )
     }
 
     override fun uploadChunk(
@@ -144,6 +170,9 @@ internal class DesktopFileSyncChunkUploadRemote(
 
     private companion object {
         val EMPTY_BODY = byteArrayOf().toRequestBody(null)
+        val XML_CONTENT_TYPE = "application/xml; charset=utf-8".toMediaType()
+        const val CHUNK_PROPERTIES =
+            "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:getcontentlength/></d:prop></d:propfind>"
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Desktop file sync)"
     }
 }

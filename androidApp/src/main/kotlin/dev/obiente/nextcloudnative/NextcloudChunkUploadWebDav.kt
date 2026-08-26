@@ -1,9 +1,12 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.MAX_NEXTCLOUD_UPLOAD_CHUNKS
 import dev.obiente.nextcloudnative.app.buildNextcloudChunkUploadUrl
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
+import dev.obiente.nextcloudnative.app.readBoundedNextcloudChunkCollection
 import java.io.File
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 
 internal fun NextcloudDocumentWebDav.createChunkUpload(
@@ -55,6 +58,46 @@ internal fun NextcloudDocumentWebDav.uploadChunk(
         "upload file chunk",
         cancellation = cancellation,
     )
+}
+
+internal fun NextcloudDocumentWebDav.listChunkUpload(
+    session: NextcloudSession,
+    userId: String,
+    uploadId: String,
+    cancellation: DocumentRequestCancellation,
+): Map<Int, Long> {
+    val bytes = executeDavRead(
+        requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
+            .header("Depth", "1")
+            .method("PROPFIND", CHUNK_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
+            .build(),
+        "inspect chunked upload",
+        cancellation,
+    )
+    return bytes.inputStream().readBoundedNextcloudChunkCollection()
+}
+
+internal fun NextcloudDocumentWebDav.deleteChunk(
+    session: NextcloudSession,
+    userId: String,
+    uploadId: String,
+    chunkNumber: Int,
+    cancellation: DocumentRequestCancellation,
+) {
+    require(chunkNumber in 1..MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+    try {
+        execute(
+            requestBuilder(
+                session,
+                buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) +
+                    "/${chunkNumber.toString().padStart(5, '0')}",
+            ).delete().build(),
+            "remove stale upload chunk",
+            cancellation = cancellation,
+        )
+    } catch (failure: DocumentWebDavException) {
+        if (failure.status != 404) throw failure
+    }
 }
 
 internal fun NextcloudDocumentWebDav.deleteChunkUpload(
@@ -119,4 +162,7 @@ internal fun NextcloudDocumentWebDav.publishChunkUploadStage(
 }
 
 private val EMPTY_CHUNK_BODY = byteArrayOf().toRequestBody(null)
+private val XML_CONTENT_TYPE = "application/xml; charset=utf-8".toMediaType()
+private const val CHUNK_PROPERTIES =
+    "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:getcontentlength/></d:prop></d:propfind>"
 private const val CHUNK_COMMIT_TIMEOUT_MILLIS = 30L * 60L * 1_000L
