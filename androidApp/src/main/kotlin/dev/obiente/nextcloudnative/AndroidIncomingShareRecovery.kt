@@ -90,6 +90,8 @@ internal class AndroidIncomingShareChunkCleanupWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val requestId = inputData.getString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID)
             ?: return@withContext Result.failure()
+        val attemptOffset = inputData.getInt(KEY_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPT, 0).coerceAtLeast(0)
+        val cleanupAttempt = attemptOffset + runAttemptCount
         val store = AndroidIncomingShareStore(applicationContext)
         val request = when (val loaded = store.loadResult(requestId)) {
             is AndroidIncomingShareLoadResult.Available -> loaded.request
@@ -101,13 +103,23 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             ?: return@withContext Result.success()
         val session = AndroidNextcloudServices(applicationContext).loadSession()
         if (session == null) {
-            return@withContext retryOrReleaseIncomingShareChunkCleanup(store, requestId, claimed)
+            return@withContext retryOrReleaseIncomingShareChunkCleanup(
+                store,
+                requestId,
+                claimed,
+                cleanupAttempt,
+            )
         }
         if (
             request.accountId != NextcloudDocumentIds.accountKey(session) ||
             request.userId.isNullOrBlank()
         ) {
-            return@withContext retryOrReleaseIncomingShareChunkCleanup(store, requestId, claimed)
+            return@withContext retryOrReleaseIncomingShareChunkCleanup(
+                store,
+                requestId,
+                claimed,
+                cleanupAttempt,
+            )
         }
         val cancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
         try {
@@ -133,9 +145,22 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             cancellation.throwIfCancelled()
             if (
                 failure.isRetryableIncomingShareChunkCleanupFailure() &&
-                runAttemptCount + 1 < MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS
+                canRetryIncomingShareChunkCleanup(cleanupAttempt)
             ) {
-                Result.retry()
+                val nowEpochMillis = System.currentTimeMillis()
+                val retryDelayMillis = failure.incomingShareChunkCleanupRetryDelayMillis(nowEpochMillis)
+                if (retryDelayMillis != null) {
+                    scheduleIncomingShareChunkCleanup(
+                        context = applicationContext,
+                        requestId = requestId,
+                        initialDelayMillis = retryDelayMillis,
+                        cleanupAttempt = cleanupAttempt + 1,
+                        policy = ExistingWorkPolicy.APPEND_OR_REPLACE,
+                    )
+                    Result.success()
+                } else {
+                    Result.retry()
+                }
             } else {
                 // Nextcloud expires abandoned upload collections server-side. Once cleanup is
                 // definitively rejected or exhausts its bounded retries, release local staging.
@@ -152,7 +177,8 @@ internal class AndroidIncomingShareChunkCleanupWorker(
         store: AndroidIncomingShareStore,
         requestId: String,
         claimed: AndroidIncomingShareChunkSession,
-    ): Result = if (runAttemptCount + 1 < MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS) {
+        cleanupAttempt: Int,
+    ): Result = if (canRetryIncomingShareChunkCleanup(cleanupAttempt)) {
         Result.retry()
     } else {
         store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
@@ -175,7 +201,17 @@ internal fun Throwable.isRetryableIncomingShareChunkCleanupFailure(): Boolean {
         (dav?.error == DocumentWebDavError.Server && dav.status >= 500)
 }
 
+internal fun Throwable.incomingShareChunkCleanupRetryDelayMillis(nowEpochMillis: Long): Long? =
+    incomingShareRetryNotBeforeEpochMillis(nowEpochMillis)
+        ?.let { retryNotBefore -> (retryNotBefore - nowEpochMillis).coerceAtLeast(0L) }
+
+internal fun canRetryIncomingShareChunkCleanup(cleanupAttempt: Int): Boolean {
+    require(cleanupAttempt >= 0)
+    return cleanupAttempt + 1 < MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS
+}
+
 internal const val MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS = 8
+internal const val KEY_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPT = "chunk_cleanup_attempt"
 
 internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
     scheduleIncomingShareChunkCleanup(context, requestId)
@@ -200,15 +236,29 @@ internal fun scheduleIncomingShareAbandonedStagingCleanup(context: Context, requ
     )
 }
 
-internal fun scheduleIncomingShareChunkCleanup(context: Context, requestId: String) {
+internal fun scheduleIncomingShareChunkCleanup(
+    context: Context,
+    requestId: String,
+    initialDelayMillis: Long = 0L,
+    cleanupAttempt: Int = 0,
+    policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
+) {
+    require(initialDelayMillis >= 0L && cleanupAttempt in 0 until MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS)
+    val request = OneTimeWorkRequestBuilder<AndroidIncomingShareChunkCleanupWorker>()
+        .setInputData(
+            Data.Builder()
+                .putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId)
+                .putInt(KEY_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPT, cleanupAttempt)
+                .build(),
+        )
+        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+        .apply { if (initialDelayMillis > 0L) setInitialDelay(initialDelayMillis, TimeUnit.MILLISECONDS) }
+        .build()
     WorkManager.getInstance(context).enqueueUniqueWork(
         incomingShareChunkCleanupWorkName(requestId),
-        ExistingWorkPolicy.KEEP,
-        OneTimeWorkRequestBuilder<AndroidIncomingShareChunkCleanupWorker>()
-            .setInputData(Data.Builder().putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId).build())
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .build(),
+        policy,
+        request,
     )
 }
 

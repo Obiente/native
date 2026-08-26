@@ -422,6 +422,21 @@ class AndroidIncomingShareStateTest {
             DocumentWebDavException(DocumentWebDavError.Permission, 403, "No")
                 .isRetryableIncomingShareChunkCleanupFailure(),
         )
+        assertEquals(
+            120_000L,
+            DocumentWebDavException(
+                DocumentWebDavError.Throttled,
+                429,
+                "Wait",
+                retryAfterSeconds = 120,
+            ).incomingShareChunkCleanupRetryDelayMillis(1_000L),
+        )
+        assertNull(
+            DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait", retryAfterSeconds = 12)
+                .incomingShareChunkCleanupRetryDelayMillis(1_000L),
+        )
+        assertTrue(canRetryIncomingShareChunkCleanup(6))
+        assertFalse(canRetryIncomingShareChunkCleanup(7))
         assertEquals(8, MAX_INCOMING_SHARE_CHUNK_CLEANUP_ATTEMPTS)
     }
 

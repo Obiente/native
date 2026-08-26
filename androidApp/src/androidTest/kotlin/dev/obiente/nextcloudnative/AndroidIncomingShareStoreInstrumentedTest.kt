@@ -192,7 +192,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
         val releasable = store.stage(
             Intent(Intent.ACTION_SEND)
                 .setType("text/plain")
-                .putExtra(Intent.EXTRA_STREAM, fixtureUri("release.txt"))
+                .putExtra(Intent.EXTRA_STREAM, fixtureUri("one.txt"))
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             "account-1",
         )

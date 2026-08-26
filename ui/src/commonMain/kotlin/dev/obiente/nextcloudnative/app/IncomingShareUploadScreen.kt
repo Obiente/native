@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -372,7 +373,13 @@ fun IncomingShareUploadScreen(
                 Text("This permanently deletes the local recovery copy for this share. Files already uploaded to Nextcloud are not removed.")
             },
             confirmButton = {
-                Button(onClick = onConfirmRemoveCorruptRecovery) { Text("Remove") }
+                Button(
+                    onClick = onConfirmRemoveCorruptRecovery,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text("Remove") }
             },
             dismissButton = {
                 TextButton(onClick = onDismissRemoveCorruptRecovery) { Text("Keep files") }
@@ -387,7 +394,13 @@ fun IncomingShareUploadScreen(
                 Text("This permanently deletes the private recovery copy. Choose Keep for later to close without losing access to this share.")
             },
             confirmButton = {
-                Button(onClick = onConfirmDiscard) { Text("Discard") }
+                Button(
+                    onClick = onConfirmDiscard,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text("Discard") }
             },
             dismissButton = {
                 TextButton(onClick = onDismissDiscard) { Text("Keep for later") }
