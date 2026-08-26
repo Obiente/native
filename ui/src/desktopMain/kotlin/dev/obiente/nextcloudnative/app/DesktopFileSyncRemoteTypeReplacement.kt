@@ -68,7 +68,7 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
     }
     val destinationPath = fullPath(relativePath)
     val stagingPath = fullPath(jvmOwnedUploadStagePath(relativePath, uploadId))
-    val backupPath = replacementBackupPath(destinationPath)
+    val backupPath = fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId))
     var protected = false
     try {
         moveRemoteDocument(current.copy(entry = current.entry.copy(relativePath = destinationPath)), backupPath, relativePath)
@@ -85,4 +85,34 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
         if (protected) restoreRemoteBackup(destinationPath, backupPath, relativePath)
         throw failure
     }
+}
+
+internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(relativePath: String, uploadId: String) {
+    deleteRemoteBackup(fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId)))
+}
+
+internal fun DesktopFileSyncRemoteTree.discardReplacementBackup(
+    relativePath: String,
+    uploadId: String,
+    assembledStageEtag: String?,
+): Boolean {
+    val destinationPath = fullPath(relativePath)
+    val backupPath = fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId))
+    val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""))
+    val backup = documents.firstOrNull { it.entry.relativePath == backupPath } ?: return true
+    require(backup.isDirectory) { "The owned replacement backup changed type." }
+    val destination = documents.firstOrNull { it.entry.relativePath == destinationPath }
+    if (destination == null) {
+        moveRemoteDocument(backup, destinationPath, relativePath)
+        return true
+    }
+    if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
+        deleteRemoteDocument(destination)
+        moveRemoteDocument(backup, destinationPath, relativePath)
+        return true
+    }
+    val conflictPath = fullPath(jvmOwnedReplacementConflictPath(relativePath, uploadId))
+    if (documents.any { it.entry.relativePath == conflictPath }) return false
+    moveRemoteDocument(backup, conflictPath, relativePath)
+    return true
 }

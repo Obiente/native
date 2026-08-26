@@ -36,11 +36,16 @@ internal class DesktopFileSyncRemoteTree(
     private val onMutationCommitted: (relativePath: String) -> Unit = {},
     private val onAmbiguousMutationResult: (relativePath: String) -> Unit = onMutationCommitted,
     private val ownedUploadIds: Set<String> = emptySet(),
+    private val ownedStageEtags: Map<String, String> = emptyMap(),
 ) : LinuxVirtualWritebackRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
 
-    init { require(ownedUploadIds.all(::isValidNextcloudChunkUploadId)) }
+    init {
+        require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
+        require(ownedStageEtags.keys.all { it in ownedUploadIds })
+        require(ownedStageEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
+    }
 
     fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
@@ -404,7 +409,11 @@ internal class DesktopFileSyncRemoteTree(
         var documents = rawListDirectory(path)
         var recovered = false
         val documentsByPath = documents.associateBy { document -> document.entry.relativePath }
-        desktopOwnedBackupRecoveryPlan(documentsByPath.keys, MAX_RECOVERY_ITEMS).forEach { (source, destination) ->
+        desktopOwnedBackupRecoveryPlan(
+            documentsByPath.keys,
+            ownedUploadIds,
+            MAX_RECOVERY_ITEMS,
+        ).forEach { (source, destination) ->
             val recoveredRelativePath = toRelativePath(destination)
             moveRemoteDocument(
                 requireNotNull(documentsByPath[source]),
@@ -414,14 +423,16 @@ internal class DesktopFileSyncRemoteTree(
             recovered = true
         }
         if (recovered) documents = rawListDirectory(path)
-        val recoveredPaths = documents.mapTo(hashSetOf()) { it.entry.relativePath }
-        return documents
-            .filterNot { jvmOwnedUploadId(it.entry.relativePath) in ownedUploadIds }
-            .filterNot { backup -> shouldSuppressDesktopOwnedBackup(backup.entry.relativePath, recoveredPaths) }
+        return projectDesktopOwnedReplacementBackups(
+            documents,
+            ownedUploadIds,
+            ownedStageEtags,
+            MAX_RECOVERY_ITEMS,
+        )
             .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
     }
 
-    private fun rawListDirectory(path: String): List<DesktopRemoteSyncDocument> {
+    internal fun rawListDirectory(path: String): List<DesktopRemoteSyncDocument> {
         val documents = executeDirectoryListing(directoryListingRequest(path))
         val parent = path.trim('/')
         return documents
@@ -510,14 +521,7 @@ internal class DesktopFileSyncRemoteTree(
         }
     }
 
-    internal fun deleteCompletedReplacementBackups(relativePath: String) {
-        val destinationPath = fullPath(relativePath)
-        rawListDirectory(destinationPath.substringBeforeLast('/', ""))
-            .filter { desktopOwnedBackupDestination(it.entry.relativePath) == destinationPath }
-            .forEach { deleteRemoteBackup(it.entry.relativePath) }
-    }
-
-    private fun deleteRemoteDocument(document: DesktopRemoteSyncDocument) {
+    internal fun deleteRemoteDocument(document: DesktopRemoteSyncDocument) {
         val url = fileUrl(document.entry.relativePath)
         val builder = requestBuilder(url)
         if (document.isDirectory) builder.header("If", "<$url> ([${safeEtag(document.entry.etag)}])")
@@ -651,35 +655,6 @@ internal class DesktopFileSyncRemoteTree(
             </d:prop></d:propfind>
         """.trimIndent()
     }
-}
-
-internal fun isDesktopOwnedUploadStage(relativePath: String): Boolean {
-    return isJvmOwnedUploadStagePath(relativePath)
-}
-
-internal fun desktopOwnedBackupDestination(relativePath: String): String? {
-    return jvmOwnedReplacementBackup(relativePath)?.first
-}
-
-internal fun shouldSuppressDesktopOwnedBackup(
-    relativePath: String,
-    listedPaths: Set<String>,
-): Boolean {
-    val destination = desktopOwnedBackupDestination(relativePath) ?: return false
-    return destination !in listedPaths
-}
-
-internal fun desktopOwnedBackupRecoveryPlan(
-    relativePaths: Collection<String>,
-    maximumRecoveryItems: Int,
-): List<Pair<String, String>> {
-    require(maximumRecoveryItems >= 0)
-    val listedPaths = relativePaths.toHashSet()
-    val recoveries = relativePaths.mapNotNull { source ->
-        desktopOwnedBackupDestination(source)?.let { destination -> source to destination }
-    }.filterNot { (_, destination) -> destination in listedPaths }
-    require(recoveries.size <= maximumRecoveryItems) { "A Nextcloud folder contains too many recovery items." }
-    return recoveries
 }
 
 internal fun parseDesktopSyncDav(

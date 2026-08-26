@@ -192,6 +192,7 @@ internal class DesktopFileSyncEngine(
                 userId = userId,
                 remoteRootPath = pair.remoteRootPath,
                 ownedUploadIds = fileSyncOwnedUploads(pair).mapTo(mutableSetOf()) { it.uploadId },
+                ownedStageEtags = fileSyncOwnedUploadStageEtags(pair),
             )
             val cleanupCoordinator = cleanupJvmFileSyncOwnedUploads(
                 remote.resumableUploadRemote(), current.coordinator, pairId, fileSyncOwnedUploads(pair),
@@ -320,6 +321,7 @@ internal class DesktopFileSyncEngine(
                 runCatching { onRemoteMutationCommitted(session, userId, path) }
             },
             ownedUploadIds = fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
+            ownedStageEtags = fileSyncOwnedUploadStageEtags(initialPair),
         )
         cleanupJvmFileSyncOwnedUploads(
             remote.resumableUploadRemote(), persisted.coordinator, pairId, initialPair.pendingUploadCleanups,

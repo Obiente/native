@@ -21,6 +21,11 @@ fun fileSyncOwnedUploads(pair: FileSyncPair): List<FileSyncPendingUploadCleanup>
         }
     }).distinctBy(FileSyncPendingUploadCleanup::uploadId)
 
+fun fileSyncOwnedUploadStageEtags(pair: FileSyncPair): Map<String, String> =
+    fileSyncOwnedUploads(pair).mapNotNull { owned ->
+        owned.assembledStageEtag?.let { etag -> owned.uploadId to etag }
+    }.toMap()
+
 internal fun requireNoFileSyncUploadOwnership(pair: FileSyncPair) {
     require(fileSyncOwnedUploads(pair).isEmpty()) {
         "Owned remote upload state must be cleaned before removing a sync pair."

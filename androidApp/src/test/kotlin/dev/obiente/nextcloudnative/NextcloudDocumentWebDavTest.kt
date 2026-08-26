@@ -100,6 +100,7 @@ class NextcloudDocumentWebDavTest {
                 "Vault",
                 NextcloudDocumentWebDav(),
                 ownedUploadIds = setOf(uploadId),
+                ownedStageEtags = mapOf(uploadId to "published-etag"),
             )
 
             val scanned = remote.scan()
@@ -110,6 +111,28 @@ class NextcloudDocumentWebDavTest {
             assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.File, scanned.last().entry.kind)
             val protectedDirectoryRead = server.request(1)
             assertTrue(protectedDirectoryRead.path.endsWith("/Vault/.archive.bin.nextcloud-native-backup-$uploadId"))
+        }
+
+    @Test
+    fun `remote sync scan surfaces a concurrent destination instead of its owned backup`() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+            val remote = AndroidFileSyncRemoteTree(
+                server.session,
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+                ownedStageEtags = mapOf(uploadId to "stage-etag"),
+            )
+
+            val scanned = remote.scan()
+
+            assertEquals(listOf("archive.bin"), scanned.map { it.entry.relativePath })
+            assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.File, scanned.single().entry.kind)
+            assertEquals("published-etag", scanned.single().entry.etag)
+            assertEquals(1, server.requestCount)
         }
 
     @Test

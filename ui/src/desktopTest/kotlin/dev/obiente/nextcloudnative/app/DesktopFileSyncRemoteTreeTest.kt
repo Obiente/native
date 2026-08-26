@@ -55,8 +55,8 @@ class DesktopFileSyncRemoteTreeTest {
         val completed = remote.discardOwnedUpload(uploadId, "large.bin", discoveredEtag)
 
         assertTrue(completed)
-        assertEquals(listOf("PROPFIND", "DELETE", "DELETE"), requests.map { it.method })
-        assertEquals("unknown-stage", requests.last().header("If-Match"))
+        assertEquals(listOf("PROPFIND", "DELETE", "DELETE", "PROPFIND"), requests.map { it.method })
+        assertEquals("unknown-stage", requests[2].header("If-Match"))
     }
 
     @Test
@@ -65,7 +65,11 @@ class DesktopFileSyncRemoteTreeTest {
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             requests += chain.request()
-            if (requests.size == 1) response(chain.request(), 404) else response(chain.request(), 412)
+            when (requests.size) {
+                1 -> response(chain.request(), 404)
+                2 -> response(chain.request(), 412)
+                else -> response(chain.request(), 207, "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>")
+            }
         }.build()
         val tree = DesktopFileSyncRemoteTree(
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
@@ -80,7 +84,7 @@ class DesktopFileSyncRemoteTreeTest {
                 .discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag"),
         )
 
-        assertEquals(listOf("DELETE", "DELETE"), requests.map { it.method })
+        assertEquals(listOf("DELETE", "DELETE", "PROPFIND"), requests.map { it.method })
         assertTrue(requests[0].url.encodedPath.endsWith("/uploads/alice/$uploadId"))
         assertTrue(requests[1].url.encodedPath.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
         assertEquals("owned-stage-etag", requests[1].header("If-Match"))
@@ -251,6 +255,10 @@ class DesktopFileSyncRemoteTreeTest {
             assertTrue(
                 moveDestinations.first()!!
                     .endsWith("/Vault/.nextcloud-native-${requireNotNull(uploadId)}.upload"),
+            )
+            assertTrue(
+                moveDestinations[1]!!
+                    .endsWith("/Vault/.archive.bin.nextcloud-native-backup-${requireNotNull(uploadId)}"),
             )
             assertTrue(moveDestinations.last()!!.endsWith("/Vault/archive.bin"))
             assertEquals("stage-etag", checkpoints.last().assembledStageEtag)
@@ -895,33 +903,61 @@ class DesktopFileSyncRemoteTreeTest {
     fun `backup recovery is bounded before orphan processing`() {
         val first = "Photos/.one.jpg.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174000"
         val second = "Photos/.two.jpg.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174001"
+        val firstId = "123e4567-e89b-12d3-a456-426614174000"
+        val secondId = "123e4567-e89b-12d3-a456-426614174001"
 
         assertFails {
-            desktopOwnedBackupRecoveryPlan(listOf(first, second), maximumRecoveryItems = 1)
+            desktopOwnedBackupRecoveryPlan(
+                listOf(first, second),
+                setOf(firstId, secondId),
+                maximumRecoveryItems = 1,
+            )
         }
         assertEquals(
             listOf(first to "Photos/one.jpg"),
-            desktopOwnedBackupRecoveryPlan(listOf(first), maximumRecoveryItems = 1),
+            desktopOwnedBackupRecoveryPlan(listOf(first), setOf(firstId), maximumRecoveryItems = 1),
         )
         assertEquals(
             emptyList(),
-            desktopOwnedBackupRecoveryPlan(listOf(first, "Photos/one.jpg"), maximumRecoveryItems = 1),
+            desktopOwnedBackupRecoveryPlan(
+                listOf(first, "Photos/one.jpg"),
+                setOf(firstId),
+                maximumRecoveryItems = 1,
+            ),
         )
         assertEquals(
             emptyList(),
             desktopOwnedBackupRecoveryPlan(
                 listOf(first, second, "Photos/one.jpg", "Photos/two.jpg"),
+                setOf(firstId, secondId),
                 maximumRecoveryItems = 0,
             ),
+        )
+        assertEquals(
+            emptyList(),
+            desktopOwnedBackupRecoveryPlan(listOf(first), emptySet(), maximumRecoveryItems = 0),
         )
     }
 
     @Test
-    fun `completed replacement backup is exposed when its destination also exists`() {
-        val backup = "Photos/.today.md.nextcloud-native-backup-123e4567-e89b-12d3-a456-426614174000"
+    fun `replacement backup projects only its verified published stage`() {
+        val uploadId = "123e4567-e89b-12d3-a456-426614174000"
+        val published = RemoteSyncEntry("Photos/today.md", SyncEntryKind.File, "stage-etag", 4)
 
-        assertEquals(false, shouldSuppressDesktopOwnedBackup(backup, setOf(backup, "Photos/today.md")))
-        assertEquals(true, shouldSuppressDesktopOwnedBackup(backup, setOf(backup)))
+        assertTrue(
+            shouldProjectJvmOwnedReplacementBackup(
+                uploadId,
+                published,
+                mapOf(uploadId to "stage-etag"),
+            ),
+        )
+        assertFalse(
+            shouldProjectJvmOwnedReplacementBackup(
+                uploadId,
+                published.copy(etag = "concurrent-etag"),
+                mapOf(uploadId to "stage-etag"),
+            ),
+        )
     }
 
     private fun davFile(name: String, etag: String, sizeBytes: Long): String =

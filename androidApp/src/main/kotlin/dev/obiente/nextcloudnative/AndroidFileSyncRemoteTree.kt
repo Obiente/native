@@ -10,10 +10,12 @@ import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.isValidNextcloudChunkUploadId
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadId
 import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackup
+import dev.obiente.nextcloudnative.app.jvmOwnedReplacementConflictPath
 import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackupPath
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadStagePath
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
 import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
+import dev.obiente.nextcloudnative.app.shouldProjectJvmOwnedReplacementBackup
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -51,11 +53,14 @@ internal class AndroidFileSyncRemoteTree(
     private val transferCancellation: DocumentRequestCancellation = AndroidFileSyncRunCancellation {
         !Thread.currentThread().isInterrupted
     },
+    private val ownedStageEtags: Map<String, String> = emptyMap(),
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
 
     init {
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
+        require(ownedStageEtags.keys.all { it in ownedUploadIds })
+        require(ownedStageEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
     }
 
     fun shouldContinueTransfer(): Boolean {
@@ -635,16 +640,31 @@ internal class AndroidFileSyncRemoteTree(
     ): List<AndroidRemoteScanChild> {
         val ownedBackups = listing.files.mapNotNull { file ->
             val parsed = jvmOwnedReplacementBackup(file.path.trim('/')) ?: return@mapNotNull null
-            parsed.takeIf { (_, uploadId) -> uploadId in ownedUploadIds }?.let { parsed.first to file }
+            parsed.takeIf { (_, uploadId) -> uploadId in ownedUploadIds }?.let { parsed to file }
         }
-        require(ownedBackups.map { it.first }.distinct().size == ownedBackups.size) {
+        require(ownedBackups.map { it.first.first }.distinct().size == ownedBackups.size) {
             "A Nextcloud folder contains duplicate owned replacement backups."
         }
-        val protectedDestinations = ownedBackups.mapTo(mutableSetOf()) { it.first }
+        val filesByPath = listing.files.associateBy { it.path.trim('/') }
+        val projectedBackups = ownedBackups.mapNotNull { (parsed, backup) ->
+            val (destination, uploadId) = parsed
+            val destinationFile = filesByPath[destination] ?: return@mapNotNull destination to backup
+            val destinationEtag = destinationFile.etag?.takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            val destinationEntry = RemoteSyncEntry(
+                relativePath = destination,
+                kind = if (destinationFile.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
+                etag = destinationEtag,
+                size = if (destinationFile.isDirectory) null else destinationFile.size,
+            )
+            (destination to backup).takeIf {
+                shouldProjectJvmOwnedReplacementBackup(uploadId, destinationEntry, ownedStageEtags)
+            }
+        }.toMap()
         val ordinary = listing.files.mapNotNull { file ->
             val physicalPath = file.path.trim('/')
             if (
-                physicalPath in protectedDestinations ||
+                physicalPath in projectedBackups ||
                 jvmOwnedReplacementBackup(physicalPath)?.second in ownedUploadIds
             ) {
                 return@mapNotNull null
@@ -652,7 +672,7 @@ internal class AndroidFileSyncRemoteTree(
             val name = physicalPath.substringAfterLast('/')
             AndroidRemoteScanChild(file, logicalChildPath(logicalRelativeParent, name))
         }
-        return ordinary + ownedBackups.map { (destination, backup) ->
+        return ordinary + projectedBackups.map { (destination, backup) ->
             AndroidRemoteScanChild(
                 file = backup,
                 logicalRelativePath = logicalChildPath(
@@ -692,7 +712,10 @@ internal class AndroidFileSyncRemoteTree(
             webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
             return true
         }
-        return false
+        val conflictPath = jvmOwnedReplacementConflictPath(relativePath, uploadId)
+        if (resolveIncludingOwnedStage(conflictPath) != null) return false
+        webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(conflictPath), backup.entry.etag)
+        return true
     }
 
     private fun fullPath(relativePath: String): String =

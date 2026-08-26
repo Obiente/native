@@ -400,12 +400,13 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
         return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
         val remote = AndroidFileSyncRemoteTree(
-            session,
-            userId,
-            initialPair.remoteRootPath,
-            webDav,
-            fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
-            transferCancellation,
+            session = session,
+            userId = userId,
+            remoteRootPath = initialPair.remoteRootPath,
+            webDav = webDav,
+            ownedUploadIds = fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
+            transferCancellation = transferCancellation,
+            ownedStageEtags = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadStageEtags(initialPair),
         )
         cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,

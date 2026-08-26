@@ -64,8 +64,16 @@ internal class DesktopFileSyncChunkUploadRemote(
                 comparison.requireComplete()
             }
         }
-        if (replacingDirectoryEtag != null) tree.deleteCompletedReplacementBackups(relativePath)
         return exact.entry
+    }
+
+    override fun verifyPublishedFile(
+        uploadId: String,
+        source: File,
+        relativePath: String,
+        published: RemoteSyncEntry,
+    ): RemoteSyncEntry = verifyDirectUpload(source, relativePath, published).also {
+        if (replacingDirectoryEtag != null) tree.completeReplacementBackup(relativePath, uploadId)
     }
 
     override fun createChunkCollection(
@@ -234,17 +242,19 @@ internal class DesktopFileSyncChunkUploadRemote(
             "discard chunked upload",
             accepted = { it in 200..299 || it == 404 },
         )
-        if (assembledStageEtag == null) {
-            return tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId)) == null
+        val stageCleaned = if (assembledStageEtag == null) {
+            tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId)) == null
+        } else {
+            execute(
+                requestBuilder(fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
+                    .header("If-Match", safeEtag(assembledStageEtag))
+                    .delete().build(),
+                "discard assembled upload",
+                accepted = { it in 200..299 || it == 404 || it == 412 },
+            )
+            true
         }
-        execute(
-            requestBuilder(fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
-                .header("If-Match", safeEtag(assembledStageEtag))
-                .delete().build(),
-            "discard assembled upload",
-            accepted = { it in 200..299 || it == 404 || it == 412 },
-        )
-        return true
+        return stageCleaned && tree.discardReplacementBackup(relativePath, uploadId, assembledStageEtag)
     }
 
     private fun execute(

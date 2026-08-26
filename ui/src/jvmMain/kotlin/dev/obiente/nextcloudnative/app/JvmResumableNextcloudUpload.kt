@@ -44,6 +44,18 @@ fun jvmOwnedReplacementBackup(relativePath: String): Pair<String, String>? {
     return destination to uploadId
 }
 
+fun shouldProjectJvmOwnedReplacementBackup(
+    uploadId: String,
+    destination: RemoteSyncEntry?,
+    ownedStageEtags: Map<String, String>,
+): Boolean = destination?.kind == SyncEntryKind.File && ownedStageEtags[uploadId] == destination.etag
+
+fun jvmOwnedReplacementConflictPath(relativePath: String, uploadId: String): String {
+    requireValidSyncPath(relativePath)
+    require(isValidNextcloudChunkUploadId(uploadId))
+    return fileSyncConflictCopyPath(relativePath, "server-original-${uploadId.take(8)}")
+}
+
 interface JvmResumableNextcloudUploadRemote {
     fun uploadDirect(source: File, relativePath: String, expectedRemoteEtag: String?): RemoteSyncEntry
 
