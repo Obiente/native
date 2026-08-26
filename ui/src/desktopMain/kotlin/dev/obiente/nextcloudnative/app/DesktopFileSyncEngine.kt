@@ -329,9 +329,7 @@ internal class DesktopFileSyncEngine(
             scannedRemoteEntries,
             initialPair.baselines,
             initialPair.knownFileSyncContentMismatches(),
-        ).withinFileSyncContentVerificationBudget(
-            maximumCandidates = MAX_DESKTOP_FILE_SYNC_CONTENT_VERIFICATION_CANDIDATES,
-        )
+        ).withinFileSyncContentVerificationBudget()
         val verificationResults = try {
             cachedMismatchResults + candidates.map { candidate ->
                 verifyDesktopFileSyncContent(candidate, scannedLocalEntries, remote, shouldContinue)
@@ -832,7 +830,6 @@ internal class DesktopFileSyncEngine(
             ?.trim()?.take(MAX_FILE_SYNC_FAILURE_LENGTH)?.takeIf(String::isNotBlank) ?: fallback
 
     private companion object {
-        const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
-        const val MAX_DESKTOP_FILE_SYNC_CONTENT_VERIFICATION_CANDIDATES = 128
+        const val MAX_SYNC_FILE_BYTES = Long.MAX_VALUE
     }
 }

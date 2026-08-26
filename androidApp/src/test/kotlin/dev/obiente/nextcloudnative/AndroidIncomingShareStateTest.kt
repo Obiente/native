@@ -178,7 +178,13 @@ class AndroidIncomingShareStateTest {
 
     @Test
     fun largeFilesUseBoundedOfficialChunkSizes() {
-        assertEquals(3, incomingShareChunkCount(DIRECT_INCOMING_SHARE_UPLOAD_BYTES + INCOMING_SHARE_CHUNK_BYTES))
+        val ordinarySize = DIRECT_INCOMING_SHARE_UPLOAD_BYTES + INCOMING_SHARE_CHUNK_BYTES
+        val ordinaryChunk = requireNotNull(incomingShareChunkSize(ordinarySize))
+        assertEquals(3, incomingShareChunkCount(ordinarySize, ordinaryChunk))
+        val multiGigabyteSize = 120L * 1024L * 1024L * 1024L
+        val scaledChunk = requireNotNull(incomingShareChunkSize(multiGigabyteSize))
+        assertTrue(incomingShareChunkCount(multiGigabyteSize, scaledChunk) <= MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+        assertEquals(null, incomingShareChunkSize(2L * 1024L * 1024L * 1024L * 1024L))
         assertTrue(java.io.IOException("offline").isRetryableIncomingShareTransferFailure())
         assertTrue(
             DocumentWebDavException(DocumentWebDavError.Throttled, 429, "Wait")

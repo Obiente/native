@@ -59,7 +59,7 @@ class FileActionPlanningTest {
             FileActionSupport(
                 platformViewer = true,
                 externalSharing = true,
-                maximumExternalFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+                maximumInMemoryExternalFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
             ),
         )
 
@@ -72,17 +72,17 @@ class FileActionPlanningTest {
     }
 
     @Test
-    fun oversizedFileCannotUseBoundedDownloadOrNativeEditing() {
+    fun largeFileRemainsDownloadableButCannotUseInMemoryPreviewOrEditing() {
         val file = file(
             name = "huge.txt",
             mimeType = "text/plain",
-            size = DEFAULT_FILE_DOWNLOAD_LIMIT_BYTES + 1,
+            size = MAX_IN_MEMORY_FILE_CONTENT_BYTES + 1,
             etag = "v1",
         )
         val plan = planFileActions(file)
         val handoff = planFileContentHandoffs(file)
 
-        assertFalse(plan.action(FileMenuAction.Download).enabled)
+        assertTrue(plan.action(FileMenuAction.Download).enabled)
         assertFalse(plan.action(FileMenuAction.EditText).enabled)
         assertNull(handoff.download)
         assertNull(handoff.preview)
@@ -111,20 +111,20 @@ class FileActionPlanningTest {
         val file = file(
             name = "large-video.mp4",
             mimeType = "video/mp4",
-            size = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1,
+            size = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES + 1,
             etag = "v4",
         )
         val support = FileActionSupport(
             sharing = true,
             externalSharing = true,
             platformViewer = true,
-            maximumExternalFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            maximumInMemoryExternalFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
         )
 
         val plan = planFilesScreenActions(file, support)
         assertTrue(plan.action(FileMenuAction.Share).enabled)
-        assertFalse(plan.action(FileMenuAction.SendCopy).enabled)
-        assertFalse(plan.action(FileMenuAction.OpenWith).enabled)
+        assertTrue(plan.action(FileMenuAction.SendCopy).enabled)
+        assertTrue(plan.action(FileMenuAction.OpenWith).enabled)
         assertNull(plan.action(FileMenuAction.Share).disabledReason)
     }
 
@@ -139,7 +139,7 @@ class FileActionPlanningTest {
         val support = FileActionSupport(
             externalSharing = true,
             platformViewer = true,
-            maximumExternalFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+            maximumInMemoryExternalFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
             seekableExternalFileStreaming = true,
         )
 

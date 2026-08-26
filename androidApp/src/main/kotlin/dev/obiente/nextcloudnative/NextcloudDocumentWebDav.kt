@@ -309,7 +309,8 @@ internal class NextcloudDocumentWebDav(
         chunkNumber: Int,
         cancellation: DocumentRequestCancellation,
     ) {
-        require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && offset + length <= source.length())
+        val end = Math.addExact(offset, length)
+        require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && end <= source.length())
         val body = fileRangeRequestBody(source, offset, length, cancellation)
         execute(
             requestBuilder(session, chunkUploadUrl(session, userId, uploadId) + "/${chunkNumber.toString().padStart(5, '0')}")
@@ -741,17 +742,14 @@ private fun org.w3c.dom.Node.searchTexts(namespace: String, localName: String): 
 private fun File.sha256ChecksumForDav(
     cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
 ): String? {
-    if (!isFile || length() !in 0..MAX_DAV_CHECKSUM_FILE_BYTES) return null
+    if (!isFile) return null
     val digest = MessageDigest.getInstance("SHA-256")
     FileInputStream(this).use { input ->
         val buffer = ByteArray(CHECKSUM_BUFFER_BYTES)
-        var total = 0L
         while (true) {
             cancellation.throwIfCancelled()
             val read = input.read(buffer)
             if (read < 0) break
-            total += read
-            if (total > MAX_DAV_CHECKSUM_FILE_BYTES) return null
             digest.update(buffer, 0, read)
         }
     }
@@ -786,5 +784,4 @@ private const val DOCUMENT_SEARCH_OC = "http://owncloud.org/ns"
 private const val DOCUMENT_SEARCH_NC = "http://nextcloud.org/ns"
 private const val MAX_DAV_CHECKSUMS_PER_FILE = 8
 private const val MAX_DAV_CHECKSUM_LENGTH = 256
-private const val MAX_DAV_CHECKSUM_FILE_BYTES = 64L * 1024L * 1024L
 private const val CHECKSUM_BUFFER_BYTES = 32 * 1024

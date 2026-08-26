@@ -11,7 +11,6 @@ import dev.obiente.nextcloudnative.app.DeckAttachment
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffAction
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffCapability
 import dev.obiente.nextcloudnative.app.ExternalFileHandoffResult
-import dev.obiente.nextcloudnative.app.MAX_EXTERNAL_FILE_HANDOFF_BYTES
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -135,8 +134,8 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         validateExternalFileHandoff(file, action, capability)?.let { return it }
 
         val staged = withContext(Dispatchers.IO) {
-            val content = download(capability.maximumFileBytes)
-            val rejection = validateDownloadedExternalFile(file, content, capability.maximumFileBytes)
+            val content = download(capability.maximumInMemoryFileBytes)
+            val rejection = validateDownloadedExternalFile(file, content, capability.maximumInMemoryFileBytes)
             if (rejection != null) {
                 return@withContext StagedExternalFile.Rejected(
                     rejection,
@@ -178,6 +177,25 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         return registerAndLaunchRemote(session, file, action, staged)
     }
 
+    suspend fun launchStreamedRemote(
+        file: NextcloudFile,
+        action: ExternalFileHandoffAction,
+        capability: ExternalFileHandoffCapability,
+        download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
+    ): ExternalFileHandoffResult {
+        validateExternalFileHandoff(file, action, capability)?.let { return it }
+        val staged = withContext(Dispatchers.IO) {
+            stageStreamedCopy(
+                sourceName = file.name,
+                declaredMimeType = file.mimeType,
+                declaredByteCount = file.size,
+                maximumBytes = Long.MAX_VALUE,
+                download = download,
+            )
+        }
+        return launchStaged(staged, action)
+    }
+
     suspend fun launchDetached(
         attachment: DeckAttachment,
         action: ExternalFileHandoffAction,
@@ -193,7 +211,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 sourceName = attachment.name,
                 declaredMimeType = attachment.mimeType,
                 declaredByteCount = attachment.byteCount,
-                maximumBytes = capability.maximumFileBytes,
+                maximumBytes = Long.MAX_VALUE,
                 download = download,
             )
         }
@@ -258,9 +276,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         maximumBytes: Long,
         download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
     ): StagedExternalFile.Ready {
-        require(maximumBytes in 1L..MAX_EXTERNAL_FILE_HANDOFF_BYTES) {
-            "The external attachment limit is outside the supported range."
-        }
+        require(maximumBytes > 0L)
         val root = File(context.cacheDir, EXTERNAL_SHARE_CACHE_DIRECTORY)
         check(root.isDirectory || root.mkdirs()) { "Could not create the private external-share cache." }
         val canonicalRoot = root.canonicalFile
@@ -278,9 +294,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                     output.fd.sync()
                 }
             }
-            check(downloaded.byteCount in 0L..maximumBytes) {
-                "The downloaded attachment is larger than the external handoff limit."
-            }
+            check(downloaded.byteCount in 0L..maximumBytes)
             verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
             check(temporary.length() == downloaded.byteCount) {
                 "The external-share cache copy is incomplete."
@@ -446,23 +460,23 @@ internal fun androidExternalFileIntentPlan(action: ExternalFileHandoffAction): A
 
 internal fun pruneExternalShareCache(root: File, requiredBytes: Long, nowMillis: Long = System.currentTimeMillis()) {
     require(root.isDirectory) { "The external-share cache root is not a directory." }
-    require(requiredBytes >= 0L && requiredBytes <= MAX_EXTERNAL_SHARE_CACHE_BYTES) {
-        "The external-share cache request is outside its size bound."
-    }
+    require(requiredBytes >= 0L)
     val entries = root.listFiles().orEmpty().sortedBy(File::lastModified).toMutableList()
     entries.filter { nowMillis - it.lastModified() > EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS }.forEach { expired ->
         expired.deleteRecursively()
         entries.remove(expired)
     }
     var storedBytes = entries.fold(0L) { total, entry -> saturatingAdd(total, recursiveFileBytes(entry)) }
+    val retainedBeforeCopy = if (requiredBytes >= MAX_EXTERNAL_SHARE_CACHE_BYTES) {
+        0L
+    } else {
+        MAX_EXTERNAL_SHARE_CACHE_BYTES - requiredBytes
+    }
     val iterator = entries.iterator()
-    while (saturatingAdd(storedBytes, requiredBytes) > MAX_EXTERNAL_SHARE_CACHE_BYTES && iterator.hasNext()) {
+    while (storedBytes > retainedBeforeCopy && iterator.hasNext()) {
         val oldest = iterator.next()
         val bytes = recursiveFileBytes(oldest)
         if (oldest.deleteRecursively()) storedBytes = (storedBytes - bytes).coerceAtLeast(0L)
-    }
-    check(saturatingAdd(storedBytes, requiredBytes) <= MAX_EXTERNAL_SHARE_CACHE_BYTES) {
-        "There is not enough room in the bounded external-share cache."
     }
 }
 

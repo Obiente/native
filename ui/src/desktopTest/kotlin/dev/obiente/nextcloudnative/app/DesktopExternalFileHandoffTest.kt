@@ -107,30 +107,28 @@ class DesktopExternalFileHandoffTest {
     }
 
     @Test
-    fun `oversized streamed deck attachment is cleaned before launch`() = runBlocking {
+    fun `streamed deck attachment is not constrained by the in-memory threshold`() = runBlocking {
         val root = Files.createTempDirectory("nextcloud-desktop-attachment-").toFile()
         var launchCalls = 0
         try {
-            assertFailsWith<IllegalStateException> {
-                DesktopExternalFileHandoff(root) {
-                    launchCalls += 1
-                    true
-                }.launchDetached(
-                    attachment = attachment(byteCount = null),
-                    action = ExternalFileHandoffAction.OpenWith,
-                    capability = ExternalFileHandoffCapability(
-                        supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
-                        maximumFileBytes = 4L,
-                    ),
-                    download = { output, _ ->
-                        output.write(byteArrayOf(1, 2, 3, 4, 5))
-                        DesktopDetachedDownload(5L)
-                    },
-                )
-            }
+            val result = DesktopExternalFileHandoff(root) {
+                launchCalls += 1
+                true
+            }.launchDetached(
+                attachment = attachment(byteCount = null),
+                action = ExternalFileHandoffAction.OpenWith,
+                capability = ExternalFileHandoffCapability(
+                    supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
+                    maximumInMemoryFileBytes = 4L,
+                ),
+                download = { output, _ ->
+                    output.write(byteArrayOf(1, 2, 3, 4, 5))
+                    DesktopDetachedDownload(5L)
+                },
+            )
 
-            assertEquals(0, launchCalls)
-            assertTrue(root.listFiles().orEmpty().isEmpty())
+            assertIs<ExternalFileHandoffResult.Launched>(result)
+            assertEquals(1, launchCalls)
         } finally {
             root.deleteRecursively()
         }
@@ -186,7 +184,7 @@ class DesktopExternalFileHandoffTest {
 
     private fun capability() = ExternalFileHandoffCapability(
         supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
-        maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+        maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
     )
 
     private fun file() = NextcloudFile(

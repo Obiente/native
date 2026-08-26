@@ -205,8 +205,9 @@ internal fun verifiedFileSyncContentMismatchHashes(
 }
 
 /**
- * Bounds automatic identity reads so reconnecting a large tree cannot silently consume an
- * unlimited amount of network traffic. Files outside this budget remain conservative conflicts.
+ * Selects generation-pinned identity reads without excluding files because of their size.
+ * [maximumCandidates] still bounds one scan's work and every platform performs these reads away
+ * from the UI thread. A byte budget must never turn an identical same-path file into a conflict.
  */
 fun List<FileSyncContentVerificationCandidate>.withinFileSyncContentVerificationBudget(
     maximumFileBytes: Long = MAX_FILE_SYNC_IDENTITY_FILE_BYTES,
@@ -319,5 +320,5 @@ private fun requireUniqueSyncContentPaths(paths: List<String>, label: String) {
     require(paths.size == paths.distinct().size) { "The $label sync snapshot contains duplicate paths." }
 }
 
-const val MAX_FILE_SYNC_IDENTITY_FILE_BYTES = 64L * 1024L * 1024L
-const val MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES = 256L * 1024L * 1024L
+const val MAX_FILE_SYNC_IDENTITY_FILE_BYTES = Long.MAX_VALUE
+const val MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES = Long.MAX_VALUE

@@ -1003,14 +1003,11 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     }
 }
 
-internal const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = 2L * 1024L * 1024L * 1024L
+internal const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = Long.MAX_VALUE
 internal const val MIN_ANDROID_DOCUMENT_FREE_BYTES = 512L * 1024L * 1024L
 
 internal fun requireAndroidDocumentWritebackCapacity(remoteSize: Long, availableBytes: Long) {
     require(remoteSize >= 0L && availableBytes >= 0L)
-    require(remoteSize <= MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) {
-        "The file is too large for editable Android staging."
-    }
     require(remoteSize <= (availableBytes - MIN_ANDROID_DOCUMENT_FREE_BYTES).coerceAtLeast(0L)) {
         "There is not enough free space to stage this edit safely."
     }
@@ -1018,9 +1015,6 @@ internal fun requireAndroidDocumentWritebackCapacity(remoteSize: Long, available
 
 internal fun requireAndroidDocumentStagedWritebackCapacity(stagedBytes: Long, availableBytes: Long) {
     require(stagedBytes >= 0L && availableBytes >= 0L)
-    require(stagedBytes <= MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES) {
-        "The edited file exceeds the Android writeback limit."
-    }
     require(availableBytes >= MIN_ANDROID_DOCUMENT_FREE_BYTES) {
         "There is not enough free space to retain this edit safely."
     }

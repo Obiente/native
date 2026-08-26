@@ -8738,7 +8738,7 @@ internal fun FileActionMenu(
                     externalHandoffCapability?.supportedActions.orEmpty(),
                 offlineStorage = offlineStorageSupported,
                 platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
-                maximumExternalFileBytes = externalHandoffCapability?.maximumFileBytes,
+                maximumInMemoryExternalFileBytes = externalHandoffCapability?.maximumInMemoryFileBytes,
                 seekableExternalFileStreaming =
                     externalHandoffCapability?.supportsSeekableRemoteStreaming == true,
             ),

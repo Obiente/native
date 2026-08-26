@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
  * Opens a detached, read-only file generation through the desktop's registered application.
  *
  * The live DAV object is never mounted or exposed. The staged bytes must carry the exact ETag the
- * user selected in Files, and every copy lives in a bounded disposable XDG cache.
+ * user selected in Files, and every copy lives in an evictable disposable XDG cache.
  */
 internal class DesktopExternalFileHandoff(
     private val root: File = desktopExternalFileHandoffDirectory(),
@@ -28,8 +28,8 @@ internal class DesktopExternalFileHandoff(
     ): ExternalFileHandoffResult {
         validateExternalFileHandoff(file, action, capability)?.let { return it }
         val staged = withContext(Dispatchers.IO) {
-            val content = download(capability.maximumFileBytes)
-            validateDownloadedExternalFile(file, content, capability.maximumFileBytes)?.let { rejection ->
+            val content = download(capability.maximumInMemoryFileBytes)
+            validateDownloadedExternalFile(file, content, capability.maximumInMemoryFileBytes)?.let { rejection ->
                 return@withContext DesktopStagedExternalFile.Rejected(rejection)
             }
             DesktopStagedExternalFile.Ready(stageDetachedCopy(file.name, content.bytes))
@@ -37,6 +37,25 @@ internal class DesktopExternalFileHandoff(
         if (staged is DesktopStagedExternalFile.Rejected) return staged.result
         staged as DesktopStagedExternalFile.Ready
         return launchStaged(staged.file, action)
+    }
+
+    suspend fun launchStreamed(
+        file: NextcloudFile,
+        action: ExternalFileHandoffAction,
+        capability: ExternalFileHandoffCapability,
+        download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
+    ): ExternalFileHandoffResult {
+        validateExternalFileHandoff(file, action, capability)?.let { return it }
+        val staged = withContext(Dispatchers.IO) {
+            stageStreamedCopy(
+                sourceName = file.name,
+                declaredByteCount = file.size,
+                expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag)),
+                maximumBytes = Long.MAX_VALUE,
+                download = download,
+            )
+        }
+        return launchStaged(staged, action)
     }
 
     suspend fun launchDetached(
@@ -53,7 +72,7 @@ internal class DesktopExternalFileHandoff(
             stageStreamedCopy(
                 sourceName = attachment.name,
                 declaredByteCount = attachment.byteCount,
-                maximumBytes = capability.maximumFileBytes,
+                maximumBytes = Long.MAX_VALUE,
                 download = download,
             )
         }
@@ -76,12 +95,11 @@ internal class DesktopExternalFileHandoff(
     private suspend fun stageStreamedCopy(
         sourceName: String,
         declaredByteCount: Long?,
+        expectedEtag: String? = null,
         maximumBytes: Long,
         download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
     ): File {
-        require(maximumBytes in 1L..MAX_EXTERNAL_FILE_HANDOFF_BYTES) {
-            "The external attachment limit is outside the supported range."
-        }
+        require(maximumBytes > 0L)
         check(root.isDirectory || root.mkdirs()) { "Could not create the desktop external-file cache." }
         val canonicalRoot = root.canonicalFile
         pruneDesktopExternalFileCache(canonicalRoot, maximumBytes)
@@ -99,8 +117,11 @@ internal class DesktopExternalFileHandoff(
                     output.fd.sync()
                 }
             }
-            check(downloaded.byteCount in 0L..maximumBytes) {
-                "The downloaded attachment is larger than the external handoff limit."
+            check(downloaded.byteCount in 0L..maximumBytes)
+            expectedEtag?.let { expected ->
+                check(downloaded.etag == expected) {
+                    "The file changed while it was being prepared. Refresh and try again."
+                }
             }
             verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
             check(temporary.length() == downloaded.byteCount) {
@@ -130,7 +151,7 @@ internal class DesktopExternalFileHandoff(
     }
 
     private fun stageDetachedCopy(sourceName: String, bytes: ByteArray): File {
-        require(bytes.size.toLong() <= MAX_EXTERNAL_FILE_HANDOFF_BYTES)
+        require(bytes.size.toLong() <= MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES)
         check(root.isDirectory || root.mkdirs()) { "Could not create the desktop external-file cache." }
         val canonicalRoot = root.canonicalFile
         pruneDesktopExternalFileCache(canonicalRoot, bytes.size.toLong())
@@ -179,6 +200,7 @@ internal class DesktopExternalFileHandoff(
 
 internal data class DesktopDetachedDownload(
     val byteCount: Long,
+    val etag: String? = null,
 )
 
 internal fun desktopExternalFileHandoffDirectory(): File {
@@ -193,23 +215,25 @@ internal fun pruneDesktopExternalFileCache(
     nowMillis: Long = System.currentTimeMillis(),
 ) {
     require(root.isDirectory) { "The desktop external-file cache root is not a directory." }
-    require(requiredBytes in 0L..MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES) {
-        "The desktop external-file cache request is outside its size bound."
-    }
+    require(requiredBytes >= 0L)
     val entries = root.listFiles().orEmpty().sortedBy(File::lastModified).toMutableList()
     entries.filter { nowMillis - it.lastModified() > DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS }.forEach { expired ->
         expired.deleteRecursively()
         entries.remove(expired)
     }
-    var storedBytes = entries.sumOf(::desktopRecursiveFileBytes)
+    var storedBytes = entries.fold(0L) { total, entry ->
+        saturatingDesktopFileBytes(total, desktopRecursiveFileBytes(entry))
+    }
+    val retainedBeforeCopy = if (requiredBytes >= MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES) {
+        0L
+    } else {
+        MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES - requiredBytes
+    }
     val iterator = entries.iterator()
-    while (storedBytes + requiredBytes > MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES && iterator.hasNext()) {
+    while (storedBytes > retainedBeforeCopy && iterator.hasNext()) {
         val oldest = iterator.next()
         val bytes = desktopRecursiveFileBytes(oldest)
         if (oldest.deleteRecursively()) storedBytes = (storedBytes - bytes).coerceAtLeast(0L)
-    }
-    check(storedBytes + requiredBytes <= MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES) {
-        "There is not enough room in the bounded desktop external-file cache."
     }
 }
 
@@ -234,6 +258,9 @@ private fun desktopRecursiveFileBytes(file: File): Long = when {
     file.isDirectory -> file.listFiles().orEmpty().sumOf(::desktopRecursiveFileBytes)
     else -> 0L
 }
+
+private fun saturatingDesktopFileBytes(left: Long, right: Long): Long =
+    if (right > Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
 
 private const val MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES = 256L * 1024L * 1024L
 private const val DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L

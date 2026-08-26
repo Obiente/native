@@ -1909,8 +1909,7 @@ private fun DeckAttachment.toDeckUiAttachment(
         createdBy,
     ).joinToString(" - ").ifBlank { null },
         canOpen = handoffCapability != null &&
-            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions &&
-            (byteCount == null || byteCount <= handoffCapability.maximumFileBytes),
+            ExternalFileHandoffAction.OpenWith in handoffCapability.supportedActions,
         canDelete = canEdit,
     )
 

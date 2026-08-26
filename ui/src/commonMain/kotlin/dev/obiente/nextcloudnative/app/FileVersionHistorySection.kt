@@ -458,8 +458,7 @@ internal fun canExportFileVersion(
 ): Boolean {
     val capability = (support as? ExternalFileHandoffSupport.Available)?.capability ?: return false
     return ExternalFileHandoffAction.Share in capability.supportedActions &&
-        (version.sizeBytes == null || version.sizeBytes <= capability.maximumFileBytes) &&
-        capability.maximumFileBytes <= MAX_FILE_VERSION_DOWNLOAD_BYTES
+        version.sizeBytes?.let { it >= 0L } != false
 }
 
 internal fun canRestoreFileVersion(

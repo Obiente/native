@@ -428,7 +428,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         )
         val verificationResults = cachedMismatchResults + verifyAndroidFileSyncCandidates(
             candidates = candidates,
-            maximumResults = initialPair.availableAndroidContentVerificationSlots(),
+            maximumResults = candidates.size,
         ) { candidate -> verifyAndroidFileSyncContent(candidate, local, remote, contentReadBudget) }
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
             .map(FileSyncContentVerificationResult::candidate)
@@ -604,15 +604,6 @@ internal class AndroidFileSyncEngine(context: Context) {
                 maximumBytes = readCeiling,
             )
         return FileSyncContentVerificationResult(candidate, localHash, localHash.takeIf { matches })
-    }
-
-    private fun FileSyncPair.availableAndroidContentVerificationSlots(): Int {
-        val retainedNonExecutable = workItems.count { work ->
-            work.state == FileSyncExecutionState.AwaitingDecision ||
-                work.state == FileSyncExecutionState.Failed ||
-                work.state == FileSyncExecutionState.Skipped
-        }
-        return (ANDROID_FILE_SYNC_NON_EXECUTABLE_RESERVE - retainedNonExecutable).coerceAtLeast(0)
     }
 
     suspend fun resolveConflictAndRun(
@@ -839,7 +830,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             ?: fallback
 
     private companion object {
-        const val MAX_SYNC_FILE_BYTES = 8L * 1024L * 1024L * 1024L
+        const val MAX_SYNC_FILE_BYTES = Long.MAX_VALUE
         val ENGINE_LOCK = Mutex()
     }
 }

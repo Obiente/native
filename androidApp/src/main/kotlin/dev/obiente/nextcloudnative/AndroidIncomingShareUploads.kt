@@ -137,8 +137,8 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                 val stagedName = "${index.toString().padStart(3, '0')}-${UUID.randomUUID()}"
                 val destination = File(requestDirectory, stagedName)
                 val declaredBytes = metadata.second
-                require(declaredBytes == null || declaredBytes in 0L..MAX_SHARE_FILE_BYTES) {
-                    "$displayName is too large to stage safely."
+                require(declaredBytes == null || declaredBytes >= 0L) {
+                    "$displayName has an invalid declared size."
                 }
                 requireIncomingShareStagingSpace(requestDirectory, declaredBytes, displayName, MIN_STAGING_FREE_BYTES)
                 val digest = MessageDigest.getInstance("SHA-256")
@@ -155,11 +155,8 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                             val count = input.read(buffer)
                             if (count < 0) break
                             currentCoroutineContext().ensureActive()
-                            fileBytes += count
-                            totalBytes += count
-                            require(fileBytes <= MAX_SHARE_FILE_BYTES && totalBytes <= MAX_SHARE_TOTAL_BYTES) {
-                                "The shared files are too large to stage safely."
-                            }
+                            fileBytes = Math.addExact(fileBytes, count.toLong())
+                            totalBytes = Math.addExact(totalBytes, count.toLong())
                             requireIncomingShareStreamingSpace(requestDirectory, count, MIN_STAGING_FREE_BYTES)
                             digest.update(buffer, 0, count)
                             output.write(buffer, 0, count)
@@ -561,8 +558,6 @@ internal class AndroidIncomingShareStore(private val context: Context) {
 
     internal companion object {
         val LOCK = Any()
-        const val MAX_SHARE_FILE_BYTES = 8L * 1024L * 1024L * 1024L
-        const val MAX_SHARE_TOTAL_BYTES = 16L * 1024L * 1024L * 1024L
         const val MIN_STAGING_FREE_BYTES = 64L * 1024L * 1024L
     }
 }

@@ -311,7 +311,7 @@ class TalkMessageRenderModelTest {
 
         assertEquals(0, backend.calls)
         assertEquals(
-            TalkAttachmentReadUnavailableReason.FileTooLarge,
+            TalkAttachmentReadUnavailableReason.InMemoryReadTooLarge,
             assertIs<TalkAttachmentReadResult.Unavailable>(result).reason,
         )
     }

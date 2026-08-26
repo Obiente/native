@@ -22,7 +22,7 @@ data class FileVersionByteRange(
 ) {
     init {
         require(start >= 0L && endInclusive >= start) { "The version byte range is invalid." }
-        require(endInclusive - start + 1L <= MAX_FILE_VERSION_RANGE_BYTES) {
+        require(endInclusive - start + 1L <= MAX_FILE_VERSION_IN_MEMORY_BYTES) {
             "The version byte range is too large."
         }
     }
@@ -157,8 +157,8 @@ fun boundedFileVersionContentRequest(
     maximumBytes: Long,
     expectedSizeBytes: Long? = null,
 ): FileVersionDavRequest {
-    require(maximumBytes in 1L..MAX_FILE_VERSION_DOWNLOAD_BYTES) {
-        "The historical file download limit is invalid."
+    require(maximumBytes in 1L..MAX_FILE_VERSION_IN_MEMORY_BYTES) {
+        "The historical file in-memory read limit is invalid."
     }
     require(expectedSizeBytes == null || expectedSizeBytes >= 0L) {
         "The historical file size is invalid."
@@ -358,8 +358,7 @@ private const val FILE_VERSION_DAV_XML_CONTENT_TYPE = "application/xml; charset=
 private const val FILE_VERSION_HISTORY_RESPONSE_BYTES = 2L * 1024L * 1024L
 private const val FILE_VERSION_RESTORE_RESPONSE_BYTES = 64L * 1024L
 const val MAX_FILE_VERSION_PREVIEW_BYTES = 16L * 1024L * 1024L
-const val MAX_FILE_VERSION_DOWNLOAD_BYTES = 64L * 1024L * 1024L
-private const val MAX_FILE_VERSION_RANGE_BYTES = MAX_FILE_VERSION_DOWNLOAD_BYTES
+const val MAX_FILE_VERSION_IN_MEMORY_BYTES = 64L * 1024L * 1024L
 private const val MAX_FILE_VERSION_RECORDS = 2_000
 private const val MAX_FILE_VERSION_USER_ID_LENGTH = 320
 private const val MAX_FILE_VERSION_HREF_LENGTH = 4_096

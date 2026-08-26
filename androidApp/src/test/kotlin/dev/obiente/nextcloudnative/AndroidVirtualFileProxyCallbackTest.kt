@@ -56,20 +56,20 @@ class AndroidVirtualFileProxyCallbackTest {
     }
 
     @Test
-    fun `writable proxy capacity preserves the limit and free space reserve`() {
+    fun `writable proxy capacity preserves the free space reserve`() {
         assertTrue(androidDocumentWriteFitsCapacity(40L, 50L, 110L, reserveBytes = 100L))
         assertFalse(androidDocumentWriteFitsCapacity(40L, 51L, 110L, reserveBytes = 100L))
         assertFalse(
             androidDocumentWriteFitsCapacity(
-                currentBytes = MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES,
-                writeEnd = MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES + 1L,
+                currentBytes = Long.MAX_VALUE,
+                writeEnd = Long.MIN_VALUE,
                 availableBytes = Long.MAX_VALUE,
             ),
         )
     }
 
     @Test
-    fun `writable proxy rejects oversized writes before changing staged bytes`() {
+    fun `writable proxy rejects offset overflow before changing staged bytes`() {
         val staging = Files.createTempFile("writable-proxy-", ".stage").toFile().apply {
             writeText("retained")
         }
@@ -77,7 +77,7 @@ class AndroidVirtualFileProxyCallbackTest {
         val callback = AndroidWritableFileProxyCallback(staging) { failure -> releaseFailure = failure }
 
         assertFailsWith<android.system.ErrnoException> {
-            callback.onWrite(MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES, 1, byteArrayOf(1))
+            callback.onWrite(Long.MAX_VALUE, 1, byteArrayOf(1))
         }
         assertEquals("retained", staging.readText())
 

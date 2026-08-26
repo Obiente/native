@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 class ExternalFileHandoffTest {
     private val capability = ExternalFileHandoffCapability(
         supportedActions = ExternalFileHandoffAction.entries.toSet(),
-        maximumFileBytes = MAX_EXTERNAL_FILE_HANDOFF_BYTES,
+        maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
     )
 
     @Test
@@ -25,15 +25,14 @@ class ExternalFileHandoffTest {
     }
 
     @Test
-    fun `known oversized files are rejected before download`() {
+    fun `files larger than the in-memory threshold remain eligible for streamed staging`() {
         val rejection = validateExternalFileHandoff(
-            file(name = "video.mov", size = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
+            file(name = "video.mov", size = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
             ExternalFileHandoffAction.OpenWith,
             capability,
         )
 
-        assertEquals(ExternalFileHandoffRejection.FileTooLarge, rejection?.reason)
-        assertTrue(requireNotNull(rejection).message.contains("64 MiB"))
+        assertNull(rejection)
     }
 
     @Test
@@ -88,14 +87,14 @@ class ExternalFileHandoffTest {
     }
 
     @Test
-    fun `known oversized deck attachment is rejected before streaming`() {
+    fun `known oversized deck attachment remains eligible for streaming`() {
         val rejection = validateDeckAttachmentHandoff(
-            attachment = attachment(byteCount = MAX_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
+            attachment = attachment(byteCount = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES + 1L),
             action = ExternalFileHandoffAction.OpenWith,
             capability = capability,
         )
 
-        assertEquals(ExternalFileHandoffRejection.FileTooLarge, rejection?.reason)
+        assertNull(rejection)
     }
 
     @Test
