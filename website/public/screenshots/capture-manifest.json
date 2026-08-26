@@ -381,7 +381,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncConflictReview.kt": "bb8e3e309bc6f40359526f44be86d698c7b993bdb770d05513d2f6f5dab24c07",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncContentIdentity.kt": "813cc7df0266c780d0a097dc0bb712b68b12c9ee7d5783c494a9fd095d13e644",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinator.kt": "738950dd6b170b71bb10d87cfef5bce655c520dee3301d7bc5cb026beea1d9ac",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "db242527e7f8d15002bef54059728b7a987850dc5744a58c3d7b0d51e013a158",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncCoordinatorSnapshot.kt": "bb1230014bd044167fb7bfb936f0b517202560cf2eeeb3d78f45a0365a85dedb",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncExperience.kt": "a61d942bd467628c7c3123c386e2ec4a97498966c427c963cf8b3f71fbd50170",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPairConfiguration.kt": "e7022629c32b99388a03675529886ac580a6def9cf5a4cbfea565ad6cc61fe01",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "7b91ed8e87299905339865adaae4071158342bf16a7d0e8366c5c8b0bab3e780",
