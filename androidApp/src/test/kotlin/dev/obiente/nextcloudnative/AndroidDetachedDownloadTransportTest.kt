@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileOutputStream
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -29,7 +30,7 @@ class AndroidDetachedDownloadTransportTest {
             server.start()
             val destination = Files.createTempFile("ncn-detached-cancel-", ".tmp").toFile()
             try {
-                val job = launch {
+                val job = launch(Dispatchers.Default) {
                     FileOutputStream(destination).use { output ->
                         downloadAndroidDetachedFile(
                             client = OkHttpClient(),
