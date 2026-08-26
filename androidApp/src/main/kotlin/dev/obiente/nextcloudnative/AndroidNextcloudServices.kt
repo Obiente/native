@@ -1115,7 +1115,7 @@ internal class AndroidNextcloudServices(
                         userId = userId,
                         file = file,
                         output = output,
-                        expectedBytes = expectedBytes,
+                        maximumBytes = expectedBytes,
                     )
                 }
             }
