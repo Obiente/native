@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.nio.file.Files
@@ -17,6 +18,66 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
+    @Test
+    fun `chunked upload assembles an owned stage before one visible move`() {
+        val requests = mutableListOf<Request>()
+        var propfindCount = 0
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val stageName = ".nextcloud-native-$uploadId.upload"
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "MKCOL", "PUT" -> response(chain.request(), 201)
+                "MOVE" -> response(chain.request(), 201)
+                "PROPFIND" -> {
+                    propfindCount += 1
+                    val name = if (propfindCount == 1) stageName else "large.bin"
+                    response(
+                        chain.request(),
+                        207,
+                        """
+                        <d:multistatus xmlns:d="DAV:"><d:response>
+                          <d:href>/remote.php/dav/files/alice/Vault/$name</d:href>
+                          <d:propstat><d:prop><d:getetag>etag-$propfindCount</d:getetag>
+                            <d:getcontentlength>22020096</d:getcontentlength><d:resourcetype/>
+                          </d:prop></d:propstat>
+                        </d:response></d:multistatus>
+                        """.trimIndent(),
+                    )
+                }
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+        )
+        val source = Files.createTempFile("nextcloud-sync-chunked", ".tmp").toFile()
+        RandomAccessFile(source, "rw").use { it.setLength(21L * 1024L * 1024L) }
+        try {
+            val checkpoints = mutableListOf<FileSyncUploadCheckpoint>()
+            val result = jvmResumableNextcloudUpload(
+                source, "large.bin", "local-1", null, null,
+                newUploadId = { uploadId },
+                persistCheckpoint = checkpoints::add,
+                remote = tree.resumableUploadRemote(),
+            )
+
+            assertEquals("etag-2", result.etag)
+            assertEquals(listOf("MKCOL", "PUT", "PUT", "PUT", "MOVE", "PROPFIND", "MOVE", "PROPFIND"),
+                requests.map(Request::method))
+            assertTrue(requests[0].header("Destination")!!.endsWith("/Vault/$stageName"))
+            assertTrue(requests[4].header("Destination")!!.endsWith("/Vault/$stageName"))
+            assertTrue(requests[6].header("Destination")!!.endsWith("/Vault/large.bin"))
+            assertEquals("F", requests[6].header("Overwrite"))
+            assertTrue(checkpoints.last().commitInFlight)
+        } finally {
+            source.delete()
+        }
+    }
+
     @Test
     fun `empty range verification revalidates the listed remote generation`() {
         val client = OkHttpClient.Builder().addInterceptor { chain ->

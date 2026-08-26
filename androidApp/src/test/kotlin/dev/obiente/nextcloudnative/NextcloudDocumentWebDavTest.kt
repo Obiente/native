@@ -460,6 +460,28 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun assembledChunkStageUsesSourceAndDestinationGenerationGuards() = RecordingServer().use { server ->
+        server.enqueue(204)
+        val destination = server.baseUrl + "/remote.php/dav/files/alice/Shared/archive.bin"
+
+        NextcloudDocumentWebDav().publishChunkUploadStage(
+            server.session,
+            "alice",
+            "Shared/.nextcloud-native-01234567-89ab-cdef-0123-456789abcdef.upload",
+            "Shared/archive.bin",
+            stagedEtag = "stage-etag",
+            expectedRemoteEtag = "old-etag",
+        )
+
+        val request = server.request(0)
+        assertEquals("MOVE", request.method)
+        assertEquals("stage-etag", request.header("If-Match"))
+        assertEquals("T", request.header("Overwrite"))
+        assertEquals(destination, request.header("Destination"))
+        assertEquals("<$destination> ([old-etag])", request.header("If"))
+    }
+
+    @Test
     fun oversizedRootNameListingFallsBackToConditionalCreates() = RecordingServer().use { server ->
         server.enqueue(207, body = " ".repeat(4 * 1024 * 1024 + 1))
         val remote = AndroidFileSyncRemoteTree(
