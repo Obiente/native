@@ -20,7 +20,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 
 internal const val ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS = 24L * 60L * 60L * 1_000L
@@ -70,9 +69,11 @@ internal data class AndroidIncomingShareRequest(
     val uploadedNames: List<String> = emptyList(),
     val chunkSession: AndroidIncomingShareChunkSession? = null,
     val visibleMutationInFlight: Boolean = false,
+    val visibleMutationTargetName: String? = null,
     val automaticTransferAttempts: Int = 0,
     val retryNotBeforeEpochMillis: Long? = null,
     val message: String? = null,
+    val discardRequested: Boolean = false,
 ) {
     init {
         require(runCatching { UUID.fromString(id) }.isSuccess)
@@ -81,6 +82,7 @@ internal data class AndroidIncomingShareRequest(
         require(completedFiles in 0..files.size)
         require(uploadedNames.size == completedFiles)
         require(chunkSession == null || chunkSession.fileIndex == completedFiles)
+        require(visibleMutationTargetName == null || safeIncomingShareFileName(visibleMutationTargetName, 0) == visibleMutationTargetName)
         require(automaticTransferAttempts in 0..MAX_INCOMING_SHARE_TRANSFER_ATTEMPTS)
         require(retryNotBeforeEpochMillis == null || retryNotBeforeEpochMillis >= 0L)
     }
@@ -287,10 +289,15 @@ internal class AndroidIncomingShareStore(private val context: Context) {
     fun setVisibleMutationInFlight(
         id: String,
         inFlight: Boolean,
+        targetName: String? = null,
     ): AndroidIncomingShareRequest? = synchronized(LOCK) {
         val current = load(id) ?: return@synchronized null
         if (current.state != AndroidIncomingShareState.Uploading) return@synchronized null
-        val updated = current.copy(visibleMutationInFlight = inFlight)
+        require(!inFlight || targetName != null)
+        val updated = current.copy(
+            visibleMutationInFlight = inFlight,
+            visibleMutationTargetName = targetName.takeIf { inFlight },
+        )
         save(updated)
         updated
     }
@@ -351,6 +358,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
             uploadedNames = current.uploadedNames + uploadedName,
             chunkSession = null,
             visibleMutationInFlight = false,
+            visibleMutationTargetName = null,
         )
         save(updated)
         updated
@@ -427,15 +435,13 @@ internal class AndroidIncomingShareStore(private val context: Context) {
     fun claimChunkSessionForCleanup(
         id: String,
         uploadId: String,
-        includeRetryableFailure: Boolean,
     ): AndroidIncomingShareChunkSession? = synchronized(LOCK) {
         val current = load(id) ?: return@synchronized null
         val session = current.chunkSession?.takeIf { it.uploadId == uploadId }
             ?: return@synchronized null
         if (current.state !in TERMINAL_INCOMING_SHARE_STATES) return@synchronized null
-        val eligible = session.cleanupPending ||
-            current.state != AndroidIncomingShareState.Failed ||
-            includeRetryableFailure
+        val eligible = session.cleanupPending || current.discardRequested ||
+            current.state == AndroidIncomingShareState.Completed
         if (!eligible) return@synchronized null
         val claimed = session.copy(commitInFlight = false, cleanupPending = true)
         if (claimed != session) save(current.copy(chunkSession = claimed))
@@ -448,6 +454,40 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         val updated = current.copy(chunkSession = null)
         save(updated)
         updated
+    }
+
+    fun recordUnknownOutcomeVerification(id: String, targetExists: Boolean): AndroidIncomingShareRequest =
+        synchronized(LOCK) {
+            val current = requireAvailable(id)
+            val updated = reconcileIncomingShareUnknownOutcome(current, targetExists)
+            save(updated)
+            updated
+        }
+
+    fun markDiscardRequested(id: String, expectedFingerprint: String): AndroidIncomingShareRequest? =
+        synchronized(LOCK) {
+            val current = load(id) ?: return@synchronized null
+            if (
+                current.incomingShareReleaseFingerprint() != expectedFingerprint ||
+                current.state !in setOf(AndroidIncomingShareState.Staged) + TERMINAL_INCOMING_SHARE_STATES
+            ) {
+                return@synchronized null
+            }
+            val updated = current.copy(
+                discardRequested = true,
+                chunkSession = current.chunkSession?.copy(commitInFlight = false, cleanupPending = true),
+            )
+            save(updated)
+            updated
+        }
+
+    fun removeIfDiscardRequested(id: String): Boolean = synchronized(LOCK) {
+        when (val loaded = loadResult(id)) {
+            AndroidIncomingShareLoadResult.Missing -> true
+            is AndroidIncomingShareLoadResult.Corrupt -> false
+            is AndroidIncomingShareLoadResult.Available ->
+                loaded.request.discardRequested && loaded.request.chunkSession == null && remove(id)
+        }
     }
 
     fun stagedFile(requestId: String, file: AndroidIncomingShareFile): File {
@@ -576,6 +616,7 @@ internal fun prepareIncomingShareRequestForQueue(
         userId = userId,
         destinationPath = destination,
         visibleMutationInFlight = false,
+        visibleMutationTargetName = null,
         automaticTransferAttempts = 0,
         retryNotBeforeEpochMillis = null,
         message = null,
@@ -593,6 +634,7 @@ internal fun prepareIncomingShareRequestForAutomaticRetry(
     return current.copy(
         state = AndroidIncomingShareState.Queued,
         visibleMutationInFlight = false,
+        visibleMutationTargetName = null,
         automaticTransferAttempts = current.automaticTransferAttempts + 1,
         retryNotBeforeEpochMillis = retryNotBeforeEpochMillis,
         message = message,
@@ -613,6 +655,33 @@ internal fun AndroidIncomingShareRequest.canSafelyResumeAfterWorkerRestart(): Bo
     state == AndroidIncomingShareState.Uploading &&
         !visibleMutationInFlight &&
         (chunkSession == null || !chunkSession.commitInFlight)
+
+internal fun reconcileIncomingShareUnknownOutcome(
+    current: AndroidIncomingShareRequest,
+    targetExists: Boolean,
+): AndroidIncomingShareRequest {
+    require(
+        current.state == AndroidIncomingShareState.OutcomeUnknown ||
+            current.state == AndroidIncomingShareState.Canceled &&
+            current.message == CANCELED_INCOMING_SHARE_MUTATION_WARNING,
+    ) { "Only an ambiguous upload result can be verified." }
+    val targetName = requireNotNull(current.visibleMutationTargetName ?: current.chunkSession?.targetName) {
+        "This older recovery record does not identify the remote target. Review it in Files."
+    }
+    return if (targetExists) {
+        current.copy(
+            message = "Nextcloud contains $targetName. It was left unchanged; review it in Files before discarding recovery.",
+        )
+    } else {
+        current.copy(
+            state = AndroidIncomingShareState.Failed,
+            chunkSession = current.chunkSession?.copy(commitInFlight = false),
+            visibleMutationInFlight = false,
+            visibleMutationTargetName = null,
+            message = "Nextcloud confirms $targetName is absent. This file is safe to retry.",
+        )
+    }
+}
 
 internal fun AndroidIncomingShareRequest.canReleaseIncomingShareRequest(): Boolean =
     (state == AndroidIncomingShareState.Staged || state in TERMINAL_INCOMING_SHARE_STATES) &&
@@ -723,77 +792,3 @@ private fun android.content.ContentResolver.queryIncomingShareMetadata(uri: Uri)
         cursor?.close()
     }
 }
-
-internal fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
-    .put("id", id)
-    .put("state", state.name)
-    .put("accountId", accountId)
-    .put("userId", userId)
-    .put("destinationPath", destinationPath)
-    .put("completedFiles", completedFiles)
-    .put("uploadedNames", JSONArray(uploadedNames))
-    .put("automaticTransferAttempts", automaticTransferAttempts)
-    .put("retryNotBeforeEpochMillis", retryNotBeforeEpochMillis)
-    .put("visibleMutationInFlight", visibleMutationInFlight)
-    .put("chunkSession", chunkSession?.let { session ->
-        JSONObject()
-            .put("fileIndex", session.fileIndex)
-            .put("targetName", session.targetName)
-            .put("uploadId", session.uploadId)
-            .put("uploadedChunks", session.uploadedChunks)
-            .put("commitInFlight", session.commitInFlight)
-            .put("cleanupPending", session.cleanupPending)
-    })
-    .put("message", message)
-    .put("files", JSONArray().also { array ->
-        files.forEach { file ->
-            array.put(
-                JSONObject()
-                    .put("id", file.id)
-                    .put("displayName", file.displayName)
-                    .put("mimeType", file.mimeType)
-                    .put("sizeBytes", file.sizeBytes)
-                    .put("stagedName", file.stagedName),
-            )
-        }
-    })
-
-private fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = AndroidIncomingShareRequest(
-    id = getString("id"),
-    state = AndroidIncomingShareState.valueOf(getString("state")),
-    accountId = optString("accountId").takeIf(String::isNotBlank),
-    userId = optString("userId").takeIf(String::isNotBlank),
-    destinationPath = optString("destinationPath").takeIf(String::isNotBlank) ?: if (has("destinationPath")) "" else null,
-    completedFiles = optInt("completedFiles"),
-    uploadedNames = getJSONArray("uploadedNames").let { array ->
-        List(array.length()) { index -> array.getString(index) }
-    },
-    automaticTransferAttempts = optInt("automaticTransferAttempts"),
-    retryNotBeforeEpochMillis = optLong("retryNotBeforeEpochMillis")
-        .takeIf { has("retryNotBeforeEpochMillis") && !isNull("retryNotBeforeEpochMillis") && it >= 0L },
-    visibleMutationInFlight = optBoolean("visibleMutationInFlight"),
-    chunkSession = optJSONObject("chunkSession")?.let { session ->
-        AndroidIncomingShareChunkSession(
-            fileIndex = session.getInt("fileIndex"),
-            targetName = session.getString("targetName"),
-            uploadId = session.getString("uploadId"),
-            uploadedChunks = session.optInt("uploadedChunks"),
-            commitInFlight = session.optBoolean("commitInFlight"),
-            cleanupPending = session.optBoolean("cleanupPending"),
-        )
-    },
-    message = optString("message").takeIf(String::isNotBlank),
-    files = getJSONArray("files").let { array ->
-        List(array.length()) { index ->
-            array.getJSONObject(index).let { file ->
-                AndroidIncomingShareFile(
-                    id = file.getString("id"),
-                    displayName = file.getString("displayName"),
-                    mimeType = file.optString("mimeType").takeIf(String::isNotBlank),
-                    sizeBytes = file.getLong("sizeBytes"),
-                    stagedName = file.getString("stagedName"),
-                )
-            }
-        }
-    },
-)

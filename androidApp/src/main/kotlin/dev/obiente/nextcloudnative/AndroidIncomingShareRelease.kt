@@ -23,6 +23,17 @@ internal class AndroidIncomingShareReleaseWorker(
         val store = AndroidIncomingShareStore(applicationContext)
         val released = if (inputData.getBoolean(KEY_REMOVE_CORRUPT_RECOVERY, false)) {
             store.removeCorruptRecovery(requestId)
+        } else if (inputData.getBoolean(KEY_REQUEST_DISCARD, false)) {
+            val expectedFingerprint = inputData.getString(KEY_EXPECTED_FINGERPRINT)
+                ?: return@withContext Result.failure()
+            val discarded = store.markDiscardRequested(requestId, expectedFingerprint)
+                ?: return@withContext Result.success()
+            if (discarded.chunkSession == null) {
+                store.removeIfDiscardRequested(requestId)
+            } else {
+                scheduleIncomingShareChunkCleanup(applicationContext, requestId)
+                false
+            }
         } else {
             val expectedFingerprint = inputData.getString(KEY_EXPECTED_FINGERPRINT)
                 ?: return@withContext Result.failure()
@@ -38,7 +49,34 @@ internal class AndroidIncomingShareReleaseWorker(
     internal companion object {
         const val KEY_EXPECTED_FINGERPRINT = "expected_fingerprint"
         const val KEY_REMOVE_CORRUPT_RECOVERY = "remove_corrupt_recovery"
+        const val KEY_REQUEST_DISCARD = "request_discard"
     }
+}
+
+internal fun scheduleIncomingSharePresentedDiscard(
+    context: Context,
+    presented: AndroidIncomingShareRequest,
+) {
+    require(
+        presented.state == AndroidIncomingShareState.Staged ||
+            presented.state in TERMINAL_INCOMING_SHARE_STATES,
+    )
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        incomingShareReleaseWorkName(presented.id),
+        ExistingWorkPolicy.REPLACE,
+        OneTimeWorkRequestBuilder<AndroidIncomingShareReleaseWorker>()
+            .setInputData(
+                Data.Builder()
+                    .putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, presented.id)
+                    .putString(
+                        AndroidIncomingShareReleaseWorker.KEY_EXPECTED_FINGERPRINT,
+                        presented.incomingShareReleaseFingerprint(),
+                    )
+                    .putBoolean(AndroidIncomingShareReleaseWorker.KEY_REQUEST_DISCARD, true)
+                    .build(),
+            )
+            .build(),
+    )
 }
 
 internal fun scheduleIncomingSharePresentedRelease(

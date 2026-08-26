@@ -34,7 +34,7 @@ internal class AndroidIncomingShareFileTransfer(
         fileIndex: Int,
         occupiedNames: MutableSet<String>,
         destinationSnapshotComplete: Boolean,
-        setMutationInFlight: (Boolean) -> Unit,
+        setMutationInFlight: (Boolean, String?) -> Unit,
     ): AndroidIncomingShareRequest {
         val source = request.files[fileIndex]
         val stagedFile = store.stagedFile(requestId, source)
@@ -68,7 +68,7 @@ internal class AndroidIncomingShareFileTransfer(
         stagedFile: File,
         occupiedNames: MutableSet<String>,
         destinationSnapshotComplete: Boolean,
-        setMutationInFlight: (Boolean) -> Unit,
+        setMutationInFlight: (Boolean, String?) -> Unit,
     ): AndroidIncomingShareRequest {
         var targetName: String
         while (true) {
@@ -82,20 +82,20 @@ internal class AndroidIncomingShareFileTransfer(
                 remote.createFileIfAbsent(
                     candidate,
                     stagedFile,
-                    onRequestStarted = { setMutationInFlight(true) },
+                    onRequestStarted = { setMutationInFlight(true, candidate) },
                     cancellation = cancellation,
                 )
                 targetName = candidate
                 break
             } catch (failure: DocumentWebDavException) {
                 if (!failure.isIncomingShareNameCollision()) throw failure
-                setMutationInFlight(false)
+                setMutationInFlight(false, null)
                 occupiedNames += candidate
             }
         }
         val updated = store.recordUploadedFile(requestId, fileIndex, targetName)
             ?: throw CancellationException("Incoming share upload canceled")
-        setMutationInFlight(false)
+        setMutationInFlight(false, null)
         occupiedNames += targetName
         return updated
     }
@@ -107,7 +107,7 @@ internal class AndroidIncomingShareFileTransfer(
         stagedFile: File,
         occupiedNames: MutableSet<String>,
         destinationSnapshotComplete: Boolean,
-        setMutationInFlight: (Boolean) -> Unit,
+        setMutationInFlight: (Boolean, String?) -> Unit,
     ): AndroidIncomingShareRequest {
         var current = store.requireAvailable(requestId)
         while (true) {
@@ -135,9 +135,11 @@ internal class AndroidIncomingShareFileTransfer(
                 )
             } else {
                 require(existingUpload.fileIndex == fileIndex)
-                if (
-                    !destinationSnapshotComplete &&
-                    remote.resourceExists(existingUpload.targetName, cancellation)
+                if (shouldAbandonResumedIncomingShareTarget(
+                        existingUpload.targetName,
+                        occupiedNames,
+                        destinationSnapshotComplete,
+                    ) { remote.resourceExists(existingUpload.targetName, cancellation) }
                 ) {
                     occupiedNames += existingUpload.targetName
                     current = store.markChunkCleanupPending(requestId)
@@ -188,11 +190,11 @@ internal class AndroidIncomingShareFileTransfer(
                 ) {
                     current = store.markChunkCommitInFlight(requestId)
                     upload = requireNotNull(current.chunkSession)
-                    setMutationInFlight(true)
+                    setMutationInFlight(true, upload.targetName)
                 }
             } catch (failure: DocumentWebDavException) {
                 if (!failure.isIncomingShareNameCollision()) throw failure
-                setMutationInFlight(false)
+                setMutationInFlight(false, null)
                 occupiedNames += upload.targetName
                 current = store.markChunkCleanupPending(requestId)
                 upload = requireNotNull(current.chunkSession)
@@ -202,12 +204,19 @@ internal class AndroidIncomingShareFileTransfer(
             }
             val updated = store.recordUploadedFile(requestId, fileIndex, upload.targetName)
                 ?: throw CancellationException("Incoming share upload canceled")
-            setMutationInFlight(false)
+            setMutationInFlight(false, null)
             occupiedNames += upload.targetName
             return updated
         }
     }
 }
+
+internal fun shouldAbandonResumedIncomingShareTarget(
+    targetName: String,
+    occupiedNames: Set<String>,
+    destinationSnapshotComplete: Boolean,
+    resourceExists: () -> Boolean,
+): Boolean = targetName in occupiedNames || !destinationSnapshotComplete && resourceExists()
 
 internal fun selectIncomingShareTransferTarget(
     displayName: String,

@@ -127,8 +127,8 @@ internal class AndroidIncomingShareUploadWorker(
                     index,
                     occupiedNames,
                     destinationSnapshot.complete,
-                ) { inFlight ->
-                    if (store.setVisibleMutationInFlight(requestId, inFlight) == null) {
+                ) { inFlight, targetName ->
+                    if (store.setVisibleMutationInFlight(requestId, inFlight, targetName) == null) {
                         throw CancellationException("Incoming share upload canceled")
                     }
                     mutationInFlight = inFlight

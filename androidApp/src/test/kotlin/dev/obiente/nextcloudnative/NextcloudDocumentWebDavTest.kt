@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.ByteArrayOutputStream
+import java.net.ServerSocket
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -278,6 +279,32 @@ class NextcloudDocumentWebDavTest {
             }
             assertTrue(!requestStarted)
             assertEquals(0, server.requestCount)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun connectionFailureDoesNotMarkAConditionalPutAsServerVisible() {
+        val unusedPort = ServerSocket(0).use { it.localPort }
+        val source = Files.createTempFile("ncn-connect-failure-", ".txt").toFile()
+        try {
+            source.writeText("not sent")
+            var requestStarted = false
+            val client = NextcloudDocumentWebDav(
+                OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS).build(),
+            )
+
+            assertFailsWith<java.io.IOException> {
+                client.createFile(
+                    NextcloudSession("http://127.0.0.1:$unusedPort", "alice", "app-password"),
+                    "alice",
+                    "Documents/report.txt",
+                    source,
+                    onRequestStarted = { requestStarted = true },
+                )
+            }
+            assertFalse(requestStarted)
         } finally {
             source.delete()
         }

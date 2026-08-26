@@ -41,17 +41,16 @@ internal class AndroidIncomingShareCleanupWorker(
             is AndroidIncomingShareLoadResult.Available -> {
                 val chunk = loaded.request.chunkSession
                 if (chunk != null) {
-                    store.claimChunkSessionForCleanup(
-                        requestId,
-                        chunk.uploadId,
-                        includeRetryableFailure = true,
-                    )
-                    scheduleIncomingShareChunkCleanup(applicationContext, requestId)
-                    return@withContext Result.retry()
+                    val claimed = store.claimChunkSessionForCleanup(requestId, chunk.uploadId)
+                    if (claimed != null) {
+                        scheduleIncomingShareChunkCleanup(applicationContext, requestId)
+                        return@withContext Result.retry()
+                    }
+                    return@withContext Result.success()
                 }
-                loaded.request.state in TERMINAL_INCOMING_SHARE_STATES && store.remove(requestId)
+                loaded.request.canExpireIncomingShareRecovery() && store.remove(requestId)
             }
-            is AndroidIncomingShareLoadResult.Corrupt -> store.remove(requestId)
+            is AndroidIncomingShareLoadResult.Corrupt -> false
             AndroidIncomingShareLoadResult.Missing -> true
         }
         if (released) {
@@ -77,7 +76,6 @@ internal class AndroidIncomingShareAbandonedStagingCleanupWorker(
             is AndroidIncomingShareLoadResult.Available -> Result.success()
             is AndroidIncomingShareLoadResult.Corrupt -> {
                 publishCorruptIncomingShareNotification(applicationContext, requestId)
-                scheduleIncomingShareCleanup(applicationContext, requestId)
                 Result.success()
             }
         }
@@ -98,11 +96,8 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             AndroidIncomingShareLoadResult.Missing -> return@withContext Result.success()
         }
         val chunk = request.chunkSession ?: return@withContext Result.success()
-        val claimed = store.claimChunkSessionForCleanup(
-            requestId,
-            chunk.uploadId,
-            includeRetryableFailure = false,
-        ) ?: return@withContext Result.success()
+        val claimed = store.claimChunkSessionForCleanup(requestId, chunk.uploadId)
+            ?: return@withContext Result.success()
         val session = AndroidNextcloudServices(applicationContext).loadSession()
         if (session == null) {
             return@withContext retryOrReleaseIncomingShareChunkCleanup(store, requestId, claimed)
@@ -131,6 +126,7 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             )
             remote.deleteChunkUpload(claimed.uploadId, cancellation)
             store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
+            releaseDiscardedIncomingShare(store, requestId)
             Result.success()
         } catch (failure: Throwable) {
             cancellation.throwIfCancelled()
@@ -143,6 +139,7 @@ internal class AndroidIncomingShareChunkCleanupWorker(
                 // Nextcloud expires abandoned upload collections server-side. Once cleanup is
                 // definitively rejected or exhausts its bounded retries, release local staging.
                 store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
+                releaseDiscardedIncomingShare(store, requestId)
                 Result.success()
             }
         } finally {
@@ -158,7 +155,15 @@ internal class AndroidIncomingShareChunkCleanupWorker(
         Result.retry()
     } else {
         store.clearChunkSessionForCleanup(requestId, claimed.uploadId)
+        releaseDiscardedIncomingShare(store, requestId)
         Result.success()
+    }
+
+    private fun releaseDiscardedIncomingShare(store: AndroidIncomingShareStore, requestId: String) {
+        if (store.removeIfDiscardRequested(requestId)) {
+            NotificationManagerCompat.from(applicationContext)
+                .cancel(incomingShareNotificationId(requestId))
+        }
     }
 }
 
@@ -194,7 +199,7 @@ internal fun scheduleIncomingShareAbandonedStagingCleanup(context: Context, requ
     )
 }
 
-private fun scheduleIncomingShareChunkCleanup(context: Context, requestId: String) {
+internal fun scheduleIncomingShareChunkCleanup(context: Context, requestId: String) {
     WorkManager.getInstance(context).enqueueUniqueWork(
         incomingShareChunkCleanupWorkName(requestId),
         ExistingWorkPolicy.KEEP,
@@ -257,6 +262,9 @@ internal fun publishCorruptIncomingShareNotification(context: Context, requestId
 internal const val CANCELED_INCOMING_SHARE_MUTATION_WARNING = "Upload canceled. The active file may already have " +
     "reached Nextcloud; check Files before sharing it again."
 
+internal fun AndroidIncomingShareRequest.canExpireIncomingShareRecovery(): Boolean =
+    state == AndroidIncomingShareState.Completed || discardRequested
+
 internal fun AndroidIncomingShareRequest.requiresIncomingShareRecovery(accountId: String): Boolean {
     if (this.accountId != null && this.accountId != accountId) return false
     return state in setOf(
@@ -265,7 +273,8 @@ internal fun AndroidIncomingShareRequest.requiresIncomingShareRecovery(accountId
         AndroidIncomingShareState.Uploading,
         AndroidIncomingShareState.Failed,
         AndroidIncomingShareState.OutcomeUnknown,
-    ) || state == AndroidIncomingShareState.Canceled && message == CANCELED_INCOMING_SHARE_MUTATION_WARNING
+        AndroidIncomingShareState.Canceled,
+    )
 }
 
 internal suspend fun loadAndroidIncomingShareRecoveries(

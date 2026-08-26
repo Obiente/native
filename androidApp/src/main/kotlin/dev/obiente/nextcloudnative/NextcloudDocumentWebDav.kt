@@ -13,6 +13,8 @@ import java.util.Base64
 import java.util.UUID
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -496,10 +498,18 @@ internal class NextcloudDocumentWebDav(
                 .callTimeout(timeout, TimeUnit.MILLISECONDS)
                 .build()
         } ?: client
-        val call = operationClient.newCall(request)
+        val requestClient = operationClient.newBuilder()
+            .eventListener(
+                object : EventListener() {
+                    override fun requestHeadersStart(call: Call) {
+                        onRequestStarted()
+                    }
+                },
+            )
+            .build()
+        val call = requestClient.newCall(request)
         cancellation.setOnCancelAction(call::cancel)
         try {
-            onRequestStarted()
             return call.execute().use { response ->
                 if (!response.isSuccessful) throw response.toDocumentException(operation)
                 if (requiredSuccessStatus != null && response.code != requiredSuccessStatus) {

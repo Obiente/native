@@ -116,6 +116,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                         onFolderPickerDismissed = { folderPickerVisible = false },
                         onCancel = ::cancelOrRequestDiscard,
                         onDone = ::finishOrReleaseReviewedRequest,
+                        onVerifyOutcome = ::verifyUnknownOutcome,
                         onConfirmDiscard = ::confirmDiscardAndFinish,
                         onDismissDiscard = { discardConfirmationVisible = false },
                         onRemoveCorruptRecovery = { corruptRemovalConfirmationVisible = true },
@@ -247,7 +248,13 @@ class AndroidShareUploadActivity : ComponentActivity() {
         if (current != null && current.state in ACTIVE_SHARE_STATES) {
             uploads.cancel(current.id)
             request = store.load(current.id)
-        } else if (current?.state in setOf(AndroidIncomingShareState.Staged, AndroidIncomingShareState.Failed)) {
+        } else if (
+            current?.state in setOf(
+                AndroidIncomingShareState.Staged,
+                AndroidIncomingShareState.Failed,
+                AndroidIncomingShareState.Canceled,
+            )
+        ) {
             discardConfirmationVisible = true
         } else {
             finishKeepingRecovery()
@@ -264,7 +271,63 @@ class AndroidShareUploadActivity : ComponentActivity() {
 
     private fun confirmDiscardAndFinish() {
         discardConfirmationVisible = false
-        finishAndRelease()
+        request?.let { scheduleIncomingSharePresentedDiscard(applicationContext, it) }
+        finishKeepingRecovery()
+    }
+
+    private fun verifyUnknownOutcome() {
+        val current = request ?: return
+        val activeSession = session ?: return
+        val info = serverInfo ?: return
+        val targetName = current.visibleMutationTargetName ?: current.chunkSession?.targetName
+        if (targetName == null || current.destinationPath == null) {
+            error = "This older recovery does not identify the exact remote target. Review it in Files."
+            return
+        }
+        val generation = restoreGeneration
+        queueing = true
+        error = null
+        queueJob?.cancel()
+        queueJob = lifecycleScope.launch {
+            try {
+                val verified = withContext(Dispatchers.IO) {
+                    require(current.accountId == NextcloudDocumentIds.accountKey(activeSession)) {
+                        "Switch back to the upload account before verifying this result."
+                    }
+                    require(current.userId == info.userId) {
+                        "The active Nextcloud user does not match this recovery."
+                    }
+                    val cancellation = CoroutineDocumentRequestCancellation(
+                        requireNotNull(kotlin.coroutines.coroutineContext[Job]),
+                    )
+                    cancellation.use {
+                        val remote = AndroidFileSyncRemoteTree(
+                            activeSession,
+                            info.userId,
+                            current.destinationPath,
+                            permissionWebDav,
+                        )
+                        store.recordUnknownOutcomeVerification(
+                            current.id,
+                            remote.resourceExists(targetName, cancellation),
+                        )
+                    }
+                }
+                if (isCurrentIncomingShareEnqueue(generation, restoreGeneration, current.id, request?.id)) {
+                    request = verified
+                }
+            } catch (_: CancellationException) {
+                return@launch
+            } catch (failure: Throwable) {
+                if (isCurrentIncomingShareEnqueue(generation, restoreGeneration, current.id, request?.id)) {
+                    error = failure.message ?: "Nextcloud could not verify the upload result."
+                }
+            } finally {
+                if (isCurrentIncomingShareEnqueue(generation, restoreGeneration, current.id, request?.id)) {
+                    queueing = false
+                }
+            }
+        }
     }
 
     private fun finishKeepingRecovery() {
@@ -312,10 +375,7 @@ internal fun isValidIncomingShareRequestId(value: String): Boolean =
     runCatching { UUID.fromString(value) }.isSuccess
 
 internal fun AndroidIncomingShareRequest.canReleaseForIncomingShareReplacement(): Boolean =
-    chunkSession == null && (
-        state == AndroidIncomingShareState.Completed ||
-            state == AndroidIncomingShareState.Canceled && message != CANCELED_INCOMING_SHARE_MUTATION_WARNING
-        )
+    chunkSession == null && state == AndroidIncomingShareState.Completed
 
 private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,
@@ -389,4 +449,8 @@ internal fun AndroidIncomingShareRequest.toPresentation(): IncomingShareUploadPr
         destinationPath = destinationPath,
         completedFiles = completedFiles,
         message = message,
+        canVerifyOutcome = (visibleMutationTargetName != null || chunkSession?.targetName != null) && (
+            state == AndroidIncomingShareState.OutcomeUnknown ||
+                state == AndroidIncomingShareState.Canceled && message == CANCELED_INCOMING_SHARE_MUTATION_WARNING
+            ),
     )

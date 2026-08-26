@@ -61,6 +61,7 @@ data class IncomingShareUploadPresentation(
     val destinationPath: String?,
     val completedFiles: Int,
     val message: String?,
+    val canVerifyOutcome: Boolean = false,
 )
 
 @Composable
@@ -131,6 +132,7 @@ fun IncomingShareUploadScreen(
     onFolderPickerDismissed: () -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
+    onVerifyOutcome: () -> Unit = {},
     onConfirmDiscard: () -> Unit = {},
     onDismissDiscard: () -> Unit = {},
     onRemoveCorruptRecovery: () -> Unit = {},
@@ -210,7 +212,15 @@ fun IncomingShareUploadScreen(
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 HorizontalDivider()
-                IncomingShareActions(request, queueing, destinationReady, onChooseDestination, onCancel, onDone)
+                IncomingShareActions(
+                    request,
+                    queueing,
+                    destinationReady,
+                    onChooseDestination,
+                    onCancel,
+                    onDone,
+                    onVerifyOutcome,
+                )
             }
         }
     }
@@ -305,6 +315,7 @@ private fun IncomingShareActions(
     onChooseDestination: () -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
+    onVerifyOutcome: () -> Unit,
 ) {
     when (request.state) {
         IncomingShareUploadState.Staged,
@@ -348,12 +359,46 @@ private fun IncomingShareActions(
             OutlinedButton(onClick = onCancel) { Text("Cancel upload") }
             TextButton(onClick = onDone) { Text("Run in background") }
         }
-        IncomingShareUploadState.Completed,
-        IncomingShareUploadState.OutcomeUnknown,
-        IncomingShareUploadState.Canceled,
-        -> Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Button(onClick = onDone) {
-                Text(if (request.state == IncomingShareUploadState.Completed) "Done" else "Close")
+        IncomingShareUploadState.Completed ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(onClick = onDone) { Text("Done") }
+            }
+        IncomingShareUploadState.OutcomeUnknown ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(enabled = !queueing, onClick = onDone) { Text("Close") }
+                Button(enabled = !queueing && request.canVerifyOutcome, onClick = onVerifyOutcome) {
+                    if (queueing) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                    }
+                    Text("Verify result")
+                }
+            }
+        IncomingShareUploadState.Canceled -> {
+            val outcomeUnknown = request.files.any { it.status == IncomingShareUploadFileStatus.OutcomeUnknown }
+            if (outcomeUnknown) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(enabled = !queueing, onClick = onDone) { Text("Close") }
+                    Button(enabled = !queueing && request.canVerifyOutcome, onClick = onVerifyOutcome) {
+                        Text("Verify result")
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small, Alignment.End),
+                ) {
+                    TextButton(enabled = !queueing, onClick = onDone) { Text("Keep for later") }
+                    TextButton(enabled = !queueing, onClick = onCancel) { Text("Discard...") }
+                }
             }
         }
     }

@@ -295,7 +295,12 @@ class AndroidIncomingShareStateTest {
 
         assertTrue(preflight.canSafelyResumeAfterWorkerRestart())
         assertTrue(chunked.canSafelyResumeAfterWorkerRestart())
-        assertFalse(preflight.copy(visibleMutationInFlight = true).canSafelyResumeAfterWorkerRestart())
+        assertFalse(
+            preflight.copy(
+                visibleMutationInFlight = true,
+                visibleMutationTargetName = "first.txt",
+            ).canSafelyResumeAfterWorkerRestart(),
+        )
         assertFalse(
             chunked.copy(chunkSession = requireNotNull(chunked.chunkSession).copy(commitInFlight = true))
                 .canSafelyResumeAfterWorkerRestart(),
@@ -476,11 +481,11 @@ class AndroidIncomingShareStateTest {
             canceled.copy(accountId = "another-account")
                 .requiresIncomingShareRecovery("account-1"),
         )
-        assertFalse(
+        assertTrue(
             canceled.copy(message = "Upload canceled before a transfer was active.")
                 .requiresIncomingShareRecovery("account-1"),
         )
-        assertTrue(
+        assertFalse(
             canceled.copy(message = "Upload canceled before a transfer was active.")
                 .canReleaseForIncomingShareReplacement(),
         )
@@ -513,6 +518,54 @@ class AndroidIncomingShareStateTest {
         assertEquals("archive (1).bin", selected)
         assertEquals(listOf("archive.bin", "archive (1).bin"), probed)
         assertEquals(setOf("archive.bin"), occupied)
+    }
+
+    @Test
+    fun resumedChunkAbandonsANameAlreadyPresentInACompleteSnapshot() {
+        var probed = false
+
+        assertTrue(
+            shouldAbandonResumedIncomingShareTarget(
+                targetName = "archive.bin",
+                occupiedNames = setOf("archive.bin"),
+                destinationSnapshotComplete = true,
+            ) {
+                probed = true
+                false
+            },
+        )
+        assertFalse(probed)
+    }
+
+    @Test
+    fun unknownOutcomeBecomesRetryableOnlyAfterRemoteAbsenceIsVerified() {
+        val unknown = request(AndroidIncomingShareState.OutcomeUnknown).copy(
+            visibleMutationInFlight = true,
+            visibleMutationTargetName = "first.txt",
+            message = "The upload result is unknown.",
+        )
+
+        val stillUnknown = reconcileIncomingShareUnknownOutcome(unknown, targetExists = true)
+        assertEquals(AndroidIncomingShareState.OutcomeUnknown, stillUnknown.state)
+        assertTrue(stillUnknown.visibleMutationInFlight)
+
+        val retryable = reconcileIncomingShareUnknownOutcome(unknown, targetExists = false)
+        assertEquals(AndroidIncomingShareState.Failed, retryable.state)
+        assertFalse(retryable.visibleMutationInFlight)
+        assertNull(retryable.visibleMutationTargetName)
+    }
+
+    @Test
+    fun onlyCompletedShareRecoveriesExpireAutomatically() {
+        assertTrue(request(AndroidIncomingShareState.Completed).canExpireIncomingShareRecovery())
+        assertFalse(request(AndroidIncomingShareState.Failed).canExpireIncomingShareRecovery())
+        assertFalse(request(AndroidIncomingShareState.OutcomeUnknown).canExpireIncomingShareRecovery())
+        assertFalse(request(AndroidIncomingShareState.Canceled).canExpireIncomingShareRecovery())
+        assertTrue(
+            request(AndroidIncomingShareState.Canceled)
+                .copy(discardRequested = true)
+                .canExpireIncomingShareRecovery(),
+        )
     }
 
     @Test

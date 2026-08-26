@@ -270,11 +270,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
             ) {
                 return FileOfflineCenterActionResult.Rejected("This offline item is not waiting for a retry.")
             }
-            val retried = existing.copy(
-                status = FileOfflineJobStatus.Queued,
-                failureMessage = null,
-                retryNotBeforeEpochMillis = null,
-            )
+            val retried = prepareFileOfflineCenterManualRetry(existing)
             val nextQueue = current.queue.copy(
                 jobs = current.queue.jobs.map { if (it.id == retried.id) retried else it },
             )
@@ -680,6 +676,17 @@ internal class AndroidFileOfflineRepository(context: Context) {
 
         fun workName(accountId: String, jobId: Long) = "nextcloud-native-offline-$accountId-$jobId"
     }
+}
+
+internal fun prepareFileOfflineCenterManualRetry(existing: FileOfflineJob): FileOfflineJob {
+    require(
+        existing.operation == FileOfflineJobOperation.Download &&
+            existing.status in setOf(FileOfflineJobStatus.Failed, FileOfflineJobStatus.WaitingForNetwork),
+    )
+    return existing.copy(
+        status = FileOfflineJobStatus.Queued,
+        failureMessage = null,
+    )
 }
 
 private fun List<String>.sumOfKnownSizes(

@@ -64,6 +64,23 @@ class AndroidFileOfflineQueueStoreTest {
     }
 
     @Test
+    fun manualRetryPreservesAStoredServerDeadline() {
+        val queued = planFileOfflineRequest(FileOfflineQueueState(), pin(), 10)
+        val running = markFileOfflineJobRunning(queued, queued.jobs.single().id, nowEpochMillis = 11)
+        val waiting = recordFileOfflineJobResult(
+            running,
+            running.jobs.single().id,
+            FileOfflineJobResult.RetryableFailure("Wait", retryNotBeforeEpochMillis = 120_000L),
+            20,
+        ).jobs.single()
+
+        val retried = prepareFileOfflineCenterManualRetry(waiting)
+
+        assertEquals(dev.obiente.nextcloudnative.app.FileOfflineJobStatus.Queued, retried.status)
+        assertEquals(120_000L, retried.retryNotBeforeEpochMillis)
+    }
+
+    @Test
     fun truncatedOrUnknownVersionIsRejectedInsteadOfSilentlyDiscarded() = withStore { store, stateFile ->
         stateFile.toPath().writeBytes(byteArrayOf(0x4e, 0x43, 0x4f))
         assertFailsWith<OfflineQueueStoreException> { store.load() }
