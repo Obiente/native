@@ -19,6 +19,40 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
+    fun `scan hides only upload stages durably owned by this sync pair`() {
+        val ownedId = "01234567-89ab-cdef-0123-456789abcdef"
+        val userId = "fedcba98-7654-3210-fedc-ba9876543210"
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            response(
+                chain.request(),
+                207,
+                """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-$ownedId.upload</d:href>
+                    <d:propstat><d:prop><d:getetag>owned-etag</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-$userId.upload</d:href>
+                    <d:propstat><d:prop><d:getetag>user-etag</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                </d:multistatus>
+                """.trimIndent(),
+            )
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "Vault",
+            client = client,
+            ownedUploadIds = setOf(ownedId),
+        )
+
+        assertEquals(
+            listOf(".nextcloud-native-$userId.upload"),
+            tree.scan().map { it.entry.relativePath },
+        )
+    }
+
+    @Test
     fun `chunked upload assembles an owned stage before one visible move`() {
         val requests = mutableListOf<Request>()
         var propfindCount = 0
@@ -29,6 +63,7 @@ class DesktopFileSyncRemoteTreeTest {
             when (chain.request().method) {
                 "MKCOL", "PUT" -> response(chain.request(), 201)
                 "MOVE" -> response(chain.request(), 201)
+                "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
                 "PROPFIND" -> {
                     propfindCount += 1
                     val name = if (propfindCount == 1) stageName else "large.bin"
@@ -66,12 +101,12 @@ class DesktopFileSyncRemoteTreeTest {
             )
 
             assertEquals("etag-2", result.etag)
-            assertEquals(listOf("MKCOL", "PUT", "PUT", "PUT", "MOVE", "PROPFIND", "MOVE", "PROPFIND"),
+            assertEquals(listOf("MKCOL", "PUT", "PUT", "PUT", "MOVE", "PROPFIND", "GET", "MOVE", "PROPFIND"),
                 requests.map { it.method })
             assertTrue(requests[0].header("Destination")!!.endsWith("/Vault/$stageName"))
             assertTrue(requests[4].header("Destination")!!.endsWith("/Vault/$stageName"))
-            assertTrue(requests[6].header("Destination")!!.endsWith("/Vault/large.bin"))
-            assertEquals("F", requests[6].header("Overwrite"))
+            assertTrue(requests[7].header("Destination")!!.endsWith("/Vault/large.bin"))
+            assertEquals("F", requests[7].header("Overwrite"))
             assertTrue(checkpoints.last().commitInFlight)
         } finally {
             source.delete()
@@ -493,6 +528,14 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     private fun response(request: Request, code: Int, body: String = ""): Response = Response.Builder()
+        .request(request)
+        .protocol(Protocol.HTTP_1_1)
+        .code(code)
+        .message("test")
+        .body(body.toResponseBody())
+        .build()
+
+    private fun binaryResponse(request: Request, code: Int, body: ByteArray): Response = Response.Builder()
         .request(request)
         .protocol(Protocol.HTTP_1_1)
         .code(code)

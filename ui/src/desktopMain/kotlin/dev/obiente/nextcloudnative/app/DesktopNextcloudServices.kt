@@ -2843,7 +2843,7 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
-            fileSyncEngine.removePair(session, pairId)
+            fileSyncEngine.removePair(session, userId, pairId)
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {

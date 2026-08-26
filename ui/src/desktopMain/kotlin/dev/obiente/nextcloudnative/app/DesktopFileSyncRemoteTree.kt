@@ -35,9 +35,12 @@ internal class DesktopFileSyncRemoteTree(
     private val client: OkHttpClient = desktopFileSyncHttpClient(),
     private val onMutationCommitted: (relativePath: String) -> Unit = {},
     private val onAmbiguousMutationResult: (relativePath: String) -> Unit = onMutationCommitted,
+    private val ownedUploadIds: Set<String> = emptySet(),
 ) : LinuxVirtualWritebackRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
+
+    init { require(ownedUploadIds.all(::isValidNextcloudChunkUploadId)) }
 
     fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
@@ -50,6 +53,7 @@ internal class DesktopFileSyncRemoteTree(
             require(parent.count { it == '/' } < MAX_DEPTH) { "The Nextcloud folder is nested too deeply." }
             listDirectory(fullPath(parent)).forEach { document ->
                 val relativePath = toRelativePath(document.entry.relativePath) ?: return@forEach
+                if (jvmOwnedUploadId(relativePath) in ownedUploadIds) return@forEach
                 val normalized = document.copy(entry = document.entry.copy(relativePath = relativePath))
                 if (!includes(relativePath, normalized.entry.kind)) return@forEach
                 require(result.size < MAX_ENTRIES) { "The Nextcloud folder contains too many entries." }
@@ -442,7 +446,7 @@ internal class DesktopFileSyncRemoteTree(
         if (recovered) documents = rawListDirectory(path)
         val recoveredPaths = documents.mapTo(hashSetOf()) { it.entry.relativePath }
         return documents
-            .filterNot { isDesktopOwnedUploadStage(it.entry.relativePath) }
+            .filterNot { jvmOwnedUploadId(it.entry.relativePath) in ownedUploadIds }
             .filterNot { backup -> shouldSuppressDesktopOwnedBackup(backup.entry.relativePath, recoveredPaths) }
             .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
     }

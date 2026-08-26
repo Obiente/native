@@ -50,4 +50,12 @@ class JvmNextcloudChunkCollectionTest {
         }
         assertEquals(MAX_NEXTCLOUD_UPLOAD_CHUNKS, parseJvmNextcloudChunkCollection(xml.encodeToByteArray()).size)
     }
+
+    @Test
+    fun `streamed listing still has a total metadata resource bound`() {
+        val xml = "<d:multistatus xmlns:d=\"DAV:\"><!--${"x".repeat(256)}--></d:multistatus>"
+        assertFailsWith<IllegalArgumentException> {
+            xml.byteInputStream().readNextcloudChunkCollection(maximumResponseBytes = 128L)
+        }
+    }
 }

@@ -2,10 +2,12 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.JvmResumableNextcloudUploadRemote
+import dev.obiente.nextcloudnative.app.JvmExactFileComparisonOutputStream
 import dev.obiente.nextcloudnative.app.NextcloudUploadChunk
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
-import dev.obiente.nextcloudnative.app.isJvmOwnedUploadStagePath
+import dev.obiente.nextcloudnative.app.isValidNextcloudChunkUploadId
+import dev.obiente.nextcloudnative.app.jvmOwnedUploadId
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadStagePath
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
 import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
@@ -32,8 +34,13 @@ internal class AndroidFileSyncRemoteTree(
     private val userId: String,
     remoteRootPath: String,
     private val webDav: NextcloudDocumentWebDav,
+    private val ownedUploadIds: Set<String> = emptySet(),
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
+
+    init {
+        require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
+    }
 
     fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
@@ -53,7 +60,7 @@ internal class AndroidFileSyncRemoteTree(
             require(!listing.limited) { "A Nextcloud folder contains too many entries to sync safely." }
             listing.files.forEach { file ->
                 val relativePath = toRelativePath(file.path) ?: return@forEach
-                if (isJvmOwnedUploadStagePath(relativePath)) return@forEach
+                if (jvmOwnedUploadId(relativePath) in ownedUploadIds) return@forEach
                 val kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File
                 if (!includes(relativePath, kind)) return@forEach
                 require(result.size < MAX_ENTRIES) { "The Nextcloud folder contains too many entries." }
@@ -82,7 +89,7 @@ internal class AndroidFileSyncRemoteTree(
     }
 
     fun resolve(relativePath: String): AndroidRemoteSyncDocument? {
-        if (isJvmOwnedUploadStagePath(relativePath)) return null
+        if (jvmOwnedUploadId(relativePath) in ownedUploadIds) return null
         return resolveIncludingOwnedStage(relativePath)
     }
 
@@ -292,22 +299,41 @@ internal class AndroidFileSyncRemoteTree(
         )
     }
 
-    override fun publishOwnedStage(
-        uploadId: String,
-        relativePath: String,
-        expectedRemoteEtag: String?,
-    ): RemoteSyncEntry {
+    override fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String {
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stage = requireNotNull(resolveIncludingOwnedStage(stagePath)) {
             "The assembled upload stage disappeared."
         }
-        require(!stage.isDirectory)
+        require(!stage.isDirectory && stage.entry.size == source.length()) {
+            "The assembled upload stage has an unexpected size."
+        }
+        JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+            webDav.readFile(
+                session = session,
+                userId = userId,
+                path = fullPath(stagePath),
+                destination = comparison,
+                maximumBytes = source.length().coerceAtLeast(1L),
+                expectedEtag = stage.entry.etag,
+            )
+            comparison.requireComplete()
+        }
+        return stage.entry.etag
+    }
+
+    override fun publishOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        verifiedStageEtag: String,
+        expectedRemoteEtag: String?,
+    ): RemoteSyncEntry {
+        val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         webDav.publishChunkUploadStage(
             session,
             userId,
             fullPath(stagePath),
             fullPath(relativePath),
-            stage.entry.etag,
+            verifiedStageEtag,
             expectedRemoteEtag,
         )
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
@@ -335,7 +361,7 @@ internal class AndroidFileSyncRemoteTree(
         }
         return AndroidRemoteChildNameSnapshot(
             names = listing.files
-                .filterNot { file -> isJvmOwnedUploadStagePath(file.path) }
+                .filterNot { file -> jvmOwnedUploadId(file.path) in ownedUploadIds }
                 .mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
             complete = !listing.limited,
         )

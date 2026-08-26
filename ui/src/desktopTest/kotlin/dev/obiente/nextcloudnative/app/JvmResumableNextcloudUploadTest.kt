@@ -4,6 +4,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -31,6 +32,7 @@ class JvmResumableNextcloudUploadTest {
             assertFalse(persisted[0].commitInFlight)
             assertTrue(persisted.last().commitInFlight)
             assertEquals("remote-etag", uploaded.etag)
+            assertEquals(listOf("commit", "verify", "publish"), remote.finalizationEvents)
         } finally {
             source.delete()
         }
@@ -58,6 +60,26 @@ class JvmResumableNextcloudUploadTest {
         }
     }
 
+    @Test
+    fun `failed stage verification never publishes the visible destination`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val remote = RecordingUploadRemote(collectionCreated = true, failVerification = true)
+        try {
+            assertFailsWith<IllegalStateException> {
+                jvmResumableNextcloudUpload(
+                    source, "large.bin", "local-1", null, null,
+                    newUploadId = { UPLOAD_ID },
+                    persistCheckpoint = {},
+                    remote = remote,
+                )
+            }
+
+            assertEquals(listOf("commit", "verify"), remote.finalizationEvents)
+        } finally {
+            source.delete()
+        }
+    }
+
     private fun sparseFile(sizeBytes: Long): File =
         File.createTempFile("nextcloud-native-resume-", ".bin").also { file ->
             RandomAccessFile(file, "rw").use { it.setLength(sizeBytes) }
@@ -66,8 +88,10 @@ class JvmResumableNextcloudUploadTest {
     private class RecordingUploadRemote(
         private val collectionCreated: Boolean,
         private val serverChunks: Map<Int, Long> = emptyMap(),
+        private val failVerification: Boolean = false,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
+        val finalizationEvents = mutableListOf<String>()
 
         override fun uploadDirect(
             source: File,
@@ -94,13 +118,26 @@ class JvmResumableNextcloudUploadTest {
             uploadedChunkNumbers += chunk.number
         }
 
-        override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) = Unit
+        override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long) {
+            finalizationEvents += "commit"
+        }
+
+        override fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String {
+            finalizationEvents += "verify"
+            check(!failVerification) { "The assembled stage differs." }
+            return "verified-stage-etag"
+        }
 
         override fun publishOwnedStage(
             uploadId: String,
             relativePath: String,
+            verifiedStageEtag: String,
             expectedRemoteEtag: String?,
-        ) = RemoteSyncEntry(relativePath, SyncEntryKind.File, "remote-etag", 25L * 1024L * 1024L)
+        ): RemoteSyncEntry {
+            check(verifiedStageEtag == "verified-stage-etag")
+            finalizationEvents += "publish"
+            return RemoteSyncEntry(relativePath, SyncEntryKind.File, "remote-etag", 25L * 1024L * 1024L)
+        }
 
         override fun discardOwnedUpload(uploadId: String, relativePath: String) = Unit
     }

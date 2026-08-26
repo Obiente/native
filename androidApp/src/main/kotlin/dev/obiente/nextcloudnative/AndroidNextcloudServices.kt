@@ -1867,7 +1867,7 @@ internal class AndroidNextcloudServices(
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
         diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
-            fileSyncEngine.removePair(session, pairId)
+            fileSyncEngine.removePair(session, userId, pairId)
         }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-remove", fields, result) }
     }
 

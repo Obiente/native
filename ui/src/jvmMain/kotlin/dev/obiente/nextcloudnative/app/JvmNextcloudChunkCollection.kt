@@ -23,7 +23,10 @@ fun parseJvmNextcloudChunkCollection(bytes: ByteArray): Map<Int, Long> {
  * verbose DAV XML or a long server URL cannot turn into either a file-size limit or an unbounded
  * in-memory document.
  */
-fun InputStream.readNextcloudChunkCollection(): Map<Int, Long> {
+fun InputStream.readNextcloudChunkCollection(
+    maximumResponseBytes: Long = MAX_NEXTCLOUD_CHUNK_COLLECTION_METADATA_BYTES,
+): Map<Int, Long> {
+    require(maximumResponseBytes > 0L)
     val factory = SAXParserFactory.newInstance().apply {
         isNamespaceAware = true
         setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
@@ -39,8 +42,35 @@ fun InputStream.readNextcloudChunkCollection(): Map<Int, Long> {
         contentHandler = handler
         errorHandler = handler
     }
-    reader.parse(InputSource(this).apply { encoding = StandardCharsets.UTF_8.name() })
+    reader.parse(InputSource(JvmBoundedChunkCollectionInputStream(this, maximumResponseBytes)).apply {
+        encoding = StandardCharsets.UTF_8.name()
+    })
     return handler.chunks
+}
+
+private class JvmBoundedChunkCollectionInputStream(
+    private val source: InputStream,
+    private val maximumBytes: Long,
+) : InputStream() {
+    private var observedBytes = 0L
+
+    override fun read(): Int = source.read().also { value ->
+        if (value >= 0) addObservedBytes(1)
+    }
+
+    override fun read(bytes: ByteArray, offset: Int, length: Int): Int =
+        source.read(bytes, offset, length).also { count ->
+            if (count > 0) addObservedBytes(count)
+        }
+
+    override fun close() = source.close()
+
+    private fun addObservedBytes(count: Int) {
+        observedBytes = Math.addExact(observedBytes, count.toLong())
+        require(observedBytes <= maximumBytes) {
+            "The chunk collection metadata response exceeds its protocol safety budget."
+        }
+    }
 }
 
 private class NextcloudChunkCollectionHandler : DefaultHandler() {
@@ -121,4 +151,5 @@ private class NextcloudChunkCollectionHandler : DefaultHandler() {
 private const val DAV_NAMESPACE = "DAV:"
 private const val MAX_CHUNK_HREF_CHARACTERS = 64 * 1024
 private const val MAX_CHUNK_LENGTH_CHARACTERS = 32
+private const val MAX_NEXTCLOUD_CHUNK_COLLECTION_METADATA_BYTES = 256L * 1024L * 1024L
 private val CHUNK_NAME = Regex("^[0-9]{1,5}$")

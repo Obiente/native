@@ -16,6 +16,7 @@ data class FileSyncPair(
     val baselines: List<FileSyncBaseline> = emptyList(),
     val contentVerificationProgress: List<FileSyncContentVerificationProgress> = emptyList(),
     val workItems: List<FileSyncWorkItem> = emptyList(),
+    val pendingUploadCleanups: List<FileSyncPendingUploadCleanup> = emptyList(),
     val nextWorkId: Long = 1,
     val lastScanEpochMillis: Long? = null,
 ) {
@@ -23,7 +24,6 @@ data class FileSyncPair(
         requireValidFileSyncPair(this)
     }
 }
-
 data class FileSyncCoordinatorState(
     val pairs: List<FileSyncPair> = emptyList(),
 ) {
@@ -190,6 +190,7 @@ fun removeFileSyncPair(
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
         "A sync pair cannot be removed while work is running."
     }
+    requireNoFileSyncUploadOwnership(pair)
     return state.copy(pairs = state.pairs.filterNot { it.id == pairId })
 }
 
@@ -370,6 +371,7 @@ fun scanFileSyncPair(
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
         workItems = work,
+        pendingUploadCleanups = retainFileSyncUploadOwnership(pair, work),
         contentVerificationProgress = contentVerificationProgress,
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
@@ -877,6 +879,7 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
     require(pair.baselines.size <= MAX_FILE_SYNC_ENTRIES) { "The sync pair contains too many baselines." }
     requireBoundedFileSyncContentVerificationProgress(pair.contentVerificationProgress)
     require(pair.workItems.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync pair contains too much work." }
+    requireValidFileSyncUploadOwnership(pair)
     requireUniqueCoordinatorPaths(pair.baselines.map(FileSyncBaseline::relativePath), "baseline")
     requireUniqueCoordinatorPaths(pair.workItems.map(FileSyncWorkItem::relativePath), "work")
     require(pair.workItems.map(FileSyncWorkItem::id).distinct().size == pair.workItems.size)

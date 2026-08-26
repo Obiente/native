@@ -117,8 +117,15 @@ private data class FileSyncPairSnapshotV1(
     val baselines: List<FileSyncBaselineSnapshotV1>,
     val contentVerificationProgress: List<FileSyncContentVerificationProgressSnapshotV1> = emptyList(),
     val workItems: List<FileSyncWorkSnapshotV1>,
+    val pendingUploadCleanups: List<FileSyncPendingUploadCleanupSnapshotV1> = emptyList(),
     val nextWorkId: Long,
     val lastScanEpochMillis: Long?,
+)
+
+@Serializable
+private data class FileSyncPendingUploadCleanupSnapshotV1(
+    val uploadId: String,
+    val relativePath: String,
 )
 
 @Serializable
@@ -227,6 +234,9 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
         .sortedBy { it.candidate.relativePath }
         .map(FileSyncContentVerificationProgress::toSnapshot),
     workItems = workItems.sortedBy(FileSyncWorkItem::id).map(FileSyncWorkItem::toSnapshot),
+    pendingUploadCleanups = pendingUploadCleanups
+        .sortedBy(FileSyncPendingUploadCleanup::uploadId)
+        .map { FileSyncPendingUploadCleanupSnapshotV1(it.uploadId, it.relativePath) },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )
@@ -251,6 +261,9 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
     contentVerificationProgress = contentVerificationProgress
         .map(FileSyncContentVerificationProgressSnapshotV1::toDomain),
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
+    pendingUploadCleanups = pendingUploadCleanups.map {
+        FileSyncPendingUploadCleanup(it.uploadId, it.relativePath)
+    },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )

@@ -53,6 +53,12 @@ class FileSyncCoordinatorSnapshotTest {
                             aggregateHash = "sha256:" + "44".repeat(32),
                         ),
                     ),
+                    pendingUploadCleanups = listOf(
+                        FileSyncPendingUploadCleanup(
+                            "01234567-89ab-cdef-0123-456789abcdef",
+                            "archive.bin",
+                        ),
+                    ),
                 )
             },
         )

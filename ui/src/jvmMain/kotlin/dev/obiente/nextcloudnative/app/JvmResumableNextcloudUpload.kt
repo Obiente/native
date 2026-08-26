@@ -11,10 +11,14 @@ fun jvmOwnedUploadStagePath(relativePath: String, uploadId: String): String {
 }
 
 fun isJvmOwnedUploadStagePath(relativePath: String): Boolean {
+    return jvmOwnedUploadId(relativePath) != null
+}
+
+fun jvmOwnedUploadId(relativePath: String): String? {
     val name = relativePath.substringAfterLast('/')
-    if (!name.startsWith(".nextcloud-native-") || !name.endsWith(".upload")) return false
+    if (!name.startsWith(".nextcloud-native-") || !name.endsWith(".upload")) return null
     val uploadId = name.removePrefix(".nextcloud-native-").removeSuffix(".upload")
-    return isValidNextcloudChunkUploadId(uploadId)
+    return uploadId.takeIf(::isValidNextcloudChunkUploadId)
 }
 
 interface JvmResumableNextcloudUploadRemote {
@@ -31,13 +35,33 @@ interface JvmResumableNextcloudUploadRemote {
 
     fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long)
 
+    /** Returns the exact stage ETag whose bytes matched [source]. */
+    fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String
+
     fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
+        verifiedStageEtag: String,
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry
 
     fun discardOwnedUpload(uploadId: String, relativePath: String)
+}
+
+fun cleanupJvmFileSyncOwnedUploads(
+    remote: JvmResumableNextcloudUploadRemote,
+    state: FileSyncCoordinatorState,
+    pairId: String,
+    uploads: List<FileSyncPendingUploadCleanup>,
+    onStateChanged: (FileSyncCoordinatorState) -> Unit = {},
+): FileSyncCoordinatorState {
+    var updated = state
+    uploads.forEach { cleanup ->
+        remote.discardOwnedUpload(cleanup.uploadId, cleanup.relativePath)
+        updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
+        onStateChanged(updated)
+    }
+    return updated
 }
 
 /**
@@ -104,5 +128,6 @@ fun jvmResumableNextcloudUpload(
     progress = progress.copy(commitInFlight = true)
     persistCheckpoint(progress)
     remote.commitChunksToOwnedStage(progress.uploadId, relativePath, source.length())
-    return remote.publishOwnedStage(progress.uploadId, relativePath, expectedRemoteEtag)
+    val verifiedStageEtag = remote.verifyOwnedStage(progress.uploadId, relativePath, source)
+    return remote.publishOwnedStage(progress.uploadId, relativePath, verifiedStageEtag, expectedRemoteEtag)
 }

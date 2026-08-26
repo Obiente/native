@@ -34,9 +34,11 @@ import dev.obiente.nextcloudnative.app.addFileSyncPair
 import dev.obiente.nextcloudnative.app.applyFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
 import dev.obiente.nextcloudnative.app.completeFileSyncOperation
+import dev.obiente.nextcloudnative.app.cleanupJvmFileSyncOwnedUploads
 import dev.obiente.nextcloudnative.app.currentFileSyncContentVerificationResults
 import dev.obiente.nextcloudnative.app.failFileSyncOperation
 import dev.obiente.nextcloudnative.app.fileSyncContentVerificationCandidates
+import dev.obiente.nextcloudnative.app.fileSyncOwnedUploads
 import dev.obiente.nextcloudnative.app.removeFileSyncPair
 import dev.obiente.nextcloudnative.app.resolveFileSyncDecisions
 import dev.obiente.nextcloudnative.app.retryFileSyncOperation
@@ -288,7 +290,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
     }
 
-    suspend fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult =
+    suspend fun removePair(session: NextcloudSession, userId: String, pairId: String): FileSyncCenterActionResult =
         ENGINE_LOCK.withLock {
             val current = store.load()
             val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -300,7 +302,17 @@ internal class AndroidFileSyncEngine(context: Context) {
                     "This folder sync pair belongs to another account.",
                 )
             }
-            val remaining = removeFileSyncPair(current.coordinator, pairId)
+            val remote = AndroidFileSyncRemoteTree(
+                session,
+                userId,
+                pair.remoteRootPath,
+                webDav,
+                fileSyncOwnedUploads(pair).mapTo(mutableSetOf()) { it.uploadId },
+            )
+            val cleanupCoordinator = cleanupJvmFileSyncOwnedUploads(
+                remote, current.coordinator, pairId, fileSyncOwnedUploads(pair),
+            )
+            val remaining = removeFileSyncPair(cleanupCoordinator, pairId)
             val mediaStore = createAndroidMediaBackupLedgerStore(
                 context = appContext,
                 recoverInterruptedTransfers = false,
@@ -389,7 +401,14 @@ internal class AndroidFileSyncEngine(context: Context) {
             userId,
             initialPair.remoteRootPath,
             webDav,
+            fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
         )
+        cleanupJvmFileSyncOwnedUploads(
+            remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,
+        ) { coordinator ->
+            persisted = persisted.copy(coordinator = coordinator)
+            store.save(persisted)
+        }
         val configuration = initialPair.configuration
         val includes: (String, SyncEntryKind) -> Boolean = { relativePath, kind ->
             configuration.includesSyncPath(relativePath, kind)

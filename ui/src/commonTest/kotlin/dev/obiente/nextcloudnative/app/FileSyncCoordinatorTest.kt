@@ -658,6 +658,48 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `rescan retains abandoned upload ownership until remote cleanup completes`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val workId = coordinator.pair().workItems.single().id
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, 20L).state
+        coordinator = checkpointFileSyncUpload(
+            coordinator,
+            PAIR_ID,
+            workId,
+            newFileSyncUploadCheckpoint(
+                "01234567-89ab-cdef-0123-456789abcdef",
+                local.revision,
+                nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+            ),
+        )
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, workId, "Interrupted upload")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 30L,
+        )
+
+        val cleanup = coordinator.pair().pendingUploadCleanups.single()
+        assertEquals("large.bin", cleanup.relativePath)
+        assertEquals(cleanup, fileSyncOwnedUploads(coordinator.pair()).single())
+        assertFailsWith<IllegalArgumentException> { removeFileSyncPair(coordinator, PAIR_ID) }
+
+        coordinator = completeFileSyncUploadCleanup(coordinator, PAIR_ID, cleanup.uploadId)
+        assertTrue(fileSyncOwnedUploads(coordinator.pair()).isEmpty())
+        assertTrue(removeFileSyncPair(coordinator, PAIR_ID).pairs.isEmpty())
+    }
+
+    @Test
     fun `keep both requires verified convergence for every generated path`() {
         var state = state(baselines = listOf(baseline("daily.note.md", "l1", "r1")))
         state = scanFileSyncPair(

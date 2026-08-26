@@ -96,22 +96,49 @@ internal class DesktopFileSyncChunkUploadRemote(
         )
     }
 
-    override fun publishOwnedStage(
-        uploadId: String,
-        relativePath: String,
-        expectedRemoteEtag: String?,
-    ): RemoteSyncEntry {
+    override fun verifyOwnedStage(uploadId: String, relativePath: String, source: File): String {
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stage = requireNotNull(tree.resolveOwnedUploadStage(stagePath)) {
             "The assembled upload stage disappeared."
         }
-        require(!stage.isDirectory)
+        require(!stage.isDirectory && stage.entry.size == source.length()) {
+            "The assembled upload stage has an unexpected size."
+        }
+        client.newCall(
+            requestBuilder(fileUrl(stagePath))
+                .header("Accept", "application/octet-stream")
+                .header("If-Match", safeEtag(stage.entry.etag))
+                .get()
+                .build(),
+        ).execute().use { response ->
+            if (response.code != 200) {
+                throw DesktopFileSyncHttpStatusException(response.code, "verify assembled upload")
+            }
+            val declaredBytes = response.body.contentLength()
+            require(declaredBytes == -1L || declaredBytes == source.length()) {
+                "The assembled upload stage has an unexpected response size."
+            }
+            JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+                response.body.byteStream().copyTo(comparison)
+                comparison.requireComplete()
+            }
+        }
+        return stage.entry.etag
+    }
+
+    override fun publishOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        verifiedStageEtag: String,
+        expectedRemoteEtag: String?,
+    ): RemoteSyncEntry {
+        val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stageUrl = fileUrl(stagePath)
         val destinationUrl = fileUrl(relativePath)
         val builder = requestBuilder(stageUrl)
             .header("Destination", destinationUrl)
             .header("Overwrite", if (expectedRemoteEtag == null) "F" else "T")
-            .header("If-Match", safeEtag(stage.entry.etag))
+            .header("If-Match", safeEtag(verifiedStageEtag))
         expectedRemoteEtag?.let { builder.header("If", "<$destinationUrl> ([${safeEtag(it)}])") }
         mutationExecutor.execute(
             request = builder.method("MOVE", EMPTY_BODY).build(),

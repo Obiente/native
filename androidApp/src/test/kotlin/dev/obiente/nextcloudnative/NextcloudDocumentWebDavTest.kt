@@ -23,6 +23,42 @@ import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
+    fun remoteSyncScanHidesOnlyUploadStagesDurablyOwnedByThisPair() = RecordingServer().use { server ->
+        val ownedId = "01234567-89ab-cdef-0123-456789abcdef"
+        val userId = "fedcba98-7654-3210-fedc-ba9876543210"
+        server.enqueue(
+            207,
+            body = """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/</d:href><d:propstat><d:prop>
+                    <d:displayname>Vault</d:displayname><d:resourcetype><d:collection/></d:resourcetype>
+                    </d:prop></d:propstat></d:response>
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-$ownedId.upload</d:href>
+                    <d:propstat><d:prop><d:displayname>.nextcloud-native-$ownedId.upload</d:displayname>
+                      <d:getetag>owned-etag</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-$userId.upload</d:href>
+                    <d:propstat><d:prop><d:displayname>.nextcloud-native-$userId.upload</d:displayname>
+                      <d:getetag>user-etag</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                </d:multistatus>
+            """.trimIndent(),
+        )
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Vault",
+            NextcloudDocumentWebDav(),
+            ownedUploadIds = setOf(ownedId),
+        )
+
+        assertEquals(
+            listOf(".nextcloud-native-$userId.upload"),
+            remote.scan().map { it.entry.relativePath },
+        )
+    }
+
+    @Test
     fun largeDavUploadsSkipOnlyTheOptionalPrecomputedChecksumPass() {
         assertTrue(shouldPrecomputeDavChecksum(byteCount = 64L * 1024L * 1024L))
         assertFalse(shouldPrecomputeDavChecksum(byteCount = 12L * 1024L * 1024L * 1024L))
