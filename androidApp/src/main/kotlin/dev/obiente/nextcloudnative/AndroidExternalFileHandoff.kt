@@ -17,6 +17,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
 import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
+import dev.obiente.nextcloudnative.app.stagedFileTransferLimit
 import dev.obiente.nextcloudnative.app.validateDeckAttachmentHandoff
 import dev.obiente.nextcloudnative.app.validateDownloadedExternalFile
 import dev.obiente.nextcloudnative.app.validateExternalFileHandoff
@@ -189,7 +190,6 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 sourceName = file.name,
                 declaredMimeType = file.mimeType,
                 declaredByteCount = file.size,
-                maximumBytes = Long.MAX_VALUE,
                 download = download,
             )
         }
@@ -211,7 +211,6 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
                 sourceName = attachment.name,
                 declaredMimeType = attachment.mimeType,
                 declaredByteCount = attachment.byteCount,
-                maximumBytes = Long.MAX_VALUE,
                 download = download,
             )
         }
@@ -273,14 +272,16 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         sourceName: String,
         declaredMimeType: String?,
         declaredByteCount: Long?,
-        maximumBytes: Long,
         download: suspend (FileOutputStream, Long) -> AndroidDetachedDownload,
     ): StagedExternalFile.Ready {
-        require(maximumBytes > 0L)
         val root = File(context.cacheDir, EXTERNAL_SHARE_CACHE_DIRECTORY)
         check(root.isDirectory || root.mkdirs()) { "Could not create the private external-share cache." }
         val canonicalRoot = root.canonicalFile
-        pruneExternalShareCache(canonicalRoot, maximumBytes)
+        pruneExternalShareCache(canonicalRoot, declaredByteCount ?: 0L)
+        val maximumBytes = stagedFileTransferLimit(
+            availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
+            declaredByteCount = declaredByteCount,
+        )
 
         val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
         check(operationDirectory.mkdir()) { "Could not create a private external-share directory." }
@@ -472,7 +473,9 @@ internal fun pruneExternalShareCache(root: File, requiredBytes: Long, nowMillis:
     } else {
         MAX_EXTERNAL_SHARE_CACHE_BYTES - requiredBytes
     }
-    val iterator = entries.iterator()
+    val iterator = entries.filter { entry ->
+        elapsedAtLeast(nowMillis, entry.lastModified(), EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS)
+    }.iterator()
     while (storedBytes > retainedBeforeCopy && iterator.hasNext()) {
         val oldest = iterator.next()
         val bytes = recursiveFileBytes(oldest)
@@ -644,6 +647,7 @@ private const val MAX_EXTERNAL_SHARE_CACHE_BYTES = 256L * 1024L * 1024L
 private const val DEFAULT_LARGE_EXTERNAL_SHARE_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
 private const val LARGE_EXTERNAL_SHARE_FREE_SPACE_RESERVE_BYTES = 256L * 1024L * 1024L
 private const val LARGE_EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 1000L
+private const val EXTERNAL_SHARE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 1000L
 private const val EXTERNAL_SHARE_CACHE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L
 private const val GENERIC_MIME_TYPE = "application/octet-stream"
 private val LARGE_EXTERNAL_SHARE_CACHE_LOCK = Any()

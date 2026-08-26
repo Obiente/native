@@ -3,6 +3,34 @@ package dev.obiente.nextcloudnative.app
 /** Largest detached payload that may be materialized as a ByteArray before handoff. */
 const val MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES = 64L * 1024L * 1024L
 
+/** Space kept free while staging a streamed handoff so the app cannot fill the user's volume. */
+const val STAGED_FILE_FREE_SPACE_RESERVE_BYTES = 256L * 1024L * 1024L
+
+/**
+ * Converts current storage capacity into a transfer bound without imposing a product file-size cap.
+ * A known byte count is admitted exactly; an unknown response may consume only the currently safe space.
+ */
+fun stagedFileTransferLimit(
+    availableBytes: Long,
+    declaredByteCount: Long?,
+    reserveBytes: Long = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+): Long {
+    require(availableBytes >= 0L) { "Available storage must not be negative." }
+    require(declaredByteCount == null || declaredByteCount >= 0L) { "The declared file size must not be negative." }
+    require(reserveBytes >= 0L) { "The free-space reserve must not be negative." }
+    val safeAvailableBytes = if (availableBytes >= reserveBytes) availableBytes - reserveBytes else 0L
+    check(declaredByteCount == null || declaredByteCount <= safeAvailableBytes) {
+        "There is not enough free space for the temporary file copy."
+    }
+    check(safeAvailableBytes > 0L || declaredByteCount == 0L) {
+        "There is not enough free space for the temporary file copy."
+    }
+    return declaredByteCount?.coerceAtLeast(1L) ?: safeAvailableBytes
+}
+
+/** A detached full-file GET must never publish a partial or bodyless successful response. */
+fun isFullDetachedFileResponse(status: Int): Boolean = status == 200
+
 enum class ExternalFileHandoffAction {
     Share,
     OpenWith,

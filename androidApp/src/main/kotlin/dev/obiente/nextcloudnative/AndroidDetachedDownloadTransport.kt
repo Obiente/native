@@ -4,6 +4,7 @@ import android.util.Base64
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.copyBoundedNetworkResponseTo
+import dev.obiente.nextcloudnative.app.isFullDetachedFileResponse
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +48,7 @@ internal suspend fun downloadAndroidDetachedFile(
         throw failure
     }
     response.use {
-        check(response.isSuccessful) { failureMessage(response.code) }
+        check(isFullDetachedFileResponse(response.code)) { failureMessage(response.code) }
         val body = response.body
         val contentLength = body.contentLength()
         check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }

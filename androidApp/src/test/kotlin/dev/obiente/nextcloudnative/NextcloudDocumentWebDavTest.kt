@@ -21,6 +21,12 @@ import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
+    fun largeDavUploadsSkipOnlyTheOptionalPrecomputedChecksumPass() {
+        assertTrue(shouldPrecomputeDavChecksum(byteCount = 64L * 1024L * 1024L))
+        assertFalse(shouldPrecomputeDavChecksum(byteCount = 12L * 1024L * 1024L * 1024L))
+    }
+
+    @Test
     fun readStreamsContentWithMetadataAndEncodedPath() = RecordingServer().use { server ->
         server.enqueue(
             MockResponse.Builder()

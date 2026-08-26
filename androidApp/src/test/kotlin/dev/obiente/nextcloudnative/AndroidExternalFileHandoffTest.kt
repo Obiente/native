@@ -69,6 +69,23 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
+    fun `cache pressure preserves newly handed off files`() {
+        val root = Files.createTempDirectory("nextcloud-handoff-test-").toFile()
+        try {
+            val recent = root.resolve("recent").apply { mkdir() }
+            recent.resolve("payload.bin").writeBytes(byteArrayOf(1, 2, 3))
+            val now = 10L * 60L * 60L * 1000L
+            recent.setLastModified(now)
+
+            pruneExternalShareCache(root, requiredBytes = Long.MAX_VALUE, nowMillis = now)
+
+            assertTrue(recent.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `cache pruning rejects a non-directory root`() {
         val root = Files.createTempFile("nextcloud-handoff-test-", ".tmp").toFile()
         try {

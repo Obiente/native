@@ -51,7 +51,6 @@ internal class DesktopExternalFileHandoff(
                 sourceName = file.name,
                 declaredByteCount = file.size,
                 expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag)),
-                maximumBytes = Long.MAX_VALUE,
                 download = download,
             )
         }
@@ -72,7 +71,6 @@ internal class DesktopExternalFileHandoff(
             stageStreamedCopy(
                 sourceName = attachment.name,
                 declaredByteCount = attachment.byteCount,
-                maximumBytes = Long.MAX_VALUE,
                 download = download,
             )
         }
@@ -96,13 +94,15 @@ internal class DesktopExternalFileHandoff(
         sourceName: String,
         declaredByteCount: Long?,
         expectedEtag: String? = null,
-        maximumBytes: Long,
         download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
     ): File {
-        require(maximumBytes > 0L)
         check(root.isDirectory || root.mkdirs()) { "Could not create the desktop external-file cache." }
         val canonicalRoot = root.canonicalFile
-        pruneDesktopExternalFileCache(canonicalRoot, maximumBytes)
+        pruneDesktopExternalFileCache(canonicalRoot, declaredByteCount ?: 0L)
+        val maximumBytes = stagedFileTransferLimit(
+            availableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
+            declaredByteCount = declaredByteCount,
+        )
         val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
         check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
         check(operationDirectory.canonicalFile.parentFile == canonicalRoot) { "Unsafe desktop handoff directory." }
@@ -229,7 +229,10 @@ internal fun pruneDesktopExternalFileCache(
     } else {
         MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES - requiredBytes
     }
-    val iterator = entries.iterator()
+    val iterator = entries.filter { entry ->
+        nowMillis >= entry.lastModified() &&
+            nowMillis - entry.lastModified() >= DESKTOP_EXTERNAL_FILE_MINIMUM_RETENTION_MILLIS
+    }.iterator()
     while (storedBytes > retainedBeforeCopy && iterator.hasNext()) {
         val oldest = iterator.next()
         val bytes = desktopRecursiveFileBytes(oldest)
@@ -258,6 +261,8 @@ private fun desktopRecursiveFileBytes(file: File): Long = when {
     file.isDirectory -> file.listFiles().orEmpty().sumOf(::desktopRecursiveFileBytes)
     else -> 0L
 }
+
+private const val DESKTOP_EXTERNAL_FILE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 1000L
 
 private fun saturatingDesktopFileBytes(left: Long, right: Long): Long =
     if (right > Long.MAX_VALUE - left) Long.MAX_VALUE else left + right

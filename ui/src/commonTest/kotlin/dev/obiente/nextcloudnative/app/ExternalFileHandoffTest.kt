@@ -63,6 +63,34 @@ class ExternalFileHandoffTest {
     }
 
     @Test
+    fun `streamed staging is bounded only by current safe storage`() {
+        val gibibyte = 1024L * 1024L * 1024L
+
+        assertEquals(
+            12L * gibibyte,
+            stagedFileTransferLimit(
+                availableBytes = 20L * gibibyte,
+                declaredByteCount = 12L * gibibyte,
+            ),
+        )
+        assertEquals(
+            20L * gibibyte - STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+            stagedFileTransferLimit(availableBytes = 20L * gibibyte, declaredByteCount = null),
+        )
+        assertEquals(1L, stagedFileTransferLimit(availableBytes = gibibyte, declaredByteCount = 0L))
+        assertFailsWith<IllegalStateException> {
+            stagedFileTransferLimit(availableBytes = 10L * gibibyte, declaredByteCount = 12L * gibibyte)
+        }
+    }
+
+    @Test
+    fun `detached file exports require a complete response`() {
+        assertTrue(isFullDetachedFileResponse(200))
+        assertTrue(!isFullDetachedFileResponse(204))
+        assertTrue(!isFullDetachedFileResponse(206))
+    }
+
+    @Test
     fun `unsupported actions return a typed rejection`() {
         val shareOnly = ExternalFileHandoffCapability(setOf(ExternalFileHandoffAction.Share), 1024L)
         val rejection = validateExternalFileHandoff(

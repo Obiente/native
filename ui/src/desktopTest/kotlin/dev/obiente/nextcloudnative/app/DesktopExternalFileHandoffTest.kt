@@ -182,6 +182,23 @@ class DesktopExternalFileHandoffTest {
         }
     }
 
+    @Test
+    fun `desktop cache pressure preserves newly handed off files`() {
+        val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
+        try {
+            val recent = root.resolve("recent").apply { mkdir() }
+            recent.resolve("payload.bin").writeBytes(byteArrayOf(1, 2, 3))
+            val now = 10L * 60L * 60L * 1000L
+            recent.setLastModified(now)
+
+            pruneDesktopExternalFileCache(root, requiredBytes = Long.MAX_VALUE, nowMillis = now)
+
+            assertTrue(recent.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun capability() = ExternalFileHandoffCapability(
         supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
         maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,

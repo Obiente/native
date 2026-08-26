@@ -45,7 +45,7 @@ internal suspend fun downloadDesktopDetachedFile(
         throw failure
     }
     response.use {
-        check(response.isSuccessful) { failureMessage(response.code) }
+        check(isFullDetachedFileResponse(response.code)) { failureMessage(response.code) }
         val body = response.body
         val contentLength = body.contentLength()
         check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }
