@@ -719,7 +719,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                             androidFileSyncStagingTransferLimit(stagingRoot, source.size),
                         )
                         resumeAndroidFileSyncUpload(
-                            staged, operation.relativePath, exactLocal, expectedRemote,
+                            staged, operation.relativePath, exactLocal, source.revision, expectedRemote,
                             work.uploadCheckpoint, persistUploadCheckpoint, remote,
                             replacingDirectoryEtag = operation.expectedRemoteEtag
                                 .takeIf { replacingLargeRemoteDirectory },

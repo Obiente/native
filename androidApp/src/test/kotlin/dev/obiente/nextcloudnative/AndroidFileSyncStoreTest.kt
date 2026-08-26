@@ -186,6 +186,7 @@ class AndroidFileSyncStoreTest {
                 uploadId,
                 "local-1",
                 nextcloudUploadTransferPlan(25L * 1024L * 1024L) as NextcloudUploadTransferPlan.Chunked,
+                contentRevision = "staged-sha256:${"a".repeat(64)}",
             )
             val active = checkpointFileSyncUpload(claimed.state, pair.id, workId, checkpoint)
             store.save(AndroidFileSyncPersistedState(active))

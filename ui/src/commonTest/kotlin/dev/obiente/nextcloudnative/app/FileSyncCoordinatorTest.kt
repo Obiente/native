@@ -677,6 +677,7 @@ class FileSyncCoordinatorTest {
                 "01234567-89ab-cdef-0123-456789abcdef",
                 local.revision,
                 nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+                contentRevision = "sha256:${"4".repeat(64)}",
             ).let { checkpoint ->
                 checkpoint.copy(
                     uploadedChunks = checkpoint.chunkCount,

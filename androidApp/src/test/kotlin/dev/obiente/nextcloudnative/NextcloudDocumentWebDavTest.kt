@@ -153,6 +153,46 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun `ambiguous replacement publication verifies bytes and retires its directory backup`() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            val source = Files.createTempFile("android-published-replacement-", ".bin").toFile()
+            try {
+                source.writeText("same")
+                server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true, publishedBytes = 4))
+                server.enqueue(200, headers = mapOf("ETag" to "published-etag"), body = "same")
+                server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true, publishedBytes = 4))
+                server.enqueue(204)
+                val remote = AndroidFileSyncRemoteTree(
+                    server.session,
+                    "alice",
+                    "Vault",
+                    NextcloudDocumentWebDav(),
+                    ownedUploadIds = setOf(uploadId),
+                ).resumableUploadRemote("directory-etag")
+
+                val verified = remote.verifyPublishedFile(
+                    uploadId,
+                    source,
+                    "archive.bin",
+                    dev.obiente.nextcloudnative.app.RemoteSyncEntry(
+                        "archive.bin",
+                        dev.obiente.nextcloudnative.app.SyncEntryKind.File,
+                        "published-etag",
+                        4,
+                    ),
+                )
+
+                assertEquals("published-etag", verified.etag)
+                val cleanup = server.request(3)
+                assertEquals("DELETE", cleanup.method)
+                assertTrue(cleanup.path.contains(".archive.bin.nextcloud-native-backup-$uploadId"))
+            } finally {
+                source.delete()
+            }
+        }
+
+    @Test
     fun largeDavUploadsSkipOnlyTheOptionalPrecomputedChecksumPass() {
         assertTrue(shouldPrecomputeDavChecksum(byteCount = 64L * 1024L * 1024L))
         assertFalse(shouldPrecomputeDavChecksum(byteCount = 12L * 1024L * 1024L * 1024L))
@@ -1029,13 +1069,17 @@ class NextcloudDocumentWebDavTest {
         </d:response></d:multistatus>
         """.trimIndent()
 
-    private fun replacementListing(uploadId: String, includePublishedFile: Boolean): String =
+    private fun replacementListing(
+        uploadId: String,
+        includePublishedFile: Boolean,
+        publishedBytes: Long = 22_020_096L,
+    ): String =
         """
         <d:multistatus xmlns:d="DAV:">
           ${if (includePublishedFile) """
           <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
             <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
-              <d:getetag>published-etag</d:getetag><d:getcontentlength>22020096</d:getcontentlength>
+              <d:getetag>published-etag</d:getetag><d:getcontentlength>$publishedBytes</d:getcontentlength>
               <d:resourcetype/>
             </d:prop></d:propstat>
           </d:response>

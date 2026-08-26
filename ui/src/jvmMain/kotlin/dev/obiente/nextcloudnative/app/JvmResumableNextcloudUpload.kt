@@ -101,7 +101,26 @@ fun cleanupJvmFileSyncOwnedUploads(
 ): FileSyncCoordinatorState {
     var updated = state
     uploads.forEach { cleanup ->
-        if (remote.discardOwnedUpload(cleanup.uploadId, cleanup.relativePath, cleanup.assembledStageEtag)) {
+        var reconciledCleanup = cleanup
+        if (cleanup.assembledStageEtag == null) {
+            remote.ownedStageEtag(cleanup.uploadId, cleanup.relativePath)?.let { discoveredEtag ->
+                updated = reconcileFileSyncOwnedUploadStageEtag(
+                    updated,
+                    pairId,
+                    cleanup.uploadId,
+                    discoveredEtag,
+                )
+                onStateChanged(updated)
+                reconciledCleanup = cleanup.copy(assembledStageEtag = discoveredEtag)
+            }
+        }
+        if (
+            remote.discardOwnedUpload(
+                reconciledCleanup.uploadId,
+                reconciledCleanup.relativePath,
+                reconciledCleanup.assembledStageEtag,
+            )
+        ) {
             updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
             onStateChanged(updated)
         }
@@ -127,6 +146,7 @@ fun jvmResumableNextcloudUpload(
     persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     remote: JvmResumableNextcloudUploadRemote,
     shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    contentRevision: String = localRevision,
 ): RemoteSyncEntry {
     fun ensureActive() {
         if (!shouldContinue()) throw CancellationException("Resumable upload cancelled.")
@@ -135,6 +155,7 @@ fun jvmResumableNextcloudUpload(
     require(source.isFile)
     requireValidSyncPath(relativePath)
     require(localRevision.isNotBlank())
+    require(contentRevision.isNotBlank())
     val plan = nextcloudUploadTransferPlan(source.length())
     if (plan is NextcloudUploadTransferPlan.Direct) {
         checkpoint?.let {
@@ -149,7 +170,7 @@ fun jvmResumableNextcloudUpload(
     require(plan is NextcloudUploadTransferPlan.Chunked)
 
     val matchingCheckpoint = checkpoint?.takeIf {
-        it.localRevision == localRevision && it.transferPlan == plan
+        it.localRevision == localRevision && it.contentRevision == contentRevision && it.transferPlan == plan
     }
     if (matchingCheckpoint?.commitInFlight == true) {
         val stageEtag = remote.ownedStageEtag(matchingCheckpoint.uploadId, relativePath)
@@ -189,7 +210,9 @@ fun jvmResumableNextcloudUpload(
         }
     }
     val resumed = resumable != null
-    var progress = resumable ?: newFileSyncUploadCheckpoint(newUploadId(), localRevision, plan)
+    var progress = resumable ?: newFileSyncUploadCheckpoint(
+        newUploadId(), localRevision, plan, contentRevision,
+    )
         .also(persistCheckpoint)
 
     val collectionCreated = remote.createChunkCollection(

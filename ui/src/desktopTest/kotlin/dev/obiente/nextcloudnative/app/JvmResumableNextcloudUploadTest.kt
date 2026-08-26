@@ -60,6 +60,36 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
+    fun `same scan revision with different staged content restarts every chunk`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val initial = newFileSyncUploadCheckpoint(
+            UPLOAD_ID,
+            "metadata-revision",
+            plan,
+            contentRevision = "sha256:old",
+        ).copy(uploadedChunks = 2)
+        val remote = RecordingUploadRemote(collectionCreated = true)
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            jvmResumableNextcloudUpload(
+                source, "large.bin", "metadata-revision", null, initial,
+                newUploadId = { "fedcba98-7654-3210-fedc-ba9876543210" },
+                persistCheckpoint = persisted::add,
+                remote = remote,
+                contentRevision = "sha256:new",
+            )
+
+            assertEquals(1, remote.discardCount)
+            assertEquals(listOf(1, 2, 3), remote.uploadedChunkNumbers)
+            assertEquals("metadata-revision", persisted.first().localRevision)
+            assertEquals("sha256:new", persisted.first().contentRevision)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `expired collection resets progress before any bytes are skipped`() {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
@@ -245,7 +275,7 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
-    fun `cleanup retains ownership while an unverified stage still exists`() {
+    fun `cleanup persists a discovered stage generation before deleting it`() {
         val cleanup = FileSyncPendingUploadCleanup(UPLOAD_ID, "large.bin")
         val pair = FileSyncPair(
             id = "pair",
@@ -258,16 +288,21 @@ class JvmResumableNextcloudUploadTest {
         val initial = FileSyncCoordinatorState(listOf(pair))
         var stateChangeCount = 0
 
+        val remote = RecordingUploadRemote(
+            collectionCreated = true,
+            ownedStageEtag = "discovered-stage",
+        )
         val after = cleanupJvmFileSyncOwnedUploads(
-            remote = RecordingUploadRemote(collectionCreated = true, cleanupComplete = false),
+            remote = remote,
             state = initial,
             pairId = pair.id,
             uploads = listOf(cleanup),
             onStateChanged = { stateChangeCount += 1 },
         )
 
-        assertEquals(initial, after)
-        assertEquals(0, stateChangeCount)
+        assertTrue(after.pairs.single().pendingUploadCleanups.isEmpty())
+        assertEquals(2, stateChangeCount)
+        assertEquals(listOf<String?>("discovered-stage"), remote.discardedStageEtags)
     }
 
     private fun sparseFile(sizeBytes: Long): File =
@@ -288,6 +323,7 @@ class JvmResumableNextcloudUploadTest {
         private val publishedFile: RemoteSyncEntry? = null,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
+        val discardedStageEtags = mutableListOf<String?>()
         val finalizationEvents = mutableListOf<String>()
         var discardCount = 0
 
@@ -371,6 +407,7 @@ class JvmResumableNextcloudUploadTest {
             assembledStageEtag: String?,
         ): Boolean {
             discardCount += 1
+            discardedStageEtags += assembledStageEtag
             return cleanupComplete
         }
     }

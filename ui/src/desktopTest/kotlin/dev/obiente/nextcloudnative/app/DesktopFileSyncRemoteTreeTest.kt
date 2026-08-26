@@ -19,14 +19,14 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
-    fun `cleanup keeps an unverified replacement stage durably owned`() {
+    fun `cleanup conditionally deletes a reconciled replacement stage`() {
         val requests = mutableListOf<Request>()
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         val stageName = ".nextcloud-native-$uploadId.upload"
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             requests += chain.request()
             when (chain.request().method) {
-                "DELETE" -> response(chain.request(), 404)
+                "DELETE" -> response(chain.request(), if (requests.size == 2) 404 else 204)
                 "PROPFIND" -> response(
                     chain.request(),
                     207,
@@ -50,11 +50,13 @@ class DesktopFileSyncRemoteTreeTest {
             ownedUploadIds = setOf(uploadId),
         )
 
-        val completed = tree.resumableUploadRemote()
-            .discardOwnedUpload(uploadId, "large.bin", assembledStageEtag = null)
+        val remote = tree.resumableUploadRemote()
+        val discoveredEtag = remote.ownedStageEtag(uploadId, "large.bin")
+        val completed = remote.discardOwnedUpload(uploadId, "large.bin", discoveredEtag)
 
-        assertFalse(completed)
-        assertEquals(listOf("DELETE", "PROPFIND"), requests.map { it.method })
+        assertTrue(completed)
+        assertEquals(listOf("PROPFIND", "DELETE", "DELETE"), requests.map { it.method })
+        assertEquals("unknown-stage", requests.last().header("If-Match"))
     }
 
     @Test

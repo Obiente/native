@@ -10,10 +10,12 @@ data class FileSyncUploadCheckpoint(
     val uploadedChunks: Int = 0,
     val commitInFlight: Boolean = false,
     val assembledStageEtag: String? = null,
+    val contentRevision: String = localRevision,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
         require(localRevision.isNotBlank())
+        require(contentRevision.isNotBlank())
         val plan = transferPlan
         require(uploadedChunks in 0..plan.chunkCount)
         require(!commitInFlight || uploadedChunks == plan.chunkCount)
@@ -30,12 +32,14 @@ fun newFileSyncUploadCheckpoint(
     uploadId: String,
     localRevision: String,
     plan: NextcloudUploadTransferPlan.Chunked,
+    contentRevision: String = localRevision,
 ): FileSyncUploadCheckpoint = FileSyncUploadCheckpoint(
     uploadId = uploadId,
     localRevision = localRevision,
     sizeBytes = plan.sizeBytes,
     chunkBytes = plan.chunkBytes,
     chunkCount = plan.chunkCount,
+    contentRevision = contentRevision,
 )
 
 internal fun requireValidFileSyncUploadCheckpoint(work: FileSyncWorkItem) {

@@ -57,6 +57,32 @@ fun retainFileSyncUploadCleanup(
     )
 }
 
+internal fun reconcileFileSyncOwnedUploadStageEtag(
+    state: FileSyncCoordinatorState,
+    pairId: String,
+    uploadId: String,
+    assembledStageEtag: String,
+): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
+    require(assembledStageEtag.isNotBlank() && assembledStageEtag.none { it == '\r' || it == '\n' })
+    var reconciled = false
+    val pending = pair.pendingUploadCleanups.map { cleanup ->
+        if (cleanup.uploadId != uploadId) return@map cleanup
+        require(cleanup.assembledStageEtag == null || cleanup.assembledStageEtag == assembledStageEtag)
+        reconciled = true
+        cleanup.copy(assembledStageEtag = assembledStageEtag)
+    }
+    val work = pair.workItems.map { item ->
+        val checkpoint = item.uploadCheckpoint
+        if (checkpoint?.uploadId != uploadId) return@map item
+        require(checkpoint.commitInFlight)
+        require(checkpoint.assembledStageEtag == null || checkpoint.assembledStageEtag == assembledStageEtag)
+        reconciled = true
+        item.copy(uploadCheckpoint = checkpoint.copy(assembledStageEtag = assembledStageEtag))
+    }
+    require(reconciled) { "The owned upload stage is no longer tracked." }
+    pair.copy(pendingUploadCleanups = pending, workItems = work)
+}
+
 internal fun retainFileSyncUploadOwnership(
     previous: FileSyncPair,
     currentWork: List<FileSyncWorkItem>,
