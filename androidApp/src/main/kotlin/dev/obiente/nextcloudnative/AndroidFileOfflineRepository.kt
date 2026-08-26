@@ -160,7 +160,8 @@ internal class AndroidFileOfflineRepository(context: Context) {
         if (file.isDirectory) {
             return setFolderAvailable(session, userId, file, available)
         }
-        require(file.size == null || file.size >= 0L) { "The file has an invalid size." }
+        val fileSize = file.size
+        require(fileSize == null || fileSize >= 0L) { "The file has an invalid size." }
         val accountId = NextcloudDocumentIds.accountKey(session)
         val key = FileOfflineKey(accountId, file.path)
         val update = synchronized(STATE_LOCK) {
