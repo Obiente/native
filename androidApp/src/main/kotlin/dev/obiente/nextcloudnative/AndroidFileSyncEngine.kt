@@ -564,6 +564,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             }
             persisted = checkpoints.state
             val failure = execution.exceptionOrNull()
+            rethrowAndroidFileSyncCancellation(failure)
             if (failure == null) {
                 val success = execution.getOrThrow()
                 persisted = persisted.copy(

@@ -19,6 +19,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -27,6 +28,19 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
+    @Test
+    fun workerCancellationIsNeverConvertedIntoFailedSyncWork() {
+        val cancellation = CancellationException("Worker stopped")
+
+        assertEquals(
+            cancellation,
+            assertFailsWith<CancellationException> {
+                rethrowAndroidFileSyncCancellation(cancellation)
+            },
+        )
+        rethrowAndroidFileSyncCancellation(IllegalStateException("ordinary operation failure"))
+    }
+
     @Test
     fun weakSafRevisionVerificationCompletesOneUnboundedGenerationWithoutDurableSlices() {
         val candidate = FileSyncContentVerificationCandidate(

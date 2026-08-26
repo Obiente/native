@@ -149,6 +149,10 @@ fun jvmResumableNextcloudUpload(
     val verifiedStageEtag = remote.verifyOwnedStage(
         progress.uploadId, relativePath, source, assembledStageEtag,
     )
+    if (progress.assembledStageEtag == null) {
+        progress = progress.copy(assembledStageEtag = verifiedStageEtag)
+        persistCheckpoint(progress)
+    }
     ensureActive()
     return remote.publishOwnedStage(progress.uploadId, relativePath, verifiedStageEtag, expectedRemoteEtag)
 }

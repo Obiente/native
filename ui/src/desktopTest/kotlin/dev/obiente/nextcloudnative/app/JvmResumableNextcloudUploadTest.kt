@@ -110,6 +110,26 @@ class JvmResumableNextcloudUploadTest {
         }
     }
 
+    @Test
+    fun `verified stage generation is durable before publish when assembly omits an etag`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val remote = RecordingUploadRemote(collectionCreated = true, assembledStageEtag = null)
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            jvmResumableNextcloudUpload(
+                source, "large.bin", "local-1", null, null,
+                newUploadId = { UPLOAD_ID },
+                persistCheckpoint = persisted::add,
+                remote = remote,
+            )
+
+            assertEquals("verified-stage-etag", persisted.last().assembledStageEtag)
+            assertEquals(listOf("commit", "verify", "publish"), remote.finalizationEvents)
+        } finally {
+            source.delete()
+        }
+    }
+
     private fun sparseFile(sizeBytes: Long): File =
         File.createTempFile("nextcloud-native-resume-", ".bin").also { file ->
             RandomAccessFile(file, "rw").use { it.setLength(sizeBytes) }
@@ -120,6 +140,7 @@ class JvmResumableNextcloudUploadTest {
         private val serverChunks: Map<Int, Long> = emptyMap(),
         private val failVerification: Boolean = false,
         private val afterChunkUploaded: () -> Unit = {},
+        private val assembledStageEtag: String? = "verified-stage-etag",
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val finalizationEvents = mutableListOf<String>()
@@ -150,9 +171,9 @@ class JvmResumableNextcloudUploadTest {
             afterChunkUploaded()
         }
 
-        override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String {
+        override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? {
             finalizationEvents += "commit"
-            return "verified-stage-etag"
+            return assembledStageEtag
         }
 
         override fun verifyOwnedStage(
@@ -162,7 +183,7 @@ class JvmResumableNextcloudUploadTest {
             expectedStageEtag: String?,
         ): String {
             finalizationEvents += "verify"
-            check(expectedStageEtag == "verified-stage-etag")
+            check(expectedStageEtag == assembledStageEtag)
             check(!failVerification) { "The assembled stage differs." }
             return "verified-stage-etag"
         }

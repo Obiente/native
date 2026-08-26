@@ -7,6 +7,11 @@ import dev.obiente.nextcloudnative.app.checkpointFileSyncUpload
 import dev.obiente.nextcloudnative.app.jvmResumableNextcloudUpload
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+
+internal fun rethrowAndroidFileSyncCancellation(failure: Throwable?) {
+    if (failure is CancellationException) throw failure
+}
 
 internal class AndroidFileSyncCheckpointPersistence(
     initialState: AndroidFileSyncPersistedState,
