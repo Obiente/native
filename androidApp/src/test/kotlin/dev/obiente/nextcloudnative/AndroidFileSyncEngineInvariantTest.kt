@@ -11,6 +11,7 @@ import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,6 +26,29 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
+    @Test
+    fun downloadsStreamIntoTheProtectedLocalStageWithoutACacheDuplicate() {
+        val destination = ByteArrayOutputStream()
+        var localStage: ByteArrayOutputStream? = null
+        var remoteDestination: ByteArrayOutputStream? = null
+
+        streamAndroidFileSyncDownload(
+            declaredByteCount = 3L,
+            writeLocal = { write ->
+                localStage = destination
+                write(destination)
+            },
+            readRemote = { output, maximumBytes ->
+                assertEquals(3L, maximumBytes)
+                remoteDestination = output as ByteArrayOutputStream
+                output.write(byteArrayOf(1, 2, 3))
+            },
+        )
+
+        assertTrue(localStage === remoteDestination)
+        assertEquals(listOf<Byte>(1, 2, 3), destination.toByteArray().toList())
+    }
+
     @Test
     fun androidPlanningRetainsTheSnapshotCompatibleWorkLimit() {
         assertEquals(10_000, ANDROID_FILE_SYNC_MAX_WORK_ITEMS)

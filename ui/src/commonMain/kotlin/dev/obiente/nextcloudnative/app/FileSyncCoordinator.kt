@@ -14,6 +14,7 @@ data class FileSyncPair(
     val remoteRootPath: String,
     val configuration: FileSyncConfiguration,
     val baselines: List<FileSyncBaseline> = emptyList(),
+    val contentVerificationProgress: List<FileSyncContentVerificationProgress> = emptyList(),
     val workItems: List<FileSyncWorkItem> = emptyList(),
     val nextWorkId: Long = 1,
     val lastScanEpochMillis: Long? = null,
@@ -190,17 +191,6 @@ fun removeFileSyncPair(
     return state.copy(pairs = state.pairs.filterNot { it.id == pairId })
 }
 
-fun updateFileSyncPairConfiguration(
-    state: FileSyncCoordinatorState,
-    pairId: String,
-    configuration: FileSyncConfiguration,
-): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
-    require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
-        "Sync configuration cannot change while work is running."
-    }
-    pair.copy(configuration = configuration, workItems = emptyList())
-}
-
 /**
  * Reconciles fresh abstract snapshots with persisted baselines.
  *
@@ -217,6 +207,7 @@ fun scanFileSyncPair(
     reservedNonExecutableWorkItems: Int = 0,
     verifiedContentMismatches: List<FileSyncContentVerificationCandidate> = emptyList(),
     verifiedContentMismatchHashes: Map<String, String> = emptyMap(),
+    contentVerificationProgress: List<FileSyncContentVerificationProgress> = emptyList(),
 ): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
     require(nowEpochMillis >= 0)
     require(maximumWorkItems in 1..MAX_FILE_SYNC_WORK_ITEMS)
@@ -246,6 +237,9 @@ fun scanFileSyncPair(
     val baselineByPath = scopedBaselines.associateBy(FileSyncBaseline::relativePath)
     val mismatchHashes = verifiedFileSyncContentMismatchHashes(
         verifiedContentMismatches, verifiedContentMismatchHashes, localByPath, remoteByPath,
+    )
+    requireCurrentFileSyncContentVerificationProgress(
+        scopedLocalEntries, scopedRemoteEntries, verifiedContentMismatches, contentVerificationProgress,
     )
     val existingWorkByPath = pair.workItems.associateBy(FileSyncWorkItem::relativePath)
     val plan = planFileSync(scopedLocalEntries, scopedRemoteEntries, scopedBaselines, pair.configuration)
@@ -374,6 +368,7 @@ fun scanFileSyncPair(
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
         workItems = work,
+        contentVerificationProgress = contentVerificationProgress,
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
     )
@@ -878,6 +873,7 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
         require(it.length <= MAX_FILE_SYNC_PATH_LENGTH)
     }
     require(pair.baselines.size <= MAX_FILE_SYNC_ENTRIES) { "The sync pair contains too many baselines." }
+    requireBoundedFileSyncContentVerificationProgress(pair.contentVerificationProgress)
     require(pair.workItems.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync pair contains too much work." }
     requireUniqueCoordinatorPaths(pair.baselines.map(FileSyncBaseline::relativePath), "baseline")
     requireUniqueCoordinatorPaths(pair.workItems.map(FileSyncWorkItem::relativePath), "work")

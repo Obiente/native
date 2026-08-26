@@ -50,6 +50,130 @@ data class FileSyncContentIdentitySnapshot(
     val remoteEntries: List<RemoteSyncEntry>,
 )
 
+/** Durable progress for an exact comparison performed in bounded byte ranges across scans. */
+data class FileSyncContentVerificationProgress(
+    val candidate: FileSyncContentVerificationCandidate,
+    val verifiedBytes: Long,
+    val aggregateHash: String,
+) {
+    init {
+        val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
+        require(verifiedBytes in 0L..expectedBytes)
+        require(normalizeSyncSha256(aggregateHash) == aggregateHash)
+    }
+}
+
+data class FileSyncContentVerificationSlice(
+    val candidate: FileSyncContentVerificationCandidate,
+    val offset: Long,
+    val length: Int,
+    val aggregateHash: String,
+) {
+    init {
+        val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
+        require(offset in 0L..expectedBytes)
+        require(length >= 0 && offset <= expectedBytes - length)
+        require(length > 0 || expectedBytes == 0L)
+        require(normalizeSyncSha256(aggregateHash) == aggregateHash)
+    }
+}
+
+fun currentFileSyncContentVerificationProgress(
+    candidates: List<FileSyncContentVerificationCandidate>,
+    progress: List<FileSyncContentVerificationProgress>,
+): List<FileSyncContentVerificationProgress> {
+    requireUniqueSyncContentPaths(candidates.map(FileSyncContentVerificationCandidate::relativePath), "candidate")
+    requireUniqueSyncContentPaths(progress.map { it.candidate.relativePath }, "content verification progress")
+    val candidatesByPath = candidates.associateBy(FileSyncContentVerificationCandidate::relativePath)
+    return progress.filter { it.candidate == candidatesByPath[it.candidate.relativePath] }
+}
+
+internal fun requireCurrentFileSyncContentVerificationProgress(
+    localEntries: List<LocalSyncEntry>,
+    remoteEntries: List<RemoteSyncEntry>,
+    verifiedMismatches: List<FileSyncContentVerificationCandidate>,
+    progress: List<FileSyncContentVerificationProgress>,
+) {
+    val candidates = fileSyncContentVerificationCandidates(
+        localEntries,
+        remoteEntries,
+        emptyList(),
+        verifiedMismatches,
+    )
+    require(currentFileSyncContentVerificationProgress(candidates, progress) == progress) {
+        "Content-verification progress no longer matches the scanned generations."
+    }
+}
+
+internal fun requireBoundedFileSyncContentVerificationProgress(
+    progress: List<FileSyncContentVerificationProgress>,
+) {
+    require(progress.size <= MAX_FILE_SYNC_ENTRIES) {
+        "The sync pair contains too much content-verification progress."
+    }
+    requireUniqueSyncContentPaths(
+        progress.map { it.candidate.relativePath },
+        "content verification progress",
+    )
+}
+
+/** Plans a fair bounded slice for each least-advanced candidate; file size is never an exclusion. */
+fun planFileSyncContentVerificationSlices(
+    candidates: List<FileSyncContentVerificationCandidate>,
+    progress: List<FileSyncContentVerificationProgress>,
+    maximumSliceBytes: Int = FILE_SYNC_IDENTITY_SLICE_BYTES,
+    maximumTotalBytes: Long = FILE_SYNC_IDENTITY_SCAN_BYTES,
+    maximumSlices: Int = FILE_SYNC_IDENTITY_SCAN_SLICES,
+): List<FileSyncContentVerificationSlice> {
+    require(maximumSliceBytes > 0 && maximumTotalBytes >= 0L && maximumSlices >= 0)
+    val currentProgress = currentFileSyncContentVerificationProgress(candidates, progress)
+        .associateBy { it.candidate.relativePath }
+    var remainingBytes = maximumTotalBytes
+    return candidates
+        .sortedWith(
+            compareBy<FileSyncContentVerificationCandidate> {
+                val saved = currentProgress[it.relativePath]
+                when {
+                    saved == null -> 0
+                    saved.verifiedBytes > 0L -> 1
+                    else -> 2
+                }
+            }.thenBy {
+                currentProgress[it.relativePath]?.verifiedBytes ?: 0L
+            }.thenBy(FileSyncContentVerificationCandidate::relativePath),
+        )
+        .asSequence()
+        .mapNotNull { candidate ->
+            val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
+            val previous = currentProgress[candidate.relativePath]
+            val offset = previous?.verifiedBytes ?: 0L
+            val remainingFileBytes = expectedBytes - offset
+            val length = minOf(remainingFileBytes, maximumSliceBytes.toLong(), remainingBytes).toInt()
+            if (expectedBytes > 0L && length == 0) return@mapNotNull null
+            remainingBytes -= length
+            FileSyncContentVerificationSlice(
+                candidate = candidate,
+                offset = offset,
+                length = length,
+                aggregateHash = previous?.aggregateHash ?: EMPTY_FILE_SYNC_IDENTITY_AGGREGATE,
+            )
+        }
+        .take(maximumSlices)
+        .toList()
+}
+
+fun markPendingFileSyncContentVerification(
+    snapshot: FileSyncContentIdentitySnapshot,
+    pendingCandidates: List<FileSyncContentVerificationCandidate>,
+): FileSyncContentIdentitySnapshot {
+    val pendingPaths = pendingCandidates.mapTo(mutableSetOf(), FileSyncContentVerificationCandidate::relativePath)
+    return snapshot.copy(
+        localEntries = snapshot.localEntries.map { entry ->
+            if (entry.relativePath in pendingPaths) entry.copy(contentIdentityUnverified = true) else entry
+        },
+    )
+}
+
 /**
  * Selects paired files which could otherwise cause a first-sync or changed-generation conflict.
  * Different known sizes are conclusive non-equality evidence and never require content reads.
@@ -320,5 +444,10 @@ private fun requireUniqueSyncContentPaths(paths: List<String>, label: String) {
     require(paths.size == paths.distinct().size) { "The $label sync snapshot contains duplicate paths." }
 }
 
+const val FILE_SYNC_IDENTITY_SLICE_BYTES = 8 * 1024 * 1024
+const val FILE_SYNC_IDENTITY_SCAN_SLICES = 8
+const val FILE_SYNC_IDENTITY_SCAN_BYTES = FILE_SYNC_IDENTITY_SLICE_BYTES.toLong() * FILE_SYNC_IDENTITY_SCAN_SLICES
 const val MAX_FILE_SYNC_IDENTITY_FILE_BYTES = Long.MAX_VALUE
-const val MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES = Long.MAX_VALUE
+const val MAX_FILE_SYNC_IDENTITY_TOTAL_BYTES = FILE_SYNC_IDENTITY_SCAN_BYTES
+const val EMPTY_FILE_SYNC_IDENTITY_AGGREGATE =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000"

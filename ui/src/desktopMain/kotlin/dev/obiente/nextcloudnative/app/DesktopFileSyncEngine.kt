@@ -330,23 +330,39 @@ internal class DesktopFileSyncEngine(
             scannedRemoteEntries,
             initialPair.baselines,
             initialPair.knownFileSyncContentMismatches(),
-        ).withinFileSyncContentVerificationBudget()
-        val verificationResults = try {
-            cachedMismatchResults + candidates.map { candidate ->
-                verifyDesktopFileSyncContent(candidate, scannedLocalEntries, remote, shouldContinue)
+        )
+        val currentProgress = currentFileSyncContentVerificationProgress(
+            candidates,
+            initialPair.contentVerificationProgress,
+        )
+        val progressByPath = currentProgress.associateByTo(mutableMapOf()) { it.candidate.relativePath }
+        val completedSlices = try {
+            planFileSyncContentVerificationSlices(candidates, currentProgress).map { slice ->
+                verifyDesktopFileSyncContentSlice(slice, local, remote, shouldContinue).also { outcome ->
+                    progressByPath.remove(slice.candidate.relativePath)
+                    outcome.progress?.let { progress ->
+                        progressByPath[progress.candidate.relativePath] = progress
+                    }
+                }
             }
         } catch (_: DesktopFileSyncScanStoppedException) {
             return FileSyncCenterActionResult.Stopped("The folder scan stopped before making changes.")
         }
+        val verificationResults = cachedMismatchResults + completedSlices.mapNotNull { it.result }
+        val verifiedPaths = verificationResults.mapTo(mutableSetOf()) { it.candidate.relativePath }
+        val pendingCandidates = candidates.filterNot { it.relativePath in verifiedPaths }
         val verifiedMismatches = verificationResults.filter { it.matchingContentHash == null }
             .map(FileSyncContentVerificationResult::candidate)
         val verifiedMismatchHashes = verificationResults
             .filter { it.matchingContentHash == null }
             .associate { it.candidate.relativePath to it.localContentHash }
-        val contentIdentity = applyFileSyncContentVerificationResults(
-            scannedLocalEntries,
-            scannedRemoteEntries,
-            verificationResults,
+        val contentIdentity = markPendingFileSyncContentVerification(
+            applyFileSyncContentVerificationResults(
+                scannedLocalEntries,
+                scannedRemoteEntries,
+                verificationResults,
+            ),
+            pendingCandidates,
         )
         val localEntries = contentIdentity.localEntries
         val remoteEntries = contentIdentity.remoteEntries
@@ -361,6 +377,7 @@ internal class DesktopFileSyncEngine(
                 maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
                 verifiedContentMismatches = verifiedMismatches,
                 verifiedContentMismatchHashes = verifiedMismatchHashes,
+                contentVerificationProgress = progressByPath.values.sortedBy { it.candidate.relativePath },
             ),
         )
         val scannedPair = persisted.coordinator.pairs.single()
@@ -378,6 +395,7 @@ internal class DesktopFileSyncEngine(
                     maximumWorkItems = MAX_FILE_SYNC_WORK_ITEMS,
                     verifiedContentMismatches = verifiedMismatches,
                     verifiedContentMismatchHashes = verifiedMismatchHashes,
+                    contentVerificationProgress = progressByPath.values.sortedBy { it.candidate.relativePath },
                 ),
             )
             store.savePair(persisted, pairId)
@@ -504,27 +522,6 @@ internal class DesktopFileSyncEngine(
         }
         return if (failures > 0) FileSyncCenterActionResult.Rejected(message)
         else FileSyncCenterActionResult.Completed(message)
-    }
-
-    private fun verifyDesktopFileSyncContent(
-        candidate: FileSyncContentVerificationCandidate,
-        localEntries: List<LocalSyncEntry>,
-        remote: DesktopFileSyncRemoteTree,
-        shouldContinue: () -> Boolean,
-    ): FileSyncContentVerificationResult {
-        val expectedBytes = requireNotNull(candidate.expectedSizeBytes)
-        val localHash = requireNotNull(
-            localEntries.first { it.relativePath == candidate.relativePath }.contentHash,
-        ) { "The local file is missing its exact content hash." }
-        val matches = remote.verifyContentHash(
-                relativePath = candidate.relativePath,
-                expectedRemoteEtag = candidate.remoteEtag,
-                expectedBytes = expectedBytes,
-                expectedContentHash = localHash,
-                maximumBytes = expectedBytes,
-                shouldContinue = shouldContinue,
-            )
-        return FileSyncContentVerificationResult(candidate, localHash, localHash.takeIf { matches })
     }
 
     private fun syncPairLabel(localDisplayName: String, remoteRootPath: String): String =

@@ -38,7 +38,7 @@ internal object NoDocumentRequestCancellation : DocumentRequestCancellation {
 
 /** Bounded read and conflict-aware mutation WebDAV client for the Android DocumentsProvider. */
 internal class NextcloudDocumentWebDav(
-    private val client: OkHttpClient = OkHttpClient(),
+    internal val client: OkHttpClient = OkHttpClient(),
     private val cloudMutationsAllowed: () -> Boolean = { true },
 ) {
     fun readFile(
@@ -562,7 +562,7 @@ internal class NextcloudDocumentWebDav(
             encodeDocumentSearchPathSegment(userId) + "/" + encodeDocumentSearchPathSegment(uploadId)
     }
 
-    private fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
+    internal fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
         val credentials = "${session.loginName}:${session.appPassword}"
         val basic = Base64.getEncoder().encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
         return Request.Builder()

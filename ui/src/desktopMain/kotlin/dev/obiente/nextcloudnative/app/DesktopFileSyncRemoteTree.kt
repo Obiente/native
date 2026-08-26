@@ -194,6 +194,52 @@ internal class DesktopFileSyncRemoteTree(
         return actual == expectedContentHash
     }
 
+    fun contentRangeHash(
+        relativePath: String,
+        expectedRemoteEtag: String,
+        expectedBytes: Long,
+        offset: Long,
+        length: Int,
+        shouldContinue: () -> Boolean,
+    ): String {
+        require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
+        if (length == 0) {
+            require(expectedBytes == 0L)
+            return hashExactJvmFileSyncSlice(java.io.ByteArrayInputStream(byteArrayOf()), 0)
+        }
+        val endInclusive = offset + length - 1L
+        val request = requestBuilder(fileUrl(fullPath(relativePath)))
+            .header("Accept", "application/octet-stream")
+            .header("If-Match", safeEtag(expectedRemoteEtag))
+            .header("Range", "bytes=$offset-$endInclusive")
+            .get()
+            .build()
+        val hash = client.newCall(request).execute().use { response ->
+            require(response.code == 206) {
+                "The server did not honor bounded content verification (HTTP ${response.code})."
+            }
+            require(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
+                "The server returned a different content-verification range."
+            }
+            response.header("ETag")?.let { returned ->
+                require(returned == expectedRemoteEtag) { "The server file changed during content verification." }
+            }
+            hashExactJvmFileSyncSlice(
+                response.body.byteStream(),
+                length,
+                shouldContinue,
+                requireExhausted = true,
+            )
+        }
+        val after = requireNotNull(resolve(relativePath)) {
+            "The server file disappeared during content verification."
+        }
+        require(after.entry.etag == expectedRemoteEtag && after.entry.size == expectedBytes && !after.isDirectory) {
+            "The server file changed during content verification."
+        }
+        return hash
+    }
+
     fun createDirectory(relativePath: String, expectedRemoteEtag: String?) {
         val current = resolve(relativePath)
         if (expectedRemoteEtag != null) {
