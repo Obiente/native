@@ -1,8 +1,11 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
 import java.io.OutputStream
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 
 /**
  * Verifies one complete SAF generation in one background pass.
@@ -59,3 +62,12 @@ internal fun safeFailureMessage(failure: Throwable, fallback: String): String =
         ?.take(1_024)
         ?.takeIf(String::isNotBlank)
         ?: fallback
+
+internal fun androidFileSyncHttpClient(context: Context): OkHttpClient = OkHttpClient.Builder()
+    .useAndroidNextcloudCertificateTrust(context)
+    .readTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
+    .writeTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
+    .callTimeout(0L, TimeUnit.MILLISECONDS)
+    .build()
+
+private const val FILE_SYNC_NETWORK_INACTIVITY_MINUTES = 30L

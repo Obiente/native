@@ -409,7 +409,8 @@ internal class NextcloudDocumentWebDav(
             require(timeout > 0L)
             client.newBuilder()
                 .readTimeout(timeout, TimeUnit.MILLISECONDS)
-                .callTimeout(timeout, TimeUnit.MILLISECONDS)
+                .writeTimeout(timeout, TimeUnit.MILLISECONDS)
+                .callTimeout(0L, TimeUnit.MILLISECONDS)
                 .build()
         } ?: client
         val requestClient = operationClient.newBuilder()

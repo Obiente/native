@@ -12,6 +12,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
 import okhttp3.MediaType.Companion.toMediaType
@@ -866,8 +867,12 @@ private fun okhttp3.Response.requireAccepted(accepted: Boolean, operation: Strin
 private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .followRedirects(false)
     .followSslRedirects(false)
+    .readTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
+    .writeTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
+    .callTimeout(0L, TimeUnit.MILLISECONDS)
     .build()
 
 private const val MAX_DAV_PROPERTY_CHARS = 16_384
 private const val MAX_PARSED_DAV_DOCUMENTS = 50_032
 private const val DAV_NAMESPACE = "DAV:"
+private const val FILE_SYNC_NETWORK_INACTIVITY_MINUTES = 30L

@@ -57,6 +57,7 @@ internal fun NextcloudDocumentWebDav.uploadChunk(
             .build(),
         "upload file chunk",
         cancellation = cancellation,
+        timeoutMillis = CHUNK_TRANSFER_INACTIVITY_TIMEOUT_MILLIS,
     )
 }
 
@@ -136,7 +137,7 @@ internal fun NextcloudDocumentWebDav.commitChunkUpload(
     "assemble chunked upload",
     onRequestStarted,
     cancellation,
-    timeoutMillis = CHUNK_COMMIT_TIMEOUT_MILLIS,
+    timeoutMillis = CHUNK_TRANSFER_INACTIVITY_TIMEOUT_MILLIS,
     requiredSuccessStatus = 201,
 )
 
@@ -165,4 +166,4 @@ private val EMPTY_CHUNK_BODY = byteArrayOf().toRequestBody(null)
 private val XML_CONTENT_TYPE = "application/xml; charset=utf-8".toMediaType()
 private const val CHUNK_PROPERTIES =
     "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:getcontentlength/></d:prop></d:propfind>"
-private const val CHUNK_COMMIT_TIMEOUT_MILLIS = 30L * 60L * 1_000L
+private const val CHUNK_TRANSFER_INACTIVITY_TIMEOUT_MILLIS = 30L * 60L * 1_000L
