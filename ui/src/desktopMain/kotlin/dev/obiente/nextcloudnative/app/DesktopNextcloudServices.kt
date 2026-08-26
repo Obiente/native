@@ -3925,61 +3925,18 @@ class DesktopNextcloudServices(
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launchStreamed(file, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
-                val authorization = Base64.getEncoder().encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                )
-                val started = System.nanoTime()
-                val networkAttempt = JvmNetworkRequestAttempt()
-                val request = Request.Builder()
-                    .url(buildNextcloudFileUrl(session.serverUrl, userId, file.path))
-                    .get()
-                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    .header("Accept", "application/octet-stream")
-                    .header("If-Match", expectedEtag)
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                val response = try {
-                    noRedirectHttpClient.newCall(request).execute()
-                } catch (failure: Throwable) {
-                    recordDesktopStreamingFailure(
-                        session = session,
-                        streamKind = "external_file",
-                        startedNanos = started,
-                        attempt = networkAttempt,
-                        failure = failure,
-                    )
-                    throw failure
-                }
-                response.use {
-                    check(response.isSuccessful) {
-                        "Opening the file in another app failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength == -1L || contentLength <= maximumBytes)
-                    val copied = responseBody.byteStream().copyBoundedNetworkResponseTo(
-                        output = output,
-                        maxBytes = maximumBytes,
-                        onLimitExceeded = { error("The file exceeds the platform byte representation.") },
-                        onNetworkReadFailure = { failure ->
-                            recordDesktopStreamingFailure(
-                                session = session,
-                                streamKind = "external_file",
-                                startedNanos = started,
-                                attempt = networkAttempt,
-                                failure = failure,
-                            )
-                        },
-                    )
-                    val returnedEtag = response.header("ETag")
-                        ?.let(::requireSafeFileRangeEtag)
-                        ?: expectedEtag
-                    DesktopDetachedDownload(copied, returnedEtag)
-                }
-            }
+            val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
+                limitMessage = "The file exceeds the platform byte representation.",
+                requestHeaders = mapOf("If-Match" to expectedEtag),
+                handoffEtag = expectedEtag,
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -3999,62 +3956,17 @@ class DesktopNextcloudServices(
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
         return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val authorization = Base64.getEncoder().encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                )
-                val started = System.nanoTime()
-                val networkAttempt = JvmNetworkRequestAttempt()
-                val request = Request.Builder()
-                    .url(buildNextcloudApiUrl(session.serverUrl, requestSpec))
-                    .get()
-                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    .header("Accept", "*/*")
-                    .header("OCS-APIRequest", "true")
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                val response = try {
-                    noRedirectHttpClient.newCall(request).execute()
-                } catch (failure: Throwable) {
-                    recordDesktopStreamingFailure(
-                        session = session,
-                        streamKind = "deck_attachment",
-                        startedNanos = started,
-                        attempt = networkAttempt,
-                        failure = failure,
-                    )
-                    throw failure
-                }
-                response.use {
-                    check(response.isSuccessful) {
-                        "Opening the Deck attachment failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength <= maximumBytes || contentLength == -1L) {
-                        "The Deck attachment exceeds the platform byte representation."
-                    }
-                    DesktopDetachedDownload(
-                        responseBody.byteStream().copyBoundedNetworkResponseTo(
-                            output = output,
-                            maxBytes = maximumBytes,
-                            onLimitExceeded = {
-                                error("The Deck attachment exceeds the platform byte representation.")
-                            },
-                            onNetworkReadFailure = { failure ->
-                                recordDesktopStreamingFailure(
-                                    session = session,
-                                    streamKind = "deck_attachment",
-                                    startedNanos = started,
-                                    attempt = networkAttempt,
-                                    failure = failure,
-                                )
-                            },
-                        ),
-                    )
-                }
-            }
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                accept = "*/*",
+                requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                },
+            )
         }
     }
 
@@ -4796,65 +4708,23 @@ class DesktopNextcloudServices(
         val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
         val specification = fileVersionContentRequest(userId, fileId, version.id)
         return externalFileHandoff.launchStreamed(historicalCopy, action, capability) { output, maximumBytes ->
-            withContext(Dispatchers.IO) {
-                val authorization = Base64.getEncoder().encodeToString(
-                    "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-                )
-                val started = System.nanoTime()
-                val networkAttempt = JvmNetworkRequestAttempt()
-                val request = Request.Builder()
-                    .url(session.serverUrl + specification.relativePath)
-                    .get()
-                    .tag(JvmNetworkRequestAttempt::class.java, networkAttempt)
-                    .header("Accept", "application/octet-stream")
-                    .header("User-Agent", USER_AGENT)
-                    .header("Authorization", "Basic $authorization")
-                    .build()
-                val response = try {
-                    noRedirectHttpClient.newCall(request).execute()
-                } catch (failure: Throwable) {
-                    recordDesktopStreamingFailure(
-                        session = session,
-                        streamKind = "file_version",
-                        startedNanos = started,
-                        attempt = networkAttempt,
-                        failure = failure,
-                    )
-                    throw failure
-                }
-                response.use {
-                    check(response.isSuccessful) {
-                        "Downloading the historical version failed (HTTP ${response.code})."
-                    }
-                    val responseBody = response.body
-                    val contentLength = responseBody.contentLength()
-                    check(contentLength == -1L || contentLength <= maximumBytes)
-                    val copied = responseBody.byteStream().copyBoundedNetworkResponseTo(
-                        output = output,
-                        maxBytes = maximumBytes,
-                        onLimitExceeded = {
-                            error("The historical version exceeds the platform byte representation.")
-                        },
-                        onNetworkReadFailure = { failure ->
-                            recordDesktopStreamingFailure(
-                                session = session,
-                                streamKind = "file_version",
-                                startedNanos = started,
-                                attempt = networkAttempt,
-                                failure = failure,
-                            )
-                        },
-                    )
-                    version.etag?.let { listedEtag ->
-                        response.header("ETag")?.let { returnedEtag ->
-                            check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(listedEtag)) {
-                                "The historical version changed while it was being exported."
-                            }
+            downloadDesktopDetachedFile(
+                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                output, maximumBytes, USER_AGENT,
+                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                limitMessage = "The historical version exceeds the platform byte representation.",
+                handoffEtag = expectedHandoffEtag,
+                validateResponseEtag = { returnedEtag ->
+                    if (version.etag != null && returnedEtag != null) {
+                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
+                            "The historical version changed while it was being exported."
                         }
                     }
-                    DesktopDetachedDownload(copied, expectedHandoffEtag)
-                }
-            }
+                },
+                onNetworkFailure = { started, attempt, failure ->
+                    recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
+                },
+            )
         }
     }
 
