@@ -6,6 +6,21 @@ import kotlin.test.assertFailsWith
 
 class NextcloudPlatformTest {
     @Test
+    fun `chunk upload URL encodes the account and validates the durable session ID`() {
+        assertEquals(
+            "https://cloud.example/remote.php/dav/uploads/user%20name/01234567-89ab-cdef-0123-456789abcdef",
+            buildNextcloudChunkUploadUrl(
+                "https://cloud.example/",
+                "user name",
+                "01234567-89ab-cdef-0123-456789abcdef",
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            buildNextcloudChunkUploadUrl("https://cloud.example", "user", "../other-session")
+        }
+    }
+
+    @Test
     fun encodesEveryWebDavPathSegmentWithoutTreatingSpacesAsFormData() {
         assertEquals(
             "https://cloud.example/remote.php/dav/files/alice%40example/Photos/July%20%26%20August/%E6%97%85%E8%A1%8C.jpg",

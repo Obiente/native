@@ -4,12 +4,15 @@ sealed interface NextcloudUploadTransferPlan {
     data object Direct : NextcloudUploadTransferPlan
 
     data class Chunked(
+        val sizeBytes: Long,
         val chunkBytes: Long,
         val chunkCount: Int,
     ) : NextcloudUploadTransferPlan {
         init {
+            require(sizeBytes > 0L)
             require(chunkBytes in MIN_NEXTCLOUD_CHUNK_BYTES..MAX_NEXTCLOUD_CHUNK_BYTES)
             require(chunkCount in 2..MAX_NEXTCLOUD_UPLOAD_CHUNKS)
+            require((((sizeBytes - 1L) / chunkBytes) + 1L).toInt() == chunkCount)
         }
     }
 }
@@ -49,7 +52,7 @@ fun nextcloudUploadTransferPlan(
     val chunkBytes = maxOf(preferredChunkBytes, minimumForProtocol)
     if (chunkBytes > maximumChunkBytes) return NextcloudUploadTransferPlan.Direct
     val chunkCount = (((sizeBytes - 1L) / chunkBytes) + 1L).toInt()
-    return NextcloudUploadTransferPlan.Chunked(chunkBytes, chunkCount)
+    return NextcloudUploadTransferPlan.Chunked(sizeBytes, chunkBytes, chunkCount)
 }
 
 /**
@@ -64,9 +67,7 @@ fun nextcloudUploadChunk(
     sizeBytes: Long,
     uploadedChunks: Int,
 ): NextcloudUploadChunk {
-    require(sizeBytes > 0L)
-    val expectedChunkCount = (((sizeBytes - 1L) / plan.chunkBytes) + 1L).toInt()
-    require(expectedChunkCount == plan.chunkCount) { "The chunk plan does not match this file generation." }
+    require(sizeBytes == plan.sizeBytes) { "The chunk plan does not match this file generation." }
     require(uploadedChunks in 0 until plan.chunkCount)
 
     val offset = uploadedChunks.toLong() * plan.chunkBytes

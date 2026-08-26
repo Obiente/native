@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.buildNextcloudChunkUploadUrl
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -284,7 +285,7 @@ internal class NextcloudDocumentWebDav(
         cancellation: DocumentRequestCancellation,
     ): Boolean = try {
         execute(
-            requestBuilder(session, chunkUploadUrl(session, userId, uploadId))
+            requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
                 .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
                 .header("If-None-Match", "*")
                 .method("MKCOL", EMPTY_BODY)
@@ -313,7 +314,11 @@ internal class NextcloudDocumentWebDav(
         require(chunkNumber in 1..10_000 && offset >= 0 && length > 0 && end <= source.length())
         val body = fileRangeRequestBody(source, offset, length, cancellation)
         execute(
-            requestBuilder(session, chunkUploadUrl(session, userId, uploadId) + "/${chunkNumber.toString().padStart(5, '0')}")
+            requestBuilder(
+                session,
+                buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) +
+                    "/${chunkNumber.toString().padStart(5, '0')}",
+            )
                 .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
                 .header("OC-Total-Length", totalLength.toString())
                 .put(body)
@@ -331,7 +336,8 @@ internal class NextcloudDocumentWebDav(
     ) {
         try {
             execute(
-                requestBuilder(session, chunkUploadUrl(session, userId, uploadId)).delete().build(),
+                requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
+                    .delete().build(),
                 "remove rejected chunked upload",
                 cancellation = cancellation,
             )
@@ -349,7 +355,7 @@ internal class NextcloudDocumentWebDav(
         cancellation: DocumentRequestCancellation,
         onRequestStarted: () -> Unit,
     ): DocumentMutationResult = execute(
-        requestBuilder(session, chunkUploadUrl(session, userId, uploadId) + "/.file")
+        requestBuilder(session, buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
             .header("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
             .header("OC-Total-Length", totalLength.toString())
             .header("Overwrite", "F")
@@ -554,12 +560,6 @@ internal class NextcloudDocumentWebDav(
         } finally {
             cancellation.setOnCancelAction(null)
         }
-    }
-
-    private fun chunkUploadUrl(session: NextcloudSession, userId: String, uploadId: String): String {
-        require(runCatching { UUID.fromString(uploadId) }.isSuccess)
-        return session.serverUrl.trimEnd('/') + "/remote.php/dav/uploads/" +
-            encodeDocumentSearchPathSegment(userId) + "/" + encodeDocumentSearchPathSegment(uploadId)
     }
 
     internal fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
