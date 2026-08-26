@@ -197,6 +197,10 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                     throw IOException("Audio download failed with HTTP ${response.code}.")
                 }
                 val body = response.body
+                val maximumBytes = stagedFileTransferLimit(
+                    availableBytes = Files.getFileStore(destination).usableSpace.coerceAtLeast(0L),
+                    declaredByteCount = body.contentLength().takeIf { it >= 0L },
+                )
                 body.byteStream().use { input ->
                     Files.newOutputStream(destination, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
                         val buffer = ByteArray(DEFAULT_AUDIO_COPY_BUFFER_BYTES)
@@ -205,6 +209,9 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
                             val read = input.read(buffer)
                             if (read < 0) break
                             total = Math.addExact(total, read.toLong())
+                            check(total <= maximumBytes) {
+                                "There is not enough free storage to stage this audio file."
+                            }
                             output.write(buffer, 0, read)
                         }
                     }

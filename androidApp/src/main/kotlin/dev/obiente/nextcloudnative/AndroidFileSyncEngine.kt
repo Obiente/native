@@ -41,6 +41,7 @@ import dev.obiente.nextcloudnative.app.removeFileSyncPair
 import dev.obiente.nextcloudnative.app.resolveFileSyncDecisions
 import dev.obiente.nextcloudnative.app.retryFileSyncOperation
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
+import dev.obiente.nextcloudnative.app.stagedFileTransferLimit
 import dev.obiente.nextcloudnative.app.toCenterSummary
 import dev.obiente.nextcloudnative.app.includesSyncPath
 import dev.obiente.nextcloudnative.app.liveFileSyncNetworkState
@@ -682,7 +683,11 @@ internal class AndroidFileSyncEngine(context: Context) {
                     remote.createDirectory(operation.relativePath, expectedRemote)
                 } else {
                     withStagingFile("upload") { staged ->
-                        local.stageForUpload(operation.relativePath, staged, MAX_SYNC_FILE_BYTES)
+                        local.stageForUpload(
+                            operation.relativePath,
+                            staged,
+                            stagingTransferLimit(source.size),
+                        )
                         remote.writeFile(operation.relativePath, staged, expectedRemote)
                     }
                 }
@@ -706,7 +711,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                             operation.relativePath,
                             source.etag,
                             staged,
-                            MAX_SYNC_FILE_BYTES,
+                            stagingTransferLimit(source.size),
                         )
                         local.writeFile(operation.relativePath, staged, expectedLocal)
                     }
@@ -752,12 +757,16 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
         withStagingFile("keep-local") { localBytes ->
             withStagingFile("keep-remote") { remoteBytes ->
-                local.stageForUpload(operation.relativePath, localBytes, MAX_SYNC_FILE_BYTES)
+                local.stageForUpload(
+                    operation.relativePath,
+                    localBytes,
+                    stagingTransferLimit(localSource.size),
+                )
                 remote.stageDownload(
                     operation.relativePath,
                     remoteSource.etag,
                     remoteBytes,
-                    MAX_SYNC_FILE_BYTES,
+                    stagingTransferLimit(remoteSource.size),
                 )
                 remote.writeFile(operation.localConflictPath, localBytes, expectedRemoteEtag = null)
                 local.writeFile(operation.localConflictPath, localBytes, expectedLocalRevision = null)
@@ -810,6 +819,13 @@ internal class AndroidFileSyncEngine(context: Context) {
         }
     }
 
+    private fun stagingTransferLimit(declaredByteCount: Long?): Long {
+        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
+        return stagedFileTransferLimit(
+            availableBytes = stagingRoot.usableSpace.coerceAtLeast(0L),
+            declaredByteCount = declaredByteCount,
+        )
+    }
     private fun normalizeRemoteRoot(path: String): String {
         val normalized = path.trim().trim('/')
         if (normalized.isEmpty()) return ""
@@ -830,7 +846,6 @@ internal class AndroidFileSyncEngine(context: Context) {
             ?: fallback
 
     private companion object {
-        const val MAX_SYNC_FILE_BYTES = Long.MAX_VALUE
         val ENGINE_LOCK = Mutex()
     }
 }

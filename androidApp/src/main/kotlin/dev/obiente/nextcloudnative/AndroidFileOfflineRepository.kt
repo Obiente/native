@@ -26,6 +26,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.markFileOfflineJobRunning
 import dev.obiente.nextcloudnative.app.planFileOfflineRequest
 import dev.obiente.nextcloudnative.app.recordFileOfflineJobResult
+import dev.obiente.nextcloudnative.app.stagedFileTransferLimit
 import dev.obiente.nextcloudnative.app.fileOfflineCenterSnapshot
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import okhttp3.OkHttpClient
@@ -442,6 +443,20 @@ internal class AndroidFileOfflineRepository(context: Context) {
             finish(job.id, FileOfflineJobResult.PermanentFailure("Could not prepare offline storage."))
             return AndroidOfflineExecutionOutcome.Complete
         }
+        val maximumBytes = try {
+            stagedFileTransferLimit(
+                availableBytes = accountDirectory.usableSpace.coerceAtLeast(0L),
+                declaredByteCount = started.record.descriptor.size,
+            )
+        } catch (_: IllegalStateException) {
+            finish(
+                job.id,
+                FileOfflineJobResult.PermanentFailure(
+                    "There is not enough free storage for this offline file.",
+                ),
+            )
+            return AndroidOfflineExecutionOutcome.Complete
+        }
         val temporary = File.createTempFile("offline-", ".part", accountDirectory)
         return try {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -452,7 +467,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
                     userId = userId,
                     path = job.key.relativePath,
                     destination = destination,
-                    maximumBytes = Long.MAX_VALUE,
+                    maximumBytes = maximumBytes,
                     expectedEtag = expectedEtag,
                     cancellation = cancellation,
                 )

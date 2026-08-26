@@ -1,14 +1,12 @@
 package dev.obiente.nextcloudnative
 
-import android.util.Base64
 import dev.obiente.nextcloudnative.app.JvmNetworkRequestAttempt
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.copyBoundedNetworkResponseTo
 import dev.obiente.nextcloudnative.app.isFullDetachedFileResponse
 import java.io.FileOutputStream
-import java.nio.charset.StandardCharsets
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -24,12 +22,9 @@ internal suspend fun downloadAndroidDetachedFile(
     accept: String = "application/octet-stream",
     requestHeaders: Map<String, String> = emptyMap(),
     onNetworkFailure: (Long, JvmNetworkRequestAttempt, Throwable) -> Unit,
-): AndroidDetachedDownload = withContext(Dispatchers.IO) {
+): AndroidDetachedDownload {
     require(maximumBytes > 0L)
-    val authorization = Base64.encodeToString(
-        "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-        Base64.NO_WRAP,
-    )
+    val authorization = Credentials.basic(session.loginName, session.appPassword)
     val started = System.nanoTime()
     val attempt = JvmNetworkRequestAttempt()
     val request = Request.Builder()
@@ -38,28 +33,48 @@ internal suspend fun downloadAndroidDetachedFile(
         .tag(JvmNetworkRequestAttempt::class.java, attempt)
         .header("Accept", accept)
         .header("User-Agent", userAgent)
-        .header("Authorization", "Basic $authorization")
+        .header("Authorization", authorization)
         .apply { requestHeaders.forEach { (name, value) -> header(name, value) } }
         .build()
-    val response = try {
-        client.newCall(request).execute()
-    } catch (failure: Throwable) {
-        onNetworkFailure(started, attempt, failure)
-        throw failure
-    }
-    response.use {
-        check(isFullDetachedFileResponse(response.code)) { failureMessage(response.code) }
-        val body = response.body
-        val contentLength = body.contentLength()
-        check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }
-        AndroidDetachedDownload(
-            byteCount = body.byteStream().copyBoundedNetworkResponseTo(
-                output = output,
-                maxBytes = maximumBytes,
-                onLimitExceeded = { error(limitMessage) },
-                onNetworkReadFailure = { failure -> onNetworkFailure(started, attempt, failure) },
-            ),
-            mimeType = body.contentType()?.toString(),
-        )
+    return suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        val execute = Runnable {
+            val result = runCatching {
+                val response = try {
+                    call.execute()
+                } catch (failure: Throwable) {
+                    onNetworkFailure(started, attempt, failure)
+                    throw failure
+                }
+                response.use {
+                    check(isFullDetachedFileResponse(response.code)) { failureMessage(response.code) }
+                    val body = response.body
+                    val contentLength = body.contentLength()
+                    check(contentLength == -1L || contentLength <= maximumBytes) { limitMessage }
+                    AndroidDetachedDownload(
+                        byteCount = body.byteStream().copyBoundedNetworkResponseTo(
+                            output = output,
+                            maxBytes = maximumBytes,
+                            onLimitExceeded = { error(limitMessage) },
+                            onNetworkReadFailure = { failure -> onNetworkFailure(started, attempt, failure) },
+                        ),
+                        mimeType = body.contentType()?.toString(),
+                    )
+                }
+            }
+            result.fold(
+                onSuccess = { download ->
+                    continuation.tryResume(download)?.let(continuation::completeResume)
+                },
+                onFailure = { failure ->
+                    continuation.tryResumeWithException(failure)?.let(continuation::completeResume)
+                },
+            )
+        }
+        runCatching { client.dispatcher.executorService.execute(execute) }
+            .onFailure { failure ->
+                continuation.tryResumeWithException(failure)?.let(continuation::completeResume)
+            }
     }
 }

@@ -1705,7 +1705,10 @@ class DesktopNextcloudServices(
 
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
-            supportedActions = setOf(ExternalFileHandoffAction.OpenWith),
+            supportedActions = setOf(
+                ExternalFileHandoffAction.OpenWith,
+                ExternalFileHandoffAction.Share,
+            ),
             maximumInMemoryFileBytes = MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES,
         ),
     )
