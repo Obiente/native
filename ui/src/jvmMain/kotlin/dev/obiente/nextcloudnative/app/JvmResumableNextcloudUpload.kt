@@ -64,17 +64,15 @@ fun jvmResumableNextcloudUpload(
     }
     require(plan is NextcloudUploadTransferPlan.Chunked)
 
-    var progress = checkpoint?.takeIf {
+    val resumable = checkpoint?.takeIf {
         it.localRevision == localRevision && it.transferPlan == plan && !it.commitInFlight
     }
-    if (checkpoint != null && progress == null) {
+    if (checkpoint != null && resumable == null) {
         remote.discardOwnedUpload(checkpoint.uploadId, relativePath)
     }
-    val resumed = progress != null
-    if (progress == null) {
-        progress = newFileSyncUploadCheckpoint(newUploadId(), localRevision, plan)
-        persistCheckpoint(progress)
-    }
+    val resumed = resumable != null
+    var progress = resumable ?: newFileSyncUploadCheckpoint(newUploadId(), localRevision, plan)
+        .also(persistCheckpoint)
 
     val collectionCreated = remote.createChunkCollection(
         progress.uploadId,
