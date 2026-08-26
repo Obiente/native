@@ -63,18 +63,11 @@ internal suspend fun downloadAndroidDetachedFile(
                     )
                 }
             }
-            result.fold(
-                onSuccess = { download ->
-                    continuation.tryResume(download)?.let(continuation::completeResume)
-                },
-                onFailure = { failure ->
-                    continuation.tryResumeWithException(failure)?.let(continuation::completeResume)
-                },
-            )
+            continuation.resumeWith(result)
         }
         runCatching { client.dispatcher.executorService.execute(execute) }
             .onFailure { failure ->
-                continuation.tryResumeWithException(failure)?.let(continuation::completeResume)
+                continuation.resumeWith(Result.failure(failure))
             }
     }
 }
