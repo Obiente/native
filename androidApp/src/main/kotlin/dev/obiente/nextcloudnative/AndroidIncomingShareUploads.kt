@@ -401,7 +401,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
     fun markChunkCleanupPending(id: String): AndroidIncomingShareRequest = synchronized(LOCK) {
         val current = requireAvailable(id)
         val session = requireNotNull(current.chunkSession)
-        require(current.state == AndroidIncomingShareState.Uploading && session.commitInFlight)
+        require(current.state == AndroidIncomingShareState.Uploading && !session.cleanupPending)
         val updated = current.copy(
             chunkSession = session.copy(commitInFlight = false, cleanupPending = true),
         )
@@ -477,17 +477,28 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         }
     }
 
-    fun removeIfPresentedReleasable(presented: AndroidIncomingShareRequest): Boolean = synchronized(LOCK) {
-        when (val loaded = loadResult(presented.id)) {
+    fun removeIfMatchingReleasable(id: String, expectedFingerprint: String): Boolean = synchronized(LOCK) {
+        when (val loaded = loadResult(id)) {
             AndroidIncomingShareLoadResult.Missing -> true
             is AndroidIncomingShareLoadResult.Corrupt -> false
             is AndroidIncomingShareLoadResult.Available -> {
-                if (shouldReleasePresentedIncomingShareRequest(presented, loaded.request)) {
-                    remove(presented.id)
+                if (
+                    loaded.request.incomingShareReleaseFingerprint() == expectedFingerprint &&
+                    loaded.request.canReleaseIncomingShareRequest()
+                ) {
+                    remove(id)
                 } else {
                     false
                 }
             }
+        }
+    }
+
+    fun removeCorruptRecovery(id: String): Boolean = synchronized(LOCK) {
+        when (loadResult(id)) {
+            AndroidIncomingShareLoadResult.Missing -> true
+            is AndroidIncomingShareLoadResult.Corrupt -> remove(id)
+            is AndroidIncomingShareLoadResult.Available -> false
         }
     }
 
@@ -713,7 +724,7 @@ private fun android.content.ContentResolver.queryIncomingShareMetadata(uri: Uri)
     }
 }
 
-private fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
+internal fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
     .put("id", id)
     .put("state", state.name)
     .put("accountId", accountId)

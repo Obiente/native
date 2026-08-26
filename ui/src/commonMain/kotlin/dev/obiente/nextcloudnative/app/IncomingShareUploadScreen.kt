@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -119,6 +120,8 @@ fun IncomingShareUploadScreen(
     loading: Boolean,
     queueing: Boolean,
     error: String?,
+    corruptRecoveryAvailable: Boolean = false,
+    corruptRemovalConfirmationVisible: Boolean = false,
     destinationReady: Boolean = true,
     folderPickerOperations: RemoteFolderPickerOperations?,
     folderPickerVisible: Boolean,
@@ -127,6 +130,9 @@ fun IncomingShareUploadScreen(
     onFolderPickerDismissed: () -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
+    onRemoveCorruptRecovery: () -> Unit = {},
+    onConfirmRemoveCorruptRecovery: () -> Unit = {},
+    onDismissRemoveCorruptRecovery: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(NextcloudSpacing.Large),
@@ -140,6 +146,13 @@ fun IncomingShareUploadScreen(
             }
             error != null && request == null -> {
                 Text(error, color = MaterialTheme.colorScheme.error)
+                if (corruptRecoveryAvailable) {
+                    Text(
+                        "The staged files are preserved. Remove them only if you no longer need to recover this share.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = onRemoveCorruptRecovery) { Text("Remove staged files") }
+                }
                 OutlinedButton(onClick = onCancel) { Text("Close") }
             }
             request != null -> {
@@ -204,6 +217,21 @@ fun IncomingShareUploadScreen(
             initialPath = request?.destinationPath.orEmpty(),
             onDismiss = onFolderPickerDismissed,
             onSelected = onDestinationSelected,
+        )
+    }
+    if (corruptRemovalConfirmationVisible) {
+        AlertDialog(
+            onDismissRequest = onDismissRemoveCorruptRecovery,
+            title = { Text("Remove staged files?") },
+            text = {
+                Text("This permanently deletes the local recovery copy for this share. Files already uploaded to Nextcloud are not removed.")
+            },
+            confirmButton = {
+                Button(onClick = onConfirmRemoveCorruptRecovery) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissRemoveCorruptRecovery) { Text("Keep files") }
+            },
         )
     }
 }

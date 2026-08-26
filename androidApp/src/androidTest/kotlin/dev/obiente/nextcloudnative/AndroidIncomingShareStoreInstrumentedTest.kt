@@ -15,6 +15,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -138,6 +139,15 @@ class AndroidIncomingShareStoreInstrumentedTest {
             assertEquals(uploading, AndroidIncomingShareStore(context).requireAvailable(staged.id))
             assertEquals(3, AndroidIncomingShareStore(context).requireAvailable(staged.id).automaticTransferAttempts)
             assertEquals(240_000L, AndroidIncomingShareStore(context).requireAvailable(staged.id).retryNotBeforeEpochMillis)
+            val preCommitCleanup = store.markChunkCleanupPending(staged.id)
+            assertTrue(preCommitCleanup.chunkSession?.cleanupPending == true)
+            store.clearChunkSession(staged.id)
+            store.beginChunkSession(
+                staged.id,
+                fileIndex = 0,
+                targetName = "one.txt",
+                uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+            )
             assertTrue(store.markChunkCommitInFlight(staged.id).chunkSession?.commitInFlight == true)
             val cleanupPending = store.markChunkCleanupPending(staged.id)
             assertTrue(cleanupPending.chunkSession?.cleanupPending == true)
@@ -177,20 +187,38 @@ class AndroidIncomingShareStoreInstrumentedTest {
             assertTrue(store.remove(staged.id))
         }
 
+        val releasable = store.stage(
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_STREAM, fixtureUri("release.txt"))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+        )
+        assertFalse(store.removeIfMatchingReleasable(releasable.id, "not-the-presented-state"))
+        assertTrue(store.loadResult(releasable.id) is AndroidIncomingShareLoadResult.Available)
+        assertTrue(
+            store.removeIfMatchingReleasable(
+                releasable.id,
+                releasable.incomingShareReleaseFingerprint(),
+            ),
+        )
+        assertTrue(store.loadResult(releasable.id) is AndroidIncomingShareLoadResult.Missing)
+
         val corruptId = "11111111-2222-3333-4444-555555555555"
         val directory = java.io.File(context.filesDir, "incoming-share/$corruptId")
         assertTrue(directory.mkdirs())
         java.io.File(directory, "request.json").writeText("{not-json")
         try {
             assertTrue(store.loadResult(corruptId) is AndroidIncomingShareLoadResult.Corrupt)
+            assertFalse(store.removeIfMatchingReleasable(corruptId, "not-a-fingerprint"))
             try {
                 store.requireAvailable(corruptId)
                 fail("Expected a typed corrupt-manifest failure")
             } catch (failure: CorruptIncomingShareManifestException) {
                 assertEquals(corruptId, failure.requestId)
             }
+            assertTrue(store.removeCorruptRecovery(corruptId))
         } finally {
-            assertTrue(store.remove(corruptId))
+            if (directory.exists()) assertTrue(store.remove(corruptId))
         }
     }
 

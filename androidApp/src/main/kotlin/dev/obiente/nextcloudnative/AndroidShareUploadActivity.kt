@@ -11,7 +11,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
-import androidx.core.app.NotificationManagerCompat
 import dev.obiente.nextcloudnative.app.IncomingShareUploadFilePresentation
 import dev.obiente.nextcloudnative.app.IncomingShareUploadFileStatus
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
@@ -49,7 +48,8 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private var queueing by mutableStateOf(false)
     private var folderPickerVisible by mutableStateOf(false)
     private var error by mutableStateOf<String?>(null)
-    private var recoveryRequestId: String? = null
+    private var corruptRecoveryRequestId by mutableStateOf<String?>(null)
+    private var corruptRemovalConfirmationVisible by mutableStateOf(false)
     private var restoreJob: Job? = null
     private var queueJob: Job? = null
     private var restoreGeneration = 0L
@@ -93,6 +93,8 @@ class AndroidShareUploadActivity : ComponentActivity() {
                         loading = loading,
                         queueing = queueing,
                         error = error,
+                        corruptRecoveryAvailable = corruptRecoveryRequestId != null,
+                        corruptRemovalConfirmationVisible = corruptRemovalConfirmationVisible,
                         destinationReady = folderOperations != null,
                         folderPickerOperations = folderOperations,
                         folderPickerVisible = folderPickerVisible,
@@ -110,6 +112,9 @@ class AndroidShareUploadActivity : ComponentActivity() {
                         onFolderPickerDismissed = { folderPickerVisible = false },
                         onCancel = ::cancelOrDismiss,
                         onDone = ::finishAndRelease,
+                        onRemoveCorruptRecovery = { corruptRemovalConfirmationVisible = true },
+                        onConfirmRemoveCorruptRecovery = ::removeCorruptRecoveryAndFinish,
+                        onDismissRemoveCorruptRecovery = { corruptRemovalConfirmationVisible = false },
                     )
                     LaunchedEffect(request?.state) {
                         while (request?.state in ACTIVE_SHARE_STATES) {
@@ -149,12 +154,12 @@ class AndroidShareUploadActivity : ComponentActivity() {
         val generation = ++restoreGeneration
         val validatedRequestId = restoredRequestId?.takeIf(::isValidIncomingShareRequestId)
         if (restoredRequestId != null && validatedRequestId == null) {
-            recoveryRequestId = null
             error = "This shared upload reference is invalid."
             loading = false
             return
         }
-        recoveryRequestId = validatedRequestId
+        corruptRecoveryRequestId = null
+        corruptRemovalConfirmationVisible = false
         restoreJob = lifecycleScope.launch {
             var unclaimedStagedRequestId: String? = null
             try {
@@ -173,13 +178,13 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 if (generation != restoreGeneration) return@launch
                 unclaimedStagedRequestId = null
                 request = staged
-                recoveryRequestId = staged.id
                 session = activeSession
                 val info = services.loadServerInfo(activeSession)
                 serverInfo = info
             } catch (_: CancellationException) {
                 return@launch
             } catch (failure: Throwable) {
+                corruptRecoveryRequestId = (failure as? CorruptIncomingShareManifestException)?.requestId
                 error = failure.message ?: "The shared files could not be prepared."
             } finally {
                 unclaimedStagedRequestId?.let { requestId ->
@@ -196,26 +201,16 @@ class AndroidShareUploadActivity : ComponentActivity() {
         restoreGeneration += 1
         restoreJob?.cancel()
         queueJob?.cancel()
-        request?.takeIf { it.state == AndroidIncomingShareState.Staged }?.let { current ->
-            val replaced = store.transition(
-                current.id,
-                expected = setOf(AndroidIncomingShareState.Staged),
-                target = AndroidIncomingShareState.Canceled,
-                message = "Replaced by a newer share before transfer started.",
-            )
-            if (replaced != null && !store.remove(current.id)) {
-                scheduleIncomingShareCleanup(applicationContext, current.id)
-            }
-        }
-        request?.takeIf { current -> current.canReleaseForIncomingShareReplacement() }?.let { current ->
-            if (store.removeIfReleasable(current.id)) {
-                NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(current.id))
-            }
+        request?.takeIf { current ->
+            current.state == AndroidIncomingShareState.Staged || current.canReleaseForIncomingShareReplacement()
+        }?.let { current ->
+            scheduleIncomingSharePresentedRelease(applicationContext, current)
         }
         request = null
         session = null
         serverInfo = null
-        recoveryRequestId = null
+        corruptRecoveryRequestId = null
+        corruptRemovalConfirmationVisible = false
         queueing = false
         folderPickerVisible = false
     }
@@ -256,9 +251,16 @@ class AndroidShareUploadActivity : ComponentActivity() {
         restoreJob?.cancel()
         queueJob?.cancel()
         val presented = request
-        if (presented != null && store.removeIfPresentedReleasable(presented)) {
-            NotificationManagerCompat.from(this).cancel(incomingShareNotificationId(presented.id))
+        if (presented?.canReleaseIncomingShareRequest() == true) {
+            scheduleIncomingSharePresentedRelease(applicationContext, presented)
         }
+        finish()
+    }
+
+    private fun removeCorruptRecoveryAndFinish() {
+        val requestId = corruptRecoveryRequestId ?: return
+        corruptRemovalConfirmationVisible = false
+        scheduleCorruptIncomingShareRemoval(applicationContext, requestId)
         finish()
     }
 

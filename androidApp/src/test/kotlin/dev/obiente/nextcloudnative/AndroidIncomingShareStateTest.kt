@@ -515,6 +515,10 @@ class AndroidIncomingShareStateTest {
 
         assertFalse(shouldReleasePresentedIncomingShareRequest(presented, terminal))
         assertTrue(shouldReleasePresentedIncomingShareRequest(terminal, terminal))
+        assertFalse(
+            terminal.incomingShareReleaseFingerprint() ==
+                terminal.copy(message = "A newer terminal result").incomingShareReleaseFingerprint(),
+        )
     }
 
     @Test
