@@ -2,6 +2,51 @@ package dev.obiente.nextcloudnative
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+
+internal data class AndroidIncomingShareFile(
+    val id: String,
+    val displayName: String,
+    val mimeType: String?,
+    val sizeBytes: Long,
+    val stagedName: String,
+    val contentHash: String? = null,
+) {
+    init {
+        require(contentHash == null || INCOMING_SHARE_CONTENT_HASH_PATTERN.matches(contentHash))
+    }
+}
+
+private val INCOMING_SHARE_CONTENT_HASH_PATTERN = Regex("sha256:[0-9a-f]{64}")
+
+/**
+ * Closes a provider-owned stream as soon as its coroutine is cancelled.
+ *
+ * A blocking ContentProvider read is not required to react to thread interruption. The sibling
+ * cancellation watcher therefore closes the descriptor from another IO worker so Android can
+ * release the provider request and the staging directory can be reclaimed.
+ */
+internal suspend fun <T> InputStream.useClosingOnCancellation(
+    block: suspend (InputStream) -> T,
+): T = coroutineScope {
+    val input = this@useClosingOnCancellation
+    val cancellationCloser = launch(start = CoroutineStart.UNDISPATCHED) {
+        try {
+            awaitCancellation()
+        } finally {
+            runCatching { input.close() }
+        }
+    }
+    try {
+        input.use { block(it) }
+    } finally {
+        cancellationCloser.cancel()
+    }
+}
 
 internal fun createIncomingShareStagingMarker(directory: File, markerName: String): File =
     File(directory, markerName).also { marker -> FileOutputStream(marker).use { it.fd.sync() } }

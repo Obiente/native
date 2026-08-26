@@ -39,6 +39,7 @@ class AndroidIncomingShareStoreInstrumentedTest {
         )
         try {
             assertEquals(listOf("one.txt"), single.files.map(AndroidIncomingShareFile::displayName))
+            assertTrue(single.files.single().contentHash?.matches(Regex("sha256:[0-9a-f]{64}")) == true)
             assertTrue(store.listRecoverablePage("account-1", cursor = null).requests.any { it.id == single.id })
             assertArrayEquals(
                 IncomingShareFixtureProvider.payload("one.txt"),
@@ -206,20 +207,30 @@ class AndroidIncomingShareStoreInstrumentedTest {
         )
         assertTrue(store.loadResult(releasable.id) is AndroidIncomingShareLoadResult.Missing)
 
-        val corruptId = "11111111-2222-3333-4444-555555555555"
+        val corrupt = store.stage(
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_STREAM, fixtureUri("one.txt"))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            "account-1",
+        )
+        val corruptId = corrupt.id
         val directory = java.io.File(context.filesDir, "incoming-share/$corruptId")
-        assertTrue(directory.mkdirs())
         java.io.File(directory, "request.json").writeText("{not-json")
         try {
             assertTrue(store.loadResult(corruptId) is AndroidIncomingShareLoadResult.Corrupt)
             assertFalse(store.removeIfMatchingReleasable(corruptId, "not-a-fingerprint"))
+            assertTrue(store.listRecoverablePage("account-1", null).corruptRequestIds.contains(corruptId))
+            assertFalse(store.listRecoverablePage("account-2", null).corruptRequestIds.contains(corruptId))
             try {
                 store.requireAvailable(corruptId)
                 fail("Expected a typed corrupt-manifest failure")
             } catch (failure: CorruptIncomingShareManifestException) {
                 assertEquals(corruptId, failure.requestId)
+                assertEquals("account-1", failure.accountId)
             }
-            assertTrue(store.removeCorruptRecovery(corruptId))
+            assertFalse(store.removeCorruptRecovery(corruptId, "account-2"))
+            assertTrue(store.removeCorruptRecovery(corruptId, "account-1"))
         } finally {
             if (directory.exists()) assertTrue(store.remove(corruptId))
         }

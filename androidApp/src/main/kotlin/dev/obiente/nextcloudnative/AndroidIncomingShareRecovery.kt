@@ -340,7 +340,18 @@ internal suspend fun loadAndroidIncomingShareRecoveries(
     val uploads = AndroidIncomingShareUploads(context)
     recoveries.requests.forEach(uploads::ensureQueuedRequestScheduled)
     IncomingShareRecoveryPage(
-        requests = recoveries.requests.map(AndroidIncomingShareRequest::toPresentation),
+        requests = recoveries.requests.map(AndroidIncomingShareRequest::toPresentation) +
+            recoveries.corruptRequestIds.map { requestId ->
+                IncomingShareUploadPresentation(
+                    id = requestId,
+                    files = emptyList(),
+                    state = dev.obiente.nextcloudnative.app.IncomingShareUploadState.Failed,
+                    destinationPath = null,
+                    completedFiles = 0,
+                    message = "This recovery record is damaged.",
+                    isCorruptRecovery = true,
+                )
+            },
         nextCursor = recoveries.nextCursor,
     )
 }

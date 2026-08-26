@@ -3,12 +3,14 @@ package dev.obiente.nextcloudnative
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 
 internal const val INCOMING_SHARE_RECOVERY_DIRECTORY_PAGE_SIZE = 32
 
 internal data class AndroidIncomingShareRecoveryPage(
     val requests: List<AndroidIncomingShareRequest>,
+    val corruptRequestIds: List<String>,
     val nextCursor: String?,
 )
 
@@ -49,13 +51,18 @@ internal fun AndroidIncomingShareStore.listRecoverablePage(
             .toList()
     }
     val page = selectIncomingShareRecoveryDirectoryPage(directories, cursor)
-    val requests = page.directories.asSequence()
-        .mapNotNull { directory ->
-            (loadResult(directory.id) as? AndroidIncomingShareLoadResult.Available)?.request
+    val loaded = page.directories.map { directory -> directory to loadResult(directory.id) }
+    val requests = loaded.mapNotNull { (_, result) ->
+        (result as? AndroidIncomingShareLoadResult.Available)?.request
+            ?.takeIf { request -> request.requiresIncomingShareRecovery(accountId) }
+    }
+    val corruptRequestIds = loaded.mapNotNull { (directory, result) ->
+        directory.id.takeIf {
+            result is AndroidIncomingShareLoadResult.Corrupt &&
+                corruptRecoveryAccountId(directory.id) == accountId
         }
-        .filter { request -> request.requiresIncomingShareRecovery(accountId) }
-        .toList()
-    return AndroidIncomingShareRecoveryPage(requests, page.nextCursor)
+    }
+    return AndroidIncomingShareRecoveryPage(requests, corruptRequestIds, page.nextCursor)
 }
 
 internal fun selectIncomingShareRecoveryDirectoryPage(
@@ -122,7 +129,8 @@ internal fun AndroidIncomingShareRequest.toJson(): JSONObject = JSONObject()
                     .put("displayName", file.displayName)
                     .put("mimeType", file.mimeType)
                     .put("sizeBytes", file.sizeBytes)
-                    .put("stagedName", file.stagedName),
+                    .put("stagedName", file.stagedName)
+                    .put("contentHash", file.contentHash),
             )
         }
     })
@@ -164,8 +172,29 @@ internal fun JSONObject.toIncomingShareRequest(): AndroidIncomingShareRequest = 
                     mimeType = file.optString("mimeType").takeIf(String::isNotBlank),
                     sizeBytes = file.getLong("sizeBytes"),
                     stagedName = file.getString("stagedName"),
+                    contentHash = file.optString("contentHash").takeIf(String::isNotBlank),
                 )
             }
         }
     },
 )
+
+internal fun saveIncomingShareAccountBinding(directory: File, accountId: String) {
+    require(directory.isDirectory && accountId.isNotBlank() && accountId.length <= 256)
+    val binding = File(directory, INCOMING_SHARE_ACCOUNT_BINDING_NAME)
+    if (loadIncomingShareAccountBinding(directory) == accountId) return
+    FileOutputStream(binding).use { output ->
+        output.write(accountId.encodeToByteArray())
+        output.fd.sync()
+    }
+}
+
+internal fun loadIncomingShareAccountBinding(directory: File): String? {
+    val binding = File(directory, INCOMING_SHARE_ACCOUNT_BINDING_NAME)
+    if (!binding.isFile || binding.length() !in 1L..256L) return null
+    return runCatching { binding.readText() }
+        .getOrNull()
+        ?.takeIf { it.isNotBlank() && it.length <= 256 }
+}
+
+internal const val INCOMING_SHARE_ACCOUNT_BINDING_NAME = ".account"

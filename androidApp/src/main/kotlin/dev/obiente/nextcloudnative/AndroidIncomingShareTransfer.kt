@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.incomingShareUploadNameCandidates
 import java.io.IOException
 import java.io.File
+import java.io.FileInputStream
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CancellationException
 
@@ -38,6 +40,7 @@ internal class AndroidIncomingShareFileTransfer(
     ): AndroidIncomingShareRequest {
         val source = request.files[fileIndex]
         val stagedFile = store.stagedFile(requestId, source)
+        requireValidIncomingShareStagedFile(stagedFile, source, cancellation)
         return if (stagedFile.length() <= DIRECT_INCOMING_SHARE_UPLOAD_BYTES) {
             uploadDirect(
                 requestId,
@@ -208,6 +211,41 @@ internal class AndroidIncomingShareFileTransfer(
             occupiedNames += upload.targetName
             return updated
         }
+    }
+}
+
+internal fun requireValidIncomingShareStagedFile(
+    stagedFile: File,
+    source: AndroidIncomingShareFile,
+    cancellation: DocumentRequestCancellation,
+) {
+    require(stagedFile.length() == source.sizeBytes) {
+        "The protected staged copy of ${source.displayName} changed before upload."
+    }
+    val expectedHash = source.contentHash ?: return
+    val digest = MessageDigest.getInstance("SHA-256")
+    FileInputStream(stagedFile).use { input ->
+        val buffer = ByteArray(64 * 1024)
+        var totalBytes = 0L
+        while (true) {
+            cancellation.throwIfCancelled()
+            val count = input.read(buffer)
+            if (count < 0) break
+            totalBytes += count
+            require(totalBytes <= source.sizeBytes) {
+                "The protected staged copy of ${source.displayName} changed before upload."
+            }
+            digest.update(buffer, 0, count)
+        }
+        require(totalBytes == source.sizeBytes) {
+            "The protected staged copy of ${source.displayName} changed before upload."
+        }
+    }
+    val actualHash = "sha256:" + digest.digest().joinToString("") { byte ->
+        "%02x".format(byte.toInt() and 0xff)
+    }
+    require(actualHash == expectedHash) {
+        "The protected staged copy of ${source.displayName} failed its integrity check."
     }
 }
 

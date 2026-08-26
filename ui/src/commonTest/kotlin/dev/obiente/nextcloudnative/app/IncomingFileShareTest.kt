@@ -60,8 +60,10 @@ class IncomingFileShareTest {
     fun recoveryPrioritizesAResultThatNeedsReview() {
         val active = recovery("active", IncomingShareUploadState.Uploading)
         val uncertain = recovery("uncertain", IncomingShareUploadState.OutcomeUnknown)
+        val corrupt = recovery("corrupt", IncomingShareUploadState.Failed).copy(isCorruptRecovery = true)
 
         assertEquals(uncertain, listOf(active, uncertain).primaryIncomingShareRecovery())
+        assertEquals(corrupt, listOf(active, corrupt).primaryIncomingShareRecovery())
         assertEquals(active, listOf(active).primaryIncomingShareRecovery())
         assertEquals(null, emptyList<IncomingShareUploadPresentation>().primaryIncomingShareRecovery())
         assertEquals(2_000L, incomingShareRecoveryRefreshMillis(hasRecoveries = true))

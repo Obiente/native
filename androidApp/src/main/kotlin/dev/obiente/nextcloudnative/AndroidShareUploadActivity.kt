@@ -49,6 +49,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
     private var folderPickerVisible by mutableStateOf(false)
     private var error by mutableStateOf<String?>(null)
     private var corruptRecoveryRequestId by mutableStateOf<String?>(null)
+    private var corruptRecoveryAccountId: String? = null
     private var corruptRemovalConfirmationVisible by mutableStateOf(false)
     private var discardConfirmationVisible by mutableStateOf(false)
     private var restoreJob: Job? = null
@@ -168,13 +169,16 @@ class AndroidShareUploadActivity : ComponentActivity() {
             return
         }
         corruptRecoveryRequestId = null
+        corruptRecoveryAccountId = null
         corruptRemovalConfirmationVisible = false
         discardConfirmationVisible = false
         restoreJob = lifecycleScope.launch {
             var unclaimedStagedRequestId: String? = null
+            var activeAccountId: String? = null
             try {
                 val activeSession = services.loadSession()
                     ?: error("Sign in to Nextcloud Native before sharing files to it.")
+                activeAccountId = NextcloudDocumentIds.accountKey(activeSession)
                 val staged = withContext(Dispatchers.IO) {
                     val restored = validatedRequestId?.let { requestId ->
                         store.requireAvailable(requestId)
@@ -200,7 +204,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
             } catch (_: CancellationException) {
                 return@launch
             } catch (failure: Throwable) {
-                corruptRecoveryRequestId = (failure as? CorruptIncomingShareManifestException)?.requestId
+                val corrupt = failure as? CorruptIncomingShareManifestException
+                corruptRecoveryRequestId = corrupt?.requestId
+                    ?.takeIf { activeAccountId != null && corrupt.accountId == activeAccountId }
+                corruptRecoveryAccountId = activeAccountId.takeIf { corruptRecoveryRequestId != null }
                 error = failure.message ?: "The shared files could not be prepared."
             } finally {
                 unclaimedStagedRequestId?.let { requestId ->
@@ -224,6 +231,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
         session = null
         serverInfo = null
         corruptRecoveryRequestId = null
+        corruptRecoveryAccountId = null
         corruptRemovalConfirmationVisible = false
         discardConfirmationVisible = false
         queueing = false
@@ -359,8 +367,9 @@ class AndroidShareUploadActivity : ComponentActivity() {
 
     private fun removeCorruptRecoveryAndFinish() {
         val requestId = corruptRecoveryRequestId ?: return
+        val accountId = corruptRecoveryAccountId ?: return
         corruptRemovalConfirmationVisible = false
-        scheduleCorruptIncomingShareRemoval(applicationContext, requestId)
+        scheduleCorruptIncomingShareRemoval(applicationContext, requestId, accountId)
         finish()
     }
 

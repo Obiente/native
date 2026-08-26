@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
+import java.nio.file.Files
+import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -646,6 +648,37 @@ class AndroidIncomingShareStateTest {
         assertNull(second.nextCursor)
         assertFailsWith<IllegalArgumentException> {
             selectIncomingShareRecoveryDirectoryPage(directories, cursor = "not-a-cursor")
+        }
+    }
+
+    @Test
+    fun stagedUploadIdentityRejectsSameLengthContentChanges() {
+        val root = Files.createTempDirectory("incoming-share-identity").toFile()
+        try {
+            val staged = root.resolve("staged-file").apply { writeText("alpha") }
+            val expectedHash = "sha256:" + MessageDigest.getInstance("SHA-256")
+                .digest("alpha".encodeToByteArray())
+                .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+            val source = AndroidIncomingShareFile(
+                id = "11111111-2222-3333-4444-555555555555",
+                displayName = "note.txt",
+                mimeType = "text/plain",
+                sizeBytes = 5,
+                stagedName = "staged-file",
+                contentHash = expectedHash,
+            )
+
+            requireValidIncomingShareStagedFile(staged, source, NoDocumentRequestCancellation)
+            staged.writeText("bravo")
+            assertFailsWith<IllegalArgumentException> {
+                requireValidIncomingShareStagedFile(staged, source, NoDocumentRequestCancellation)
+            }
+            staged.writeText("shorter")
+            assertFailsWith<IllegalArgumentException> {
+                requireValidIncomingShareStagedFile(staged, source, NoDocumentRequestCancellation)
+            }
+        } finally {
+            root.deleteRecursively()
         }
     }
 

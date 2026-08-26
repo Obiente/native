@@ -22,7 +22,9 @@ internal class AndroidIncomingShareReleaseWorker(
             ?: return@withContext Result.failure()
         val store = AndroidIncomingShareStore(applicationContext)
         val released = if (inputData.getBoolean(KEY_REMOVE_CORRUPT_RECOVERY, false)) {
-            store.removeCorruptRecovery(requestId)
+            val expectedAccountId = inputData.getString(KEY_EXPECTED_ACCOUNT_ID)
+                ?: return@withContext Result.failure()
+            store.removeCorruptRecovery(requestId, expectedAccountId)
         } else if (inputData.getBoolean(KEY_REQUEST_DISCARD, false)) {
             val expectedFingerprint = inputData.getString(KEY_EXPECTED_FINGERPRINT)
                 ?: return@withContext Result.failure()
@@ -50,6 +52,7 @@ internal class AndroidIncomingShareReleaseWorker(
         const val KEY_EXPECTED_FINGERPRINT = "expected_fingerprint"
         const val KEY_REMOVE_CORRUPT_RECOVERY = "remove_corrupt_recovery"
         const val KEY_REQUEST_DISCARD = "request_discard"
+        const val KEY_EXPECTED_ACCOUNT_ID = "expected_account_id"
     }
 }
 
@@ -101,8 +104,9 @@ internal fun scheduleIncomingSharePresentedRelease(
     )
 }
 
-internal fun scheduleCorruptIncomingShareRemoval(context: Context, requestId: String) {
+internal fun scheduleCorruptIncomingShareRemoval(context: Context, requestId: String, expectedAccountId: String) {
     require(isValidIncomingShareRequestId(requestId))
+    require(expectedAccountId.isNotBlank())
     WorkManager.getInstance(context).enqueueUniqueWork(
         incomingShareReleaseWorkName(requestId),
         ExistingWorkPolicy.REPLACE,
@@ -111,6 +115,7 @@ internal fun scheduleCorruptIncomingShareRemoval(context: Context, requestId: St
                 Data.Builder()
                     .putString(AndroidIncomingShareUploadWorker.KEY_REQUEST_ID, requestId)
                     .putBoolean(AndroidIncomingShareReleaseWorker.KEY_REMOVE_CORRUPT_RECOVERY, true)
+                    .putString(AndroidIncomingShareReleaseWorker.KEY_EXPECTED_ACCOUNT_ID, expectedAccountId)
                     .build(),
             )
             .build(),

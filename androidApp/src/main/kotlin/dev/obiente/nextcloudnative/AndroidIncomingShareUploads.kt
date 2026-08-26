@@ -15,6 +15,7 @@ import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -34,14 +35,6 @@ internal enum class AndroidIncomingShareState {
     OutcomeUnknown,
     Canceled,
 }
-
-internal data class AndroidIncomingShareFile(
-    val id: String,
-    val displayName: String,
-    val mimeType: String?,
-    val sizeBytes: Long,
-    val stagedName: String,
-)
 
 internal data class AndroidIncomingShareChunkSession(
     val fileIndex: Int,
@@ -95,7 +88,10 @@ internal sealed interface AndroidIncomingShareLoadResult {
     data class Corrupt(val requestId: String) : AndroidIncomingShareLoadResult
 }
 
-internal class CorruptIncomingShareManifestException(val requestId: String) :
+internal class CorruptIncomingShareManifestException(
+    val requestId: String,
+    val accountId: String?,
+) :
     Exception("This shared upload needs attention because its recovery record is damaged.")
 
 internal sealed interface AndroidIncomingShareSource {
@@ -145,11 +141,12 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                     "$displayName is too large to stage safely."
                 }
                 requireIncomingShareStagingSpace(requestDirectory, declaredBytes, displayName, MIN_STAGING_FREE_BYTES)
+                val digest = MessageDigest.getInstance("SHA-256")
                 val input = when (source) {
                     is AndroidIncomingShareSource.ContentUri -> context.contentResolver.openInputStream(source.uri)
                     is AndroidIncomingShareSource.SharedText -> ByteArrayInputStream(requireNotNull(textBytes))
                 }
-                val copied = input?.use { input ->
+                val copied = input?.useClosingOnCancellation { input ->
                     FileOutputStream(destination).use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         var fileBytes = 0L
@@ -164,6 +161,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                                 "The shared files are too large to stage safely."
                             }
                             requireIncomingShareStreamingSpace(requestDirectory, count, MIN_STAGING_FREE_BYTES)
+                            digest.update(buffer, 0, count)
                             output.write(buffer, 0, count)
                         }
                         output.fd.sync()
@@ -183,6 +181,9 @@ internal class AndroidIncomingShareStore(private val context: Context) {
                     },
                     sizeBytes = copied,
                     stagedName = stagedName,
+                    contentHash = "sha256:" + digest.digest().joinToString("") { byte ->
+                        "%02x".format(byte.toInt() and 0xff)
+                    },
                 )
             }
             AndroidIncomingShareRequest(
@@ -211,13 +212,15 @@ internal class AndroidIncomingShareStore(private val context: Context) {
 
     fun requireAvailable(id: String): AndroidIncomingShareRequest = when (val loaded = loadResult(id)) {
         is AndroidIncomingShareLoadResult.Available -> loaded.request
-        is AndroidIncomingShareLoadResult.Corrupt -> throw CorruptIncomingShareManifestException(id)
+        is AndroidIncomingShareLoadResult.Corrupt ->
+            throw CorruptIncomingShareManifestException(id, corruptRecoveryAccountId(id))
         AndroidIncomingShareLoadResult.Missing -> error("This shared upload is no longer available.")
     }
 
     fun save(request: AndroidIncomingShareRequest) = synchronized(LOCK) {
         val directory = directory(request.id)
         require(directory.isDirectory)
+        request.accountId?.let { accountId -> saveIncomingShareAccountBinding(directory, accountId) }
         val atomic = AtomicFile(manifest(request.id))
         val stream = atomic.startWrite()
         try {
@@ -518,10 +521,15 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         }
     }
 
-    fun removeCorruptRecovery(id: String): Boolean = synchronized(LOCK) {
+    fun corruptRecoveryAccountId(id: String): String? =
+        loadIncomingShareAccountBinding(directory(id))
+
+    fun removeCorruptRecovery(id: String, expectedAccountId: String): Boolean = synchronized(LOCK) {
+        require(expectedAccountId.isNotBlank())
         when (loadResult(id)) {
             AndroidIncomingShareLoadResult.Missing -> true
-            is AndroidIncomingShareLoadResult.Corrupt -> remove(id)
+            is AndroidIncomingShareLoadResult.Corrupt ->
+                corruptRecoveryAccountId(id) == expectedAccountId && remove(id)
             is AndroidIncomingShareLoadResult.Available -> false
         }
     }
@@ -558,6 +566,7 @@ internal class AndroidIncomingShareStore(private val context: Context) {
         const val MIN_STAGING_FREE_BYTES = 64L * 1024L * 1024L
     }
 }
+
 
 internal fun DocumentWebDavException.isIncomingShareNameCollision(): Boolean =
     status == 412

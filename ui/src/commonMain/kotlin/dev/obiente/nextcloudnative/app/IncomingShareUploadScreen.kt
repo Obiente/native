@@ -71,6 +71,7 @@ data class IncomingShareUploadPresentation(
     val completedFiles: Int,
     val message: String?,
     val canVerifyOutcome: Boolean = false,
+    val isCorruptRecovery: Boolean = false,
 )
 
 data class IncomingShareRecoveryPage(
@@ -143,7 +144,7 @@ internal fun IncomingShareRecoveryCard(
     }
     val selectedIndex = if (ordered.isEmpty()) 0 else pageIndex.coerceIn(ordered.indices)
     val request = ordered.getOrNull(selectedIndex)
-    val needsAttention = request?.state in setOf(
+    val needsAttention = request?.isCorruptRecovery == true || request?.state in setOf(
         IncomingShareUploadState.Failed,
         IncomingShareUploadState.OutcomeUnknown,
         IncomingShareUploadState.Canceled,
@@ -170,6 +171,7 @@ internal fun IncomingShareRecoveryCard(
                     Text(
                         when {
                             request == null -> "No shared uploads on this page"
+                            request.isCorruptRecovery -> "Shared upload recovery is damaged"
                             needsAttention -> "Shared upload needs review"
                             else -> "Shared upload in progress"
                         },
@@ -177,7 +179,11 @@ internal fun IncomingShareRecoveryCard(
                     )
                     if (request != null) {
                         Text(
-                            "${request.completedFiles} of ${request.files.size} files confirmed.",
+                            if (request.isCorruptRecovery) {
+                                "Protected staged files are preserved for review or removal."
+                            } else {
+                                "${request.completedFiles} of ${request.files.size} files confirmed."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                     } else {
@@ -232,7 +238,7 @@ internal fun IncomingShareRecoveryCard(
 }
 
 private fun IncomingShareUploadPresentation.incomingShareRecoveryNeedsAttention(): Boolean =
-    state in setOf(
+    isCorruptRecovery || state in setOf(
         IncomingShareUploadState.Failed,
         IncomingShareUploadState.OutcomeUnknown,
         IncomingShareUploadState.Canceled,
