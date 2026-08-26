@@ -230,10 +230,11 @@ class FileSyncContentIdentityTest {
         assertEquals(listOf(0L, progress.verifiedBytes), slices.map(FileSyncContentVerificationSlice::offset))
         assertEquals(12, slices.first().length)
 
+        val largeBytes = requireNotNull(large.expectedSizeBytes)
         val pending = markPendingFileSyncContentVerification(
             FileSyncContentIdentitySnapshot(
-                localEntries = listOf(fileOnDevice(large.relativePath, large.localRevision, large.expectedSizeBytes!!)),
-                remoteEntries = listOf(fileOnServer(large.relativePath, large.remoteEtag, large.expectedSizeBytes!!)),
+                localEntries = listOf(fileOnDevice(large.relativePath, large.localRevision, largeBytes)),
+                remoteEntries = listOf(fileOnServer(large.relativePath, large.remoteEtag, largeBytes)),
             ),
             listOf(large),
         )

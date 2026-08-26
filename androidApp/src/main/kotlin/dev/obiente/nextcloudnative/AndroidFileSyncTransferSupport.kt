@@ -29,7 +29,7 @@ internal fun verifyAndroidFileSyncSlice(
     return completeJvmFileSyncContentSlice(slice, localHash, remoteHash)
 }
 
-internal inline fun streamAndroidFileSyncDownload(
+internal fun streamAndroidFileSyncDownload(
     declaredByteCount: Long?,
     writeLocal: (((OutputStream) -> Unit) -> Unit),
     readRemote: (OutputStream, maximumBytes: Long) -> Unit,
