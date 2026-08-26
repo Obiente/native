@@ -205,6 +205,12 @@ internal class DesktopFileSyncRemoteTree(
         require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
         if (length == 0) {
             require(expectedBytes == 0L)
+            val after = requireNotNull(resolve(relativePath)) {
+                "The server file disappeared during content verification."
+            }
+            require(after.entry.etag == expectedRemoteEtag && after.entry.size == 0L && !after.isDirectory) {
+                "The server file changed during content verification."
+            }
             return hashExactJvmFileSyncSlice(java.io.ByteArrayInputStream(byteArrayOf()), 0)
         }
         val endInclusive = offset + length - 1L

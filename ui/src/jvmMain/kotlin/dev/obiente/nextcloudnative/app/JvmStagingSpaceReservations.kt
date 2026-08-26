@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.Closeable
+import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -75,3 +77,10 @@ private fun saturatingJvmStagingAdd(left: Long, right: Long): Long =
     if (right > Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
 
 val sharedJvmStagingSpaceReservations = JvmStagingSpaceReservations()
+
+/** Stable identity shared by every staging owner on one physical filesystem. */
+fun jvmStagingStorageKey(root: File): String {
+    require(root.isDirectory) { "The staging root is not a directory." }
+    val store = Files.getFileStore(root.canonicalFile.toPath())
+    return listOf(store.name(), store.type(), store.totalSpace).joinToString("\u0000")
+}

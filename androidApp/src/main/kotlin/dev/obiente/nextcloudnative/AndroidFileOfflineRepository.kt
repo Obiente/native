@@ -24,6 +24,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.markFileOfflineJobRunning
+import dev.obiente.nextcloudnative.app.jvmStagingStorageKey
 import dev.obiente.nextcloudnative.app.planFileOfflineRequest
 import dev.obiente.nextcloudnative.app.recordFileOfflineJobResult
 import dev.obiente.nextcloudnative.app.sharedJvmStagingSpaceReservations
@@ -446,7 +447,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
         }
         val reservation = try {
             sharedJvmStagingSpaceReservations.reserve(
-                storageKey = contentRoot.canonicalFile.absolutePath,
+                storageKey = jvmStagingStorageKey(accountDirectory),
                 usableBytes = accountDirectory.usableSpace.coerceAtLeast(0L),
                 declaredByteCount = started.record.descriptor.size,
                 reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,

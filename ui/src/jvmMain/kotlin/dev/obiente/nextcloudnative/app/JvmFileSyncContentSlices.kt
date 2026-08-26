@@ -62,19 +62,21 @@ fun completeJvmFileSyncContentSlice(
     slice: FileSyncContentVerificationSlice,
     localChunkHash: String,
     remoteChunkHash: String,
+    localContentHash: String,
 ): JvmFileSyncContentSliceOutcome {
     require(normalizeSyncSha256(localChunkHash) == localChunkHash)
     require(normalizeSyncSha256(remoteChunkHash) == remoteChunkHash)
+    require(normalizeSyncSha256(localContentHash) == localContentHash)
     if (localChunkHash != remoteChunkHash) {
         return JvmFileSyncContentSliceOutcome(
-            result = FileSyncContentVerificationResult(slice.candidate, localChunkHash, null),
+            result = FileSyncContentVerificationResult(slice.candidate, localContentHash, null),
         )
     }
     val aggregate = advanceJvmFileSyncContentAggregate(slice.aggregateHash, localChunkHash)
     val verifiedBytes = slice.offset + slice.length
     return if (verifiedBytes == requireNotNull(slice.candidate.expectedSizeBytes)) {
         JvmFileSyncContentSliceOutcome(
-            result = FileSyncContentVerificationResult(slice.candidate, aggregate, aggregate),
+            result = FileSyncContentVerificationResult(slice.candidate, localContentHash, localContentHash),
         )
     } else {
         JvmFileSyncContentSliceOutcome(

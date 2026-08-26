@@ -18,6 +18,30 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
+    fun `empty range verification revalidates the listed remote generation`() {
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            response(chain.request(), 207, "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>")
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            userId = "alice",
+            remoteRootPath = "Vault",
+            client = client,
+        )
+
+        assertFails {
+            tree.contentRangeHash(
+                relativePath = "empty.bin",
+                expectedRemoteEtag = "\"empty-1\"",
+                expectedBytes = 0L,
+                offset = 0L,
+                length = 0,
+                shouldContinue = { true },
+            )
+        }
+    }
+
+    @Test
     fun `content identity streams and verifies one exact remote generation`() {
         val methods = mutableListOf<String>()
         val ifMatches = mutableListOf<String?>()

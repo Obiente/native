@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
-import java.nio.file.Files
 
 /**
  * Coordinates temporary-file admission so concurrent transfers cannot each claim the same bytes.
@@ -19,9 +18,8 @@ internal class DesktopStagingSpaceReservations(
         require(root.isDirectory) { "The staging root is not a directory." }
         require(declaredByteCount == null || declaredByteCount >= 0L)
         require(reserveBytes >= 0L)
-        val store = Files.getFileStore(root.toPath())
         return ledger.reserve(
-            storageKey = listOf(store.name(), store.type(), store.totalSpace).joinToString("\u0000"),
+            storageKey = jvmStagingStorageKey(root),
             usableBytes = usableSpace(root),
             declaredByteCount = declaredByteCount,
             reserveBytes = reserveBytes,

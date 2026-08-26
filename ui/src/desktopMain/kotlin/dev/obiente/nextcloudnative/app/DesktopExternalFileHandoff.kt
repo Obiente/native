@@ -307,7 +307,7 @@ internal fun publishDesktopStagedFile(
         return DesktopStagedFileExport.Exported
     }
     val reservation = reservations.reserve(
-        storageKey = "${destinationStore.name()}:${destinationStore.type()}",
+        storageKey = jvmStagingStorageKey(parent),
         usableBytes = parent.usableSpace.coerceAtLeast(0L),
         declaredByteCount = file.length(),
         reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,

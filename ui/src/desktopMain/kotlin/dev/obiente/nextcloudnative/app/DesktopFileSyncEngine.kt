@@ -336,9 +336,20 @@ internal class DesktopFileSyncEngine(
             initialPair.contentVerificationProgress,
         )
         val progressByPath = currentProgress.associateByTo(mutableMapOf()) { it.candidate.relativePath }
+        val localContentHashes = scannedLocalEntries.associate { entry ->
+            entry.relativePath to entry.contentHash
+        }
         val completedSlices = try {
             planFileSyncContentVerificationSlices(candidates, currentProgress).map { slice ->
-                verifyDesktopFileSyncContentSlice(slice, local, remote, shouldContinue).also { outcome ->
+                verifyDesktopFileSyncContentSlice(
+                    slice,
+                    local,
+                    remote,
+                    requireNotNull(localContentHashes[slice.candidate.relativePath]) {
+                        "The local file has no complete content hash."
+                    },
+                    shouldContinue,
+                ).also { outcome ->
                     progressByPath.remove(slice.candidate.relativePath)
                     outcome.progress?.let { progress ->
                         progressByPath[progress.candidate.relativePath] = progress

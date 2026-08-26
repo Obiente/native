@@ -7,6 +7,26 @@ import kotlin.test.assertFailsWith
 
 class DesktopStagingSpaceReservationsTest {
     @Test
+    fun `different staging directories on one filesystem share reservations`() {
+        val root = Files.createTempDirectory("nextcloud-stage-filesystem-key-").toFile()
+        try {
+            val offline = root.resolve("offline").apply { mkdir() }
+            val handoff = root.resolve("handoff").apply { mkdir() }
+            assertEquals(jvmStagingStorageKey(offline), jvmStagingStorageKey(handoff))
+            val ledger = JvmStagingSpaceReservations()
+            ledger.reserve(jvmStagingStorageKey(offline), 1_000L, 600L, 100L).use {
+                ledger.reserve(jvmStagingStorageKey(handoff), 1_000L, 300L, 100L).use {
+                    assertFailsWith<IllegalStateException> {
+                        ledger.reserve(jvmStagingStorageKey(handoff), 1_000L, 1L, 100L)
+                    }
+                }
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `concurrent reservations cannot claim the same staging bytes`() {
         val root = Files.createTempDirectory("nextcloud-stage-reservations-").toFile()
         try {

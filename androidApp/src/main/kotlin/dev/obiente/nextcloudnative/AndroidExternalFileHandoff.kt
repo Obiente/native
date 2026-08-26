@@ -15,6 +15,7 @@ import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.sharedJvmStagingSpaceReservations
+import dev.obiente.nextcloudnative.app.jvmStagingStorageKey
 import dev.obiente.nextcloudnative.app.canUseSeekableRemoteHandoff
 import dev.obiente.nextcloudnative.app.sanitizeExternalFileName
 import dev.obiente.nextcloudnative.app.sanitizeExternalMimeType
@@ -32,7 +33,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 internal class AndroidExternalFileHandoff(private val context: Context) {
-    private val stagingStorageKey = context.cacheDir.canonicalFile.absolutePath
 
     init {
         AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(context))
@@ -281,7 +281,7 @@ internal class AndroidExternalFileHandoff(private val context: Context) {
         val canonicalRoot = root.canonicalFile
         pruneExternalShareCache(canonicalRoot, declaredByteCount ?: 0L)
         val reservation = sharedJvmStagingSpaceReservations.reserve(
-            storageKey = stagingStorageKey,
+            storageKey = jvmStagingStorageKey(canonicalRoot),
             usableBytes = canonicalRoot.usableSpace.coerceAtLeast(0L),
             declaredByteCount = declaredByteCount,
             reserveBytes = dev.obiente.nextcloudnative.app.STAGED_FILE_FREE_SPACE_RESERVE_BYTES,

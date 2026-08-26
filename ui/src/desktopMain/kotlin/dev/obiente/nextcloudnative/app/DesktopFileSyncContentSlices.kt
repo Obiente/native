@@ -4,6 +4,7 @@ internal fun verifyDesktopFileSyncContentSlice(
     slice: FileSyncContentVerificationSlice,
     local: DesktopFileSyncLocalTree,
     remote: DesktopFileSyncRemoteTree,
+    localContentHash: String,
     shouldContinue: () -> Boolean,
 ): JvmFileSyncContentSliceOutcome {
     val candidate = slice.candidate
@@ -28,5 +29,5 @@ internal fun verifyDesktopFileSyncContentSlice(
         slice.length,
         continueOrStop,
     )
-    return completeJvmFileSyncContentSlice(slice, localHash, remoteHash)
+    return completeJvmFileSyncContentSlice(slice, localHash, remoteHash, localContentHash)
 }
