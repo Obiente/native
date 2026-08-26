@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import kotlinx.coroutines.CancellationException
 
 fun jvmOwnedUploadStagePath(relativePath: String, uploadId: String): String {
     requireValidSyncPath(relativePath)
@@ -87,7 +88,12 @@ fun jvmResumableNextcloudUpload(
     newUploadId: () -> String,
     persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     remote: JvmResumableNextcloudUploadRemote,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ): RemoteSyncEntry {
+    fun ensureActive() {
+        if (!shouldContinue()) throw CancellationException("Resumable upload cancelled.")
+    }
+    ensureActive()
     require(source.isFile)
     requireValidSyncPath(relativePath)
     require(localRevision.isNotBlank())
@@ -125,12 +131,14 @@ fun jvmResumableNextcloudUpload(
         persistCheckpoint(progress)
     }
     while (progress.uploadedChunks < plan.chunkCount) {
+        ensureActive()
         val chunk = nextcloudUploadChunk(plan, source.length(), progress.uploadedChunks)
         remote.uploadChunk(progress.uploadId, relativePath, source, chunk)
         progress = progress.copy(uploadedChunks = progress.uploadedChunks + 1)
         persistCheckpoint(progress)
     }
 
+    ensureActive()
     progress = progress.copy(commitInFlight = true)
     persistCheckpoint(progress)
     val assembledStageEtag = remote.commitChunksToOwnedStage(progress.uploadId, relativePath, source.length())
@@ -141,5 +149,6 @@ fun jvmResumableNextcloudUpload(
     val verifiedStageEtag = remote.verifyOwnedStage(
         progress.uploadId, relativePath, source, assembledStageEtag,
     )
+    ensureActive()
     return remote.publishOwnedStage(progress.uploadId, relativePath, verifiedStageEtag, expectedRemoteEtag)
 }

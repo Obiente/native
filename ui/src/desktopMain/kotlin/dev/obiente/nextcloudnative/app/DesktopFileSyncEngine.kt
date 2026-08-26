@@ -478,7 +478,9 @@ internal class DesktopFileSyncEngine(
                 val checkpoints = DesktopFileSyncCheckpointPersistence(
                     execution, store, pairId, command.workId,
                 )
-                val success = execute(command, runningWork, local, remote, checkpoints::persist)
+                val success = execute(
+                    command, runningWork, local, remote, checkpoints::persist, shouldContinue,
+                )
                 execution = checkpoints.state
                 execution = execution.copy(
                     coordinator = completeFileSyncOperation(
@@ -568,6 +570,7 @@ internal class DesktopFileSyncEngine(
         local: DesktopFileSyncLocalTree,
         remote: DesktopFileSyncRemoteTree,
         persistUploadCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
+        shouldContinue: () -> Boolean,
     ): FileSyncExecutionSuccess {
         require(work.id == command.workId && work.operation == command.operation)
         return when (val operation = command.operation) {
@@ -596,7 +599,7 @@ internal class DesktopFileSyncEngine(
                             resumeDesktopFileSyncUpload(
                                 staged, operation.relativePath, requireNotNull(exactLocal),
                                 operation.expectedRemoteEtag, work.uploadCheckpoint,
-                                persistUploadCheckpoint, remote,
+                                persistUploadCheckpoint, remote, shouldContinue,
                             )
                         }
                         if (replacingType) {

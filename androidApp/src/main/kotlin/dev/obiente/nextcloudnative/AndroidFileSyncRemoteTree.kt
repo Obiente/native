@@ -17,6 +17,7 @@ import java.io.OutputStream
 import java.security.MessageDigest
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
 
 internal data class AndroidRemoteSyncDocument(
     val entry: RemoteSyncEntry,
@@ -35,8 +36,16 @@ internal class AndroidFileSyncRemoteTree(
     remoteRootPath: String,
     private val webDav: NextcloudDocumentWebDav,
     private val ownedUploadIds: Set<String> = emptySet(),
+    private val shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
+    private val transferCancellation = object : DocumentRequestCancellation {
+        override fun throwIfCancelled() {
+            if (!shouldContinue()) throw CancellationException("Sync upload cancelled.")
+        }
+
+        override fun setOnCancelAction(action: (() -> Unit)?) = Unit
+    }
 
     init {
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
@@ -265,7 +274,7 @@ internal class AndroidFileSyncRemoteTree(
         uploadId,
         jvmOwnedUploadStagePath(relativePath, uploadId),
         allowExisting,
-        NoDocumentRequestCancellation,
+        transferCancellation,
     )
 
     override fun uploadChunk(
@@ -280,21 +289,21 @@ internal class AndroidFileSyncRemoteTree(
         chunk.offsetBytes,
         chunk.sizeBytes,
         chunk.number,
-        NoDocumentRequestCancellation,
+        transferCancellation,
     )
 
     override fun listChunkCollection(uploadId: String): Map<Int, Long> =
-        webDav.listChunkUpload(session, userId, uploadId, NoDocumentRequestCancellation)
+        webDav.listChunkUpload(session, userId, uploadId, transferCancellation)
 
     override fun deleteChunk(uploadId: String, chunkNumber: Int) =
-        webDav.deleteChunk(session, userId, uploadId, chunkNumber, NoDocumentRequestCancellation)
+        webDav.deleteChunk(session, userId, uploadId, chunkNumber, transferCancellation)
 
     override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? =
         commitChunkUpload(
             uploadId,
             jvmOwnedUploadStagePath(relativePath, uploadId),
             sizeBytes,
-            NoDocumentRequestCancellation,
+            transferCancellation,
             onRequestStarted = {},
         ).etag
 
@@ -322,6 +331,7 @@ internal class AndroidFileSyncRemoteTree(
                 destination = comparison,
                 maximumBytes = source.length().coerceAtLeast(1L),
                 expectedEtag = stage.entry.etag,
+                cancellation = transferCancellation,
             )
             comparison.requireComplete()
         }
@@ -349,7 +359,7 @@ internal class AndroidFileSyncRemoteTree(
     }
 
     override fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?) {
-        deleteChunkUpload(uploadId, NoDocumentRequestCancellation)
+        deleteChunkUpload(uploadId, transferCancellation)
         assembledStageEtag ?: return
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         try {

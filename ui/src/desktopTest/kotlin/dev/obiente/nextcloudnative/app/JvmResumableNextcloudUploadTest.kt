@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 
 class JvmResumableNextcloudUploadTest {
     @Test
@@ -81,6 +82,34 @@ class JvmResumableNextcloudUploadTest {
         }
     }
 
+    @Test
+    fun `pause between chunks retains durable progress without assembling or publishing`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        var active = true
+        val remote = RecordingUploadRemote(
+            collectionCreated = true,
+            afterChunkUploaded = { active = false },
+        )
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            assertFailsWith<CancellationException> {
+                jvmResumableNextcloudUpload(
+                    source, "large.bin", "local-1", null, null,
+                    newUploadId = { UPLOAD_ID },
+                    persistCheckpoint = persisted::add,
+                    remote = remote,
+                    shouldContinue = { active },
+                )
+            }
+
+            assertEquals(listOf(1), remote.uploadedChunkNumbers)
+            assertEquals(1, persisted.last().uploadedChunks)
+            assertTrue(remote.finalizationEvents.isEmpty())
+        } finally {
+            source.delete()
+        }
+    }
+
     private fun sparseFile(sizeBytes: Long): File =
         File.createTempFile("nextcloud-native-resume-", ".bin").also { file ->
             RandomAccessFile(file, "rw").use { it.setLength(sizeBytes) }
@@ -90,6 +119,7 @@ class JvmResumableNextcloudUploadTest {
         private val collectionCreated: Boolean,
         private val serverChunks: Map<Int, Long> = emptyMap(),
         private val failVerification: Boolean = false,
+        private val afterChunkUploaded: () -> Unit = {},
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val finalizationEvents = mutableListOf<String>()
@@ -117,6 +147,7 @@ class JvmResumableNextcloudUploadTest {
             chunk: NextcloudUploadChunk,
         ) {
             uploadedChunkNumbers += chunk.number
+            afterChunkUploaded()
         }
 
         override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String {

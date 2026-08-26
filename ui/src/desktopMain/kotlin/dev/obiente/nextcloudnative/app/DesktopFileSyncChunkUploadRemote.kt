@@ -16,6 +16,7 @@ internal class DesktopFileSyncChunkUploadRemote(
     private val tree: DesktopFileSyncRemoteTree,
     private val onMutationCommitted: (String) -> Unit,
     private val onAmbiguousMutationResult: (String) -> Unit,
+    private val shouldContinue: () -> Boolean,
 ) : JvmResumableNextcloudUploadRemote {
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
 
@@ -77,7 +78,9 @@ internal class DesktopFileSyncChunkUploadRemote(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/${chunk.remoteName}")
                 .header("Destination", fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
                 .header("OC-Total-Length", source.length().toString())
-                .put(jvmFileRangeRequestBody(source, chunk.offsetBytes, chunk.sizeBytes))
+                .put(jvmFileRangeRequestBody(source, chunk.offsetBytes, chunk.sizeBytes) {
+                    if (!shouldContinue()) throw kotlinx.coroutines.CancellationException("Sync upload paused.")
+                })
                 .build(),
             "upload file chunk",
         )
@@ -129,7 +132,13 @@ internal class DesktopFileSyncChunkUploadRemote(
                 "The assembled upload stage has an unexpected response size."
             }
             JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
-                response.body.byteStream().copyTo(comparison)
+                response.body.byteStream().copyBoundedNetworkResponseTo(
+                    output = comparison,
+                    maxBytes = source.length().coerceAtLeast(1L),
+                    onLimitExceeded = { error("The assembled upload stage is larger than expected.") },
+                    onNetworkReadFailure = {},
+                    shouldContinue = shouldContinue,
+                )
                 comparison.requireComplete()
             }
         }

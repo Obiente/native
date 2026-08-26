@@ -29,6 +29,7 @@ internal fun resumeDesktopFileSyncUpload(
     checkpoint: FileSyncUploadCheckpoint?,
     persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     remote: DesktopFileSyncRemoteTree,
+    shouldContinue: () -> Boolean,
 ): RemoteSyncEntry = jvmResumableNextcloudUpload(
     source = staged,
     relativePath = relativePath,
@@ -37,5 +38,6 @@ internal fun resumeDesktopFileSyncUpload(
     checkpoint = checkpoint,
     newUploadId = { UUID.randomUUID().toString() },
     persistCheckpoint = persistCheckpoint,
-    remote = remote.resumableUploadRemote(),
+    remote = remote.resumableUploadRemote(shouldContinue),
+    shouldContinue = shouldContinue,
 )

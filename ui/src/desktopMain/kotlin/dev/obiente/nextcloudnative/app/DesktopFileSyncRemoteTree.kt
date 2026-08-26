@@ -315,7 +315,7 @@ internal class DesktopFileSyncRemoteTree(
         return after.entry
     }
 
-    fun resumableUploadRemote(): JvmResumableNextcloudUploadRemote = DesktopFileSyncChunkUploadRemote(
+    fun resumableUploadRemote(shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted }) = DesktopFileSyncChunkUploadRemote(
         session = session,
         userId = userId,
         rootPath = rootPath,
@@ -323,6 +323,7 @@ internal class DesktopFileSyncRemoteTree(
         tree = this,
         onMutationCommitted = onMutationCommitted,
         onAmbiguousMutationResult = onAmbiguousMutationResult,
+        shouldContinue = shouldContinue,
     )
 
     internal fun resolveOwnedUploadStage(relativePath: String): DesktopRemoteSyncDocument? {
