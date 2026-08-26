@@ -22,6 +22,28 @@ fun jvmOwnedUploadId(relativePath: String): String? {
     return uploadId.takeIf(::isValidNextcloudChunkUploadId)
 }
 
+fun jvmOwnedReplacementBackupPath(relativePath: String, uploadId: String): String {
+    requireValidSyncPath(relativePath)
+    require(isValidNextcloudChunkUploadId(uploadId))
+    val parent = relativePath.substringBeforeLast('/', "")
+    val name = relativePath.substringAfterLast('/')
+    val backupName = ".$name.nextcloud-native-backup-$uploadId"
+    return listOf(parent, backupName).filter(String::isNotBlank).joinToString("/")
+}
+
+fun jvmOwnedReplacementBackup(relativePath: String): Pair<String, String>? {
+    val name = relativePath.substringAfterLast('/')
+    val marker = ".nextcloud-native-backup-"
+    val markerIndex = name.lastIndexOf(marker)
+    if (!name.startsWith('.') || markerIndex <= 1) return null
+    val uploadId = name.substring(markerIndex + marker.length)
+        .takeIf(::isValidNextcloudChunkUploadId) ?: return null
+    val destinationName = name.substring(1, markerIndex).takeIf(String::isNotBlank) ?: return null
+    val parent = relativePath.substringBeforeLast('/', "")
+    val destination = listOf(parent, destinationName).filter(String::isNotBlank).joinToString("/")
+    return destination to uploadId
+}
+
 interface JvmResumableNextcloudUploadRemote {
     fun uploadDirect(source: File, relativePath: String, expectedRemoteEtag: String?): RemoteSyncEntry
 
@@ -51,6 +73,13 @@ interface JvmResumableNextcloudUploadRemote {
     fun ownedStageEtag(uploadId: String, relativePath: String): String?
 
     fun resolvePublishedFile(relativePath: String): RemoteSyncEntry?
+
+    fun verifyPublishedFile(
+        uploadId: String,
+        source: File,
+        relativePath: String,
+        published: RemoteSyncEntry,
+    ): RemoteSyncEntry = verifyDirectUpload(source, relativePath, published)
 
     fun publishOwnedStage(
         uploadId: String,
@@ -145,7 +174,7 @@ fun jvmResumableNextcloudUpload(
         remote.resolvePublishedFile(relativePath)?.let { published ->
             ensureActive()
             try {
-                return remote.verifyDirectUpload(source, relativePath, published)
+                return remote.verifyPublishedFile(matchingCheckpoint.uploadId, source, relativePath, published)
             } catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
                 ensureActive()

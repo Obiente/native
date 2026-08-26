@@ -111,6 +111,7 @@ internal fun resumeAndroidFileSyncUpload(
     checkpoint: FileSyncUploadCheckpoint?,
     persistCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
     remote: AndroidFileSyncRemoteTree,
+    replacingDirectoryEtag: String? = null,
 ): RemoteSyncEntry = jvmResumableNextcloudUpload(
     source = staged,
     relativePath = relativePath,
@@ -119,6 +120,6 @@ internal fun resumeAndroidFileSyncUpload(
     checkpoint = checkpoint,
     newUploadId = { UUID.randomUUID().toString() },
     persistCheckpoint = persistCheckpoint,
-    remote = remote,
+    remote = remote.resumableUploadRemote(replacingDirectoryEtag),
     shouldContinue = remote::shouldContinueTransfer,
 )

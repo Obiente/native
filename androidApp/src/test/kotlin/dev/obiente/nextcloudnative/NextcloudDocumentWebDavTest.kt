@@ -28,6 +28,7 @@ class NextcloudDocumentWebDavTest {
             val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
             server.enqueue(404)
             server.enqueue(412)
+            server.enqueue(404)
             val remote = AndroidFileSyncRemoteTree(
                 server.session,
                 "alice",
@@ -45,6 +46,10 @@ class NextcloudDocumentWebDavTest {
             assertEquals("DELETE", stageDelete.method)
             assertTrue(stageDelete.path.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
             assertEquals("owned-stage-etag", stageDelete.header("If-Match"))
+            val backupProbe = server.request(2)
+            assertEquals("PROPFIND", backupProbe.method)
+            assertEquals("0", backupProbe.header("Depth"))
+            assertTrue(backupProbe.path.endsWith("/Vault/nested/.large.bin.nextcloud-native-backup-$uploadId"))
         }
 
     @Test
@@ -81,6 +86,70 @@ class NextcloudDocumentWebDavTest {
             listOf(".nextcloud-native-$userId.upload"),
             remote.scan().map { it.entry.relativePath },
         )
+    }
+
+    @Test
+    fun `remote sync scan retains the protected directory while publication awaits verification`() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+            server.enqueue(207, body = protectedDirectoryListing(uploadId))
+            val remote = AndroidFileSyncRemoteTree(
+                server.session,
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+            )
+
+            val scanned = remote.scan()
+
+            assertEquals(listOf("archive.bin", "archive.bin/inside.txt"), scanned.map { it.entry.relativePath })
+            assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.Directory, scanned.first().entry.kind)
+            assertEquals("directory-etag", scanned.first().entry.etag)
+            assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.File, scanned.last().entry.kind)
+            val protectedDirectoryRead = server.request(1)
+            assertTrue(protectedDirectoryRead.path.endsWith("/Vault/.archive.bin.nextcloud-native-backup-$uploadId"))
+        }
+
+    @Test
+    fun `verified chunk stage replaces a directory through a protected backup`() = RecordingServer().use { server ->
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        server.enqueue(207, body = directoryListing())
+        server.enqueue(207, body = directoryListing())
+        server.enqueue(201)
+        server.enqueue(201)
+        server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+        server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+        server.enqueue(204)
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Vault",
+            NextcloudDocumentWebDav(),
+            ownedUploadIds = setOf(uploadId),
+        )
+
+        val published = remote.publishOwnedStageReplacingDirectory(
+            uploadId,
+            "archive.bin",
+            "stage-etag",
+            "directory-etag",
+        )
+
+        assertEquals("published-etag", published.etag)
+        val protect = server.request(2)
+        assertEquals("MOVE", protect.method)
+        assertEquals("F", protect.header("Overwrite"))
+        assertTrue(protect.header("If").orEmpty().contains("directory-etag"))
+        val publish = server.request(3)
+        assertEquals("MOVE", publish.method)
+        assertEquals("F", publish.header("Overwrite"))
+        assertEquals("stage-etag", publish.header("If-Match"))
+        val cleanup = server.request(6)
+        assertEquals("DELETE", cleanup.method)
+        assertTrue(cleanup.path.contains(".archive.bin.nextcloud-native-backup-$uploadId"))
+        assertTrue(cleanup.header("If").orEmpty().contains("directory-etag"))
     }
 
     @Test
@@ -949,6 +1018,47 @@ class NextcloudDocumentWebDavTest {
         )
         assertTrue(parsed.isEmpty())
     }
+
+    private fun directoryListing(): String =
+        """
+        <d:multistatus xmlns:d="DAV:"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault/archive.bin/</d:href>
+          <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+            <d:getetag>directory-etag</d:getetag><d:resourcetype><d:collection/></d:resourcetype>
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+        """.trimIndent()
+
+    private fun replacementListing(uploadId: String, includePublishedFile: Boolean): String =
+        """
+        <d:multistatus xmlns:d="DAV:">
+          ${if (includePublishedFile) """
+          <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
+            <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+              <d:getetag>published-etag</d:getetag><d:getcontentlength>22020096</d:getcontentlength>
+              <d:resourcetype/>
+            </d:prop></d:propstat>
+          </d:response>
+          """.trimIndent() else ""}
+          <d:response>
+            <d:href>/remote.php/dav/files/alice/Vault/.archive.bin.nextcloud-native-backup-$uploadId/</d:href>
+            <d:propstat><d:prop>
+              <d:displayname>.archive.bin.nextcloud-native-backup-$uploadId</d:displayname>
+              <d:getetag>directory-etag</d:getetag><d:resourcetype><d:collection/></d:resourcetype>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """.trimIndent()
+
+    private fun protectedDirectoryListing(uploadId: String): String =
+        """
+        <d:multistatus xmlns:d="DAV:"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault/.archive.bin.nextcloud-native-backup-$uploadId/inside.txt</d:href>
+          <d:propstat><d:prop><d:displayname>inside.txt</d:displayname>
+            <d:getetag>inside-etag</d:getetag><d:getcontentlength>4</d:getcontentlength><d:resourcetype/>
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+        """.trimIndent()
 
     private class RecordingServer : AutoCloseable {
         private val server = MockWebServer()

@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative
 
 import java.io.ByteArrayInputStream
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class AndroidFileSyncContentHashTest {
@@ -53,5 +55,37 @@ class AndroidFileSyncContentHashTest {
                 maximumBytes = 4,
             ),
         )
+    }
+
+    @Test
+    fun `upload staging binds resumable progress to exact copied bytes`() {
+        val destination = Files.createTempFile("android-sync-staged-", ".bin").toFile()
+        try {
+            val first = stageAndroidFileSyncUpload(
+                ByteArrayInputStream("alpha note".encodeToByteArray()),
+                destination,
+                expectedBytes = 10,
+                maximumBytes = Long.MAX_VALUE,
+            )
+            val edited = stageAndroidFileSyncUpload(
+                ByteArrayInputStream("bravo note".encodeToByteArray()),
+                destination,
+                expectedBytes = 10,
+                maximumBytes = Long.MAX_VALUE,
+            )
+
+            assertEquals("staged-$first", androidStagedFileSyncRevision(first))
+            assertEquals(false, first == edited)
+            assertFailsWith<IllegalArgumentException> {
+                stageAndroidFileSyncUpload(
+                    ByteArrayInputStream("short".encodeToByteArray()),
+                    destination,
+                    expectedBytes = 10,
+                    maximumBytes = Long.MAX_VALUE,
+                )
+            }
+        } finally {
+            destination.delete()
+        }
     }
 }

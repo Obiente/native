@@ -364,6 +364,27 @@ internal class NextcloudDocumentWebDav(
         )
     }
 
+    fun moveDirectory(
+        session: NextcloudSession,
+        userId: String,
+        sourcePath: String,
+        destinationPath: String,
+        expectedEtag: String,
+    ): DocumentMutationResult {
+        require(expectedEtag.isNotBlank()) { "An ETag is required for conflict-protected directory move." }
+        val sourceUrl = buildNextcloudFileUrl(session.serverUrl, userId, sourcePath)
+        val destinationUrl = buildNextcloudFileUrl(session.serverUrl, userId, destinationPath)
+        return execute(
+            request = requestBuilder(session, sourceUrl)
+                .header("Destination", destinationUrl)
+                .header("Overwrite", "F")
+                .header("If", "<$sourceUrl> ([$expectedEtag])")
+                .method("MOVE", EMPTY_BODY)
+                .build(),
+            operation = "move directory",
+        )
+    }
+
     fun delete(
         session: NextcloudSession,
         userId: String,

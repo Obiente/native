@@ -695,14 +695,20 @@ internal class AndroidFileSyncEngine(context: Context) {
         return when (val operation = command.operation) {
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
-                if (work.observedRemote?.kind?.let { it != source.kind } == true) {
+                val replacingType = work.observedRemote?.kind?.let { it != source.kind } == true
+                val replacingLargeRemoteDirectory = shouldProtectAndroidFileSyncDirectoryReplacement(
+                    source,
+                    work.observedRemote,
+                )
+                if (replacingType && !replacingLargeRemoteDirectory) {
                     remote.delete(
                         operation.relativePath,
                         requireNotNull(operation.expectedRemoteEtag),
                     )
                 }
-                val expectedRemote = operation.expectedRemoteEtag
-                    .takeUnless { work.observedRemote?.kind?.let { kind -> kind != source.kind } == true }
+                val expectedRemote = operation.expectedRemoteEtag.takeUnless {
+                    replacingType && !replacingLargeRemoteDirectory
+                }
                 if (source.kind == SyncEntryKind.Directory) {
                     remote.createDirectory(operation.relativePath, expectedRemote)
                 } else {
@@ -715,6 +721,8 @@ internal class AndroidFileSyncEngine(context: Context) {
                         resumeAndroidFileSyncUpload(
                             staged, operation.relativePath, exactLocal, expectedRemote,
                             work.uploadCheckpoint, persistUploadCheckpoint, remote,
+                            replacingDirectoryEtag = operation.expectedRemoteEtag
+                                .takeIf { replacingLargeRemoteDirectory },
                         )
                     }
                 }

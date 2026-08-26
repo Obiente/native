@@ -76,8 +76,18 @@ internal class AndroidFileSyncStore internal constructor(
         return stored.copy(
             coordinator = FileSyncCoordinatorState(
                 stored.coordinator.pairs.map { pair ->
+                    val externalCleanups = external[pair.id].orEmpty()
+                    val externallyAbandonedIds = externalCleanups
+                        .mapTo(mutableSetOf(), dev.obiente.nextcloudnative.app.FileSyncPendingUploadCleanup::uploadId)
                     pair.copy(
-                        pendingUploadCleanups = (external[pair.id].orEmpty() + pair.pendingUploadCleanups)
+                        workItems = pair.workItems.map { work ->
+                            if (work.uploadCheckpoint?.uploadId in externallyAbandonedIds) {
+                                work.copy(uploadCheckpoint = null)
+                            } else {
+                                work
+                            }
+                        },
+                        pendingUploadCleanups = (externalCleanups + pair.pendingUploadCleanups)
                             .distinctBy { it.uploadId },
                     )
                 },

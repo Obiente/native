@@ -658,15 +658,7 @@ internal fun isDesktopOwnedUploadStage(relativePath: String): Boolean {
 }
 
 internal fun desktopOwnedBackupDestination(relativePath: String): String? {
-    val name = relativePath.substringAfterLast('/')
-    val markerIndex = name.lastIndexOf(".nextcloud-native-backup-")
-    if (!name.startsWith('.') || markerIndex <= 1) return null
-    val token = name.substring(markerIndex + ".nextcloud-native-backup-".length)
-    if (runCatching { UUID.fromString(token) }.isFailure) return null
-    val destinationName = name.substring(1, markerIndex)
-    if (destinationName.isBlank()) return null
-    val parent = relativePath.substringBeforeLast('/', "")
-    return listOf(parent, destinationName).filter(String::isNotBlank).joinToString("/")
+    return jvmOwnedReplacementBackup(relativePath)?.first
 }
 
 internal fun shouldSuppressDesktopOwnedBackup(

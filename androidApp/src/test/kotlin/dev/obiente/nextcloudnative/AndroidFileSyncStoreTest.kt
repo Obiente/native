@@ -5,6 +5,14 @@ import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.FileSyncPendingUploadCleanup
 import dev.obiente.nextcloudnative.app.FileSyncPriorityRule
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.NextcloudUploadTransferPlan
+import dev.obiente.nextcloudnative.app.SyncEntryKind
+import dev.obiente.nextcloudnative.app.checkpointFileSyncUpload
+import dev.obiente.nextcloudnative.app.claimNextFileSyncOperation
+import dev.obiente.nextcloudnative.app.newFileSyncUploadCheckpoint
+import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
+import dev.obiente.nextcloudnative.app.scanFileSyncPair
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -152,6 +160,43 @@ class AndroidFileSyncStoreTest {
                 AndroidFileSyncUploadCleanupStore(File(directory, "state.bin.upload-cleanups"))
                     .read().getValue(pair.id),
             )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `external abandonment wins over an older active checkpoint snapshot`() {
+        val directory = Files.createTempDirectory("file-sync-cleanup-window-").toFile()
+        try {
+            val stateFile = File(directory, "state.bin")
+            val store = AndroidFileSyncStore(stateFile)
+            val pair = pair()
+            val planned = scanFileSyncPair(
+                FileSyncCoordinatorState(listOf(pair)),
+                pair.id,
+                listOf(LocalSyncEntry("Camera/large.bin", SyncEntryKind.File, "local-1", 25L * 1024L * 1024L)),
+                emptyList(),
+                nowEpochMillis = 1L,
+            )
+            val claimed = claimNextFileSyncOperation(planned, pair.id, nowEpochMillis = 2L)
+            val workId = requireNotNull(claimed.command).workId
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            val checkpoint = newFileSyncUploadCheckpoint(
+                uploadId,
+                "local-1",
+                nextcloudUploadTransferPlan(25L * 1024L * 1024L) as NextcloudUploadTransferPlan.Chunked,
+            )
+            val active = checkpointFileSyncUpload(claimed.state, pair.id, workId, checkpoint)
+            store.save(AndroidFileSyncPersistedState(active))
+            val cleanup = FileSyncPendingUploadCleanup(uploadId, "Camera/large.bin")
+            AndroidFileSyncUploadCleanupStore(File(directory, "state.bin.upload-cleanups"))
+                .retain(mapOf(pair.id to listOf(cleanup)))
+
+            val loaded = AndroidFileSyncStore(stateFile).load().coordinator.pairs.single()
+
+            assertEquals(listOf(cleanup), loaded.pendingUploadCleanups)
+            assertEquals(null, loaded.workItems.single().uploadCheckpoint)
         } finally {
             directory.deleteRecursively()
         }

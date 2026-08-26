@@ -4,10 +4,13 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.JvmResumableNextcloudUploadRemote
 import dev.obiente.nextcloudnative.app.JvmExactFileComparisonOutputStream
 import dev.obiente.nextcloudnative.app.NextcloudUploadChunk
+import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.isValidNextcloudChunkUploadId
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadId
+import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackup
+import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackupPath
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadStagePath
 import dev.obiente.nextcloudnative.app.normalizeSyncSha256
 import dev.obiente.nextcloudnative.app.safeIncomingShareFileName
@@ -26,6 +29,16 @@ internal data class AndroidRemoteSyncDocument(
 internal data class AndroidRemoteChildNameSnapshot(
     val names: Set<String>,
     val complete: Boolean,
+)
+
+private data class AndroidRemoteScanDirectory(
+    val logicalRelativePath: String,
+    val physicalPath: String,
+)
+
+private data class AndroidRemoteScanChild(
+    val file: NextcloudFile,
+    val logicalRelativePath: String,
 )
 
 /** Recursive, bounded and revision-guarded view of one Nextcloud Files subtree. */
@@ -54,20 +67,17 @@ internal class AndroidFileSyncRemoteTree(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
     ): List<AndroidRemoteSyncDocument> {
         val result = ArrayList<AndroidRemoteSyncDocument>()
-        val pending = ArrayDeque<String>()
-        pending += ""
+        val pending = ArrayDeque<AndroidRemoteScanDirectory>()
+        pending += AndroidRemoteScanDirectory("", fullPath(""))
         while (pending.isNotEmpty()) {
-            val relativeParent = pending.removeFirst()
+            val directory = pending.removeFirst()
+            val relativeParent = directory.logicalRelativePath
             require(relativeParent.count { it == '/' } < MAX_DEPTH) { "The Nextcloud folder is nested too deeply." }
-            val listing = webDav.listDirectory(
-                session = session,
-                userId = userId,
-                path = fullPath(relativeParent),
-                maximumEntries = MAX_CHILDREN,
-            )
+            val listing = listSyncDirectoryAt(directory.physicalPath)
             require(!listing.limited) { "A Nextcloud folder contains too many entries to sync safely." }
-            listing.files.forEach { file ->
-                val relativePath = toRelativePath(file.path) ?: return@forEach
+            scanChildren(relativeParent, listing).forEach { child ->
+                val file = child.file
+                val relativePath = child.logicalRelativePath
                 if (jvmOwnedUploadId(relativePath) in ownedUploadIds) return@forEach
                 val kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File
                 if (!includes(relativePath, kind)) return@forEach
@@ -90,7 +100,9 @@ internal class AndroidFileSyncRemoteTree(
                     isDirectory = file.isDirectory,
                 )
                 result += document
-                if (file.isDirectory) pending += relativePath
+                if (file.isDirectory) {
+                    pending += AndroidRemoteScanDirectory(relativePath, file.path.trim('/'))
+                }
             }
         }
         return result.sortedBy { it.entry.relativePath }
@@ -104,7 +116,7 @@ internal class AndroidFileSyncRemoteTree(
     private fun resolveIncludingOwnedStage(relativePath: String): AndroidRemoteSyncDocument? {
         val parent = relativePath.substringBeforeLast('/', "")
         val target = fullPath(relativePath)
-        return webDav.listDirectory(session, userId, fullPath(parent), MAX_CHILDREN)
+        return listSyncDirectory(parent)
             .files
             .firstOrNull { it.path.trim('/') == target }
             ?.let { file ->
@@ -274,7 +286,9 @@ internal class AndroidFileSyncRemoteTree(
         relativePath: String,
         uploaded: RemoteSyncEntry,
     ): RemoteSyncEntry {
-        val exact = requireNotNull(resolve(relativePath)) { "The directly uploaded file disappeared." }
+        val exact = requireNotNull(resolveIncludingOwnedStage(relativePath)) {
+            "The directly uploaded file disappeared."
+        }
         require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
             "The directly uploaded file changed before verification."
         }
@@ -369,7 +383,59 @@ internal class AndroidFileSyncRemoteTree(
         resolveIncludingOwnedStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
 
     override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? =
-        resolve(relativePath)?.takeUnless { it.isDirectory }?.entry
+        resolveIncludingOwnedStage(relativePath)?.takeUnless { it.isDirectory }?.entry
+
+    internal fun requireDirectoryGeneration(relativePath: String, expectedRemoteEtag: String) {
+        val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
+        require(current.isDirectory && current.entry.etag == expectedRemoteEtag) {
+            "The server directory changed after the sync scan."
+        }
+    }
+
+    internal fun publishOwnedStageReplacingDirectory(
+        uploadId: String,
+        relativePath: String,
+        verifiedStageEtag: String,
+        expectedDirectoryEtag: String,
+    ): RemoteSyncEntry {
+        requireDirectoryGeneration(relativePath, expectedDirectoryEtag)
+        val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
+        require(resolveIncludingOwnedStage(backupPath) == null) { "The replacement backup already exists." }
+        try {
+            webDav.moveDirectory(
+                session,
+                userId,
+                fullPath(relativePath),
+                fullPath(backupPath),
+                expectedDirectoryEtag,
+            )
+            webDav.publishChunkUploadStage(
+                session,
+                userId,
+                fullPath(jvmOwnedUploadStagePath(relativePath, uploadId)),
+                fullPath(relativePath),
+                verifiedStageEtag,
+                expectedRemoteEtag = null,
+            )
+            val published = requireNotNull(resolveIncludingOwnedStage(relativePath)) {
+                "The uploaded server file disappeared."
+            }
+            require(!published.isDirectory) { "The uploaded server item is not a file." }
+            completeReplacementBackup(relativePath, uploadId)
+            return published.entry
+        } catch (failure: Throwable) {
+            restoreReplacementBackupIfDestinationMissing(relativePath, uploadId)
+            throw failure
+        }
+    }
+
+    internal fun completeReplacementBackup(relativePath: String, uploadId: String) {
+        val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
+        resolveIncludingOwnedStage(backupPath)?.let { backup ->
+            require(backup.isDirectory) { "The owned replacement backup changed type." }
+            webDav.delete(session, userId, fullPath(backupPath), backup.entry.etag, isDirectory = true)
+        }
+    }
 
     override fun publishOwnedStage(
         uploadId: String,
@@ -398,21 +464,27 @@ internal class AndroidFileSyncRemoteTree(
     ): Boolean {
         deleteChunkUpload(uploadId, transferCancellation)
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
-        if (assembledStageEtag == null) {
-            return resolveIncludingOwnedStage(stagePath) == null
+        val stageCleaned = if (assembledStageEtag == null) {
+            resolveIncludingOwnedStage(stagePath) == null
+        } else {
+            try {
+                webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
+            } catch (failure: DocumentWebDavException) {
+                if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
+            }
+            true
         }
-        try {
-            webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
-        } catch (failure: DocumentWebDavException) {
-            if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
-        }
-        return true
+        return stageCleaned && discardReplacementBackup(
+            relativePath,
+            uploadId,
+            assembledStageEtag,
+        )
     }
 
     /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
     fun rootChildNames(): AndroidRemoteChildNameSnapshot {
         val listing = try {
-            webDav.listDirectory(session, userId, fullPath(""), MAX_CHILDREN)
+            listSyncDirectory("")
         } catch (failure: DocumentWebDavException) {
             if (failure.error == DocumentWebDavError.TooLarge) {
                 return AndroidRemoteChildNameSnapshot(emptySet(), complete = false)
@@ -422,6 +494,7 @@ internal class AndroidFileSyncRemoteTree(
         return AndroidRemoteChildNameSnapshot(
             names = listing.files
                 .filterNot { file -> jvmOwnedUploadId(file.path) in ownedUploadIds }
+                .filterNot { file -> jvmOwnedReplacementBackup(file.path.trim('/'))?.second in ownedUploadIds }
                 .mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
             complete = !listing.limited,
         )
@@ -526,15 +599,107 @@ internal class AndroidFileSyncRemoteTree(
         )
     }
 
+    private fun listSyncDirectory(relativeParent: String): DocumentDirectoryResult =
+        listSyncDirectoryAt(fullPath(relativeParent))
+
+    private fun listSyncDirectoryAt(directoryPath: String): DocumentDirectoryResult {
+        var listing = webDav.listDirectory(session, userId, directoryPath, MAX_CHILDREN)
+        val listedPaths = listing.files.mapTo(mutableSetOf()) { it.path.trim('/') }
+        val ownedBackups = listing.files.mapNotNull { file ->
+            val parsed = jvmOwnedReplacementBackup(file.path.trim('/')) ?: return@mapNotNull null
+            parsed.takeIf { (_, uploadId) -> uploadId in ownedUploadIds }?.let { parsed to file }
+        }
+        require(ownedBackups.map { it.first.first }.distinct().size == ownedBackups.size) {
+            "A Nextcloud folder contains duplicate owned replacement backups."
+        }
+        var recovered = false
+        ownedBackups.forEach { (parsed, file) ->
+            val destination = parsed.first
+            if (destination in listedPaths) return@forEach
+            require(file.isDirectory) { "The owned replacement backup changed type." }
+            val backupEtag = requireNotNull(file.etag?.takeIf(String::isNotBlank)) {
+                "The owned replacement backup has no usable revision."
+            }
+            webDav.moveDirectory(session, userId, file.path.trim('/'), destination, backupEtag)
+            recovered = true
+        }
+        if (recovered) {
+            listing = webDav.listDirectory(session, userId, directoryPath, MAX_CHILDREN)
+        }
+        return listing
+    }
+
+    private fun scanChildren(
+        logicalRelativeParent: String,
+        listing: DocumentDirectoryResult,
+    ): List<AndroidRemoteScanChild> {
+        val ownedBackups = listing.files.mapNotNull { file ->
+            val parsed = jvmOwnedReplacementBackup(file.path.trim('/')) ?: return@mapNotNull null
+            parsed.takeIf { (_, uploadId) -> uploadId in ownedUploadIds }?.let { parsed.first to file }
+        }
+        require(ownedBackups.map { it.first }.distinct().size == ownedBackups.size) {
+            "A Nextcloud folder contains duplicate owned replacement backups."
+        }
+        val protectedDestinations = ownedBackups.mapTo(mutableSetOf()) { it.first }
+        val ordinary = listing.files.mapNotNull { file ->
+            val physicalPath = file.path.trim('/')
+            if (
+                physicalPath in protectedDestinations ||
+                jvmOwnedReplacementBackup(physicalPath)?.second in ownedUploadIds
+            ) {
+                return@mapNotNull null
+            }
+            val name = physicalPath.substringAfterLast('/')
+            AndroidRemoteScanChild(file, logicalChildPath(logicalRelativeParent, name))
+        }
+        return ordinary + ownedBackups.map { (destination, backup) ->
+            AndroidRemoteScanChild(
+                file = backup,
+                logicalRelativePath = logicalChildPath(
+                    logicalRelativeParent,
+                    destination.substringAfterLast('/'),
+                ),
+            )
+        }
+    }
+
+    private fun restoreReplacementBackupIfDestinationMissing(relativePath: String, uploadId: String) {
+        runCatching {
+            if (resolveIncludingOwnedStage(relativePath) != null) return@runCatching
+            val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
+            val backup = resolveIncludingOwnedStage(backupPath) ?: return@runCatching
+            require(backup.isDirectory)
+            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
+        }
+    }
+
+    private fun discardReplacementBackup(
+        relativePath: String,
+        uploadId: String,
+        assembledStageEtag: String?,
+    ): Boolean {
+        val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
+        if (!webDav.resourceExists(session, userId, fullPath(backupPath), transferCancellation)) return true
+        val backup = resolveIncludingOwnedStage(backupPath) ?: return true
+        require(backup.isDirectory) { "The owned replacement backup changed type." }
+        val destination = resolveIncludingOwnedStage(relativePath)
+        if (destination == null) {
+            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
+            return true
+        }
+        if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
+            webDav.delete(session, userId, fullPath(relativePath), destination.entry.etag, isDirectory = false)
+            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
+            return true
+        }
+        return false
+    }
+
     private fun fullPath(relativePath: String): String =
         listOf(rootPath, relativePath.trim('/')).filter(String::isNotBlank).joinToString("/")
 
-    private fun toRelativePath(fullPath: String): String? {
-        val normalized = fullPath.trim('/')
-        if (rootPath.isBlank()) return normalized.takeIf(String::isNotBlank)
-        if (!normalized.startsWith("$rootPath/")) return null
-        return normalized.removePrefix("$rootPath/").takeIf(String::isNotBlank)
-    }
+    private fun logicalChildPath(parent: String, name: String): String =
+        listOf(parent, name).filter(String::isNotBlank).joinToString("/")
 
     private companion object {
         const val MAX_ENTRIES = 20_000

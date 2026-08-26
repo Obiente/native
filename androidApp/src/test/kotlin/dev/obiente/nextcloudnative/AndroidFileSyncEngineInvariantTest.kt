@@ -31,6 +31,24 @@ import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
     @Test
+    fun largeFileDirectoryReplacementKeepsTheDirectoryUntilProtectedPublication() {
+        val directory = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
+
+        assertTrue(
+            shouldProtectAndroidFileSyncDirectoryReplacement(
+                LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", 21L * 1024L * 1024L),
+                directory,
+            ),
+        )
+        assertFalse(
+            shouldProtectAndroidFileSyncDirectoryReplacement(
+                LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", 1L * 1024L * 1024L),
+                directory,
+            ),
+        )
+    }
+
+    @Test
     fun workerCancellationIsNeverConvertedIntoFailedSyncWork() {
         val cancellation = CancellationException("Worker stopped")
 
