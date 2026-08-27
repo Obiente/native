@@ -94,6 +94,7 @@ class DesktopFileSyncReplacementPublicationTest {
             "Vault",
             client,
             ownedUploadIds = setOf(uploadId),
+            ownedStageEtags = mapOf(uploadId to "published-etag"),
             ownedUploadPaths = mapOf(uploadId to "archive.bin"),
             ownedReplacementBackupEtags = mapOf(uploadId to "directory-etag"),
         )
@@ -116,6 +117,37 @@ class DesktopFileSyncReplacementPublicationTest {
         assertTrue(requests.last().url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId"))
     }
 
+    @Test
+    fun `recovery scan traverses an owned backup at its physical path`() {
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val requestedPaths = mutableListOf<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requestedPaths += chain.request().url.encodedPath
+            val body = if (chain.request().url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId")) {
+                backupChildListing(uploadId)
+            } else {
+                publishedListing(uploadId, 4)
+            }
+            response(chain.request(), 207, body)
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+            ownedUploadIds = setOf(uploadId),
+            ownedStageEtags = mapOf(uploadId to "published-etag"),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+            ownedReplacementBackupEtags = mapOf(uploadId to "directory-etag"),
+        )
+
+        val scanned = tree.scan()
+
+        assertEquals(listOf("archive.bin", "archive.bin/kept.txt"), scanned.map { it.entry.relativePath })
+        assertTrue(requestedPaths.last().endsWith(".nextcloud-native-backup-$uploadId"))
+        assertTrue(requestedPaths.none { it.endsWith("/archive.bin") })
+    }
+
     private fun stagedListing(uploadId: String?, sizeBytes: Long): String =
         """
         <d:multistatus xmlns:d="DAV:">
@@ -133,6 +165,16 @@ class DesktopFileSyncReplacementPublicationTest {
           <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
             <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
               <d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+        </d:multistatus>
+        """.trimIndent()
+
+    private fun backupChildListing(uploadId: String): String =
+        """
+        <d:multistatus xmlns:d="DAV:">
+          <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
+            <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+              <d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+          ${fileResponse(".nextcloud-native-backup-$uploadId/kept.txt", "child-etag", 3)}
         </d:multistatus>
         """.trimIndent()
 

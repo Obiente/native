@@ -132,6 +132,7 @@ internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
             expectedContentHash = expectedContentHash,
             maximumBytes = expectedSizeBytes.coerceAtLeast(1L),
             shouldContinue = shouldContinue,
+            physicalDestination = true,
         )
     ) {
         return false

@@ -225,6 +225,7 @@ internal class DesktopFileSyncChunkUploadRemote(
             request = builder.method("MOVE", EMPTY_BODY).build(),
             onAmbiguousNetworkResult = { onAmbiguousMutationResult(relativePath) },
             onAcceptedResponse = { onMutationCommitted(relativePath) },
+            shouldContinue = shouldContinue,
         ) { response ->
             if (!response.isSuccessful) throw DesktopFileSyncHttpStatusException(response.code, "publish upload")
         }

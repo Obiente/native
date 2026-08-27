@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -45,6 +46,49 @@ class DesktopFileSyncChunkUploadCancellationTest {
 
             assertFalse(upload.isAlive, "The paused assembly call did not release promptly.")
             assertIs<CancellationException>(failure.get())
+        }
+    }
+
+    @Test
+    fun `pausing sync cancels an in-flight final publication request`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(201)
+                    .headersDelay(30, TimeUnit.SECONDS)
+                    .build(),
+            )
+            server.start()
+            val active = AtomicBoolean(true)
+            val ambiguous = AtomicBoolean(false)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(
+                session,
+                "alice",
+                "Vault",
+                OkHttpClient(),
+                onAmbiguousMutationResult = { ambiguous.set(true) },
+            )
+            val remote = tree.resumableUploadRemote(shouldContinue = active::get)
+            val upload = thread(name = "desktop-upload-publication-test") {
+                runCatching {
+                    remote.publishOwnedStage(
+                        "01234567-89ab-cdef-0123-456789abcdef",
+                        "large.bin",
+                        "stage-etag",
+                        null,
+                    )
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            active.set(false)
+            upload.join(2_000L)
+
+            assertFalse(upload.isAlive, "The paused publication call did not release promptly.")
+            assertIs<CancellationException>(failure.get())
+            assertTrue(ambiguous.get(), "Cancellation after network exchange must trigger reconciliation.")
         }
     }
 }

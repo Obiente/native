@@ -619,23 +619,9 @@ internal class DesktopFileSyncEngine(
                             persistUploadCheckpoint, retainUploadCleanup, completeUploadCleanup,
                             remote, shouldContinue,
                         )
-                        if (replacingType) {
-                            withStagingFile("verify-upload", staged.length()) { verified, verificationMaximumBytes ->
-                                exactRemote = remote.stageDownload(
-                                    operation.relativePath,
-                                    uploaded.etag,
-                                    verified,
-                                    verificationMaximumBytes,
-                                )
-                                require(filesMatch(staged, verified)) {
-                                    "The uploaded server file does not match the staged local generation."
-                                }
-                            }
-                        } else {
-                            // Both direct and chunked plans byte-compare their exact remote
-                            // generation before the synchronized baseline is recorded.
-                            exactRemote = uploaded
-                        }
+                        // Every direct, chunked, and type-replacement upload byte-compares this
+                        // exact generation before the synchronized baseline is recorded.
+                        exactRemote = uploaded
                     }
                 }
                 if (source.kind == SyncEntryKind.File) {

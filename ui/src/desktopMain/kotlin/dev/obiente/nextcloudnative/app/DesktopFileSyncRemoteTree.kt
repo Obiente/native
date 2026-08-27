@@ -25,6 +25,12 @@ internal data class DesktopRemoteSyncDocument(
     val entry: RemoteSyncEntry,
     val isDirectory: Boolean,
     val lastModifiedEpochMillis: Long? = null,
+    val physicalPath: String = entry.relativePath,
+)
+
+private data class DesktopRemoteScanDirectory(
+    val logicalRelativePath: String,
+    val physicalPath: String,
 )
 
 /** Recursive, bounded and revision-guarded WebDAV adapter used by desktop sync. */
@@ -58,19 +64,27 @@ internal class DesktopFileSyncRemoteTree(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
     ): List<DesktopRemoteSyncDocument> {
         val result = ArrayList<DesktopRemoteSyncDocument>()
-        val pending = ArrayDeque<String>()
-        pending += ""
+        val pending = ArrayDeque<DesktopRemoteScanDirectory>()
+        pending += DesktopRemoteScanDirectory("", fullPath(""))
         while (pending.isNotEmpty()) {
-            val parent = pending.removeFirst()
-            require(parent.count { it == '/' } < MAX_DEPTH) { "The Nextcloud folder is nested too deeply." }
-            listDirectory(fullPath(parent)).forEach { document ->
-                val relativePath = toRelativePath(document.entry.relativePath) ?: return@forEach
+            val directory = pending.removeFirst()
+            val logicalParent = directory.logicalRelativePath
+            require(logicalParent.count { it == '/' } < MAX_DEPTH) {
+                "The Nextcloud folder is nested too deeply."
+            }
+            listDirectory(directory.physicalPath).forEach { document ->
+                val childName = document.entry.relativePath.substringAfterLast('/')
+                val relativePath = listOf(logicalParent, childName)
+                    .filter(String::isNotBlank)
+                    .joinToString("/")
                 if (jvmOwnedUploadId(relativePath) in ownedUploadIds) return@forEach
                 val normalized = document.copy(entry = document.entry.copy(relativePath = relativePath))
                 if (!includes(relativePath, normalized.entry.kind)) return@forEach
                 require(result.size < MAX_ENTRIES) { "The Nextcloud folder contains too many entries." }
                 result += normalized
-                if (normalized.isDirectory) pending += relativePath
+                if (normalized.isDirectory) {
+                    pending += DesktopRemoteScanDirectory(relativePath, document.physicalPath)
+                }
             }
         }
         return result.sortedBy { it.entry.relativePath }
@@ -174,6 +188,7 @@ internal class DesktopFileSyncRemoteTree(
         maximumBytes: Long,
         shouldContinue: () -> Boolean,
         ownedStage: Boolean = false,
+        physicalDestination: Boolean = false,
     ): Boolean {
         require(expectedBytes in 0L..maximumBytes)
         require(normalizeSyncSha256(expectedContentHash) == expectedContentHash)
@@ -210,9 +225,11 @@ internal class DesktopFileSyncRemoteTree(
             }
         }
         require(total == expectedBytes) { "The server returned truncated content during verification." }
-        val after = requireNotNull(
-            if (ownedStage) resolveOwnedUploadStage(relativePath) else resolve(relativePath),
-        ) {
+        val after = requireNotNull(when {
+            ownedStage -> resolveOwnedUploadStage(relativePath)
+            physicalDestination -> resolvePhysical(relativePath)
+            else -> resolve(relativePath)
+        }) {
             "The server file disappeared during content verification."
         }
         require(after.entry.etag == expectedRemoteEtag && !after.isDirectory) {
