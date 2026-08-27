@@ -30,8 +30,16 @@ internal class DesktopFileSyncChunkUploadRemote(
         return tree.writeFileCancellable(relativePath, source, expectedRemoteEtag, shouldContinue)
     }
 
-    override fun ownedStageCreationAllowed(relativePath: String): Boolean? =
-        if (replacingDirectoryEtag != null) true else tree.ownedStageCreationAllowed(relativePath, shouldContinue)
+    override fun ownedStageCreationAllowed(relativePath: String): Boolean? {
+        val allowed = tree.ownedStageCreationAllowed(relativePath, shouldContinue)
+        if (replacingDirectoryEtag != null) {
+            check(allowed != false) {
+                "The destination folder does not allow the staging file required to replace a directory."
+            }
+            return true
+        }
+        return allowed
+    }
 
     override fun verifyDirectUpload(
         source: File,

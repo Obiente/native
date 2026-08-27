@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.app
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 
@@ -13,6 +15,7 @@ class DesktopFileSyncPermissionsTest {
             server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVW</oc:permissions>"))
             server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVCKW</oc:permissions>"))
             server.enqueue(directoryAccessResponse(""))
+            server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVW</oc:permissions>"))
             server.start()
             val remote = DesktopFileSyncRemoteTree(
                 NextcloudSession(server.url("/").toString(), "alice", "secret"),
@@ -23,7 +26,16 @@ class DesktopFileSyncPermissionsTest {
             assertEquals(false, remote.ownedStageCreationAllowed("Shared/archive.bin"))
             assertEquals(true, remote.ownedStageCreationAllowed("Shared/archive.bin"))
             assertEquals(null, remote.ownedStageCreationAllowed("Shared/archive.bin"))
-            repeat(3) {
+            val replacement = DesktopFileSyncRemoteTree(
+                NextcloudSession(server.url("/").toString(), "alice", "secret"),
+                "alice",
+                "Vault",
+            ).resumableUploadRemote(replacingDirectoryEtag = "directory-etag")
+            val failure = assertFailsWith<IllegalStateException> {
+                replacement.ownedStageCreationAllowed("Shared/archive.bin")
+            }
+            assertTrue(failure.message.orEmpty().contains("required to replace a directory"))
+            repeat(4) {
                 val request = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS))
                 assertEquals("0", request.headers["Depth"])
             }

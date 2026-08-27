@@ -58,6 +58,7 @@ class AndroidFileSyncRemoteCapabilitiesTest {
         MockWebServer().use { server ->
             server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVW</oc:permissions>"))
             server.enqueue(directoryAccessResponse(""))
+            server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVW</oc:permissions>"))
             server.start()
             val remote = AndroidFileSyncRemoteTree(
                 NextcloudSession(server.url("/").toString(), "alice", "secret"),
@@ -68,7 +69,12 @@ class AndroidFileSyncRemoteCapabilitiesTest {
 
             assertEquals(false, remote.ownedStageCreationAllowed("Shared/archive.bin"))
             assertEquals(null, remote.ownedStageCreationAllowed("Shared/archive.bin"))
-            repeat(2) {
+            val failure = assertFailsWith<IllegalStateException> {
+                remote.resumableUploadRemote(replacingDirectoryEtag = "directory-etag")
+                    .ownedStageCreationAllowed("Shared/archive.bin")
+            }
+            assertTrue(failure.message.orEmpty().contains("required to replace a directory"))
+            repeat(3) {
                 val request = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS))
                 assertEquals("0", request.headers["Depth"])
                 assertTrue(request.url.encodedPath.endsWith("/Vault/Shared"))
