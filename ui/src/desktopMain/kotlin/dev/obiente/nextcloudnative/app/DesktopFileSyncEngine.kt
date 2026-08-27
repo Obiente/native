@@ -328,7 +328,10 @@ internal class DesktopFileSyncEngine(
             ownedReplacementBackupEtags = fileSyncOwnedReplacementBackupEtags(initialPair),
         )
         cleanupJvmFileSyncOwnedUploads(
-            remote.resumableUploadRemote(), persisted.coordinator, pairId, initialPair.pendingUploadCleanups,
+            remote.resumableUploadRemote(shouldContinue),
+            persisted.coordinator,
+            pairId,
+            initialPair.pendingUploadCleanups,
         ) { coordinator ->
             persisted = persisted.copy(coordinator = coordinator)
             store.savePair(persisted, pairId)

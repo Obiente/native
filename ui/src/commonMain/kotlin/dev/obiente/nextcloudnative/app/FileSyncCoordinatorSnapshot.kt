@@ -286,6 +286,7 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
                 it.replacementBackupEtag,
                 it.expectedStageSizeBytes,
                 it.expectedStageContentHash,
+                it.publicationInFlight,
             )
         },
     nextWorkId = nextWorkId,

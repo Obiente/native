@@ -311,9 +311,11 @@ internal class DesktopFileSyncChunkUploadRemote(
         request: Request,
         operation: String,
         accepted: (Int) -> Boolean = { it in 200..299 },
-    ): Int = client.newCall(request).execute().use { response ->
-        if (!accepted(response.code)) throw DesktopFileSyncHttpStatusException(response.code, operation)
-        response.code
+    ): Int = executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
+        call.execute().use { response ->
+            if (!accepted(response.code)) throw DesktopFileSyncHttpStatusException(response.code, operation)
+            response.code
+        }
     }
 
     private fun requestBuilder(url: String): Request.Builder {

@@ -61,6 +61,7 @@ class FileSyncCoordinatorSnapshotTest {
                             replacementBackupEtag = "directory-etag",
                             expectedStageSizeBytes = 4,
                             expectedStageContentHash = "sha256:" + "55".repeat(32),
+                            publicationInFlight = true,
                         ),
                     ),
                 )

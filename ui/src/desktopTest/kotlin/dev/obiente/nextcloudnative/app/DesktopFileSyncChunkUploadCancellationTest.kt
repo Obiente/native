@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -15,6 +16,49 @@ import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 
 class DesktopFileSyncChunkUploadCancellationTest {
+    @Test
+    fun `pausing sync cancels a chunk put while waiting for its response`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(201)
+                    .headersDelay(30, TimeUnit.SECONDS)
+                    .build(),
+            )
+            server.start()
+            val source = File.createTempFile("desktop-sync-chunk-", ".bin")
+            source.writeText("chunk")
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(session, "alice", "Vault", OkHttpClient())
+            val remote = tree.resumableUploadRemote(shouldContinue = active::get)
+            val upload = thread(name = "desktop-chunk-put-test") {
+                runCatching {
+                    remote.uploadChunk(
+                        "01234567-89ab-cdef-0123-456789abcdef",
+                        "large.bin",
+                        source,
+                        NextcloudUploadChunk(1, 0, source.length()),
+                    )
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            try {
+                assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+                active.set(false)
+                upload.join(2_000L)
+
+                assertFalse(upload.isAlive, "The paused chunk PUT did not release promptly.")
+                assertIs<CancellationException>(failure.get())
+            } finally {
+                active.set(false)
+                upload.join(2_000L)
+                source.delete()
+            }
+        }
+    }
+
     @Test
     fun `pausing sync cancels an in-flight chunk assembly request`() {
         MockWebServer().use { server ->

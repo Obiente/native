@@ -187,28 +187,30 @@ internal class DesktopFileSyncRemoteTree(
             .build()
         val digest = MessageDigest.getInstance("SHA-256")
         var total = 0L
-        client.newCall(request).execute().use { response ->
-            require(response.code == 200) {
-                "The server rejected file content verification with HTTP ${response.code}."
-            }
-            val declared = response.body.contentLength()
-            require(declared == -1L || declared == expectedBytes) {
-                "The server file size changed during content verification."
-            }
-            response.header("ETag")?.let { returned ->
-                require(returned == expectedRemoteEtag) {
-                    "The server file changed during content verification."
+        executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
+            call.execute().use { response ->
+                require(response.code == 200) {
+                    "The server rejected file content verification with HTTP ${response.code}."
                 }
-            }
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            response.body.byteStream().use { input ->
-                while (true) {
-                    if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    total += count
-                    require(total <= maximumBytes) { "The server file exceeds the sync size limit." }
-                    digest.update(buffer, 0, count)
+                val declared = response.body.contentLength()
+                require(declared == -1L || declared == expectedBytes) {
+                    "The server file size changed during content verification."
+                }
+                response.header("ETag")?.let { returned ->
+                    require(returned == expectedRemoteEtag) {
+                        "The server file changed during content verification."
+                    }
+                }
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                response.body.byteStream().use { input ->
+                    while (true) {
+                        if (!shouldContinue()) throw DesktopFileSyncScanStoppedException()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= maximumBytes) { "The server file exceeds the sync size limit." }
+                        digest.update(buffer, 0, count)
+                    }
                 }
             }
         }
