@@ -26,6 +26,19 @@ class JvmNextcloudChunkCollectionTest {
     }
 
     @Test
+    fun `DAV listing decodes percent encoded chunk names`() {
+        val bytes = """
+            <d:multistatus xmlns:d="DAV:">
+              <d:response><d:href>/remote.php/dav/uploads/alice/upload-id/000%30%31</d:href>
+                <d:propstat><d:prop><d:getcontentlength>42</d:getcontentlength></d:prop></d:propstat>
+              </d:response>
+            </d:multistatus>
+        """.trimIndent().encodeToByteArray()
+
+        assertEquals(mapOf(1 to 42L), parseJvmNextcloudChunkCollection(bytes))
+    }
+
+    @Test
     fun `DAV listing rejects entity declarations before parsing`() {
         assertFailsWith<SAXException> {
             parseJvmNextcloudChunkCollection(

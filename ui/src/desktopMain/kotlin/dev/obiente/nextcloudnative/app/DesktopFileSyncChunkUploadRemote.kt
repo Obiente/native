@@ -39,29 +39,32 @@ internal class DesktopFileSyncChunkUploadRemote(
         require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
             "The directly uploaded file changed before verification."
         }
-        client.newCall(
+        val call = client.newCall(
             requestBuilder(fileUrl(relativePath))
                 .header("Accept", "application/octet-stream")
                 .header("If-Match", safeEtag(exact.entry.etag))
                 .get()
                 .build(),
-        ).execute().use { response ->
-            if (response.code != 200) {
-                throw DesktopFileSyncHttpStatusException(response.code, "verify direct upload")
-            }
-            val declaredBytes = response.body.contentLength()
-            require(declaredBytes == -1L || declaredBytes == source.length()) {
-                "The directly uploaded file has an unexpected response size."
-            }
-            JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
-                response.body.byteStream().copyBoundedNetworkResponseTo(
-                    output = comparison,
-                    maxBytes = source.length().coerceAtLeast(1L),
-                    onLimitExceeded = { error("The directly uploaded file is larger than expected.") },
-                    onNetworkReadFailure = {},
-                    shouldContinue = shouldContinue,
-                )
-                comparison.requireComplete()
+        )
+        executeDesktopFileSyncCancellableCall(call, shouldContinue) { cancellable ->
+            cancellable.execute().use { response ->
+                if (response.code != 200) {
+                    throw DesktopFileSyncHttpStatusException(response.code, "verify direct upload")
+                }
+                val declaredBytes = response.body.contentLength()
+                require(declaredBytes == -1L || declaredBytes == source.length()) {
+                    "The directly uploaded file has an unexpected response size."
+                }
+                JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+                    response.body.byteStream().copyBoundedNetworkResponseTo(
+                        output = comparison,
+                        maxBytes = source.length().coerceAtLeast(1L),
+                        onLimitExceeded = { error("The directly uploaded file is larger than expected.") },
+                        onNetworkReadFailure = {},
+                        shouldContinue = shouldContinue,
+                    )
+                    comparison.requireComplete()
+                }
             }
         }
         return exact.entry
@@ -171,29 +174,32 @@ internal class DesktopFileSyncChunkUploadRemote(
         require(expectedStageEtag == null || safeEtag(stage.entry.etag) == safeEtag(expectedStageEtag)) {
             "The assembled upload stage changed before verification."
         }
-        client.newCall(
+        val call = client.newCall(
             requestBuilder(fileUrl(stagePath))
                 .header("Accept", "application/octet-stream")
                 .header("If-Match", safeEtag(stage.entry.etag))
                 .get()
                 .build(),
-        ).execute().use { response ->
-            if (response.code != 200) {
-                throw DesktopFileSyncHttpStatusException(response.code, "verify assembled upload")
-            }
-            val declaredBytes = response.body.contentLength()
-            require(declaredBytes == -1L || declaredBytes == source.length()) {
-                "The assembled upload stage has an unexpected response size."
-            }
-            JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
-                response.body.byteStream().copyBoundedNetworkResponseTo(
-                    output = comparison,
-                    maxBytes = source.length().coerceAtLeast(1L),
-                    onLimitExceeded = { error("The assembled upload stage is larger than expected.") },
-                    onNetworkReadFailure = {},
-                    shouldContinue = shouldContinue,
-                )
-                comparison.requireComplete()
+        )
+        executeDesktopFileSyncCancellableCall(call, shouldContinue) { cancellable ->
+            cancellable.execute().use { response ->
+                if (response.code != 200) {
+                    throw DesktopFileSyncHttpStatusException(response.code, "verify assembled upload")
+                }
+                val declaredBytes = response.body.contentLength()
+                require(declaredBytes == -1L || declaredBytes == source.length()) {
+                    "The assembled upload stage has an unexpected response size."
+                }
+                JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+                    response.body.byteStream().copyBoundedNetworkResponseTo(
+                        output = comparison,
+                        maxBytes = source.length().coerceAtLeast(1L),
+                        onLimitExceeded = { error("The assembled upload stage is larger than expected.") },
+                        onNetworkReadFailure = {},
+                        shouldContinue = shouldContinue,
+                    )
+                    comparison.requireComplete()
+                }
             }
         }
         return stage.entry.etag

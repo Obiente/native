@@ -17,6 +17,112 @@ import okhttp3.OkHttpClient
 
 class DesktopFileSyncChunkUploadCancellationTest {
     @Test
+    fun `pausing sync cancels direct verification while waiting for headers`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder().code(207).body(
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/alice/Vault/small.bin</d:href>
+                      <d:propstat><d:prop><d:getetag>uploaded-etag</d:getetag>
+                        <d:getcontentlength>5</d:getcontentlength><d:resourcetype/>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                ).build(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(200).headersDelay(30, TimeUnit.SECONDS).body("chunk").build(),
+            )
+            server.start()
+            val source = File.createTempFile("desktop-sync-direct-", ".bin")
+            source.writeText("chunk")
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(session, "alice", "Vault", OkHttpClient())
+            val remote = tree.resumableUploadRemote(shouldContinue = active::get)
+            val verification = thread(name = "desktop-direct-verification-test") {
+                runCatching {
+                    remote.verifyDirectUpload(
+                        source,
+                        "small.bin",
+                        RemoteSyncEntry(
+                            relativePath = "small.bin",
+                            kind = SyncEntryKind.File,
+                            etag = "uploaded-etag",
+                            size = source.length(),
+                            modifiedEpochMillis = 1L,
+                        ),
+                    )
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            try {
+                repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+                active.set(false)
+                verification.join(2_000L)
+
+                assertFalse(verification.isAlive, "The paused direct verification call did not release promptly.")
+                assertIs<CancellationException>(failure.get())
+            } finally {
+                active.set(false)
+                verification.join(2_000L)
+                source.delete()
+            }
+        }
+    }
+
+    @Test
+    fun `pausing sync cancels stage verification while waiting for headers`() {
+        MockWebServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            val stageName = ".nextcloud-native-$uploadId.upload"
+            server.enqueue(
+                MockResponse.Builder().code(207).body(
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/alice/Vault/$stageName</d:href>
+                      <d:propstat><d:prop><d:getetag>stage-etag</d:getetag>
+                        <d:getcontentlength>5</d:getcontentlength><d:resourcetype/>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                ).build(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(200).headersDelay(30, TimeUnit.SECONDS).body("chunk").build(),
+            )
+            server.start()
+            val source = File.createTempFile("desktop-sync-stage-", ".bin")
+            source.writeText("chunk")
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(session, "alice", "Vault", OkHttpClient())
+            val remote = tree.resumableUploadRemote(shouldContinue = active::get)
+            val verification = thread(name = "desktop-stage-verification-test") {
+                runCatching {
+                    remote.verifyOwnedStage(uploadId, "large.bin", source, "stage-etag")
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            try {
+                repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+                active.set(false)
+                verification.join(2_000L)
+
+                assertFalse(verification.isAlive, "The paused stage verification call did not release promptly.")
+                assertIs<CancellationException>(failure.get())
+            } finally {
+                active.set(false)
+                verification.join(2_000L)
+                source.delete()
+            }
+        }
+    }
+
+    @Test
     fun `pausing sync cancels resumed chunk discovery`() {
         MockWebServer().use { server ->
             server.enqueue(

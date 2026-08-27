@@ -132,7 +132,7 @@ private class NextcloudChunkCollectionHandler : DefaultHandler() {
 
     private fun retainChunk() {
         val name = href?.let {
-            URLDecoder.decode(it.replace("+", "%2B"), StandardCharsets.UTF_8)
+            URLDecoder.decode(it.replace("+", "%2B"), StandardCharsets.UTF_8.name())
                 .trimEnd('/').substringAfterLast('/')
         } ?: return
         if (!name.matches(CHUNK_NAME)) return
