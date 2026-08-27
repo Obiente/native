@@ -79,7 +79,6 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
         )
         val after = requireNotNull(resolvePhysical(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
-        deleteOwnedReplacementBackup(backupPath, expectedRemoteEtag)
         return after.entry
     } catch (failure: Throwable) {
         if (protected) {

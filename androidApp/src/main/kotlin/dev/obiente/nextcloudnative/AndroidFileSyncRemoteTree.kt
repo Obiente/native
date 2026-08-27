@@ -427,12 +427,12 @@ internal class AndroidFileSyncRemoteTree(
                 fullPath(relativePath),
                 verifiedStageEtag,
                 expectedRemoteEtag = null,
+                cancellation = transferCancellation,
             )
             val published = requireNotNull(resolveIncludingOwnedStage(relativePath)) {
                 "The uploaded server file disappeared."
             }
             require(!published.isDirectory) { "The uploaded server item is not a file." }
-            completeReplacementBackup(relativePath, uploadId, expectedDirectoryEtag)
             return published.entry
         } catch (failure: Throwable) {
             restoreReplacementBackupIfDestinationMissing(relativePath, uploadId, expectedDirectoryEtag)
@@ -452,7 +452,6 @@ internal class AndroidFileSyncRemoteTree(
             webDav.delete(session, userId, fullPath(backupPath), expectedBackupEtag, isDirectory = true)
         }
     }
-
     override fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
@@ -467,6 +466,7 @@ internal class AndroidFileSyncRemoteTree(
             fullPath(relativePath),
             verifiedStageEtag,
             expectedRemoteEtag,
+            transferCancellation,
         )
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory)
@@ -491,10 +491,14 @@ internal class AndroidFileSyncRemoteTree(
         } else {
             try {
                 webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
+                true
             } catch (failure: DocumentWebDavException) {
-                if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
+                when (failure.error) {
+                    DocumentWebDavError.NotFound -> true
+                    DocumentWebDavError.Conflict -> false
+                    else -> throw failure
+                }
             }
-            true
         }
         return stageCleaned && discardReplacementBackup(
             relativePath,
@@ -502,7 +506,6 @@ internal class AndroidFileSyncRemoteTree(
             assembledStageEtag,
         )
     }
-
     private fun reconcileUnrecordedOwnedStage(
         stagePath: String,
         expectedStageSizeBytes: Long?,
@@ -524,12 +527,15 @@ internal class AndroidFileSyncRemoteTree(
         }
         try {
             webDav.delete(session, userId, fullPath(stagePath), stage.entry.etag, isDirectory = false)
+            return true
         } catch (failure: DocumentWebDavException) {
-            if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
+            return when (failure.error) {
+                DocumentWebDavError.NotFound -> true
+                DocumentWebDavError.Conflict -> false
+                else -> throw failure
+            }
         }
-        return true
     }
-
     /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */
     fun rootChildNames(): AndroidRemoteChildNameSnapshot {
         val listing = try {

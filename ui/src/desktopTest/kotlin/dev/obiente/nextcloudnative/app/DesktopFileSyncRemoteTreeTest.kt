@@ -156,7 +156,7 @@ class DesktopFileSyncRemoteTreeTest {
     }
 
     @Test
-    fun `cleanup deletes only the recorded stage generation and accepts its replacement`() {
+    fun `cleanup retains ownership when the recorded stage generation was replaced`() {
         val requests = mutableListOf<Request>()
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         val client = OkHttpClient.Builder().addInterceptor { chain ->
@@ -175,12 +175,12 @@ class DesktopFileSyncRemoteTreeTest {
             ownedUploadIds = setOf(uploadId),
         )
 
-        assertTrue(
+        assertFalse(
             tree.resumableUploadRemote()
                 .discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag"),
         )
 
-        assertEquals(listOf("DELETE", "DELETE", "PROPFIND"), requests.map { it.method })
+        assertEquals(listOf("DELETE", "DELETE"), requests.map { it.method })
         assertTrue(requests[0].url.encodedPath.endsWith("/uploads/alice/$uploadId"))
         assertTrue(requests[1].url.encodedPath.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
         assertEquals("owned-stage-etag", requests[1].header("If-Match"))
@@ -235,13 +235,14 @@ class DesktopFileSyncRemoteTreeTest {
                 "PROPFIND" -> {
                     propfindCount += 1
                     val name = if (propfindCount == 1) stageName else "large.bin"
+                    val etag = if (propfindCount == 1) "etag-1" else "etag-2"
                     response(
                         chain.request(),
                         207,
                         """
                         <d:multistatus xmlns:d="DAV:"><d:response>
                           <d:href>/remote.php/dav/files/alice/Vault/$name</d:href>
-                          <d:propstat><d:prop><d:getetag>etag-$propfindCount</d:getetag>
+                          <d:propstat><d:prop><d:getetag>$etag</d:getetag>
                             <d:getcontentlength>22020096</d:getcontentlength><d:resourcetype/>
                           </d:prop></d:propstat>
                         </d:response></d:multistatus>
@@ -269,8 +270,13 @@ class DesktopFileSyncRemoteTreeTest {
             )
 
             assertEquals("etag-2", result.etag)
-            assertEquals(listOf("MKCOL", "PUT", "PUT", "PUT", "MOVE", "PROPFIND", "GET", "MOVE", "PROPFIND"),
-                requests.map { it.method })
+            assertEquals(
+                listOf(
+                    "MKCOL", "PUT", "PUT", "PUT", "MOVE", "PROPFIND", "GET", "MOVE",
+                    "PROPFIND", "PROPFIND", "GET",
+                ),
+                requests.map { it.method },
+            )
             assertTrue(requests[0].header("Destination")!!.endsWith("/Vault/$stageName"))
             assertTrue(requests[4].header("Destination")!!.endsWith("/Vault/$stageName"))
             assertTrue(requests[7].header("Destination")!!.endsWith("/Vault/large.bin"))
@@ -295,6 +301,7 @@ class DesktopFileSyncRemoteTreeTest {
                     response(chain.request(), 201)
                 }
                 "PUT" -> response(chain.request(), 201)
+                "DELETE" -> response(chain.request(), 204)
                 "MOVE" -> response(chain.request(), 201).newBuilder().header("ETag", "stage-etag").build()
                 "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
                 "PROPFIND" -> {
@@ -308,7 +315,12 @@ class DesktopFileSyncRemoteTreeTest {
                         )
                         3 -> davDirectory("archive.bin", "directory-etag")
                         4 -> davFile("archive.bin", "published-etag", 21L * 1024L * 1024L)
-                        5 -> "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>"
+                        5 -> davFile("archive.bin", "published-etag", 21L * 1024L * 1024L)
+                        6 -> publishedReplacementListing(
+                            requireNotNull(uploadId),
+                            "published-etag",
+                            21L * 1024L * 1024L,
+                        )
                         else -> error("Unexpected directory listing")
                     }
                     response(chain.request(), 207, body)

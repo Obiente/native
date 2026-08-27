@@ -28,7 +28,7 @@ class AndroidFileSyncReplacementOwnershipTest {
                 </d:response></d:multistatus>
             """.trimIndent()
             server.enqueue(MockResponse.Builder().code(404).build())
-            server.enqueue(MockResponse.Builder().code(412).build())
+            server.enqueue(MockResponse.Builder().code(404).build())
             repeat(2) {
                 server.enqueue(
                     MockResponse.Builder().code(207).addHeader("Content-Type", "application/xml")

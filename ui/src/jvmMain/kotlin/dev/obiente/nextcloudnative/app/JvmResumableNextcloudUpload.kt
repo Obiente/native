@@ -171,6 +171,20 @@ fun jvmResumableNextcloudUpload(
     requireValidSyncPath(relativePath)
     require(localRevision.isNotBlank())
     require(contentRevision.isNotBlank())
+    fun publishVerifiedStage(uploadId: String, verifiedStageEtag: String): RemoteSyncEntry {
+        ensureActive()
+        val published = remote.publishOwnedStage(
+            uploadId,
+            relativePath,
+            verifiedStageEtag,
+            expectedRemoteEtag,
+        )
+        ensureActive()
+        val verified = remote.verifyPublishedFile(uploadId, source, relativePath, published)
+        ensureActive()
+        remote.completePublishedFile(uploadId, relativePath)
+        return verified
+    }
     val plan = nextcloudUploadTransferPlan(source.length())
     if (plan is NextcloudUploadTransferPlan.Direct) {
         checkpoint?.let {
@@ -199,13 +213,7 @@ fun jvmResumableNextcloudUpload(
             if (matchingCheckpoint.assembledStageEtag != verifiedStageEtag) {
                 persistCheckpoint(matchingCheckpoint.copy(assembledStageEtag = verifiedStageEtag))
             }
-            ensureActive()
-            return remote.publishOwnedStage(
-                matchingCheckpoint.uploadId,
-                relativePath,
-                verifiedStageEtag,
-                expectedRemoteEtag,
-            )
+            return publishVerifiedStage(matchingCheckpoint.uploadId, verifiedStageEtag)
         }
         remote.resolvePublishedFile(relativePath)?.let { published ->
             ensureActive()
@@ -267,6 +275,5 @@ fun jvmResumableNextcloudUpload(
         progress = progress.copy(assembledStageEtag = verifiedStageEtag)
         persistCheckpoint(progress)
     }
-    ensureActive()
-    return remote.publishOwnedStage(progress.uploadId, relativePath, verifiedStageEtag, expectedRemoteEtag)
+    return publishVerifiedStage(progress.uploadId, verifiedStageEtag)
 }

@@ -67,7 +67,10 @@ class JvmResumableNextcloudUploadTest {
             assertTrue(persisted.last().commitInFlight)
             assertEquals("verified-stage-etag", persisted.last().assembledStageEtag)
             assertEquals("remote-etag", uploaded.etag)
-            assertEquals(listOf("commit", "verify", "publish"), remote.finalizationEvents)
+            assertEquals(
+                listOf("commit", "verify", "publish", "published-verify", "complete-published"),
+                remote.finalizationEvents,
+            )
         } finally {
             source.delete()
         }
@@ -187,7 +190,42 @@ class JvmResumableNextcloudUploadTest {
             )
 
             assertEquals("verified-stage-etag", persisted.last().assembledStageEtag)
-            assertEquals(listOf("commit", "verify", "publish"), remote.finalizationEvents)
+            assertEquals(
+                listOf("commit", "verify", "publish", "published-verify", "complete-published"),
+                remote.finalizationEvents,
+            )
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun `fresh publication verifies the visible generation before completing ownership`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val remote = RecordingUploadRemote(
+            collectionCreated = true,
+            failDirectVerification = true,
+        )
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            assertFailsWith<IllegalStateException> {
+                jvmResumableNextcloudUpload(
+                    source,
+                    "large.bin",
+                    "local-1",
+                    null,
+                    null,
+                    newUploadId = { UPLOAD_ID },
+                    persistCheckpoint = persisted::add,
+                    remote = remote,
+                )
+            }
+
+            assertTrue(persisted.last().commitInFlight)
+            assertEquals(
+                listOf("commit", "verify", "publish", "published-verify"),
+                remote.finalizationEvents,
+            )
         } finally {
             source.delete()
         }
@@ -218,7 +256,10 @@ class JvmResumableNextcloudUploadTest {
             assertEquals("remote-etag", uploaded.etag)
             assertEquals("verified-stage-etag", persisted.single().assembledStageEtag)
             assertTrue(remote.uploadedChunkNumbers.isEmpty())
-            assertEquals(listOf("verify", "publish"), remote.finalizationEvents)
+            assertEquals(
+                listOf("verify", "publish", "published-verify", "complete-published"),
+                remote.finalizationEvents,
+            )
             assertEquals(0, remote.discardCount)
         } finally {
             source.delete()
@@ -249,7 +290,7 @@ class JvmResumableNextcloudUploadTest {
 
             assertEquals("direct-etag", uploaded.etag)
             assertTrue(remote.uploadedChunkNumbers.isEmpty())
-            assertEquals(listOf("direct-verify", "complete-published"), remote.finalizationEvents)
+            assertEquals(listOf("published-verify", "complete-published"), remote.finalizationEvents)
             assertEquals(0, remote.discardCount)
         } finally {
             source.delete()
@@ -281,7 +322,7 @@ class JvmResumableNextcloudUploadTest {
                 )
             }
 
-            assertEquals(listOf("direct-verify", "complete-published"), remote.finalizationEvents)
+            assertEquals(listOf("published-verify", "complete-published"), remote.finalizationEvents)
             assertTrue(remote.uploadedChunkNumbers.isEmpty())
             assertEquals(0, remote.discardCount)
         } finally {
@@ -315,7 +356,7 @@ class JvmResumableNextcloudUploadTest {
             }
 
             assertTrue(remote.uploadedChunkNumbers.isEmpty())
-            assertEquals(listOf("direct-verify"), remote.finalizationEvents)
+            assertEquals(listOf("published-verify"), remote.finalizationEvents)
             assertEquals(0, remote.discardCount)
         } finally {
             source.delete()
@@ -439,6 +480,17 @@ class JvmResumableNextcloudUploadTest {
         override fun ownedStageEtag(uploadId: String, relativePath: String): String? = ownedStageEtag
 
         override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? = publishedFile
+
+        override fun verifyPublishedFile(
+            uploadId: String,
+            source: File,
+            relativePath: String,
+            published: RemoteSyncEntry,
+        ): RemoteSyncEntry {
+            finalizationEvents += "published-verify"
+            check(!failDirectVerification) { "The visible destination differs." }
+            return published
+        }
 
         override fun completePublishedFile(uploadId: String, relativePath: String) {
             finalizationEvents += "complete-published"

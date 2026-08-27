@@ -158,12 +158,7 @@ internal class DesktopFileSyncStore(
                     pair.contentVerificationProgress,
                 )
                 persistWork(connection, pairId, before?.workItems.orEmpty(), pair.workItems)
-                persistDesktopFileSyncUploadCleanups(
-                    connection,
-                    pairId,
-                    before?.pendingUploadCleanups.orEmpty(),
-                    pair.pendingUploadCleanups,
-                )
+                persistDesktopFileSyncPairUploadCleanups(connection, pairId, before, pair)
                 putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
             }
         } finally {
@@ -219,12 +214,7 @@ internal class DesktopFileSyncStore(
                 }
                 upsertPairRecord(connection, pair)
                 persistWorkRecord(connection, pairId, workId, workItem)
-                persistDesktopFileSyncUploadCleanups(
-                    connection,
-                    pairId,
-                    storedUploadCleanups,
-                    pair.pendingUploadCleanups,
-                )
+                persistDesktopFileSyncExecutionUploadCleanups(connection, pairId, storedUploadCleanups, pair)
                 synchronizedBaselines.forEach { baseline ->
                     upsertDesktopFileSyncBaseline(connection, pairId, baseline)
                 }
@@ -635,12 +625,7 @@ internal class DesktopFileSyncStore(
                 pair.contentVerificationProgress,
             )
             persistWork(connection, pairId, oldPair?.workItems.orEmpty(), pair.workItems)
-            persistDesktopFileSyncUploadCleanups(
-                connection,
-                pairId,
-                oldPair?.pendingUploadCleanups.orEmpty(),
-                pair.pendingUploadCleanups,
-            )
+            persistDesktopFileSyncPairUploadCleanups(connection, pairId, oldPair, pair)
             putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
         }
     }

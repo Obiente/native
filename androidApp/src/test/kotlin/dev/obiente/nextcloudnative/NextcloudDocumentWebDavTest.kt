@@ -23,12 +23,11 @@ import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
-    fun ownedUploadCleanupAcceptsMissingCollectionAndAReplacedStageWithoutListingItsParent() =
+    fun ownedUploadCleanupRetainsAReplacedStageWithoutListingItsParent() =
         RecordingServer().use { server ->
             val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
             server.enqueue(404)
             server.enqueue(412)
-            server.enqueue(404)
             val remote = AndroidFileSyncRemoteTree(
                 server.session,
                 "alice",
@@ -38,7 +37,7 @@ class NextcloudDocumentWebDavTest {
                 ownedUploadPaths = mapOf(uploadId to "nested/large.bin"),
             )
 
-            remote.discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag")
+            assertFalse(remote.discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag"))
 
             val collectionDelete = server.request(0)
             val stageDelete = server.request(1)
@@ -47,10 +46,6 @@ class NextcloudDocumentWebDavTest {
             assertEquals("DELETE", stageDelete.method)
             assertTrue(stageDelete.path.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
             assertEquals("owned-stage-etag", stageDelete.header("If-Match"))
-            val backupProbe = server.request(2)
-            assertEquals("PROPFIND", backupProbe.method)
-            assertEquals("0", backupProbe.header("Depth"))
-            assertTrue(backupProbe.path.endsWith("/Vault/nested/.nextcloud-native-backup-$uploadId"))
         }
 
     @Test
@@ -139,15 +134,14 @@ class NextcloudDocumentWebDavTest {
         }
 
     @Test
-    fun `verified chunk stage replaces a directory through a protected backup`() = RecordingServer().use { server ->
+    fun `verified chunk stage retains its protected backup until destination verification`() =
+        RecordingServer().use { server ->
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         server.enqueue(207, body = directoryListing())
         server.enqueue(207, body = directoryListing())
         server.enqueue(201)
         server.enqueue(201)
         server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
-        server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
-        server.enqueue(204)
         val remote = AndroidFileSyncRemoteTree(
             server.session,
             "alice",
@@ -173,10 +167,7 @@ class NextcloudDocumentWebDavTest {
         assertEquals("MOVE", publish.method)
         assertEquals("F", publish.header("Overwrite"))
         assertEquals("stage-etag", publish.header("If-Match"))
-        val cleanup = server.request(6)
-        assertEquals("DELETE", cleanup.method)
-        assertTrue(cleanup.path.contains(".nextcloud-native-backup-$uploadId"))
-        assertTrue(cleanup.header("If").orEmpty().contains("directory-etag"))
+        assertEquals(5, server.requestCount)
     }
 
     @Test

@@ -253,8 +253,7 @@ internal class DesktopFileSyncChunkUploadRemote(
                     .delete().build(),
                 "discard assembled upload",
                 accepted = { it in 200..299 || it == 404 || it == 412 },
-            )
-            true
+            ) != 412
         }
         return stageCleaned && tree.discardReplacementBackup(relativePath, uploadId, assembledStageEtag)
     }
@@ -282,15 +281,14 @@ internal class DesktopFileSyncChunkUploadRemote(
         ) {
             return false
         }
-        execute(
+        return execute(
             requestBuilder(fileUrl(stagePath))
                 .header("If-Match", safeEtag(stage.entry.etag))
                 .delete()
                 .build(),
             "discard verified assembled upload",
             accepted = { it in 200..299 || it == 404 || it == 412 },
-        )
-        return true
+        ) != 412
     }
 
     private fun execute(

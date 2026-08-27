@@ -63,6 +63,25 @@ internal fun persistDesktopFileSyncUploadCleanups(
     }
 }
 
+internal fun persistDesktopFileSyncPairUploadCleanups(
+    connection: SQLiteConnection,
+    pairId: String,
+    before: FileSyncPair?,
+    after: FileSyncPair,
+) = persistDesktopFileSyncUploadCleanups(
+    connection,
+    pairId,
+    before?.pendingUploadCleanups.orEmpty(),
+    after.pendingUploadCleanups,
+)
+
+internal fun persistDesktopFileSyncExecutionUploadCleanups(
+    connection: SQLiteConnection,
+    pairId: String,
+    stored: List<FileSyncPendingUploadCleanup>,
+    after: FileSyncPair,
+) = persistDesktopFileSyncUploadCleanups(connection, pairId, stored, after.pendingUploadCleanups)
+
 internal fun migrateInlineDesktopFileSyncUploadCleanups(
     connection: SQLiteConnection,
     upsertPairRecord: (FileSyncPair) -> Unit,

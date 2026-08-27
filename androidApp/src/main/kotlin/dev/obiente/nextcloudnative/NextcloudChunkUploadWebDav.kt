@@ -147,6 +147,7 @@ internal fun NextcloudDocumentWebDav.publishChunkUploadStage(
     destinationPath: String,
     stagedEtag: String,
     expectedRemoteEtag: String?,
+    cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
 ): DocumentMutationResult {
     require(stagedEtag.isNotBlank() && stagedEtag.none { it == '\r' || it == '\n' })
     require(expectedRemoteEtag == null ||
@@ -158,7 +159,11 @@ internal fun NextcloudDocumentWebDav.publishChunkUploadStage(
         .header("Overwrite", if (expectedRemoteEtag == null) "F" else "T")
         .header("If-Match", stagedEtag)
     expectedRemoteEtag?.let { builder.header("If", "<$destinationUrl> ([$it])") }
-    return execute(builder.method("MOVE", EMPTY_CHUNK_BODY).build(), "publish chunked upload")
+    return execute(
+        builder.method("MOVE", EMPTY_CHUNK_BODY).build(),
+        "publish chunked upload",
+        cancellation = cancellation,
+    )
 }
 
 private val EMPTY_CHUNK_BODY = byteArrayOf().toRequestBody(null)
