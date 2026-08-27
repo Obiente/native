@@ -616,10 +616,12 @@ internal class DesktopFileSyncRemoteTree(
         request: Request,
         operation: String,
         vararg mutationRelativePaths: String,
+        shouldContinue: (() -> Boolean)? = null,
     ): String? = mutationExecutor.execute(
         request = request,
         onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
         onAcceptedResponse = { notifyMutationCommitted(*mutationRelativePaths) },
+        shouldContinue = shouldContinue,
     ) { response ->
             response.requireAccepted(response.code in 200..299, operation)
             response.header("ETag") ?: response.header("OC-Etag")

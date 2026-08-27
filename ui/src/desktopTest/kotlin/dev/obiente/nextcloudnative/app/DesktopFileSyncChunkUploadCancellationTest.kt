@@ -273,6 +273,60 @@ class DesktopFileSyncChunkUploadCancellationTest {
     }
 
     @Test
+    fun `pausing sync cancels direct replacement stage put`() {
+        MockWebServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(
+                MockResponse.Builder().code(207).body(
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/alice/Vault/archive.bin/</d:href>
+                      <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+                        <d:resourcetype><d:collection/></d:resourcetype>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                ).build(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(201).headersDelay(30, TimeUnit.SECONDS).build(),
+            )
+            server.start()
+            val source = File.createTempFile("desktop-sync-replacement-", ".bin")
+            source.writeText("replacement")
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(session, "alice", "Vault", OkHttpClient())
+            val upload = thread(name = "desktop-replacement-stage-put-test") {
+                runCatching {
+                    tree.replaceWithFile(
+                        "archive.bin",
+                        source,
+                        "directory-etag",
+                        uploadId,
+                        active::get,
+                        onStageGenerationKnown = {},
+                    )
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            try {
+                repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+                active.set(false)
+                upload.join(2_000L)
+
+                assertFalse(upload.isAlive, "The paused replacement stage PUT did not release promptly.")
+                assertIs<CancellationException>(failure.get())
+            } finally {
+                active.set(false)
+                upload.join(2_000L)
+                source.delete()
+            }
+        }
+    }
+
+    @Test
     fun `pausing sync cancels direct replacement publication`() {
         MockWebServer().use { server ->
             server.enqueue(

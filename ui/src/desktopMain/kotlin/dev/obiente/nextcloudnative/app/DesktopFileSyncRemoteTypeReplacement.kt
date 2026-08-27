@@ -28,6 +28,8 @@ internal fun DesktopFileSyncRemoteTree.replaceWithFile(
     val responseEtag = executeMutationForEtag(
         requestBuilder(fileUrl(stagingPath)).header("If-None-Match", "*").put(stageBody).build(),
         "create replacement upload stage",
+        relativePath,
+        shouldContinue = shouldContinue,
     )
     val staged = requireNotNull(resolveOwnedUploadStage(ownedStagePath)) {
         "The replacement upload stage disappeared."
