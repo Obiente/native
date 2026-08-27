@@ -17,6 +17,36 @@ import okhttp3.OkHttpClient
 
 class DesktopFileSyncChunkUploadCancellationTest {
     @Test
+    fun `pausing sync cancels resumed chunk discovery`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(207)
+                    .headersDelay(30, TimeUnit.SECONDS)
+                    .build(),
+            )
+            server.start()
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(session, "alice", "Vault", OkHttpClient())
+            val remote = tree.resumableUploadRemote(shouldContinue = active::get)
+            val upload = thread(name = "desktop-chunk-discovery-test") {
+                runCatching {
+                    remote.listChunkCollection("01234567-89ab-cdef-0123-456789abcdef")
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            active.set(false)
+            upload.join(2_000L)
+
+            assertFalse(upload.isAlive, "The paused chunk discovery call did not release promptly.")
+            assertIs<CancellationException>(failure.get())
+        }
+    }
+
+    @Test
     fun `pausing sync cancels a chunk put while waiting for its response`() {
         MockWebServer().use { server ->
             server.enqueue(

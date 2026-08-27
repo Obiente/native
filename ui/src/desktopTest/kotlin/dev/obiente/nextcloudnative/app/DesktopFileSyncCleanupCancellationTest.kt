@@ -6,7 +6,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
@@ -15,6 +17,78 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 
 class DesktopFileSyncCleanupCancellationTest {
+    @Test
+    fun `unresolved upload cleanup blocks new pair work`() {
+        MockWebServer().use { server ->
+            server.start()
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(MockResponse.Builder().code(404).build())
+            server.enqueue(
+                MockResponse.Builder().code(207).addHeader("Content-Type", "application/xml")
+                    .body(
+                        """
+                        <d:multistatus xmlns:d="DAV:">
+                          <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
+                            <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+                              <d:getetag>different-etag</d:getetag><d:getcontentlength>5</d:getcontentlength>
+                              <d:resourcetype/>
+                            </d:prop></d:propstat>
+                          </d:response>
+                          <d:response>
+                            <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
+                            <d:propstat><d:prop>
+                              <d:displayname>.nextcloud-native-backup-$uploadId</d:displayname>
+                              <d:getetag>directory-etag</d:getetag>
+                              <d:resourcetype><d:collection/></d:resourcetype>
+                            </d:prop></d:propstat>
+                          </d:response>
+                        </d:multistatus>
+                        """.trimIndent(),
+                    ).build(),
+            )
+            val directory = Files.createTempDirectory("desktop-sync-cleanup-block-").toFile()
+            val localRoot = directory.resolve("local").apply { mkdirs() }
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val cleanup = FileSyncPendingUploadCleanup(
+                uploadId = uploadId,
+                relativePath = "archive.bin",
+                assembledStageEtag = "stage-etag",
+                replacementBackupEtag = "directory-etag",
+                expectedStageSizeBytes = 4,
+                expectedStageContentHash = "sha256:" + "55".repeat(32),
+                publicationInFlight = true,
+            )
+            val pair = FileSyncPair(
+                id = "pair",
+                accountId = desktopFileCacheAccountId(session),
+                localRootId = "root",
+                remoteRootPath = "Vault",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                pendingUploadCleanups = listOf(cleanup),
+            )
+            val store = DesktopFileSyncStore(directory.resolve("state.db"), legacyStateFile = null)
+            store.savePair(
+                DesktopFileSyncPersistedState(
+                    coordinator = FileSyncCoordinatorState(listOf(pair)),
+                    roots = listOf(DesktopFileSyncRootRecord("root", localRoot.absolutePath, "Local")),
+                ),
+                pair.id,
+            )
+            val engine = DesktopFileSyncEngine(store, directory.resolve("staging"))
+
+            try {
+                val result = runBlocking { engine.runPair(session, "alice", pair.id) }
+
+                assertIs<FileSyncCenterActionResult.Rejected>(result)
+                assertEquals(FileSyncRejectionScope.Preflight, result.scope)
+                assertEquals(2, server.requestCount)
+                assertEquals(listOf(cleanup), store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups)
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
     @Test
     fun `pausing a run cancels published replacement cleanup`() {
         MockWebServer().use { server ->

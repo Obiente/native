@@ -78,14 +78,15 @@ class AndroidFileSyncReplacementOwnershipTest {
                 NextcloudDocumentWebDav(),
             )
 
-            val cleaned = cleanupJvmFileSyncOwnedUploads(
+            val result = cleanupJvmFileSyncOwnedUploads(
                 remote,
                 FileSyncCoordinatorState(listOf(pair)),
                 pair.id,
                 listOf(cleanup),
             )
 
-            assertTrue(cleaned.pairs.single().pendingUploadCleanups.isEmpty())
+            assertTrue(result.state.pairs.single().pendingUploadCleanups.isEmpty())
+            assertTrue(result.unresolvedUploads.isEmpty())
             assertEquals(listOf("DELETE", "PROPFIND", "GET", "PROPFIND", "PROPFIND", "DELETE"),
                 List(6) { server.takeRequest().method })
         }

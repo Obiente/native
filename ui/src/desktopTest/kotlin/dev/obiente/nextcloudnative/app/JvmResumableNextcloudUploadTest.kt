@@ -382,7 +382,7 @@ class JvmResumableNextcloudUploadTest {
             ownedStageEtag = "discovered-stage",
             cleanupComplete = false,
         )
-        val after = cleanupJvmFileSyncOwnedUploads(
+        val result = cleanupJvmFileSyncOwnedUploads(
             remote = remote,
             state = initial,
             pairId = pair.id,
@@ -390,7 +390,8 @@ class JvmResumableNextcloudUploadTest {
             onStateChanged = { stateChangeCount += 1 },
         )
 
-        assertEquals(listOf(cleanup), after.pairs.single().pendingUploadCleanups)
+        assertEquals(listOf(cleanup), result.state.pairs.single().pendingUploadCleanups)
+        assertEquals(listOf(cleanup), result.unresolvedUploads)
         assertEquals(0, stateChangeCount)
         assertEquals(listOf<String?>(null), remote.discardedStageEtags)
     }

@@ -304,10 +304,15 @@ internal class AndroidFileSyncEngine(context: Context) {
             }
             val ownedUploads = fileSyncOwnedUploads(pair)
             val remote = androidFileSyncOwnedRemoteTree(session, userId, pair, webDav)
-            val cleanupCoordinator = cleanupJvmFileSyncOwnedUploads(
+            val cleanupResult = cleanupJvmFileSyncOwnedUploads(
                 remote, current.coordinator, pairId, ownedUploads,
             )
-            val remaining = removeFileSyncPair(cleanupCoordinator, pairId)
+            if (cleanupResult.unresolvedUploads.isNotEmpty()) {
+                return@withLock FileSyncCenterActionResult.Rejected(
+                    "A previous upload still needs safe recovery. Run this folder sync before removing it.",
+                )
+            }
+            val remaining = removeFileSyncPair(cleanupResult.state, pairId)
             val mediaStore = createAndroidMediaBackupLedgerStore(
                 context = appContext,
                 recoverInterruptedTransfers = false,
@@ -398,11 +403,17 @@ internal class AndroidFileSyncEngine(context: Context) {
             session, userId, initialPair, webDav,
             transferCancellation = transferCancellation,
         )
-        cleanupJvmFileSyncOwnedUploads(
+        val cleanupResult = cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,
         ) { coordinator ->
             persisted = persisted.copy(coordinator = coordinator)
             store.save(persisted)
+        }
+        if (cleanupResult.unresolvedUploads.isNotEmpty()) {
+            return@withAndroidMediaBackupLedger FileSyncCenterActionResult.Rejected(
+                "A previous upload still needs safe recovery. No new file changes were started.",
+                FileSyncRejectionScope.Preflight,
+            )
         }
         val configuration = initialPair.configuration
         val includes: (String, SyncEntryKind) -> Boolean = { relativePath, kind ->

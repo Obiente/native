@@ -88,18 +88,22 @@ internal class DesktopFileSyncChunkUploadRemote(
         return responseCode != 405
     }
 
-    override fun listChunkCollection(uploadId: String): Map<Int, Long> =
-        client.newCall(
+    override fun listChunkCollection(uploadId: String): Map<Int, Long> {
+        val call = client.newCall(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
                 .header("Depth", "1")
                 .method("PROPFIND", CHUNK_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
                 .build(),
-        ).execute().use { response ->
-            if (response.code != 207) {
-                throw DesktopFileSyncHttpStatusException(response.code, "inspect chunked upload")
+        )
+        return executeDesktopFileSyncCancellableCall(call, shouldContinue) { cancellable ->
+            cancellable.execute().use { response ->
+                if (response.code != 207) {
+                    throw DesktopFileSyncHttpStatusException(response.code, "inspect chunked upload")
+                }
+                response.body.byteStream().readNextcloudChunkCollection()
             }
-            response.body.byteStream().readNextcloudChunkCollection()
         }
+    }
 
     override fun deleteChunk(uploadId: String, chunkNumber: Int) {
         require(chunkNumber in 1..MAX_NEXTCLOUD_UPLOAD_CHUNKS)

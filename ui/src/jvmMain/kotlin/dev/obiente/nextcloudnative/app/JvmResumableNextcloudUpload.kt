@@ -119,14 +119,25 @@ interface JvmResumableNextcloudUploadRemote {
     ): Boolean
 }
 
+data class JvmFileSyncUploadCleanupResult(
+    val state: FileSyncCoordinatorState,
+    val unresolvedUploads: List<FileSyncPendingUploadCleanup>,
+) {
+    init {
+        require(unresolvedUploads.map(FileSyncPendingUploadCleanup::uploadId).distinct().size ==
+            unresolvedUploads.size)
+    }
+}
+
 fun cleanupJvmFileSyncOwnedUploads(
     remote: JvmResumableNextcloudUploadRemote,
     state: FileSyncCoordinatorState,
     pairId: String,
     uploads: List<FileSyncPendingUploadCleanup>,
     onStateChanged: (FileSyncCoordinatorState) -> Unit = {},
-): FileSyncCoordinatorState {
+): JvmFileSyncUploadCleanupResult {
     var updated = state
+    val unresolved = mutableListOf<FileSyncPendingUploadCleanup>()
     uploads.forEach { cleanup ->
         if (
             remote.discardOwnedUpload(
@@ -140,9 +151,11 @@ fun cleanupJvmFileSyncOwnedUploads(
         ) {
             updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
             onStateChanged(updated)
+        } else {
+            unresolved += cleanup
         }
     }
-    return updated
+    return JvmFileSyncUploadCleanupResult(updated, unresolved)
 }
 
 /**

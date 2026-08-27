@@ -196,10 +196,15 @@ internal class DesktopFileSyncEngine(
                 ownedUploadPaths = fileSyncOwnedUploadPaths(pair),
                 ownedReplacementBackupEtags = fileSyncOwnedReplacementBackupEtags(pair),
             )
-            val cleanupCoordinator = cleanupJvmFileSyncOwnedUploads(
+            val cleanupResult = cleanupJvmFileSyncOwnedUploads(
                 remote.resumableUploadRemote(), current.coordinator, pairId, fileSyncOwnedUploads(pair),
             )
-            removeFileSyncPair(cleanupCoordinator, pairId)
+            if (cleanupResult.unresolvedUploads.isNotEmpty()) {
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    "A previous upload still needs safe recovery. Run this folder sync before removing it.",
+                )
+            }
+            removeFileSyncPair(cleanupResult.state, pairId)
             val overview = store.load()
             store.deletePair(
                 pairId = pairId,
@@ -327,7 +332,7 @@ internal class DesktopFileSyncEngine(
             ownedUploadPaths = fileSyncOwnedUploadPaths(initialPair),
             ownedReplacementBackupEtags = fileSyncOwnedReplacementBackupEtags(initialPair),
         )
-        cleanupJvmFileSyncOwnedUploads(
+        val cleanupResult = cleanupJvmFileSyncOwnedUploads(
             remote.resumableUploadRemote(shouldContinue),
             persisted.coordinator,
             pairId,
@@ -335,6 +340,12 @@ internal class DesktopFileSyncEngine(
         ) { coordinator ->
             persisted = persisted.copy(coordinator = coordinator)
             store.savePair(persisted, pairId)
+        }
+        if (cleanupResult.unresolvedUploads.isNotEmpty()) {
+            return FileSyncCenterActionResult.Rejected(
+                "A previous upload still needs safe recovery. No new file changes were started.",
+                FileSyncRejectionScope.Preflight,
+            )
         }
         val includes = { path: String, kind: SyncEntryKind -> initialPair.configuration.includesSyncPath(path, kind) }
         val cachedLocalRevisions = initialPair.baselines.mapNotNull { baseline ->
