@@ -38,6 +38,7 @@ internal class DesktopFileSyncRemoteTree(
     private val ownedUploadIds: Set<String> = emptySet(),
     private val ownedStageEtags: Map<String, String> = emptyMap(),
     private val ownedUploadPaths: Map<String, String> = emptyMap(),
+    internal val ownedReplacementBackupEtags: Map<String, String> = emptyMap(),
 ) : LinuxVirtualWritebackRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
@@ -47,8 +48,10 @@ internal class DesktopFileSyncRemoteTree(
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
         require(ownedStageEtags.keys.all { it in ownedUploadIds })
         require(ownedUploadPaths.keys.all { it in ownedUploadIds })
+        require(ownedReplacementBackupEtags.keys.all { it in ownedUploadIds })
         ownedUploadPaths.values.forEach(::requireValidSyncPath)
         require(ownedStageEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
+        require(ownedReplacementBackupEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
     }
 
     fun scan(
@@ -426,9 +429,15 @@ internal class DesktopFileSyncRemoteTree(
             ownedDestinationPaths,
             MAX_RECOVERY_ITEMS,
         ).forEach { (source, destination) ->
+            val uploadId = requireNotNull(
+                jvmOwnedReplacementBackupDestination(source, ownedDestinationPaths),
+            ).second
+            val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
+            val backup = requireNotNull(documentsByPath[source])
+            require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
             val recoveredRelativePath = toRelativePath(destination)
             moveRemoteDocument(
-                requireNotNull(documentsByPath[source]),
+                backup,
                 destination,
                 *recoveredRelativePath?.let(::arrayOf).orEmpty(),
             )
@@ -515,12 +524,17 @@ internal class DesktopFileSyncRemoteTree(
         destinationPath: String,
         backupPath: String,
         vararg mutationRelativePaths: String,
+        expectedBackupEtag: String? = null,
     ) {
         runCatching {
             val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""))
             if (documents.none { it.entry.relativePath == destinationPath }) {
-                documents.firstOrNull { it.entry.relativePath == backupPath }
-                    ?.let { moveRemoteDocument(it, destinationPath, *mutationRelativePaths) }
+                documents.firstOrNull { it.entry.relativePath == backupPath }?.let { backup ->
+                    require(expectedBackupEtag == null || backup.entry.etag == expectedBackupEtag) {
+                        "The protected backup changed."
+                    }
+                    moveRemoteDocument(backup, destinationPath, *mutationRelativePaths)
+                }
             }
         }
     }
@@ -533,11 +547,12 @@ internal class DesktopFileSyncRemoteTree(
         }
     }
 
-    internal fun deleteOwnedReplacementBackup(backupPath: String) {
+    internal fun deleteOwnedReplacementBackup(backupPath: String, expectedBackupEtag: String) {
         rawListDirectory(backupPath.substringBeforeLast('/', ""))
             .firstOrNull { it.entry.relativePath == backupPath }
             ?.let { backup ->
                 require(backup.isDirectory) { "The owned replacement backup changed type." }
+                require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
                 deleteRemoteDocument(backup)
             }
     }

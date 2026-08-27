@@ -58,6 +58,7 @@ class FileSyncCoordinatorSnapshotTest {
                             "01234567-89ab-cdef-0123-456789abcdef",
                             "archive.bin",
                             "stage-etag",
+                            "directory-etag",
                         ),
                     ),
                 )

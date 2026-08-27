@@ -255,7 +255,7 @@ fun scanFileSyncPair(
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
-        current.retainCommitInFlightUpload(local)?.let { return it }
+        current.retainCommitInFlightUpload(local, remote)?.let { return it }
         return current.takeIf { it.sameGeneration(operation, local, remote, baseline) }
             ?.copy(observedLocal = local, observedRemote = remote)
             ?: current.rebindResolvedSourceGeneration(operation, local, remote, baseline)

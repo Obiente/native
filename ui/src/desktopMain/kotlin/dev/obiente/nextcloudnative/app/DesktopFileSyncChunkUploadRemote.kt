@@ -68,7 +68,7 @@ internal class DesktopFileSyncChunkUploadRemote(
     }
 
     override fun completePublishedFile(uploadId: String, relativePath: String) {
-        if (replacingDirectoryEtag != null) tree.completeReplacementBackup(relativePath, uploadId)
+        replacingDirectoryEtag?.let { tree.completeReplacementBackup(relativePath, uploadId, it) }
     }
 
     override fun createChunkCollection(

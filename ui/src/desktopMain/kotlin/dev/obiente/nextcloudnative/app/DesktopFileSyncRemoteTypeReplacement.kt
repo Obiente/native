@@ -79,16 +79,30 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
         )
         val after = requireNotNull(resolvePhysical(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
-        deleteOwnedReplacementBackup(backupPath)
+        deleteOwnedReplacementBackup(backupPath, expectedRemoteEtag)
         return after.entry
     } catch (failure: Throwable) {
-        if (protected) restoreRemoteBackup(destinationPath, backupPath, relativePath)
+        if (protected) {
+            restoreRemoteBackup(
+                destinationPath,
+                backupPath,
+                relativePath,
+                expectedBackupEtag = expectedRemoteEtag,
+            )
+        }
         throw failure
     }
 }
 
-internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(relativePath: String, uploadId: String) {
-    deleteOwnedReplacementBackup(fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId)))
+internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(
+    relativePath: String,
+    uploadId: String,
+    expectedBackupEtag: String,
+) {
+    deleteOwnedReplacementBackup(
+        fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId)),
+        expectedBackupEtag,
+    )
 }
 
 internal fun DesktopFileSyncRemoteTree.discardReplacementBackup(
@@ -100,7 +114,9 @@ internal fun DesktopFileSyncRemoteTree.discardReplacementBackup(
     val backupPath = fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId))
     val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""))
     val backup = documents.firstOrNull { it.entry.relativePath == backupPath } ?: return true
+    val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
     require(backup.isDirectory) { "The owned replacement backup changed type." }
+    require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
     val destination = documents.firstOrNull { it.entry.relativePath == destinationPath }
     if (destination == null) {
         moveRemoteDocument(backup, destinationPath, relativePath)

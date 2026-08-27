@@ -47,6 +47,6 @@ private class AndroidFileSyncDirectoryReplacementUploadRemote(
     }
 
     override fun completePublishedFile(uploadId: String, relativePath: String) {
-        tree.completeReplacementBackup(relativePath, uploadId)
+        tree.completeReplacementBackup(relativePath, uploadId, expectedDirectoryEtag)
     }
 }

@@ -408,6 +408,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             transferCancellation = transferCancellation,
             ownedStageEtags = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadStageEtags(initialPair),
             ownedUploadPaths = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadPaths(initialPair),
+            ownedReplacementBackupEtags = dev.obiente.nextcloudnative.app.fileSyncOwnedReplacementBackupEtags(initialPair),
         )
         cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,
@@ -706,8 +707,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 } else {
                     withAndroidFileSyncStagingFile(stagingRoot, "upload") { staged ->
                         val exactLocal = local.stageForUpload(
-                            operation.relativePath,
-                            staged,
+                            operation.relativePath, staged,
                             androidFileSyncStagingTransferLimit(stagingRoot, source.size),
                             remote::shouldContinueTransfer,
                         )

@@ -9,6 +9,7 @@ import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import okhttp3.OkHttpClient
@@ -354,6 +355,39 @@ class DesktopFileSyncRemoteTreeTest {
                 .completePublishedFile(uploadId, "archive.bin")
         }
         assertEquals(listOf("PROPFIND", "DELETE"), requests.map { it.method })
+    }
+
+    @Test
+    fun `published replacement cleanup preserves a changed backup generation`() {
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            response(
+                chain.request(),
+                207,
+                publishedReplacementListing(
+                    uploadId,
+                    "stage-etag",
+                    4,
+                    backupEtag = "changed-directory-etag",
+                ),
+            )
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+            ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            tree.resumableUploadRemote(replacingDirectoryEtag = "directory-etag")
+                .completePublishedFile(uploadId, "archive.bin")
+        }
+        assertEquals(listOf("PROPFIND"), requests.map { it.method })
     }
 
     @Test
@@ -1012,7 +1046,12 @@ class DesktopFileSyncRemoteTreeTest {
         </d:response></d:multistatus>
         """.trimIndent()
 
-    private fun publishedReplacementListing(uploadId: String, etag: String, sizeBytes: Long): String =
+    private fun publishedReplacementListing(
+        uploadId: String,
+        etag: String,
+        sizeBytes: Long,
+        backupEtag: String = "directory-etag",
+    ): String =
         """
         <d:multistatus xmlns:d="DAV:">
           <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
@@ -1022,7 +1061,7 @@ class DesktopFileSyncRemoteTreeTest {
           </d:response>
           <d:response>
             <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
-            <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+            <d:propstat><d:prop><d:getetag>$backupEtag</d:getetag>
               <d:resourcetype><d:collection/></d:resourcetype>
             </d:prop></d:propstat>
           </d:response>

@@ -55,6 +55,7 @@ internal class AndroidFileSyncRemoteTree(
     },
     private val ownedStageEtags: Map<String, String> = emptyMap(),
     private val ownedUploadPaths: Map<String, String> = emptyMap(),
+    private val ownedReplacementBackupEtags: Map<String, String> = emptyMap(),
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val ownedDestinationPaths = ownedUploadPaths.mapValues { (_, path) -> fullPath(path) }
@@ -63,7 +64,9 @@ internal class AndroidFileSyncRemoteTree(
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
         require(ownedStageEtags.keys.all { it in ownedUploadIds })
         require(ownedUploadPaths.keys.all { it in ownedUploadIds })
+        require(ownedReplacementBackupEtags.keys.all { it in ownedUploadIds })
         require(ownedStageEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
+        require(ownedReplacementBackupEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
     }
 
     fun shouldContinueTransfer(): Boolean {
@@ -429,19 +432,24 @@ internal class AndroidFileSyncRemoteTree(
                 "The uploaded server file disappeared."
             }
             require(!published.isDirectory) { "The uploaded server item is not a file." }
-            completeReplacementBackup(relativePath, uploadId)
+            completeReplacementBackup(relativePath, uploadId, expectedDirectoryEtag)
             return published.entry
         } catch (failure: Throwable) {
-            restoreReplacementBackupIfDestinationMissing(relativePath, uploadId)
+            restoreReplacementBackupIfDestinationMissing(relativePath, uploadId, expectedDirectoryEtag)
             throw failure
         }
     }
 
-    internal fun completeReplacementBackup(relativePath: String, uploadId: String) {
+    internal fun completeReplacementBackup(
+        relativePath: String,
+        uploadId: String,
+        expectedBackupEtag: String,
+    ) {
         val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
         resolveIncludingOwnedStage(backupPath)?.let { backup ->
             require(backup.isDirectory) { "The owned replacement backup changed type." }
-            webDav.delete(session, userId, fullPath(backupPath), backup.entry.etag, isDirectory = true)
+            require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
+            webDav.delete(session, userId, fullPath(backupPath), expectedBackupEtag, isDirectory = true)
         }
     }
 
@@ -625,13 +633,15 @@ internal class AndroidFileSyncRemoteTree(
         }
         var recovered = false
         ownedBackups.forEach { (parsed, file) ->
-            val destination = parsed.first
+            val (destination, uploadId) = parsed
             if (destination in listedPaths) return@forEach
             require(file.isDirectory) { "The owned replacement backup changed type." }
             val backupEtag = requireNotNull(file.etag?.takeIf(String::isNotBlank)) {
                 "The owned replacement backup has no usable revision."
             }
-            webDav.moveDirectory(session, userId, file.path.trim('/'), destination, backupEtag)
+            val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
+            require(backupEtag == expectedBackupEtag) { "The owned replacement backup changed." }
+            webDav.moveDirectory(session, userId, file.path.trim('/'), destination, expectedBackupEtag)
             recovered = true
         }
         if (recovered) {
@@ -690,13 +700,17 @@ internal class AndroidFileSyncRemoteTree(
         }
     }
 
-    private fun restoreReplacementBackupIfDestinationMissing(relativePath: String, uploadId: String) {
+    private fun restoreReplacementBackupIfDestinationMissing(
+        relativePath: String,
+        uploadId: String,
+        expectedBackupEtag: String,
+    ) {
         runCatching {
             if (resolveIncludingOwnedStage(relativePath) != null) return@runCatching
             val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
             val backup = resolveIncludingOwnedStage(backupPath) ?: return@runCatching
-            require(backup.isDirectory)
-            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
+            require(backup.isDirectory && backup.entry.etag == expectedBackupEtag)
+            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
         }
     }
 
@@ -708,20 +722,22 @@ internal class AndroidFileSyncRemoteTree(
         val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
         if (!webDav.resourceExists(session, userId, fullPath(backupPath), transferCancellation)) return true
         val backup = resolveIncludingOwnedStage(backupPath) ?: return true
+        val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
         require(backup.isDirectory) { "The owned replacement backup changed type." }
+        require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
         val destination = resolveIncludingOwnedStage(relativePath)
         if (destination == null) {
-            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
+            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
             return true
         }
         if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
             webDav.delete(session, userId, fullPath(relativePath), destination.entry.etag, isDirectory = false)
-            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), backup.entry.etag)
+            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
             return true
         }
         val conflictPath = jvmOwnedReplacementConflictPath(relativePath, uploadId)
         if (resolveIncludingOwnedStage(conflictPath) != null) return false
-        webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(conflictPath), backup.entry.etag)
+        webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(conflictPath), expectedBackupEtag)
         return true
     }
 

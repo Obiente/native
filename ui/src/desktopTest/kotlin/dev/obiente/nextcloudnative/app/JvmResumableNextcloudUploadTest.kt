@@ -19,6 +19,9 @@ class JvmResumableNextcloudUploadTest {
         assertTrue(backup.substringAfterLast('/').encodeToByteArray().size <= 255)
         assertFalse(destinationLeaf in backup)
         assertEquals("Archive/.nextcloud-native-backup-$UPLOAD_ID", backup)
+        val conflict = jvmOwnedReplacementConflictPath("Archive/$destinationLeaf", UPLOAD_ID)
+        assertTrue(conflict.substringAfterLast('/').encodeToByteArray().size <= 255)
+        assertFalse(destinationLeaf in conflict)
     }
 
     @Test
@@ -287,7 +290,7 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
-    fun `missing stage and a different destination restart the guarded upload`() {
+    fun `unknown published verification failure retains recovery without retransmitting`() {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
         val checkpoint = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(
@@ -302,17 +305,18 @@ class JvmResumableNextcloudUploadTest {
             publishedFile = RemoteSyncEntry("large.bin", SyncEntryKind.File, "different-etag", source.length()),
         )
         try {
-            val uploaded = jvmResumableNextcloudUpload(
-                source, "large.bin", "local-1", "different-etag", checkpoint,
-                newUploadId = { "fedcba98-7654-3210-fedc-ba9876543210" },
-                persistCheckpoint = {},
-                remote = remote,
-            )
+            assertFailsWith<IllegalStateException> {
+                jvmResumableNextcloudUpload(
+                    source, "large.bin", "local-1", "different-etag", checkpoint,
+                    newUploadId = { error("An unknown outcome must not allocate another upload.") },
+                    persistCheckpoint = {},
+                    remote = remote,
+                )
+            }
 
-            assertEquals("remote-etag", uploaded.etag)
-            assertEquals(listOf(1, 2, 3), remote.uploadedChunkNumbers)
-            assertEquals(listOf("direct-verify", "commit", "verify", "publish"), remote.finalizationEvents)
-            assertEquals(1, remote.discardCount)
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
+            assertEquals(listOf("direct-verify"), remote.finalizationEvents)
+            assertEquals(0, remote.discardCount)
         } finally {
             source.delete()
         }

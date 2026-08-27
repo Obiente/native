@@ -96,6 +96,7 @@ fun encodeFileSyncPendingUploadCleanupRecord(
         cleanup.uploadId,
         cleanup.relativePath,
         cleanup.assembledStageEtag,
+        cleanup.replacementBackupEtag,
     ),
 ).encodeToByteArray().also { encoded ->
     require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
@@ -108,7 +109,12 @@ fun decodeFileSyncPendingUploadCleanupRecord(
     val snapshot = syncCoordinatorJson.decodeFromString<FileSyncPendingUploadCleanupSnapshotV1>(
         strictSyncRecordText(bytes),
     )
-    return FileSyncPendingUploadCleanup(snapshot.uploadId, snapshot.relativePath, snapshot.assembledStageEtag)
+    return FileSyncPendingUploadCleanup(
+        snapshot.uploadId,
+        snapshot.relativePath,
+        snapshot.assembledStageEtag,
+        snapshot.replacementBackupEtag,
+    )
 }
 
 private fun strictSyncRecordText(bytes: ByteArray): String = bytes.decodeToString().also { text ->
@@ -149,6 +155,7 @@ private data class FileSyncPendingUploadCleanupSnapshotV1(
     val uploadId: String,
     val relativePath: String,
     val assembledStageEtag: String? = null,
+    val replacementBackupEtag: String? = null,
 )
 
 @Serializable
@@ -261,7 +268,11 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
     workItems = workItems.sortedBy(FileSyncWorkItem::id).map(FileSyncWorkItem::toSnapshot),
     pendingUploadCleanups = pendingUploadCleanups
         .sortedBy(FileSyncPendingUploadCleanup::uploadId)
-        .map { FileSyncPendingUploadCleanupSnapshotV1(it.uploadId, it.relativePath, it.assembledStageEtag) },
+        .map {
+            FileSyncPendingUploadCleanupSnapshotV1(
+                it.uploadId, it.relativePath, it.assembledStageEtag, it.replacementBackupEtag,
+            )
+        },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )
@@ -287,7 +298,9 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
         .map(FileSyncContentVerificationProgressSnapshotV1::toDomain),
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
     pendingUploadCleanups = pendingUploadCleanups.map {
-        FileSyncPendingUploadCleanup(it.uploadId, it.relativePath, it.assembledStageEtag)
+        FileSyncPendingUploadCleanup(
+            it.uploadId, it.relativePath, it.assembledStageEtag, it.replacementBackupEtag,
+        )
     },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,

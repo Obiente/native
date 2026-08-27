@@ -5,19 +5,27 @@ data class FileSyncPendingUploadCleanup(
     val uploadId: String,
     val relativePath: String,
     val assembledStageEtag: String? = null,
+    val replacementBackupEtag: String? = null,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
         requireValidSyncPath(relativePath)
         require(assembledStageEtag == null || assembledStageEtag.isNotBlank())
         require(assembledStageEtag == null || assembledStageEtag.none { it == '\r' || it == '\n' })
+        require(replacementBackupEtag == null || replacementBackupEtag.isNotBlank())
+        require(replacementBackupEtag == null || replacementBackupEtag.none { it == '\r' || it == '\n' })
     }
 }
 
 fun fileSyncOwnedUploads(pair: FileSyncPair): List<FileSyncPendingUploadCleanup> =
     (pair.pendingUploadCleanups + pair.workItems.mapNotNull { work ->
         work.uploadCheckpoint?.let { checkpoint ->
-            FileSyncPendingUploadCleanup(checkpoint.uploadId, work.relativePath, checkpoint.assembledStageEtag)
+            FileSyncPendingUploadCleanup(
+                checkpoint.uploadId,
+                work.relativePath,
+                checkpoint.assembledStageEtag,
+                work.replacementBackupEtag(),
+            )
         }
     }).distinctBy(FileSyncPendingUploadCleanup::uploadId)
 
@@ -29,14 +37,32 @@ fun fileSyncOwnedUploadStageEtags(pair: FileSyncPair): Map<String, String> =
 fun fileSyncOwnedUploadPaths(pair: FileSyncPair): Map<String, String> =
     fileSyncOwnedUploads(pair).associate { owned -> owned.uploadId to owned.relativePath }
 
-internal fun FileSyncWorkItem.retainCommitInFlightUpload(local: LocalSyncEntry?): FileSyncWorkItem? {
-    val checkpoint = uploadCheckpoint
+fun fileSyncOwnedReplacementBackupEtags(pair: FileSyncPair): Map<String, String> =
+    fileSyncOwnedUploads(pair).mapNotNull { owned ->
+        owned.replacementBackupEtag?.let { etag -> owned.uploadId to etag }
+    }.toMap()
+
+internal fun FileSyncWorkItem.retainCommitInFlightUpload(
+    local: LocalSyncEntry?,
+    remote: RemoteSyncEntry?,
+): FileSyncWorkItem? {
+    val checkpoint = uploadCheckpoint ?: return null
+    val destinationUnchanged = observedRemote?.let { previous ->
+        remote?.kind == previous.kind && remote.etag == previous.etag
+    } ?: (remote == null)
+    val destinationPublished = remote?.kind == SyncEntryKind.File &&
+        remote.etag == checkpoint.assembledStageEtag && remote.size == checkpoint.sizeBytes
     return takeIf {
-        checkpoint?.commitInFlight == true && operation is FileSyncOperation.Upload &&
+        checkpoint.commitInFlight && operation is FileSyncOperation.Upload &&
             local?.kind == SyncEntryKind.File && local.revision == checkpoint.localRevision &&
-            (local.size == null || local.size == checkpoint.sizeBytes)
+            (local.size == null || local.size == checkpoint.sizeBytes) &&
+            (destinationUnchanged || destinationPublished)
     }?.copy(observedLocal = local)
 }
+
+private fun FileSyncWorkItem.replacementBackupEtag(): String? =
+    (operation as? FileSyncOperation.Upload)?.expectedRemoteEtag
+        ?.takeIf { observedRemote?.kind == SyncEntryKind.Directory }
 
 internal fun requireNoFileSyncUploadOwnership(pair: FileSyncPair) {
     require(fileSyncOwnedUploads(pair).isEmpty()) {
@@ -81,7 +107,12 @@ internal fun retainFileSyncUploadOwnership(
     val retainedUploadIds = currentWork.mapNotNullTo(mutableSetOf()) { it.uploadCheckpoint?.uploadId }
     val abandonedUploads = previous.workItems.mapNotNull { work ->
         work.uploadCheckpoint?.takeIf { it.uploadId !in retainedUploadIds }?.let { checkpoint ->
-            FileSyncPendingUploadCleanup(checkpoint.uploadId, work.relativePath, checkpoint.assembledStageEtag)
+            FileSyncPendingUploadCleanup(
+                checkpoint.uploadId,
+                work.relativePath,
+                checkpoint.assembledStageEtag,
+                work.replacementBackupEtag(),
+            )
         }
     }
     return (previous.pendingUploadCleanups + abandonedUploads)

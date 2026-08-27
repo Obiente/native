@@ -56,7 +56,9 @@ fun shouldProjectJvmOwnedReplacementBackup(
 fun jvmOwnedReplacementConflictPath(relativePath: String, uploadId: String): String {
     requireValidSyncPath(relativePath)
     require(isValidNextcloudChunkUploadId(uploadId))
-    return fileSyncConflictCopyPath(relativePath, "server-original-${uploadId.take(8)}")
+    val parent = relativePath.substringBeforeLast('/', "")
+    val conflictName = ".nextcloud-native-conflict-$uploadId"
+    return listOf(parent, conflictName).filter(String::isNotBlank).joinToString("/")
 }
 
 interface JvmResumableNextcloudUploadRemote {
@@ -199,18 +201,10 @@ fun jvmResumableNextcloudUpload(
         }
         remote.resolvePublishedFile(relativePath)?.let { published ->
             ensureActive()
-            val verified = try {
-                remote.verifyPublishedFile(matchingCheckpoint.uploadId, source, relativePath, published)
-            } catch (failure: Exception) {
-                if (failure is CancellationException) throw failure
-                ensureActive()
-                null
-            }
-            if (verified != null) {
-                ensureActive()
-                remote.completePublishedFile(matchingCheckpoint.uploadId, relativePath)
-                return verified
-            }
+            val verified = remote.verifyPublishedFile(matchingCheckpoint.uploadId, source, relativePath, published)
+            ensureActive()
+            remote.completePublishedFile(matchingCheckpoint.uploadId, relativePath)
+            return verified
         }
     }
 
