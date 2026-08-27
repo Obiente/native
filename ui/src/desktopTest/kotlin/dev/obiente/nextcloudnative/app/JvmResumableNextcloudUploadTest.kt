@@ -11,6 +11,17 @@ import kotlinx.coroutines.CancellationException
 
 class JvmResumableNextcloudUploadTest {
     @Test
+    fun `replacement backup name is bounded independently of the destination leaf`() {
+        val destinationLeaf = "a".repeat(240) + ".bin"
+
+        val backup = jvmOwnedReplacementBackupPath("Archive/$destinationLeaf", UPLOAD_ID)
+
+        assertTrue(backup.substringAfterLast('/').encodeToByteArray().size <= 255)
+        assertFalse(destinationLeaf in backup)
+        assertEquals("Archive/.nextcloud-native-backup-$UPLOAD_ID", backup)
+    }
+
+    @Test
     fun `direct upload is byte verified before its result is returned`() {
         val source = sparseFile(1024L)
         val remote = RecordingUploadRemote(collectionCreated = true, directUpload = true)
@@ -308,7 +319,7 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
-    fun `cleanup persists a discovered stage generation before deleting it`() {
+    fun `cleanup preserves a stage whose generation was never recorded`() {
         val cleanup = FileSyncPendingUploadCleanup(UPLOAD_ID, "large.bin")
         val pair = FileSyncPair(
             id = "pair",
@@ -324,6 +335,7 @@ class JvmResumableNextcloudUploadTest {
         val remote = RecordingUploadRemote(
             collectionCreated = true,
             ownedStageEtag = "discovered-stage",
+            cleanupComplete = false,
         )
         val after = cleanupJvmFileSyncOwnedUploads(
             remote = remote,
@@ -333,9 +345,9 @@ class JvmResumableNextcloudUploadTest {
             onStateChanged = { stateChangeCount += 1 },
         )
 
-        assertTrue(after.pairs.single().pendingUploadCleanups.isEmpty())
-        assertEquals(2, stateChangeCount)
-        assertEquals(listOf<String?>("discovered-stage"), remote.discardedStageEtags)
+        assertEquals(listOf(cleanup), after.pairs.single().pendingUploadCleanups)
+        assertEquals(0, stateChangeCount)
+        assertEquals(listOf<String?>(null), remote.discardedStageEtags)
     }
 
     private fun sparseFile(sizeBytes: Long): File =

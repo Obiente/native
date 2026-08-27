@@ -35,6 +35,7 @@ class NextcloudDocumentWebDavTest {
                 "Vault",
                 NextcloudDocumentWebDav(),
                 ownedUploadIds = setOf(uploadId),
+                ownedUploadPaths = mapOf(uploadId to "nested/large.bin"),
             )
 
             remote.discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag")
@@ -49,7 +50,7 @@ class NextcloudDocumentWebDavTest {
             val backupProbe = server.request(2)
             assertEquals("PROPFIND", backupProbe.method)
             assertEquals("0", backupProbe.header("Depth"))
-            assertTrue(backupProbe.path.endsWith("/Vault/nested/.large.bin.nextcloud-native-backup-$uploadId"))
+            assertTrue(backupProbe.path.endsWith("/Vault/nested/.nextcloud-native-backup-$uploadId"))
         }
 
     @Test
@@ -101,6 +102,7 @@ class NextcloudDocumentWebDavTest {
                 NextcloudDocumentWebDav(),
                 ownedUploadIds = setOf(uploadId),
                 ownedStageEtags = mapOf(uploadId to "published-etag"),
+                ownedUploadPaths = mapOf(uploadId to "archive.bin"),
             )
 
             val scanned = remote.scan()
@@ -110,7 +112,7 @@ class NextcloudDocumentWebDavTest {
             assertEquals("directory-etag", scanned.first().entry.etag)
             assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.File, scanned.last().entry.kind)
             val protectedDirectoryRead = server.request(1)
-            assertTrue(protectedDirectoryRead.path.endsWith("/Vault/.archive.bin.nextcloud-native-backup-$uploadId"))
+            assertTrue(protectedDirectoryRead.path.endsWith("/Vault/.nextcloud-native-backup-$uploadId"))
         }
 
     @Test
@@ -125,6 +127,7 @@ class NextcloudDocumentWebDavTest {
                 NextcloudDocumentWebDav(),
                 ownedUploadIds = setOf(uploadId),
                 ownedStageEtags = mapOf(uploadId to "stage-etag"),
+                ownedUploadPaths = mapOf(uploadId to "archive.bin"),
             )
 
             val scanned = remote.scan()
@@ -151,6 +154,7 @@ class NextcloudDocumentWebDavTest {
             "Vault",
             NextcloudDocumentWebDav(),
             ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
         )
 
         val published = remote.publishOwnedStageReplacingDirectory(
@@ -171,7 +175,7 @@ class NextcloudDocumentWebDavTest {
         assertEquals("stage-etag", publish.header("If-Match"))
         val cleanup = server.request(6)
         assertEquals("DELETE", cleanup.method)
-        assertTrue(cleanup.path.contains(".archive.bin.nextcloud-native-backup-$uploadId"))
+        assertTrue(cleanup.path.contains(".nextcloud-native-backup-$uploadId"))
         assertTrue(cleanup.header("If").orEmpty().contains("directory-etag"))
     }
 
@@ -192,6 +196,7 @@ class NextcloudDocumentWebDavTest {
                     "Vault",
                     NextcloudDocumentWebDav(),
                     ownedUploadIds = setOf(uploadId),
+                    ownedUploadPaths = mapOf(uploadId to "archive.bin"),
                 ).resumableUploadRemote("directory-etag")
 
                 val verified = remote.verifyPublishedFile(
@@ -210,7 +215,7 @@ class NextcloudDocumentWebDavTest {
                 assertEquals("published-etag", verified.etag)
                 val cleanup = server.request(3)
                 assertEquals("DELETE", cleanup.method)
-                assertTrue(cleanup.path.contains(".archive.bin.nextcloud-native-backup-$uploadId"))
+                assertTrue(cleanup.path.contains(".nextcloud-native-backup-$uploadId"))
             } finally {
                 source.delete()
             }
@@ -1109,9 +1114,9 @@ class NextcloudDocumentWebDavTest {
           </d:response>
           """.trimIndent() else ""}
           <d:response>
-            <d:href>/remote.php/dav/files/alice/Vault/.archive.bin.nextcloud-native-backup-$uploadId/</d:href>
+            <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
             <d:propstat><d:prop>
-              <d:displayname>.archive.bin.nextcloud-native-backup-$uploadId</d:displayname>
+              <d:displayname>.nextcloud-native-backup-$uploadId</d:displayname>
               <d:getetag>directory-etag</d:getetag><d:resourcetype><d:collection/></d:resourcetype>
             </d:prop></d:propstat>
           </d:response>
@@ -1121,7 +1126,7 @@ class NextcloudDocumentWebDavTest {
     private fun protectedDirectoryListing(uploadId: String): String =
         """
         <d:multistatus xmlns:d="DAV:"><d:response>
-          <d:href>/remote.php/dav/files/alice/Vault/.archive.bin.nextcloud-native-backup-$uploadId/inside.txt</d:href>
+          <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/inside.txt</d:href>
           <d:propstat><d:prop><d:displayname>inside.txt</d:displayname>
             <d:getetag>inside-etag</d:getetag><d:getcontentlength>4</d:getcontentlength><d:resourcetype/>
           </d:prop></d:propstat>
@@ -1168,9 +1173,7 @@ class NextcloudDocumentWebDavTest {
     }
 
     private val RecordedRequest.path: String get() = url.encodedPath
-
     private fun RecordedRequest.header(name: String): String? = headers[name]
-
     private class TestCancellation : DocumentRequestCancellation {
         val attached = CountDownLatch(1)
         val detached = CountDownLatch(1)

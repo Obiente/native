@@ -59,7 +59,12 @@ internal interface AndroidFileSyncLocalTree {
         offset: Long,
         length: Int,
     ): String? = null
-    fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
+    fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    ): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
     fun writeFileFromStream(
@@ -187,14 +192,19 @@ internal class AndroidSafFileSyncLocalTree(
         return hash
     }
 
-    override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
+    override fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean,
+    ): LocalSyncEntry {
         val document = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(document.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
         require((document.entry.size ?: 0L) <= maximumBytes) { "The local file exceeds the sync size limit." }
         val stagedContentHash = requireNotNull(resolver.openInputStream(document.uri)) {
             "The local file could not be opened."
         }.use { source ->
-            stageAndroidFileSyncUpload(source, destination, document.entry.size, maximumBytes)
+            stageAndroidFileSyncUpload(source, destination, document.entry.size, maximumBytes, shouldContinue)
         }
         val after = requireNotNull(resolve(path)) { "The local file disappeared while it was read." }
         require(after.entry.revision == document.entry.revision && after.entry.size == document.entry.size) {
@@ -448,6 +458,7 @@ internal fun stageAndroidFileSyncUpload(
     destination: File,
     expectedBytes: Long?,
     maximumBytes: Long,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ): String {
     require(expectedBytes == null || expectedBytes >= 0L)
     require(maximumBytes > 0L)
@@ -456,7 +467,7 @@ internal fun stageAndroidFileSyncUpload(
     FileOutputStream(destination).use { output ->
         val buffer = ByteArray(64 * 1024)
         while (true) {
-            if (Thread.currentThread().isInterrupted) {
+            if (!shouldContinue() || Thread.currentThread().isInterrupted) {
                 throw kotlinx.coroutines.CancellationException("Sync upload staging cancelled.")
             }
             val count = input.read(buffer)

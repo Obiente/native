@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlinx.coroutines.CancellationException
 
 class AndroidFileSyncContentHashTest {
     @Test
@@ -84,6 +85,26 @@ class AndroidFileSyncContentHashTest {
                     maximumBytes = Long.MAX_VALUE,
                 )
             }
+        } finally {
+            destination.delete()
+        }
+    }
+
+    @Test
+    fun `upload staging observes worker cancellation between copied blocks`() {
+        val destination = Files.createTempFile("android-sync-cancelled-", ".bin").toFile()
+        var checks = 0
+        try {
+            assertFailsWith<CancellationException> {
+                stageAndroidFileSyncUpload(
+                    ByteArrayInputStream(ByteArray(128 * 1024)),
+                    destination,
+                    expectedBytes = 128L * 1024L,
+                    maximumBytes = Long.MAX_VALUE,
+                    shouldContinue = { ++checks < 2 },
+                )
+            }
+            assertEquals(64L * 1024L, destination.length())
         } finally {
             destination.delete()
         }

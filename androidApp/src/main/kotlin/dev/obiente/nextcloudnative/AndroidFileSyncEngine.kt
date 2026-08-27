@@ -407,6 +407,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             ownedUploadIds = fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
             transferCancellation = transferCancellation,
             ownedStageEtags = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadStageEtags(initialPair),
+            ownedUploadPaths = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadPaths(initialPair),
         )
         cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,
@@ -697,33 +698,32 @@ internal class AndroidFileSyncEngine(context: Context) {
             is FileSyncOperation.Upload -> {
                 val source = requireNotNull(work.observedLocal)
                 val replacingType = work.observedRemote?.kind?.let { it != source.kind } == true
-                val replacingLargeRemoteDirectory = shouldProtectAndroidFileSyncDirectoryReplacement(
-                    source,
-                    work.observedRemote,
-                )
-                if (replacingType && !replacingLargeRemoteDirectory) {
-                    remote.delete(
-                        operation.relativePath,
-                        requireNotNull(operation.expectedRemoteEtag),
-                    )
-                }
-                val expectedRemote = operation.expectedRemoteEtag.takeUnless {
-                    replacingType && !replacingLargeRemoteDirectory
-                }
                 if (source.kind == SyncEntryKind.Directory) {
-                    remote.createDirectory(operation.relativePath, expectedRemote)
+                    if (replacingType) {
+                        remote.delete(operation.relativePath, requireNotNull(operation.expectedRemoteEtag))
+                    }
+                    remote.createDirectory(operation.relativePath, operation.expectedRemoteEtag.takeUnless { replacingType })
                 } else {
                     withAndroidFileSyncStagingFile(stagingRoot, "upload") { staged ->
                         val exactLocal = local.stageForUpload(
                             operation.relativePath,
                             staged,
                             androidFileSyncStagingTransferLimit(stagingRoot, source.size),
+                            remote::shouldContinueTransfer,
                         )
+                        val protectedDirectoryReplacement =
+                            shouldProtectAndroidFileSyncDirectoryReplacement(exactLocal, work.observedRemote)
+                        if (replacingType && !protectedDirectoryReplacement) {
+                            remote.delete(operation.relativePath, requireNotNull(operation.expectedRemoteEtag))
+                        }
+                        val expectedRemote = operation.expectedRemoteEtag.takeUnless {
+                            replacingType && !protectedDirectoryReplacement
+                        }
                         resumeAndroidFileSyncUpload(
                             staged, operation.relativePath, exactLocal, source.revision, expectedRemote,
                             work.uploadCheckpoint, persistUploadCheckpoint, remote,
                             replacingDirectoryEtag = operation.expectedRemoteEtag
-                                .takeIf { replacingLargeRemoteDirectory },
+                                .takeIf { protectedDirectoryReplacement },
                         )
                     }
                 }
@@ -794,9 +794,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         withAndroidFileSyncStagingFile(stagingRoot, "keep-local") { localBytes ->
             withAndroidFileSyncStagingFile(stagingRoot, "keep-remote") { remoteBytes ->
                 local.stageForUpload(
-                    operation.relativePath,
-                    localBytes,
+                    operation.relativePath, localBytes,
                     androidFileSyncStagingTransferLimit(stagingRoot, localSource.size),
+                    remote::shouldContinueTransfer,
                 )
                 remote.stageDownload(
                     operation.relativePath,

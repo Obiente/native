@@ -103,12 +103,17 @@ internal class AndroidMediaStoreSyncLocalTree(
         return hash
     }
 
-    override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
+    override fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean,
+    ): LocalSyncEntry {
         val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(before.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
         require((before.entry.size ?: 0L) <= maximumBytes) { "The local file exceeds the sync size limit." }
         val stagedContentHash = FileInputStream(before.uri.toFile()).use { input ->
-            stageAndroidFileSyncUpload(input, destination, before.entry.size, maximumBytes)
+            stageAndroidFileSyncUpload(input, destination, before.entry.size, maximumBytes, shouldContinue)
         }
         val after = requireNotNull(resolve(path)) { "The local file disappeared while it was read." }
         require(after.entry.revision == before.entry.revision && after.entry.size == before.entry.size) {

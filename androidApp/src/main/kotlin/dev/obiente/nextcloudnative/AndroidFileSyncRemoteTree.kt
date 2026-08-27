@@ -9,7 +9,7 @@ import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.isValidNextcloudChunkUploadId
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadId
-import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackup
+import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackupDestination
 import dev.obiente.nextcloudnative.app.jvmOwnedReplacementConflictPath
 import dev.obiente.nextcloudnative.app.jvmOwnedReplacementBackupPath
 import dev.obiente.nextcloudnative.app.jvmOwnedUploadStagePath
@@ -54,12 +54,15 @@ internal class AndroidFileSyncRemoteTree(
         !Thread.currentThread().isInterrupted
     },
     private val ownedStageEtags: Map<String, String> = emptyMap(),
+    private val ownedUploadPaths: Map<String, String> = emptyMap(),
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
+    private val ownedDestinationPaths = ownedUploadPaths.mapValues { (_, path) -> fullPath(path) }
 
     init {
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
         require(ownedStageEtags.keys.all { it in ownedUploadIds })
+        require(ownedUploadPaths.keys.all { it in ownedUploadIds })
         require(ownedStageEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
     }
 
@@ -499,7 +502,9 @@ internal class AndroidFileSyncRemoteTree(
         return AndroidRemoteChildNameSnapshot(
             names = listing.files
                 .filterNot { file -> jvmOwnedUploadId(file.path) in ownedUploadIds }
-                .filterNot { file -> jvmOwnedReplacementBackup(file.path.trim('/'))?.second in ownedUploadIds }
+                .filterNot { file ->
+                    jvmOwnedReplacementBackupDestination(file.path.trim('/'), ownedDestinationPaths) != null
+                }
                 .mapTo(mutableSetOf()) { file -> file.path.trim('/').substringAfterLast('/') },
             complete = !listing.limited,
         )
@@ -611,8 +616,9 @@ internal class AndroidFileSyncRemoteTree(
         var listing = webDav.listDirectory(session, userId, directoryPath, MAX_CHILDREN)
         val listedPaths = listing.files.mapTo(mutableSetOf()) { it.path.trim('/') }
         val ownedBackups = listing.files.mapNotNull { file ->
-            val parsed = jvmOwnedReplacementBackup(file.path.trim('/')) ?: return@mapNotNull null
-            parsed.takeIf { (_, uploadId) -> uploadId in ownedUploadIds }?.let { parsed to file }
+            val parsed = jvmOwnedReplacementBackupDestination(file.path.trim('/'), ownedDestinationPaths)
+                ?: return@mapNotNull null
+            parsed to file
         }
         require(ownedBackups.map { it.first.first }.distinct().size == ownedBackups.size) {
             "A Nextcloud folder contains duplicate owned replacement backups."
@@ -639,8 +645,9 @@ internal class AndroidFileSyncRemoteTree(
         listing: DocumentDirectoryResult,
     ): List<AndroidRemoteScanChild> {
         val ownedBackups = listing.files.mapNotNull { file ->
-            val parsed = jvmOwnedReplacementBackup(file.path.trim('/')) ?: return@mapNotNull null
-            parsed.takeIf { (_, uploadId) -> uploadId in ownedUploadIds }?.let { parsed to file }
+            val parsed = jvmOwnedReplacementBackupDestination(file.path.trim('/'), ownedDestinationPaths)
+                ?: return@mapNotNull null
+            parsed to file
         }
         require(ownedBackups.map { it.first.first }.distinct().size == ownedBackups.size) {
             "A Nextcloud folder contains duplicate owned replacement backups."
@@ -665,7 +672,7 @@ internal class AndroidFileSyncRemoteTree(
             val physicalPath = file.path.trim('/')
             if (
                 physicalPath in projectedBackups ||
-                jvmOwnedReplacementBackup(physicalPath)?.second in ownedUploadIds
+                jvmOwnedReplacementBackupDestination(physicalPath, ownedDestinationPaths) != null
             ) {
                 return@mapNotNull null
             }

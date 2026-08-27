@@ -708,6 +708,53 @@ class FileSyncCoordinatorTest {
     }
 
     @Test
+    fun `rescan retains commit in flight work when publication changed the destination etag`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val original = coordinator.pair().workItems.single()
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+            contentRevision = "sha256:${"4".repeat(64)}",
+        ).let { progress ->
+            progress.copy(
+                uploadedChunks = progress.chunkCount,
+                commitInFlight = true,
+                assembledStageEtag = "published-etag",
+            )
+        }
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, original.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, original.id, "Publication response was lost")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(RemoteSyncEntry("large.bin", SyncEntryKind.File, "published-etag", local.size)),
+            nowEpochMillis = 30L,
+        )
+
+        val retained = coordinator.pair().workItems.single()
+        assertEquals(original.id, retained.id)
+        assertEquals(checkpoint, retained.uploadCheckpoint)
+        assertEquals(original.operation, retained.operation)
+        assertTrue(coordinator.pair().pendingUploadCleanups.isEmpty())
+    }
+
+    @Test
     fun `keep both requires verified convergence for every generated path`() {
         var state = state(baselines = listOf(baseline("daily.note.md", "l1", "r1")))
         state = scanFileSyncPair(

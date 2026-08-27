@@ -26,6 +26,18 @@ fun fileSyncOwnedUploadStageEtags(pair: FileSyncPair): Map<String, String> =
         owned.assembledStageEtag?.let { etag -> owned.uploadId to etag }
     }.toMap()
 
+fun fileSyncOwnedUploadPaths(pair: FileSyncPair): Map<String, String> =
+    fileSyncOwnedUploads(pair).associate { owned -> owned.uploadId to owned.relativePath }
+
+internal fun FileSyncWorkItem.retainCommitInFlightUpload(local: LocalSyncEntry?): FileSyncWorkItem? {
+    val checkpoint = uploadCheckpoint
+    return takeIf {
+        checkpoint?.commitInFlight == true && operation is FileSyncOperation.Upload &&
+            local?.kind == SyncEntryKind.File && local.revision == checkpoint.localRevision &&
+            (local.size == null || local.size == checkpoint.sizeBytes)
+    }?.copy(observedLocal = local)
+}
+
 internal fun requireNoFileSyncUploadOwnership(pair: FileSyncPair) {
     require(fileSyncOwnedUploads(pair).isEmpty()) {
         "Owned remote upload state must be cleaned before removing a sync pair."
@@ -60,32 +72,6 @@ fun retainFileSyncUploadCleanup(
         pendingUploadCleanups = pair.pendingUploadCleanups
             .filterNot { it.uploadId == cleanup.uploadId } + cleanup,
     )
-}
-
-internal fun reconcileFileSyncOwnedUploadStageEtag(
-    state: FileSyncCoordinatorState,
-    pairId: String,
-    uploadId: String,
-    assembledStageEtag: String,
-): FileSyncCoordinatorState = state.updatePair(pairId) { pair ->
-    require(assembledStageEtag.isNotBlank() && assembledStageEtag.none { it == '\r' || it == '\n' })
-    var reconciled = false
-    val pending = pair.pendingUploadCleanups.map { cleanup ->
-        if (cleanup.uploadId != uploadId) return@map cleanup
-        require(cleanup.assembledStageEtag == null || cleanup.assembledStageEtag == assembledStageEtag)
-        reconciled = true
-        cleanup.copy(assembledStageEtag = assembledStageEtag)
-    }
-    val work = pair.workItems.map { item ->
-        val checkpoint = item.uploadCheckpoint
-        if (checkpoint?.uploadId != uploadId) return@map item
-        require(checkpoint.commitInFlight)
-        require(checkpoint.assembledStageEtag == null || checkpoint.assembledStageEtag == assembledStageEtag)
-        reconciled = true
-        item.copy(uploadCheckpoint = checkpoint.copy(assembledStageEtag = assembledStageEtag))
-    }
-    require(reconciled) { "The owned upload stage is no longer tracked." }
-    pair.copy(pendingUploadCleanups = pending, workItems = work)
 }
 
 internal fun retainFileSyncUploadOwnership(

@@ -255,6 +255,7 @@ fun scanFileSyncPair(
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
+        current.retainCommitInFlightUpload(local)?.let { return it }
         return current.takeIf { it.sameGeneration(operation, local, remote, baseline) }
             ?.copy(observedLocal = local, observedRemote = remote)
             ?: current.rebindResolvedSourceGeneration(operation, local, remote, baseline)
@@ -949,8 +950,7 @@ private fun requireBoundedWorkItem(work: FileSyncWorkItem) {
     }
 }
 
-private fun String.syncDeviceLabel(): String =
-    lowercase().map { if (it.isLetterOrDigit()) it else '-' }
+private fun String.syncDeviceLabel(): String = lowercase().map { if (it.isLetterOrDigit()) it else '-' }
         .joinToString("").trim('-').take(24).ifBlank { "device" }
 
 private fun String.isSafeSyncText(maxLength: Int): Boolean =

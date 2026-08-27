@@ -26,21 +26,24 @@ fun jvmOwnedReplacementBackupPath(relativePath: String, uploadId: String): Strin
     requireValidSyncPath(relativePath)
     require(isValidNextcloudChunkUploadId(uploadId))
     val parent = relativePath.substringBeforeLast('/', "")
-    val name = relativePath.substringAfterLast('/')
-    val backupName = ".$name.nextcloud-native-backup-$uploadId"
+    val backupName = ".nextcloud-native-backup-$uploadId"
     return listOf(parent, backupName).filter(String::isNotBlank).joinToString("/")
 }
 
-fun jvmOwnedReplacementBackup(relativePath: String): Pair<String, String>? {
+fun jvmOwnedReplacementBackupUploadId(relativePath: String): String? {
     val name = relativePath.substringAfterLast('/')
     val marker = ".nextcloud-native-backup-"
-    val markerIndex = name.lastIndexOf(marker)
-    if (!name.startsWith('.') || markerIndex <= 1) return null
-    val uploadId = name.substring(markerIndex + marker.length)
-        .takeIf(::isValidNextcloudChunkUploadId) ?: return null
-    val destinationName = name.substring(1, markerIndex).takeIf(String::isNotBlank) ?: return null
-    val parent = relativePath.substringBeforeLast('/', "")
-    val destination = listOf(parent, destinationName).filter(String::isNotBlank).joinToString("/")
+    if (!name.startsWith(marker)) return null
+    return name.removePrefix(marker).takeIf(::isValidNextcloudChunkUploadId)
+}
+
+fun jvmOwnedReplacementBackupDestination(
+    backupPath: String,
+    ownedUploadPaths: Map<String, String>,
+): Pair<String, String>? {
+    val uploadId = jvmOwnedReplacementBackupUploadId(backupPath) ?: return null
+    val destination = ownedUploadPaths[uploadId] ?: return null
+    if (backupPath.substringBeforeLast('/', "") != destination.substringBeforeLast('/', "")) return null
     return destination to uploadId
 }
 
@@ -116,24 +119,11 @@ fun cleanupJvmFileSyncOwnedUploads(
 ): FileSyncCoordinatorState {
     var updated = state
     uploads.forEach { cleanup ->
-        var reconciledCleanup = cleanup
-        if (cleanup.assembledStageEtag == null) {
-            remote.ownedStageEtag(cleanup.uploadId, cleanup.relativePath)?.let { discoveredEtag ->
-                updated = reconcileFileSyncOwnedUploadStageEtag(
-                    updated,
-                    pairId,
-                    cleanup.uploadId,
-                    discoveredEtag,
-                )
-                onStateChanged(updated)
-                reconciledCleanup = cleanup.copy(assembledStageEtag = discoveredEtag)
-            }
-        }
         if (
             remote.discardOwnedUpload(
-                reconciledCleanup.uploadId,
-                reconciledCleanup.relativePath,
-                reconciledCleanup.assembledStageEtag,
+                cleanup.uploadId,
+                cleanup.relativePath,
+                cleanup.assembledStageEtag,
             )
         ) {
             updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)

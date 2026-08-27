@@ -40,6 +40,12 @@ class AndroidFileSyncEngineInvariantTest {
                 directory,
             ),
         )
+        assertTrue(
+            shouldProtectAndroidFileSyncDirectoryReplacement(
+                LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", size = null),
+                directory,
+            ),
+        )
         assertFalse(
             shouldProtectAndroidFileSyncDirectoryReplacement(
                 LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-1", 1L * 1024L * 1024L),

@@ -37,13 +37,17 @@ internal class DesktopFileSyncRemoteTree(
     private val onAmbiguousMutationResult: (relativePath: String) -> Unit = onMutationCommitted,
     private val ownedUploadIds: Set<String> = emptySet(),
     private val ownedStageEtags: Map<String, String> = emptyMap(),
+    private val ownedUploadPaths: Map<String, String> = emptyMap(),
 ) : LinuxVirtualWritebackRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val mutationExecutor = DesktopHttpMutationExecutor(client)
+    private val ownedDestinationPaths = ownedUploadPaths.mapValues { (_, path) -> fullPath(path) }
 
     init {
         require(ownedUploadIds.all(::isValidNextcloudChunkUploadId))
         require(ownedStageEtags.keys.all { it in ownedUploadIds })
+        require(ownedUploadPaths.keys.all { it in ownedUploadIds })
+        ownedUploadPaths.values.forEach(::requireValidSyncPath)
         require(ownedStageEtags.values.all { it.isNotBlank() && '\r' !in it && '\n' !in it })
     }
 
@@ -419,7 +423,7 @@ internal class DesktopFileSyncRemoteTree(
         val documentsByPath = documents.associateBy { document -> document.entry.relativePath }
         desktopOwnedBackupRecoveryPlan(
             documentsByPath.keys,
-            ownedUploadIds,
+            ownedDestinationPaths,
             MAX_RECOVERY_ITEMS,
         ).forEach { (source, destination) ->
             val recoveredRelativePath = toRelativePath(destination)
@@ -433,7 +437,7 @@ internal class DesktopFileSyncRemoteTree(
         if (recovered) documents = rawListDirectory(path)
         return projectDesktopOwnedReplacementBackups(
             documents,
-            ownedUploadIds,
+            ownedDestinationPaths,
             ownedStageEtags,
             MAX_RECOVERY_ITEMS,
         )

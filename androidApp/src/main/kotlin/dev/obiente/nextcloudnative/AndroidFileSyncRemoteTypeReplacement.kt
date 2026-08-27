@@ -19,7 +19,7 @@ internal fun shouldProtectAndroidFileSyncDirectoryReplacement(
     remote: RemoteSyncEntry?,
 ): Boolean = local.kind == SyncEntryKind.File &&
     remote?.kind == SyncEntryKind.Directory &&
-    nextcloudUploadTransferPlan(requireNotNull(local.size)) is NextcloudUploadTransferPlan.Chunked
+    local.size?.let { nextcloudUploadTransferPlan(it) is NextcloudUploadTransferPlan.Chunked } != false
 
 private class AndroidFileSyncDirectoryReplacementUploadRemote(
     private val tree: AndroidFileSyncRemoteTree,
