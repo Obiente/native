@@ -107,8 +107,8 @@ class DesktopFileSyncCleanupCancellationTest {
                 relativePath = "archive.bin",
                 assembledStageEtag = "stage-etag",
                 replacementBackupEtag = "directory-etag",
-                expectedStageSizeBytes = 4,
-                expectedStageContentHash = "sha256:" + "55".repeat(32),
+                expectedStageSizeBytes = null,
+                expectedStageContentHash = null,
                 publicationInFlight = true,
             )
             val pair = FileSyncPair(

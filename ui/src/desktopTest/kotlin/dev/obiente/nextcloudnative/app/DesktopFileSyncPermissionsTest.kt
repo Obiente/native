@@ -42,17 +42,41 @@ class DesktopFileSyncPermissionsTest {
         }
     }
 
-    private fun directoryAccessResponse(permissions: String) =
-        MockResponse.Builder().code(207).body(desktopDavDirectoryAccess(permissions, "Shared")).build()
+    @Test
+    fun `account root upload reads its depth zero create permission`() {
+        MockWebServer().use { server ->
+            server.enqueue(directoryAccessResponse("RGDNVW", accountRoot = true))
+            server.enqueue(directoryAccessResponse("RGDNVCKW", accountRoot = true))
+            server.start()
+            val remote = DesktopFileSyncRemoteTree(
+                NextcloudSession(server.url("/").toString(), "alice", "secret"),
+                "alice",
+                "",
+            ).resumableUploadRemote()
+
+            assertEquals(false, remote.ownedStageCreationAllowed("archive.bin"))
+            assertEquals(true, remote.ownedStageCreationAllowed("archive.bin"))
+        }
+    }
+
+    private fun directoryAccessResponse(permissions: String, accountRoot: Boolean = false) =
+        MockResponse.Builder().code(207).body(
+            desktopDavDirectoryAccess(permissions, if (accountRoot) "" else "Shared", includeSyncRoot = !accountRoot),
+        ).build()
 }
 
-internal fun desktopDavDirectoryAccess(permissions: String, name: String = ""): String {
+internal fun desktopDavDirectoryAccess(
+    permissions: String,
+    name: String = "",
+    includeSyncRoot: Boolean = true,
+): String {
     val suffix = name.takeIf(String::isNotEmpty)?.let { "/$it" }.orEmpty()
+    val syncRoot = if (includeSyncRoot) "/Vault" else ""
     val permissionProperty = permissions.takeIf(String::isNotEmpty)
         ?.let { "<oc:permissions>$it</oc:permissions>" }.orEmpty()
     return """
         <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response>
-          <d:href>/remote.php/dav/files/alice/Vault$suffix/</d:href>
+          <d:href>/remote.php/dav/files/alice$syncRoot$suffix/</d:href>
           <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
             <d:resourcetype><d:collection/></d:resourcetype>$permissionProperty
           </d:prop></d:propstat>

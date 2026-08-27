@@ -382,12 +382,14 @@ internal class DesktopFileSyncRemoteTree(
         return executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
             call.execute().use { response ->
                 response.requireAccepted(response.code == 207, "inspect upload destination")
-                val directory = parseDesktopSyncDav(
+                val directory = parseDesktopDavDirectoryAccess(
                     input = response.body.byteStream(),
                     userId = userId,
                     maximumBytes = MAX_ERROR_RESPONSE_BYTES,
-                    maximumDocuments = 2,
-                ).singleOrNull() ?: error("The upload destination did not return one DAV record.")
+                ) ?: error("The upload destination did not return one DAV record.")
+                require(directory.relativePath == fullPath(parent)) {
+                    "The upload destination returned a different DAV record."
+                }
                 require(directory.isDirectory) { "The upload destination is not a folder." }
                 directory.permissions?.contains('C')
             }
@@ -606,15 +608,21 @@ internal class DesktopFileSyncRemoteTree(
         backupPath: String,
         vararg mutationRelativePaths: String,
         expectedBackupEtag: String? = null,
+        shouldContinue: (() -> Boolean)? = null,
     ) {
         runCatching {
-            val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""))
+            val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""), shouldContinue)
             if (documents.none { it.entry.relativePath == destinationPath }) {
                 documents.firstOrNull { it.entry.relativePath == backupPath }?.let { backup ->
                     require(expectedBackupEtag == null || backup.entry.etag == expectedBackupEtag) {
                         "The protected backup changed."
                     }
-                    moveRemoteDocument(backup, destinationPath, *mutationRelativePaths)
+                    moveRemoteDocument(
+                        backup,
+                        destinationPath,
+                        *mutationRelativePaths,
+                        shouldContinue = shouldContinue,
+                    )
                 }
             }
         }

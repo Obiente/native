@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -380,6 +381,7 @@ class DesktopFileSyncChunkUploadCancellationTest {
 
             assertFalse(upload.isAlive, "The paused direct publication call did not release promptly.")
             assertIs<CancellationException>(failure.get())
+            assertEquals(3, server.requestCount, "A paused publication must not start rollback I/O.")
         }
     }
 }

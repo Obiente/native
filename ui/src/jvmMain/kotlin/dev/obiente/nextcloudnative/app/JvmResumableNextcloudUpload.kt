@@ -209,6 +209,7 @@ fun jvmResumableNextcloudUpload(
         it.localRevision == localRevision && it.contentRevision == contentRevision &&
             it.contentHash == contentHash && it.transferPlan == preferredPlan
     }
+    var recoverableCheckpoint = preferredCheckpoint
     if (preferredPlan is NextcloudUploadTransferPlan.Chunked && preferredCheckpoint?.commitInFlight == true) {
         val stageEtag = remote.ownedStageEtag(preferredCheckpoint.uploadId, relativePath)
         if (stageEtag != null) {
@@ -223,12 +224,22 @@ fun jvmResumableNextcloudUpload(
             }
             return publishVerifiedStage(preferredCheckpoint.uploadId, verifiedStageEtag)
         }
-        remote.resolvePublishedFile(relativePath)?.let { published ->
-            ensureActive()
-            val verified = remote.verifyPublishedFile(preferredCheckpoint.uploadId, source, relativePath, published)
-            ensureActive()
-            remote.completePublishedFile(preferredCheckpoint.uploadId, relativePath)
-            return verified
+        if (preferredCheckpoint.assembledStageEtag != null) {
+            remote.resolvePublishedFile(relativePath)?.let { published ->
+                ensureActive()
+                val verified = remote.verifyPublishedFile(
+                    preferredCheckpoint.uploadId,
+                    source,
+                    relativePath,
+                    published,
+                )
+                ensureActive()
+                remote.completePublishedFile(preferredCheckpoint.uploadId, relativePath)
+                return verified
+            }
+        } else {
+            recoverableCheckpoint = preferredCheckpoint.copy(commitInFlight = false)
+                .also(persistCheckpoint)
         }
     }
     val plan = if (
@@ -252,7 +263,7 @@ fun jvmResumableNextcloudUpload(
     }
     require(plan is NextcloudUploadTransferPlan.Chunked)
 
-    val matchingCheckpoint = checkpoint?.takeIf {
+    val matchingCheckpoint = recoverableCheckpoint?.takeIf {
         it.localRevision == localRevision && it.contentRevision == contentRevision &&
             it.contentHash == contentHash && it.transferPlan == plan
     }

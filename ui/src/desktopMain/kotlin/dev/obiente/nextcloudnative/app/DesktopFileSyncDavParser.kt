@@ -21,7 +21,23 @@ internal fun parseDesktopSyncDav(
     userId: String,
     maximumBytes: Long,
     maximumDocuments: Int,
-): List<DesktopRemoteSyncDocument> {
+): List<DesktopRemoteSyncDocument> =
+    parseDesktopDavResponses(input, maximumBytes, maximumDocuments).mapNotNull { it.toDocument(userId) }
+
+internal fun parseDesktopDavDirectoryAccess(
+    input: InputStream,
+    userId: String,
+    maximumBytes: Long,
+): DesktopDavDirectoryAccess? =
+    parseDesktopDavResponses(input, maximumBytes, maximumDocuments = 2)
+        .singleOrNull()
+        ?.toDirectoryAccess(userId)
+
+private fun parseDesktopDavResponses(
+    input: InputStream,
+    maximumBytes: Long,
+    maximumDocuments: Int,
+): List<DesktopDavResponseBuilder> {
     require(maximumBytes > 0L && maximumDocuments > 0)
     val factory = XMLInputFactory.newFactory().apply {
         setProperty(XMLInputFactory.SUPPORT_DTD, false)
@@ -33,7 +49,7 @@ internal fun parseDesktopSyncDav(
         GuardedXmlInputStream(BoundedInputStream(input, maximumBytes)),
         StandardCharsets.UTF_8.name(),
     )
-    val documents = ArrayList<DesktopRemoteSyncDocument>()
+    val responses = ArrayList<DesktopDavResponseBuilder>()
     var responseCount = 0
     var response: DesktopDavResponseBuilder? = null
     var textField: String? = null
@@ -83,12 +99,7 @@ internal fun parseDesktopSyncDav(
                         text.clear()
                     }
                     if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == "response") {
-                        response?.toDocument(userId)?.let { document ->
-                            require(documents.size < maximumDocuments) {
-                                "A Nextcloud folder contains too many entries."
-                            }
-                            documents.add(document)
-                        }
+                        response?.let(responses::add)
                         response = null
                     }
                 }
@@ -97,8 +108,14 @@ internal fun parseDesktopSyncDav(
     } finally {
         reader.close()
     }
-    return documents
+    return responses
 }
+
+internal data class DesktopDavDirectoryAccess(
+    val relativePath: String,
+    val isDirectory: Boolean,
+    val permissions: String?,
+)
 
 private class DesktopDavResponseBuilder {
     private var href: String? = null
@@ -119,9 +136,7 @@ private class DesktopDavResponseBuilder {
     }
 
     fun toDocument(userId: String): DesktopRemoteSyncDocument? {
-        val encodedHref = href ?: return null
-        val decoded = URLDecoder.decode(encodedHref.replace("+", "%2B"), StandardCharsets.UTF_8)
-        val path = decoded.substringAfter("/files/$userId/", "").trim('/')
+        val path = decodedPath(userId) ?: return null
         if (path.isBlank()) return null
         val revision = etag?.takeIf(String::isNotBlank) ?: error("A server item has no usable revision.")
         val modifiedEpochMillis = lastModified?.let(::parseDesktopSyncDavTimestamp)
@@ -137,6 +152,20 @@ private class DesktopDavResponseBuilder {
             lastModifiedEpochMillis = modifiedEpochMillis,
             permissions = permissions?.trim()?.takeIf(String::isNotEmpty),
         )
+    }
+
+    fun toDirectoryAccess(userId: String): DesktopDavDirectoryAccess? = DesktopDavDirectoryAccess(
+        relativePath = decodedPath(userId) ?: return null,
+        isDirectory = isDirectory,
+        permissions = permissions?.trim()?.takeIf(String::isNotEmpty),
+    )
+
+    private fun decodedPath(userId: String): String? {
+        val encodedHref = href ?: return null
+        val decoded = URLDecoder.decode(encodedHref.replace("+", "%2B"), StandardCharsets.UTF_8)
+        val accountRoot = "/files/$userId/"
+        if (accountRoot !in decoded) return null
+        return decoded.substringAfter(accountRoot).trim('/')
     }
 }
 

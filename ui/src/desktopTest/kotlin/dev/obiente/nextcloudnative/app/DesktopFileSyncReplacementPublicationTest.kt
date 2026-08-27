@@ -118,6 +118,43 @@ class DesktopFileSyncReplacementPublicationTest {
     }
 
     @Test
+    fun `definitive published mismatch preserves the protected directory as a conflict`() {
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "PROPFIND" -> response(chain.request(), 207, publishedListing(uploadId, sizeBytes = 5))
+                "MOVE" -> response(chain.request(), 201)
+                else -> error("Mismatch recovery must not ${chain.request().method} either generation")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+            ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+            ownedReplacementBackupEtags = mapOf(uploadId to "directory-etag"),
+        )
+
+        val reconciled = tree.reconcilePublishedReplacement(
+            relativePath = "archive.bin",
+            uploadId = uploadId,
+            expectedSizeBytes = 4,
+            expectedContentHash = "sha256:" + "55".repeat(32),
+            shouldContinue = { true },
+        )
+
+        assertEquals(true, reconciled)
+        val move = requests.single { it.method == "MOVE" }
+        assertTrue(move.url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId"))
+        assertTrue(move.header("Destination").orEmpty().endsWith(".nextcloud-native-conflict-$uploadId"))
+        assertTrue(requests.none { it.method == "DELETE" || it.method == "GET" })
+    }
+
+    @Test
     fun `recovery scan traverses an owned backup at its physical path`() {
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         val requestedPaths = mutableListOf<String>()

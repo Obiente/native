@@ -104,6 +104,7 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
                 backupPath,
                 relativePath,
                 expectedBackupEtag = expectedRemoteEtag,
+                shouldContinue = shouldContinue,
             )
         }
         throw failure
@@ -128,7 +129,8 @@ internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(
  *
  * A file at the destination is never treated as abandoned staging. Its exact generation is
  * compared with the durably recorded size and content hash before the old directory backup is
- * removed. A mismatch keeps both generations owned for a later, explicit recovery attempt.
+ * removed. A definitive mismatch preserves the protected directory at the conflict path so the
+ * cleanup record can complete without hiding either generation indefinitely.
  * Returns null while publication definitely has not replaced the destination directory yet.
  */
 internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
@@ -142,7 +144,9 @@ internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
     val destination = resolvePhysical(relativePath, shouldContinue) ?: return null
     if (destination.isDirectory) return null
     if (expectedSizeBytes == null || expectedContentHash == null) return false
-    if (destination.entry.size != expectedSizeBytes) return false
+    if (destination.entry.size != expectedSizeBytes) {
+        return discardReplacementBackup(relativePath, uploadId, assembledStageEtag = null, shouldContinue)
+    }
     if (
         !verifyContentHash(
             relativePath = relativePath,
@@ -154,7 +158,7 @@ internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
             physicalDestination = true,
         )
     ) {
-        return false
+        return discardReplacementBackup(relativePath, uploadId, assembledStageEtag = null, shouldContinue)
     }
     completeReplacementBackup(
         relativePath,

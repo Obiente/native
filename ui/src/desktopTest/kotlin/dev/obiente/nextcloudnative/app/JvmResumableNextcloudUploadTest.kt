@@ -291,6 +291,45 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
+    fun `assembly not received resumes chunks without inspecting the old destination`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+        )
+        val serverChunks = (0 until plan.chunkCount).associate { index ->
+            val chunk = nextcloudUploadChunk(plan, source.length(), index)
+            chunk.number to chunk.sizeBytes
+        }
+        val remote = RecordingUploadRemote(
+            collectionCreated = false,
+            serverChunks = serverChunks,
+            publishedFile = RemoteSyncEntry("large.bin", SyncEntryKind.File, "old-etag", source.length()),
+        )
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            val uploaded = jvmResumableNextcloudUpload(
+                source, "large.bin", "local-1", "old-etag", checkpoint,
+                newUploadId = { error("Recovery must retain the durable upload ID.") },
+                persistCheckpoint = persisted::add,
+                remote = remote,
+            )
+
+            assertEquals("remote-etag", uploaded.etag)
+            assertEquals(0, remote.resolvePublishedCount)
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
+            assertFalse(persisted.first().commitInFlight)
+            assertEquals(
+                listOf("commit", "verify", "publish", "published-verify", "complete-published"),
+                remote.finalizationEvents,
+            )
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `ambiguous publication verifies the destination without retransmitting`() {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
@@ -443,6 +482,7 @@ class JvmResumableNextcloudUploadTest {
         val discardedStageEtags = mutableListOf<String?>()
         val finalizationEvents = mutableListOf<String>()
         var discardCount = 0
+        var resolvePublishedCount = 0
 
         override fun ownedStageCreationAllowed(relativePath: String): Boolean? = ownedStageCreationAllowed
 
@@ -507,7 +547,10 @@ class JvmResumableNextcloudUploadTest {
 
         override fun ownedStageEtag(uploadId: String, relativePath: String): String? = ownedStageEtag
 
-        override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? = publishedFile
+        override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? {
+            resolvePublishedCount += 1
+            return publishedFile
+        }
 
         override fun verifyPublishedFile(
             uploadId: String,
