@@ -93,7 +93,12 @@ internal fun replaceDesktopFileSyncRemoteType(
     val published = remote.replaceWithFile(
         relativePath, source, expectedRemoteEtag, uploadId, shouldContinue,
     ) { stageEtag ->
-        retainCleanup(ownership.copy(assembledStageEtag = stageEtag))
+        retainCleanup(
+            ownership.copy(
+                assembledStageEtag = stageEtag,
+                publicationInFlight = true,
+            ),
+        )
     }
     val publication = remote.resumableUploadRemote(shouldContinue, expectedRemoteEtag)
     val verified = publication.verifyPublishedFile(uploadId, source, relativePath, published)

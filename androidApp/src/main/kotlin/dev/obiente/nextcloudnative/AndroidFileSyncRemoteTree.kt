@@ -473,7 +473,9 @@ internal class AndroidFileSyncRemoteTree(
         assembledStageEtag: String?,
         expectedStageSizeBytes: Long?,
         expectedStageContentHash: String?,
+        publicationInFlight: Boolean,
     ): Boolean {
+        require(!publicationInFlight) { "Android upload cleanup cannot own desktop publication state." }
         deleteChunkUpload(uploadId, transferCancellation)
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stageCleaned = if (assembledStageEtag == null) {

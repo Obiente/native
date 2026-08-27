@@ -104,6 +104,46 @@ internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(
     )
 }
 
+/**
+ * Resolves the direct-replacement crash window after the owned stage may have become visible.
+ *
+ * A file at the destination is never treated as abandoned staging. Its exact generation is
+ * compared with the durably recorded size and content hash before the old directory backup is
+ * removed. A mismatch keeps both generations owned for a later, explicit recovery attempt.
+ * Returns null while publication definitely has not replaced the destination directory yet.
+ */
+internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
+    relativePath: String,
+    uploadId: String,
+    expectedSizeBytes: Long?,
+    expectedContentHash: String?,
+    shouldContinue: () -> Boolean,
+): Boolean? {
+    val expectedBackupEtag = ownedReplacementBackupEtags[uploadId] ?: return null
+    val destination = resolvePhysical(relativePath) ?: return null
+    if (destination.isDirectory) return null
+    if (expectedSizeBytes == null || expectedContentHash == null) return false
+    if (destination.entry.size != expectedSizeBytes) return false
+    if (
+        !verifyContentHash(
+            relativePath = relativePath,
+            expectedRemoteEtag = destination.entry.etag,
+            expectedBytes = expectedSizeBytes,
+            expectedContentHash = expectedContentHash,
+            maximumBytes = expectedSizeBytes.coerceAtLeast(1L),
+            shouldContinue = shouldContinue,
+        )
+    ) {
+        return false
+    }
+    completeReplacementBackup(
+        relativePath,
+        uploadId,
+        expectedBackupEtag,
+    )
+    return true
+}
+
 internal fun DesktopFileSyncRemoteTree.discardReplacementBackup(
     relativePath: String,
     uploadId: String,

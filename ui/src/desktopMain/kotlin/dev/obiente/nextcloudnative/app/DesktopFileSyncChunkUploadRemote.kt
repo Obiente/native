@@ -132,18 +132,23 @@ internal class DesktopFileSyncChunkUploadRemote(
     }
 
     override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? =
-        client.newCall(
-            requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
-                .header("Destination", fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
-                .header("OC-Total-Length", sizeBytes.toString())
-                .header("Overwrite", "F")
-                .method("MOVE", EMPTY_BODY)
-                .build(),
-        ).execute().use { response ->
-            if (response.code != 201) {
-                throw DesktopFileSyncHttpStatusException(response.code, "assemble chunked upload")
+        executeDesktopFileSyncCancellableCall(
+            client.newCall(
+                requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
+                    .header("Destination", fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
+                    .header("OC-Total-Length", sizeBytes.toString())
+                    .header("Overwrite", "F")
+                    .method("MOVE", EMPTY_BODY)
+                    .build(),
+            ),
+            shouldContinue,
+        ) { call ->
+            call.execute().use { response ->
+                if (response.code != 201) {
+                    throw DesktopFileSyncHttpStatusException(response.code, "assemble chunked upload")
+                }
+                response.header("ETag") ?: response.header("OC-Etag")
             }
-            response.header("ETag") ?: response.header("OC-Etag")
         }
 
     override fun verifyOwnedStage(
@@ -233,12 +238,22 @@ internal class DesktopFileSyncChunkUploadRemote(
         assembledStageEtag: String?,
         expectedStageSizeBytes: Long?,
         expectedStageContentHash: String?,
+        publicationInFlight: Boolean,
     ): Boolean {
         execute(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId)).delete().build(),
             "discard chunked upload",
             accepted = { it in 200..299 || it == 404 },
         )
+        if (publicationInFlight) {
+            tree.reconcilePublishedReplacement(
+                relativePath,
+                uploadId,
+                expectedStageSizeBytes,
+                expectedStageContentHash,
+                shouldContinue,
+            )?.let { return it }
+        }
         val stageCleaned = if (assembledStageEtag == null) {
             reconcileUnrecordedOwnedStage(
                 uploadId,

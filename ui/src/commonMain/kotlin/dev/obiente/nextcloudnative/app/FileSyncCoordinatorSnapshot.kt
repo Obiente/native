@@ -99,6 +99,7 @@ fun encodeFileSyncPendingUploadCleanupRecord(
         cleanup.replacementBackupEtag,
         cleanup.expectedStageSizeBytes,
         cleanup.expectedStageContentHash,
+        cleanup.publicationInFlight,
     ),
 ).encodeToByteArray().also { encoded ->
     require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
@@ -118,6 +119,7 @@ fun decodeFileSyncPendingUploadCleanupRecord(
         snapshot.replacementBackupEtag,
         snapshot.expectedStageSizeBytes,
         snapshot.expectedStageContentHash,
+        snapshot.publicationInFlight,
     )
 }
 
@@ -162,6 +164,7 @@ private data class FileSyncPendingUploadCleanupSnapshotV1(
     val replacementBackupEtag: String? = null,
     val expectedStageSizeBytes: Long? = null,
     val expectedStageContentHash: String? = null,
+    val publicationInFlight: Boolean = false,
 )
 
 @Serializable
@@ -316,6 +319,7 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
             it.replacementBackupEtag,
             it.expectedStageSizeBytes,
             it.expectedStageContentHash,
+            it.publicationInFlight,
         )
     },
     nextWorkId = nextWorkId,

@@ -8,6 +8,7 @@ data class FileSyncPendingUploadCleanup(
     val replacementBackupEtag: String? = null,
     val expectedStageSizeBytes: Long? = null,
     val expectedStageContentHash: String? = null,
+    val publicationInFlight: Boolean = false,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
@@ -19,6 +20,15 @@ data class FileSyncPendingUploadCleanup(
         require((expectedStageSizeBytes == null) == (expectedStageContentHash == null))
         require(expectedStageSizeBytes == null || expectedStageSizeBytes >= 0L)
         require(expectedStageContentHash == null || normalizeSyncSha256(expectedStageContentHash) == expectedStageContentHash)
+        require(!publicationInFlight || replacementBackupEtag != null) {
+            "Publication recovery requires an owned replacement backup."
+        }
+        require(!publicationInFlight || assembledStageEtag != null) {
+            "Publication recovery requires a verified upload stage."
+        }
+        require(!publicationInFlight || expectedStageSizeBytes != null) {
+            "Publication recovery requires exact content evidence."
+        }
     }
 }
 

@@ -64,11 +64,56 @@ class DesktopFileSyncReplacementPublicationTest {
             assertEquals(listOf(requireNotNull(uploadId)), completed)
             assertEquals(2, retained.size)
             assertEquals("stage-etag", retained.last().assembledStageEtag)
+            assertTrue(retained.last().publicationInFlight)
             assertTrue(requests.indexOfLast { it.method == "GET" } < requests.indexOfLast { it.method == "DELETE" })
             assertTrue(requests.last { it.method == "DELETE" }.url.encodedPath.contains(".nextcloud-native-backup-"))
         } finally {
             assertTrue(source.delete())
         }
+    }
+
+    @Test
+    fun `restart verifies a published direct replacement instead of rolling it back`() {
+        val payload = "replacement file".encodeToByteArray()
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "PROPFIND" -> response(chain.request(), 207, publishedListing(uploadId, payload.size.toLong()))
+                "GET" -> response(chain.request(), 200, payload).newBuilder()
+                    .header("ETag", "published-etag")
+                    .build()
+                "DELETE" -> response(chain.request(), if (chain.request().url.encodedPath.contains("/uploads/")) 404 else 204)
+                else -> error("Restart cleanup must not ${chain.request().method} the published file")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+            ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+            ownedReplacementBackupEtags = mapOf(uploadId to "directory-etag"),
+        )
+
+        val cleaned = tree.resumableUploadRemote(shouldContinue = { true }).discardOwnedUpload(
+            uploadId = uploadId,
+            relativePath = "archive.bin",
+            assembledStageEtag = "stage-etag",
+            expectedStageSizeBytes = payload.size.toLong(),
+            expectedStageContentHash = hashExactJvmFileSyncContent(
+                payload.inputStream(),
+                payload.size.toLong(),
+            ),
+            publicationInFlight = true,
+        )
+
+        assertTrue(cleaned)
+        assertEquals(1, requests.count { it.method == "GET" })
+        assertTrue(requests.none { it.method == "DELETE" && it.url.encodedPath.endsWith("/archive.bin") })
+        assertTrue(requests.last().url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId"))
     }
 
     private fun stagedListing(uploadId: String?, sizeBytes: Long): String =

@@ -115,6 +115,7 @@ interface JvmResumableNextcloudUploadRemote {
         assembledStageEtag: String?,
         expectedStageSizeBytes: Long? = null,
         expectedStageContentHash: String? = null,
+        publicationInFlight: Boolean = false,
     ): Boolean
 }
 
@@ -134,6 +135,7 @@ fun cleanupJvmFileSyncOwnedUploads(
                 cleanup.assembledStageEtag,
                 cleanup.expectedStageSizeBytes,
                 cleanup.expectedStageContentHash,
+                cleanup.publicationInFlight,
             )
         ) {
             updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
