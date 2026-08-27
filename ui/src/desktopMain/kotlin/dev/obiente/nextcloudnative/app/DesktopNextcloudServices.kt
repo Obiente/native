@@ -762,11 +762,15 @@ internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: Stri
     ) {
         "Nextcloud returned a cross-origin direct-editing handoff."
     }
-    val routePrefix = server.rawPath.trimEnd('/') + "/index.php/apps/files/directEditing/"
+    val basePath = server.rawPath.trimEnd('/')
+    val routePrefix = listOf(
+        "$basePath/apps/files/directEditing/",
+        "$basePath/index.php/apps/files/directEditing/",
+    ).firstOrNull { prefix -> resolved.rawPath.startsWith(prefix) }.orEmpty()
     val rawPath = resolved.rawPath
     val token = rawPath.removePrefix(routePrefix)
     require(
-        rawPath.startsWith(routePrefix) &&
+        routePrefix.isNotEmpty() &&
             token.isNotBlank() &&
             '/' !in token &&
             '\\' !in token &&

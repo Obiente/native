@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.DynamicResourceRecordContext
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeRecord
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeChoresWorkspaceKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredScalarKind
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeStructuredValue
 import kotlinx.serialization.encodeToString
@@ -29,6 +30,14 @@ class DynamicNavigationHistoryPersistenceTest {
 
         assertEquals(team, retainedChoresNavigationContext(team, invitation))
         assertEquals(invitation, retainedChoresNavigationContext(null, invitation))
+        assertEquals(
+            team,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Chores, team, null),
+        )
+        assertEquals(
+            invitation,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Invitations, team, invitation),
+        )
     }
 
     @Test

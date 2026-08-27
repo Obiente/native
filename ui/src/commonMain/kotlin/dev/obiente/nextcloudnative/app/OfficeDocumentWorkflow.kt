@@ -62,7 +62,7 @@ data class NextcloudDocumentEditSessionRequest(
  * Platform implementations validate this as same-origin and on the core direct-editing route.
  * [toString] stays redacted so routine diagnostics cannot accidentally log its token.
  */
-class NextcloudDocumentEditSession internal constructor(
+class NextcloudDocumentEditSession(
     val sameOriginUrl: String,
 ) {
     override fun toString(): String = "NextcloudDocumentEditSession(url=<redacted>)"

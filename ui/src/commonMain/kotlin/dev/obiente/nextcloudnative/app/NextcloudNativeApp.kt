@@ -187,6 +187,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceUsesTeamContext
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresMemberFieldChoices
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
@@ -1052,62 +1053,29 @@ private fun LoginScreen(
     }
 
     certificateReview?.let { review ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!trustingCertificate) certificateReview = null
-            },
-            title = { Text("Unverified server certificate") },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    Text(
-                        "Android cannot verify the identity of ${review.serverDisplayName}. " +
-                            "Only continue if you obtained this fingerprint from your server administrator through a separate trusted channel.",
-                    )
-                    Text("Subject", style = MaterialTheme.typography.labelLarge)
-                    Text(review.subject, style = MaterialTheme.typography.bodySmall)
-                    Text("Issuer", style = MaterialTheme.typography.labelLarge)
-                    Text(review.issuer, style = MaterialTheme.typography.bodySmall)
-                    Text("SHA-256 fingerprint", style = MaterialTheme.typography.labelLarge)
-                    Text(review.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
-                    Text("Valid from ${review.validFrom} until ${review.validUntil}", style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "Approval is limited to this exact certificate and server address. A changed or expired certificate will require a new review.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !trustingCertificate,
-                    onClick = { certificateReview = null },
-                ) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !trustingCertificate,
-                    onClick = {
-                        trustingCertificate = true
-                        scope.launch {
-                            runCatching { services.trustServerCertificate(review) }
-                                .onSuccess {
-                                    trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
-                                    certificateReview = null
-                                    trustingCertificate = false
-                                    startLogin(certificateJustApproved = review.sha256Fingerprint)
-                                }
-                                .onFailure { failure ->
-                                    if (failure is CancellationException) throw failure
-                                    error = failure.message ?: "The certificate could not be trusted."
-                                    certificateReview = null
-                                    trustingCertificate = false
-                                }
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = null,
+            confirmLabel = "Trust and connect",
+            onDismiss = { certificateReview = null },
+            onConfirm = {
+                trustingCertificate = true
+                scope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
+                            certificateReview = null
+                            trustingCertificate = false
+                            startLogin(certificateJustApproved = review.sha256Fingerprint)
                         }
-                    },
-                ) { Text(if (trustingCertificate) "Checking..." else "Trust and connect") }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            error = failure.message ?: "The certificate could not be trusted."
+                            certificateReview = null
+                            trustingCertificate = false
+                        }
+                }
             },
         )
     }
@@ -1208,6 +1176,61 @@ private fun LoginScreen(
 }
 
 @Composable
+private fun ServerCertificateReviewDialog(
+    review: ServerCertificateReview,
+    checking: Boolean,
+    error: String?,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = {
+            if (!checking) onDismiss()
+        },
+        title = { Text("Unverified server certificate") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+            ) {
+                Text(
+                    "Android cannot verify the identity of ${review.serverDisplayName}. " +
+                        "Only continue if you obtained this fingerprint from your server administrator through a separate trusted channel.",
+                )
+                Text("Subject", style = MaterialTheme.typography.labelLarge)
+                Text(review.subject, style = MaterialTheme.typography.bodySmall)
+                Text("Issuer", style = MaterialTheme.typography.labelLarge)
+                Text(review.issuer, style = MaterialTheme.typography.bodySmall)
+                Text("SHA-256 fingerprint", style = MaterialTheme.typography.labelLarge)
+                Text(review.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
+                Text("Valid from ${review.validFrom} until ${review.validUntil}", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Approval is limited to this exact certificate and server address. A changed or expired certificate will require a new review.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                error?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !checking,
+                onClick = onDismiss,
+            ) { Text("Cancel") }
+        },
+        confirmButton = {
+            Button(
+                enabled = !checking,
+                onClick = onConfirm,
+            ) { Text(if (checking) "Checking..." else confirmLabel) }
+        },
+    )
+}
+
+@Composable
 private fun AuthenticatedApp(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -1283,6 +1306,11 @@ private fun AuthenticatedApp(
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
+    var certificateReview by remember(session) { mutableStateOf<ServerCertificateReview?>(null) }
+    var certificateTrustError by remember(session) { mutableStateOf<String?>(null) }
+    var trustingCertificate by remember(session) { mutableStateOf(false) }
+    var certificateRecoveryAttempt by remember(session) { mutableStateOf(0) }
+    val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
@@ -1440,24 +1468,70 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(session, discoveryAttempt) {
         discoveryError = null
-        runCatching { services.loadServerInfo(session) }
-            .onSuccess { discovered ->
-                serverInfo = discovered
-                val reconciled = reconciledAppWorkspacePinsForDiscovery(
-                    appIds = pinnedAppIds,
-                    installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
-                    appsAuthoritative = discovered.appsAuthoritative,
-                )
-                if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
-                    pinnedAppIds = reconciled
-                    appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
-                        null
-                    } else {
-                        "Unavailable pins were removed for this session, but the change could not be saved on this device."
-                    }
+        val discoveryResult = runCatching { services.loadServerInfo(session) }
+        val discovered = discoveryResult.getOrNull()
+        if (discovered != null) {
+            serverInfo = discovered
+            val reconciled = reconciledAppWorkspacePinsForDiscovery(
+                appIds = pinnedAppIds,
+                installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
+                appsAuthoritative = discovered.appsAuthoritative,
+            )
+            if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
+                pinnedAppIds = reconciled
+                appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                    null
+                } else {
+                    "Unavailable pins were removed for this session, but the change could not be saved on this device."
                 }
             }
-            .onFailure { discoveryError = it.message ?: "Could not load server details." }
+            return@LaunchedEffect
+        }
+        val failure = requireNotNull(discoveryResult.exceptionOrNull())
+        if (failure is CancellationException) throw failure
+        val reviewResult = runCatching {
+            services.inspectServerCertificateFailure(session.serverUrl, failure)
+        }
+        val review = reviewResult.getOrNull()
+        if (review != null) {
+            certificateReview = review
+            certificateTrustError = null
+        } else {
+            discoveryError = reviewResult.exceptionOrNull()?.message
+                ?: failure.message
+                ?: "Could not load server details."
+        }
+    }
+
+    certificateReview?.let { review ->
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = certificateTrustError,
+            confirmLabel = "Trust and retry",
+            onDismiss = {
+                certificateReview = null
+                certificateTrustError = null
+            },
+            onConfirm = {
+                trustingCertificate = true
+                certificateTrustError = null
+                certificateScope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            certificateReview = null
+                            trustingCertificate = false
+                            certificateRecoveryAttempt += 1
+                            discoveryAttempt += 1
+                        }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            certificateTrustError = failure.message ?: "The certificate could not be trusted."
+                            trustingCertificate = false
+                        }
+                }
+            },
+        )
     }
 
     LaunchedEffect(session, serverInfo?.apps) {
@@ -2041,6 +2115,7 @@ private fun AuthenticatedApp(
                 RootDestinationContent.HomeWorkspace -> NativeDashboardScreen(
                     services = services,
                     session = session,
+                    recoveryAttempt = certificateRecoveryAttempt,
                     installedApps = serverInfo?.apps.orEmpty(),
                     pinnedAppIds = pinnedAppIds,
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
@@ -2214,6 +2289,7 @@ private fun AuthenticatedApp(
         Screen.Dashboard -> NativeDashboardScreen(
             services = services,
             session = session,
+            recoveryAttempt = certificateRecoveryAttempt,
             installedApps = serverInfo?.apps.orEmpty(),
             pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
@@ -4273,7 +4349,7 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         if (
             retainedChoresTeamContext == null ||
-            nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team
+            !nativeChoresWorkspaceUsesTeamContext(nativeChoresWorkspaceKind(schema, selectedView))
         ) {
             emptyMap()
         } else {
@@ -4292,6 +4368,20 @@ private fun DynamicDiscoveredAppScreen(
     }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
+    }
+    val formActionContext = remember(
+        recordContext,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        retainedChoresFormActionContext(
+            workspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+            retainedTeamContext = retainedChoresTeamContext,
+            currentRecordContext = recordContext,
+        )
+    }
+    val formActionNavigationPlan = remember(descriptor, formActionContext) {
+        descriptor.planDynamicNavigation(formActionContext)
     }
     val mailCollectionSummaryDestinations = remember(
         recordContext,
@@ -4557,15 +4647,16 @@ private fun DynamicDiscoveredAppScreen(
     }
     val actionViews = remember(
         descriptor,
-        navigationPlan,
+        formActionNavigationPlan,
+        formActionContext,
         schema,
         selectedRecord,
         selectedView.resourceId,
         selectedCollectionState,
     ) {
         val planned = buildList {
-            addAll(if (selectedRecord == null) {
-                navigationPlan.rootFormActions.filter { action ->
+            addAll(if (formActionContext == null) {
+                formActionNavigationPlan.rootFormActions.filter { action ->
                     val spec = schema.action(action.actionId)
                         ?: return@filter false
                     val formView = schema.views.singleOrNull { candidate ->
@@ -4580,8 +4671,8 @@ private fun DynamicDiscoveredAppScreen(
                     )
                 }
             } else {
-                val currentResourceId = selectedRecordResourceId.orEmpty()
-                navigationPlan.contextualFormActions.filter { action ->
+                val currentResourceId = formActionContext.resourceId
+                formActionNavigationPlan.contextualFormActions.filter { action ->
                     val spec = schema.action(action.actionId)
                         ?: return@filter false
                     val formView = schema.views.singleOrNull { candidate ->
@@ -6202,6 +6293,16 @@ internal fun retainedChoresNavigationContext(
     retainedTeamContext: DynamicResourceRecordContext?,
     currentRecordContext: DynamicResourceRecordContext?,
 ): DynamicResourceRecordContext? = retainedTeamContext ?: currentRecordContext
+
+internal fun retainedChoresFormActionContext(
+    workspaceKind: NativeChoresWorkspaceKind?,
+    retainedTeamContext: DynamicResourceRecordContext?,
+    currentRecordContext: DynamicResourceRecordContext?,
+): DynamicResourceRecordContext? = if (nativeChoresWorkspaceUsesTeamContext(workspaceKind)) {
+    retainedTeamContext ?: currentRecordContext
+} else {
+    currentRecordContext
+}
 
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()

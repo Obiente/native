@@ -118,6 +118,13 @@ class OfficeDocumentRequestTest {
     @Test
     fun acceptsOnlySameOriginTokenRouteWithoutQueryOrFragment() {
         assertEquals(
+            "https://cloud.example/apps/files/directEditing/token-123",
+            validatedDirectEditingHandoffUrl(
+                "https://cloud.example",
+                "/apps/files/directEditing/token-123",
+            ),
+        )
+        assertEquals(
             "https://cloud.example/index.php/apps/files/directEditing/token-123",
             validatedDirectEditingHandoffUrl(
                 "https://cloud.example",

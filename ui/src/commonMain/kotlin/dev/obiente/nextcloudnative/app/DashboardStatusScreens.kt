@@ -211,6 +211,7 @@ private suspend fun executeDashboardItemsPlan(
 internal fun NativeDashboardScreen(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
+    recoveryAttempt: Int = 0,
     installedApps: List<NextcloudAppEntry>,
     pinnedAppIds: List<String> = defaultAppWorkspacePinnedIds(),
     onOpenApp: (NextcloudAppEntry) -> Unit,
@@ -225,6 +226,7 @@ internal fun NativeDashboardScreen(
         services = services,
         session = session,
         refreshAttempt = refreshAttempt,
+        recoveryAttempt = recoveryAttempt,
     )
     val formFactor = rememberHomeFormFactor()
     val workspaceStorage = rememberHomeWorkspaceLayoutStorage()
@@ -433,17 +435,18 @@ internal fun rememberNativeDashboardState(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
     refreshAttempt: Int,
+    recoveryAttempt: Int = 0,
 ): DashboardSurfaceState {
     var state by remember(session) {
         mutableStateOf<DashboardSurfaceState>(DashboardSurfaceState.Loading)
     }
-    LaunchedEffect(session, refreshAttempt) {
+    LaunchedEffect(session, refreshAttempt, recoveryAttempt) {
         val now = currentDashboardEpochSeconds()
         val displayed = state as? DashboardSurfaceState.Available
         val cached = sharedDashboardStatusMemoryCache.get(session, now)
         val previousSnapshot = retainedDashboardRefreshSnapshot(cached, displayed?.snapshot)
         val previousStatus = cached?.status ?: displayed?.status
-        val cachePolicy = if (refreshAttempt > 0) {
+        val cachePolicy = if (refreshAttempt > 0 || recoveryAttempt > 0) {
             NextcloudApiCachePolicy.RefreshNetwork
         } else {
             NextcloudApiCachePolicy.PreferCache

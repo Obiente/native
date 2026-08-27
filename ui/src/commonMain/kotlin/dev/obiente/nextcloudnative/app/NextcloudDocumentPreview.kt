@@ -102,6 +102,16 @@ fun NextcloudDocumentPreview(
     }
 
     Surface(modifier = modifier.fillMaxSize()) {
+        val activeEditor = editStatus as? DocumentEditUiState.Editing
+        if (activeEditor != null) {
+            PlatformEmbeddedNextcloudWebApp(
+                session = session,
+                initialUrl = activeEditor.sameOriginUrl,
+                onExit = { editStatus = DocumentEditUiState.Idle },
+                modifier = Modifier.fillMaxSize(),
+            )
+            return@Surface
+        }
         when (val current = state) {
             DocumentPreviewUiState.Loading -> Box(
                 modifier = Modifier.fillMaxSize(),
@@ -120,10 +130,9 @@ fun NextcloudDocumentPreview(
                             editStatus = DocumentEditUiState.Starting
                             scope.launch {
                                 runCatching {
-                                    val editSession = services.beginDocumentEditSession(session, request)
-                                    services.openExternalUrl(editSession.sameOriginUrl)
-                                }.onSuccess {
-                                    editStatus = DocumentEditUiState.Idle
+                                    services.beginDocumentEditSession(session, request)
+                                }.onSuccess { editSession ->
+                                    editStatus = DocumentEditUiState.Editing(editSession.sameOriginUrl)
                                 }.onFailure {
                                     editStatus = DocumentEditUiState.Failed(
                                         it.message ?: "Could not start the Office editor.",
@@ -429,5 +438,6 @@ private sealed interface DocumentPreviewUiState {
 private sealed interface DocumentEditUiState {
     data object Idle : DocumentEditUiState
     data object Starting : DocumentEditUiState
+    data class Editing(val sameOriginUrl: String) : DocumentEditUiState
     data class Failed(val message: String) : DocumentEditUiState
 }

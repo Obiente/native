@@ -2,10 +2,12 @@ package dev.obiente.nextcloudnative.app
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.net.http.SslError
 import android.net.Uri
 import android.util.Base64
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
+import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -154,6 +156,23 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                                 handler?.cancel()
                             }
                         }
+
+                        @SuppressLint("WebViewClientOnReceivedSslError")
+                        override fun onReceivedSslError(
+                            view: WebView?,
+                            handler: SslErrorHandler?,
+                            error: SslError?,
+                        ) {
+                            val trusted = error != null &&
+                                embeddedWebOrigin(error.url) == initialOrigin &&
+                                error.onlyReportsUntrustedIssuer() &&
+                                AndroidServerCertificateTrust.isWebViewCertificateTrusted(
+                                    context = context,
+                                    serverUrl = error.url,
+                                    certificate = error.certificate,
+                                )
+                            if (trusted) handler?.proceed() else handler?.cancel()
+                        }
                     }
                     loadUrl(initialUrl, mapOf("Authorization" to authorization))
                 }
@@ -172,6 +191,14 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
         }
     }
 }
+
+private fun SslError.onlyReportsUntrustedIssuer(): Boolean =
+    primaryError == SslError.SSL_UNTRUSTED &&
+        !hasError(SslError.SSL_DATE_INVALID) &&
+        !hasError(SslError.SSL_EXPIRED) &&
+        !hasError(SslError.SSL_IDMISMATCH) &&
+        !hasError(SslError.SSL_INVALID) &&
+        !hasError(SslError.SSL_NOTYETVALID)
 
 private fun embeddedWebOrigin(value: String): String? {
     val parsed = Uri.parse(value)
