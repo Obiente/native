@@ -75,12 +75,26 @@ internal fun persistDesktopFileSyncPairUploadCleanups(
     after.pendingUploadCleanups,
 )
 
+internal sealed interface DesktopFileSyncUploadCleanupChange {
+    data class Retain(val cleanup: FileSyncPendingUploadCleanup) : DesktopFileSyncUploadCleanupChange
+    data class Complete(val uploadId: String) : DesktopFileSyncUploadCleanupChange
+}
+
 internal fun persistDesktopFileSyncExecutionUploadCleanups(
     connection: SQLiteConnection,
     pairId: String,
     stored: List<FileSyncPendingUploadCleanup>,
-    after: FileSyncPair,
-) = persistDesktopFileSyncUploadCleanups(connection, pairId, stored, after.pendingUploadCleanups)
+    change: DesktopFileSyncUploadCleanupChange?,
+) {
+    val after = when (change) {
+        null -> stored
+        is DesktopFileSyncUploadCleanupChange.Retain ->
+            stored.filterNot { it.uploadId == change.cleanup.uploadId } + change.cleanup
+        is DesktopFileSyncUploadCleanupChange.Complete ->
+            stored.filterNot { it.uploadId == change.uploadId }
+    }
+    persistDesktopFileSyncUploadCleanups(connection, pairId, stored, after)
+}
 
 internal fun migrateInlineDesktopFileSyncUploadCleanups(
     connection: SQLiteConnection,

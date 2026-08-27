@@ -193,6 +193,7 @@ internal class DesktopFileSyncStore(
         workItem: FileSyncWorkItem?,
         synchronizedBaselines: List<FileSyncBaseline> = emptyList(),
         removedBaselinePaths: Set<String> = emptySet(),
+        uploadCleanupChange: DesktopFileSyncUploadCleanupChange? = null,
     ) {
         DesktopFileSyncPersistedState(state.coordinator, state.roots)
         val pair = state.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -214,7 +215,9 @@ internal class DesktopFileSyncStore(
                 }
                 upsertPairRecord(connection, pair)
                 persistWorkRecord(connection, pairId, workId, workItem)
-                persistDesktopFileSyncExecutionUploadCleanups(connection, pairId, storedUploadCleanups, pair)
+                persistDesktopFileSyncExecutionUploadCleanups(
+                    connection, pairId, storedUploadCleanups, uploadCleanupChange,
+                )
                 synchronizedBaselines.forEach { baseline ->
                     upsertDesktopFileSyncBaseline(connection, pairId, baseline)
                 }

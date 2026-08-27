@@ -25,7 +25,10 @@ internal class DesktopFileSyncCheckpointPersistence(
             coordinator = retainFileSyncUploadCleanup(state.coordinator, pairId, cleanup),
         )
         val work = state.coordinator.pairs.single().workItems.single()
-        store.saveExecutionTransition(state, pairId, workId, work)
+        store.saveExecutionTransition(
+            state, pairId, workId, work,
+            uploadCleanupChange = DesktopFileSyncUploadCleanupChange.Retain(cleanup),
+        )
     }
 
     fun completeCleanup(uploadId: String) {
@@ -33,7 +36,10 @@ internal class DesktopFileSyncCheckpointPersistence(
             coordinator = completeFileSyncUploadCleanup(state.coordinator, pairId, uploadId),
         )
         val work = state.coordinator.pairs.single().workItems.single()
-        store.saveExecutionTransition(state, pairId, workId, work)
+        store.saveExecutionTransition(
+            state, pairId, workId, work,
+            uploadCleanupChange = DesktopFileSyncUploadCleanupChange.Complete(uploadId),
+        )
     }
 }
 
@@ -84,11 +90,16 @@ internal fun replaceDesktopFileSyncRemoteType(
         expectedStageContentHash = expectedStageContentHash,
     )
     retainCleanup(ownership)
-    return remote.replaceWithFile(
+    val published = remote.replaceWithFile(
         relativePath, source, expectedRemoteEtag, uploadId, shouldContinue,
     ) { stageEtag ->
         retainCleanup(ownership.copy(assembledStageEtag = stageEtag))
-    }.also { completeCleanup(uploadId) }
+    }
+    val publication = remote.resumableUploadRemote(shouldContinue, expectedRemoteEtag)
+    val verified = publication.verifyPublishedFile(uploadId, source, relativePath, published)
+    publication.completePublishedFile(uploadId, relativePath)
+    completeCleanup(uploadId)
+    return verified
 }
 
 internal fun executeDesktopFileSyncUpload(

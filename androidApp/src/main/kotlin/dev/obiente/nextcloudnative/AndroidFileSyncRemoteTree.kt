@@ -413,13 +413,7 @@ internal class AndroidFileSyncRemoteTree(
         val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
         require(resolveIncludingOwnedStage(backupPath) == null) { "The replacement backup already exists." }
         try {
-            webDav.moveDirectory(
-                session,
-                userId,
-                fullPath(relativePath),
-                fullPath(backupPath),
-                expectedDirectoryEtag,
-            )
+            moveReplacementDirectory(fullPath(relativePath), fullPath(backupPath), expectedDirectoryEtag)
             webDav.publishChunkUploadStage(
                 session,
                 userId,
@@ -680,7 +674,7 @@ internal class AndroidFileSyncRemoteTree(
             }
             val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
             require(backupEtag == expectedBackupEtag) { "The owned replacement backup changed." }
-            webDav.moveDirectory(session, userId, file.path.trim('/'), destination, expectedBackupEtag)
+            moveReplacementDirectory(file.path.trim('/'), destination, expectedBackupEtag)
             recovered = true
         }
         if (recovered) {
@@ -749,7 +743,7 @@ internal class AndroidFileSyncRemoteTree(
             val backupPath = jvmOwnedReplacementBackupPath(relativePath, uploadId)
             val backup = resolveIncludingOwnedStage(backupPath) ?: return@runCatching
             require(backup.isDirectory && backup.entry.etag == expectedBackupEtag)
-            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
+            moveReplacementDirectory(fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
         }
     }
 
@@ -766,19 +760,22 @@ internal class AndroidFileSyncRemoteTree(
         require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
         val destination = resolveIncludingOwnedStage(relativePath)
         if (destination == null) {
-            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
+            moveReplacementDirectory(fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
             return true
         }
         if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
             webDav.delete(session, userId, fullPath(relativePath), destination.entry.etag, isDirectory = false)
-            webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
+            moveReplacementDirectory(fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
             return true
         }
         val conflictPath = jvmOwnedReplacementConflictPath(relativePath, uploadId)
         if (resolveIncludingOwnedStage(conflictPath) != null) return false
-        webDav.moveDirectory(session, userId, fullPath(backupPath), fullPath(conflictPath), expectedBackupEtag)
+        moveReplacementDirectory(fullPath(backupPath), fullPath(conflictPath), expectedBackupEtag)
         return true
     }
+
+    private fun moveReplacementDirectory(sourcePath: String, destinationPath: String, expectedEtag: String) =
+        webDav.moveDirectory(session, userId, sourcePath, destinationPath, expectedEtag, transferCancellation)
 
     private fun fullPath(relativePath: String): String =
         listOf(rootPath, relativePath.trim('/')).filter(String::isNotBlank).joinToString("/")

@@ -370,6 +370,7 @@ internal class NextcloudDocumentWebDav(
         sourcePath: String,
         destinationPath: String,
         expectedEtag: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
     ): DocumentMutationResult {
         require(expectedEtag.isNotBlank()) { "An ETag is required for conflict-protected directory move." }
         val sourceUrl = buildNextcloudFileUrl(session.serverUrl, userId, sourcePath)
@@ -382,6 +383,7 @@ internal class NextcloudDocumentWebDav(
                 .method("MOVE", EMPTY_BODY)
                 .build(),
             operation = "move directory",
+            cancellation = cancellation,
         )
     }
 

@@ -43,6 +43,37 @@ class NextcloudChunkUploadCancellationTest {
         }
     }
 
+    @Test
+    fun directoryBackupCancellationAbortsTheInflightMove() {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(201).headersDelay(30, TimeUnit.SECONDS).build())
+            val cancellation = TestCancellation()
+            val executor = Executors.newSingleThreadExecutor()
+            try {
+                val future = executor.submit<Unit> {
+                    NextcloudDocumentWebDav().moveDirectory(
+                        NextcloudSession(server.url("/").toString().trimEnd('/'), "alice", "app-password"),
+                        "alice",
+                        "Shared/archive.bin",
+                        "Shared/.nextcloud-native-backup-01234567-89ab-cdef-0123-456789abcdef",
+                        expectedEtag = "directory-etag",
+                        cancellation = cancellation,
+                    )
+                }
+                assertTrue(cancellation.attached.await(2, TimeUnit.SECONDS))
+                cancellation.cancel()
+                val failure = assertFailsWith<java.util.concurrent.ExecutionException> {
+                    future.get(2, TimeUnit.SECONDS)
+                }
+                assertTrue(failure.cause is TestCancelledException)
+                assertTrue(cancellation.detached.await(2, TimeUnit.SECONDS))
+            } finally {
+                executor.shutdownNow()
+            }
+        }
+    }
+
     private class TestCancellation : DocumentRequestCancellation {
         val attached = CountDownLatch(1)
         val detached = CountDownLatch(1)

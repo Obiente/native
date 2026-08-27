@@ -410,6 +410,44 @@ class DesktopFileSyncStoreTest {
     }
 
     @Test
+    fun `later execution transitions preserve cleanup ownership retained by earlier work`() {
+        val directory = Files.createTempDirectory("desktop-sync-cleanup-transition-").toFile()
+        try {
+            val pair = FileSyncPair(
+                id = "cleanup-transition-pair",
+                accountId = "account",
+                localRootId = "cleanup-transition-root",
+                remoteRootPath = "Archive",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val root = DesktopFileSyncRootRecord(pair.localRootId, directory.absolutePath, "Archive")
+            val stale = DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(pair)), listOf(root))
+            val cleanup = FileSyncPendingUploadCleanup(
+                uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                relativePath = "archive.bin",
+                replacementBackupEtag = "directory-etag",
+            )
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+            store.savePair(stale, pair.id)
+
+            store.saveExecutionTransition(
+                stale, pair.id, workId = 1L, workItem = null,
+                uploadCleanupChange = DesktopFileSyncUploadCleanupChange.Retain(cleanup),
+            )
+            store.saveExecutionTransition(stale, pair.id, workId = 2L, workItem = null)
+
+            assertEquals(listOf(cleanup), store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups)
+            store.saveExecutionTransition(
+                stale, pair.id, workId = 2L, workItem = null,
+                uploadCleanupChange = DesktopFileSyncUploadCleanupChange.Complete(cleanup.uploadId),
+            )
+            assertTrue(store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups.isEmpty())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `execution transitions update only their durable work and baseline rows`() {
         val directory = Files.createTempDirectory("desktop-sync-transition-").toFile()
         try {
