@@ -18,6 +18,59 @@ import mockwebserver3.MockWebServer
 
 class DesktopFileSyncCleanupCancellationTest {
     @Test
+    fun `pausing cancellation interrupts replacement backup deletion`() {
+        MockWebServer().use { server ->
+            server.start()
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(
+                MockResponse.Builder().code(207).addHeader("Content-Type", "application/xml")
+                    .body(
+                        """
+                        <d:multistatus xmlns:d="DAV:"><d:response>
+                          <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
+                          <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+                            <d:resourcetype><d:collection/></d:resourcetype>
+                          </d:prop></d:propstat>
+                        </d:response></d:multistatus>
+                        """.trimIndent(),
+                    ).build(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(204).headersDelay(30, TimeUnit.SECONDS).build(),
+            )
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val tree = DesktopFileSyncRemoteTree(
+                NextcloudSession(server.url("/").toString(), "alice", "secret"),
+                "alice",
+                "Vault",
+            )
+            val cleanup = thread(name = "desktop-backup-delete-cancellation-test") {
+                runCatching {
+                    tree.completeReplacementBackup(
+                        "archive.bin",
+                        uploadId,
+                        "directory-etag",
+                        active::get,
+                    )
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            try {
+                repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+                active.set(false)
+                cleanup.join(2_000L)
+
+                assertFalse(cleanup.isAlive, "The paused backup deletion did not release promptly.")
+                assertIs<CancellationException>(failure.get())
+            } finally {
+                active.set(false)
+                cleanup.join(2_000L)
+            }
+        }
+    }
+
+    @Test
     fun `unresolved upload cleanup blocks new pair work`() {
         MockWebServer().use { server ->
             server.start()

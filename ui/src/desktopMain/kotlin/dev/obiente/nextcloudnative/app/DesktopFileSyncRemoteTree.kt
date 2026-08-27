@@ -1,20 +1,13 @@
 package dev.obiente.nextcloudnative.app
 
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import javax.xml.stream.XMLInputFactory
-import javax.xml.stream.XMLStreamConstants
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -86,10 +79,13 @@ internal class DesktopFileSyncRemoteTree(
             ?.let { it.copy(entry = it.entry.copy(relativePath = relativePath)) }
     }
 
-    internal fun resolvePhysical(relativePath: String): DesktopRemoteSyncDocument? {
+    internal fun resolvePhysical(
+        relativePath: String,
+        shouldContinue: (() -> Boolean)? = null,
+    ): DesktopRemoteSyncDocument? {
         requireValidSyncPath(relativePath)
         val target = fullPath(relativePath)
-        return rawListDirectory(target.substringBeforeLast('/', ""))
+        return rawListDirectory(target.substringBeforeLast('/', ""), shouldContinue)
             .firstOrNull { it.entry.relativePath == target }
             ?.let { it.copy(entry = it.entry.copy(relativePath = relativePath)) }
     }
@@ -216,9 +212,9 @@ internal class DesktopFileSyncRemoteTree(
         }
         require(total == expectedBytes) { "The server returned truncated content during verification." }
         val after = requireNotNull(when {
-            ownedStage -> resolveOwnedUploadStage(relativePath)
-            physicalDestination -> resolvePhysical(relativePath)
-            else -> resolve(relativePath)
+            ownedStage -> resolveOwnedUploadStage(relativePath, shouldContinue)
+            physicalDestination -> resolvePhysical(relativePath, shouldContinue)
+            else -> resolvePhysical(relativePath, shouldContinue)
         }) {
             "The server file disappeared during content verification."
         }
@@ -240,7 +236,7 @@ internal class DesktopFileSyncRemoteTree(
         require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
         if (length == 0) {
             require(expectedBytes == 0L)
-            val after = requireNotNull(resolve(relativePath)) {
+            val after = requireNotNull(resolvePhysical(relativePath, shouldContinue)) {
                 "The server file disappeared during content verification."
             }
             require(after.entry.etag == expectedRemoteEtag && after.entry.size == 0L && !after.isDirectory) {
@@ -255,24 +251,26 @@ internal class DesktopFileSyncRemoteTree(
             .header("Range", "bytes=$offset-$endInclusive")
             .get()
             .build()
-        val hash = client.newCall(request).execute().use { response ->
-            require(response.code == 206) {
-                "The server did not honor bounded content verification (HTTP ${response.code})."
+        val hash = executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
+            call.execute().use { response ->
+                require(response.code == 206) {
+                    "The server did not honor bounded content verification (HTTP ${response.code})."
+                }
+                require(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
+                    "The server returned a different content-verification range."
+                }
+                response.header("ETag")?.let { returned ->
+                    require(returned == expectedRemoteEtag) { "The server file changed during content verification." }
+                }
+                hashExactJvmFileSyncSlice(
+                    response.body.byteStream(),
+                    length,
+                    shouldContinue,
+                    requireExhausted = true,
+                )
             }
-            require(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
-                "The server returned a different content-verification range."
-            }
-            response.header("ETag")?.let { returned ->
-                require(returned == expectedRemoteEtag) { "The server file changed during content verification." }
-            }
-            hashExactJvmFileSyncSlice(
-                response.body.byteStream(),
-                length,
-                shouldContinue,
-                requireExhausted = true,
-            )
         }
-        val after = requireNotNull(resolve(relativePath)) {
+        val after = requireNotNull(resolvePhysical(relativePath, shouldContinue)) {
             "The server file disappeared during content verification."
         }
         require(after.entry.etag == expectedRemoteEtag && after.entry.size == expectedBytes && !after.isDirectory) {
@@ -329,20 +327,71 @@ internal class DesktopFileSyncRemoteTree(
     }
 
     override fun writeFile(relativePath: String, source: File, expectedRemoteEtag: String?): RemoteSyncEntry {
+        return writeFileInternal(relativePath, source, expectedRemoteEtag, shouldContinue = null)
+    }
+
+    internal fun writeFileCancellable(
+        relativePath: String,
+        source: File,
+        expectedRemoteEtag: String?,
+        shouldContinue: () -> Boolean,
+    ): RemoteSyncEntry = writeFileInternal(relativePath, source, expectedRemoteEtag, shouldContinue)
+
+    private fun writeFileInternal(
+        relativePath: String,
+        source: File,
+        expectedRemoteEtag: String?,
+        shouldContinue: (() -> Boolean)?,
+    ): RemoteSyncEntry {
         require(source.isFile)
-        val current = resolve(relativePath)
+        val current = if (shouldContinue == null) {
+            resolve(relativePath)
+        } else {
+            resolvePhysical(relativePath, shouldContinue)
+        }
         if (expectedRemoteEtag == null) {
             require(current == null) { "The server file appeared after the sync scan." }
-            createFile(fullPath(relativePath), source, relativePath)
+            createFile(fullPath(relativePath), source, relativePath, shouldContinue = shouldContinue)
         } else {
             require(current?.entry?.etag == expectedRemoteEtag && !current.isDirectory) {
                 "The server file changed after the sync scan."
             }
-            replaceFileAtomically(fullPath(relativePath), source, expectedRemoteEtag, relativePath)
+            replaceFileAtomically(
+                fullPath(relativePath), source, expectedRemoteEtag, relativePath,
+                shouldContinue = shouldContinue,
+            )
         }
-        val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
+        val after = requireNotNull(
+            if (shouldContinue == null) resolve(relativePath) else resolvePhysical(relativePath, shouldContinue),
+        ) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
         return after.entry
+    }
+
+    internal fun ownedStageCreationAllowed(
+        relativePath: String,
+        shouldContinue: () -> Boolean,
+    ): Boolean? {
+        requireValidSyncPath(relativePath)
+        val parent = relativePath.substringBeforeLast('/', "")
+        val request = requestBuilder(fileUrl(fullPath(parent)))
+            .header("Accept", "application/xml")
+            .header("Depth", "0")
+            .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
+            .build()
+        return executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
+            call.execute().use { response ->
+                response.requireAccepted(response.code == 207, "inspect upload destination")
+                val directory = parseDesktopSyncDav(
+                    input = response.body.byteStream(),
+                    userId = userId,
+                    maximumBytes = MAX_ERROR_RESPONSE_BYTES,
+                    maximumDocuments = 2,
+                ).singleOrNull() ?: error("The upload destination did not return one DAV record.")
+                require(directory.isDirectory) { "The upload destination is not a folder." }
+                directory.permissions?.contains('C')
+            }
+        }
     }
 
     fun resumableUploadRemote(
@@ -360,10 +409,13 @@ internal class DesktopFileSyncRemoteTree(
         replacingDirectoryEtag = replacingDirectoryEtag,
     )
 
-    internal fun resolveOwnedUploadStage(relativePath: String): DesktopRemoteSyncDocument? {
+    internal fun resolveOwnedUploadStage(
+        relativePath: String,
+        shouldContinue: (() -> Boolean)? = null,
+    ): DesktopRemoteSyncDocument? {
         require(isJvmOwnedUploadStagePath(relativePath))
         val fullStagePath = fullPath(relativePath)
-        return rawListDirectory(fullStagePath.substringBeforeLast('/', ""))
+        return rawListDirectory(fullStagePath.substringBeforeLast('/', ""), shouldContinue)
             .firstOrNull { it.entry.relativePath == fullStagePath }
     }
 
@@ -463,8 +515,11 @@ internal class DesktopFileSyncRemoteTree(
             .also { require(it.size <= MAX_CHILDREN) { "A Nextcloud folder contains too many entries." } }
     }
 
-    internal fun rawListDirectory(path: String): List<DesktopRemoteSyncDocument> {
-        val documents = executeDirectoryListing(directoryListingRequest(path))
+    internal fun rawListDirectory(
+        path: String,
+        shouldContinue: (() -> Boolean)? = null,
+    ): List<DesktopRemoteSyncDocument> {
+        val documents = executeDirectoryListing(directoryListingRequest(path), shouldContinue)
         val parent = path.trim('/')
         return documents
             .filter { it.entry.relativePath.substringBeforeLast('/', "") == parent }
@@ -477,8 +532,11 @@ internal class DesktopFileSyncRemoteTree(
         .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
         .build()
 
-    private fun executeDirectoryListing(request: Request): List<DesktopRemoteSyncDocument> =
-        client.newCall(request).execute().use { response ->
+    private fun executeDirectoryListing(
+        request: Request,
+        shouldContinue: (() -> Boolean)? = null,
+    ): List<DesktopRemoteSyncDocument> {
+        val consume = { call: okhttp3.Call -> call.execute().use { response ->
             response.requireAccepted(response.code == 207, "list folder")
             parseDesktopSyncDav(
                 input = response.body.byteStream(),
@@ -486,7 +544,12 @@ internal class DesktopFileSyncRemoteTree(
                 maximumBytes = MAX_DIRECTORY_RESPONSE_BYTES,
                 maximumDocuments = MAX_CHILDREN + MAX_RECOVERY_ITEMS + 1,
             )
+        } }
+        val call = client.newCall(request)
+        return if (shouldContinue == null) consume(call) else {
+            executeDesktopFileSyncCancellableCall(call, shouldContinue, consume)
         }
+    }
 
     private fun DesktopRemoteSyncDocument.withPath(path: String): DesktopRemoteSyncDocument =
         copy(entry = entry.copy(relativePath = path))
@@ -565,35 +628,48 @@ internal class DesktopFileSyncRemoteTree(
         }
     }
 
-    internal fun deleteOwnedReplacementBackup(backupPath: String, expectedBackupEtag: String) {
-        rawListDirectory(backupPath.substringBeforeLast('/', ""))
+    internal fun deleteOwnedReplacementBackup(
+        backupPath: String,
+        expectedBackupEtag: String,
+        shouldContinue: (() -> Boolean)? = null,
+    ) {
+        rawListDirectory(backupPath.substringBeforeLast('/', ""), shouldContinue)
             .firstOrNull { it.entry.relativePath == backupPath }
             ?.let { backup ->
                 require(backup.isDirectory) { "The owned replacement backup changed type." }
                 require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
-                deleteRemoteDocument(backup)
+                deleteRemoteDocument(backup, shouldContinue)
             }
     }
 
-    internal fun deleteRemoteDocument(document: DesktopRemoteSyncDocument) {
+    internal fun deleteRemoteDocument(
+        document: DesktopRemoteSyncDocument,
+        shouldContinue: (() -> Boolean)? = null,
+    ) {
         val url = fileUrl(document.entry.relativePath)
         val builder = requestBuilder(url)
         if (document.isDirectory) builder.header("If", "<$url> ([${safeEtag(document.entry.etag)}])")
         else builder.header("If-Match", safeEtag(document.entry.etag))
-        execute(builder.delete().build(), "remove protected backup")
+        executeMutation(
+            builder.delete().build(),
+            "remove protected backup",
+            shouldContinue = shouldContinue,
+        )
     }
 
     private fun createFile(
         path: String,
         source: File,
         vararg mutationRelativePaths: String,
+        shouldContinue: (() -> Boolean)? = null,
     ): String? = executeMutationForEtag(
         requestBuilder(fileUrl(path))
             .header("If-None-Match", "*")
-            .put(source.asRequestBody(OCTET_STREAM))
+            .put(cancellableFileRequestBody(source, shouldContinue))
             .build(),
         "create file",
         *mutationRelativePaths,
+        shouldContinue = shouldContinue,
     )
 
     private fun replaceFileAtomically(
@@ -601,16 +677,27 @@ internal class DesktopFileSyncRemoteTree(
         source: File,
         expectedEtag: String,
         vararg mutationRelativePaths: String,
+        shouldContinue: (() -> Boolean)? = null,
     ) {
         executeMutation(
             requestBuilder(fileUrl(path))
                 .header("If-Match", safeEtag(expectedEtag))
-                .put(source.asRequestBody(OCTET_STREAM))
+                .put(cancellableFileRequestBody(source, shouldContinue))
                 .build(),
             "replace file",
             *mutationRelativePaths,
+            shouldContinue = shouldContinue,
         )
     }
+
+    private fun cancellableFileRequestBody(source: File, shouldContinue: (() -> Boolean)?) =
+        if (shouldContinue == null || source.length() == 0L) {
+            source.asRequestBody(OCTET_STREAM)
+        } else {
+            jvmFileRangeRequestBody(source, 0L, source.length()) {
+                if (!shouldContinue()) throw kotlinx.coroutines.CancellationException("Sync upload paused.")
+            }
+        }
 
     internal fun executeMutationForEtag(
         request: Request,
@@ -708,138 +795,13 @@ internal class DesktopFileSyncRemoteTree(
         const val BACKUP_MARKER = ".nextcloud-native-backup-"
         val DIRECTORY_PROPERTIES = """
             <?xml version="1.0" encoding="UTF-8"?>
-            <d:propfind xmlns:d="DAV:"><d:prop>
+            <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop>
               <d:displayname/><d:getcontentlength/><d:getetag/><d:getlastmodified/><d:resourcetype/>
+              <oc:permissions/>
             </d:prop></d:propfind>
         """.trimIndent()
     }
 }
-
-internal fun parseDesktopSyncDav(
-    bytes: ByteArray,
-    userId: String,
-    maximumDocuments: Int = MAX_PARSED_DAV_DOCUMENTS,
-): List<DesktopRemoteSyncDocument> {
-    return parseDesktopSyncDav(ByteArrayInputStream(bytes), userId, bytes.size.toLong(), maximumDocuments)
-}
-
-private fun parseDesktopSyncDav(
-    input: InputStream,
-    userId: String,
-    maximumBytes: Long,
-    maximumDocuments: Int,
-): List<DesktopRemoteSyncDocument> {
-    require(maximumBytes > 0L && maximumDocuments > 0)
-    val factory = XMLInputFactory.newFactory().apply {
-        setProperty(XMLInputFactory.SUPPORT_DTD, false)
-        setProperty("javax.xml.stream.isSupportingExternalEntities", false)
-        setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true)
-        setProperty(XMLInputFactory.IS_COALESCING, false)
-    }
-    val reader = factory.createXMLStreamReader(
-        GuardedXmlInputStream(BoundedInputStream(input, maximumBytes)),
-        StandardCharsets.UTF_8.name(),
-    )
-    val documents = ArrayList<DesktopRemoteSyncDocument>()
-    var responseCount = 0
-    var response: DesktopDavResponseBuilder? = null
-    var textField: String? = null
-    val text = StringBuilder()
-    try {
-        while (reader.hasNext()) {
-            when (reader.next()) {
-                XMLStreamConstants.START_ELEMENT -> {
-                    if (reader.namespaceURI == DAV_NAMESPACE) {
-                        when (reader.localName) {
-                            "response" -> {
-                                require(responseCount < maximumDocuments) {
-                                    "A Nextcloud folder contains too many entries."
-                                }
-                                responseCount += 1
-                                response = DesktopDavResponseBuilder()
-                            }
-                            "href", "getetag", "getcontentlength", "getlastmodified" -> if (response != null) {
-                                textField = reader.localName
-                                text.clear()
-                            }
-                            "collection" -> response?.isDirectory = true
-                        }
-                    }
-                }
-                XMLStreamConstants.CHARACTERS,
-                XMLStreamConstants.CDATA,
-                -> if (textField != null) {
-                    val eventLength = reader.textLength
-                    require(eventLength <= MAX_DAV_PROPERTY_CHARS - text.length) {
-                        "A DAV property is too large."
-                    }
-                    text.append(reader.textCharacters, reader.textStart, eventLength)
-                }
-                XMLStreamConstants.END_ELEMENT -> {
-                    if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == textField) {
-                        response?.set(reader.localName, text.toString())
-                        textField = null
-                        text.clear()
-                    }
-                    if (reader.namespaceURI == DAV_NAMESPACE && reader.localName == "response") {
-                        response?.toDocument(userId)?.let { document ->
-                            require(documents.size < maximumDocuments) {
-                                "A Nextcloud folder contains too many entries."
-                            }
-                            documents.add(document)
-                        }
-                        response = null
-                    }
-                }
-            }
-        }
-    } finally {
-        reader.close()
-    }
-    return documents
-}
-
-private class DesktopDavResponseBuilder {
-    private var href: String? = null
-    private var etag: String? = null
-    private var contentLength: String? = null
-    private var lastModified: String? = null
-    var isDirectory: Boolean = false
-
-    fun set(name: String, value: String) {
-        when (name) {
-            "href" -> href = value
-            "getetag" -> etag = value
-            "getcontentlength" -> contentLength = value
-            "getlastmodified" -> lastModified = value
-        }
-    }
-
-    fun toDocument(userId: String): DesktopRemoteSyncDocument? {
-        val encodedHref = href ?: return null
-        val decoded = URLDecoder.decode(encodedHref.replace("+", "%2B"), StandardCharsets.UTF_8)
-        val path = decoded.substringAfter("/files/$userId/", "").trim('/')
-        if (path.isBlank()) return null
-        val revision = etag?.takeIf(String::isNotBlank) ?: error("A server item has no usable revision.")
-        val modifiedEpochMillis = lastModified?.let(::parseDesktopSyncDavTimestamp)
-        return DesktopRemoteSyncDocument(
-            RemoteSyncEntry(
-                relativePath = path,
-                kind = if (isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
-                etag = revision,
-                size = contentLength?.toLongOrNull()?.takeIf { !isDirectory },
-                modifiedEpochMillis = modifiedEpochMillis,
-            ),
-            isDirectory,
-            lastModifiedEpochMillis = modifiedEpochMillis,
-        )
-    }
-}
-
-internal fun parseDesktopSyncDavTimestamp(value: String): Long? = runCatching {
-    ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
-        .takeIf { it >= 0L }
-}.getOrNull()
 
 private fun java.io.InputStream.readBounded(maximumBytes: Long): ByteArray {
     val output = ByteArrayOutputStream()
@@ -870,7 +832,4 @@ private fun desktopFileSyncHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .callTimeout(0L, TimeUnit.MILLISECONDS)
     .build()
 
-private const val MAX_DAV_PROPERTY_CHARS = 16_384
-private const val MAX_PARSED_DAV_DOCUMENTS = 50_032
-private const val DAV_NAMESPACE = "DAV:"
 private const val FILE_SYNC_NETWORK_INACTIVITY_MINUTES = 30L

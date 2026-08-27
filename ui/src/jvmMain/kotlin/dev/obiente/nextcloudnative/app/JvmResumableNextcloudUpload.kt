@@ -64,6 +64,9 @@ fun jvmOwnedReplacementConflictPath(relativePath: String, uploadId: String): Str
 interface JvmResumableNextcloudUploadRemote {
     fun uploadDirect(source: File, relativePath: String, expectedRemoteEtag: String?): RemoteSyncEntry
 
+    /** False means an existing file can be updated but its parent cannot accept an owned sibling stage. */
+    fun ownedStageCreationAllowed(relativePath: String): Boolean? = null
+
     /** Byte-compares the exact generation returned by a successful direct PUT with [source]. */
     fun verifyDirectUpload(source: File, relativePath: String, uploaded: RemoteSyncEntry): RemoteSyncEntry
 
@@ -201,7 +204,16 @@ fun jvmResumableNextcloudUpload(
         remote.completePublishedFile(uploadId, relativePath)
         return verified
     }
-    val plan = nextcloudUploadTransferPlan(source.length())
+    val preferredPlan = nextcloudUploadTransferPlan(source.length())
+    val plan = if (
+        preferredPlan is NextcloudUploadTransferPlan.Chunked &&
+        expectedRemoteEtag != null &&
+        remote.ownedStageCreationAllowed(relativePath) == false
+    ) {
+        NextcloudUploadTransferPlan.Direct
+    } else {
+        preferredPlan
+    }
     if (plan is NextcloudUploadTransferPlan.Direct) {
         checkpoint?.let {
             check(remote.discardOwnedUpload(it.uploadId, relativePath, it.assembledStageEtag)) {

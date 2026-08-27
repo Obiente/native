@@ -5,6 +5,7 @@ internal data class DesktopRemoteSyncDocument(
     val isDirectory: Boolean,
     val lastModifiedEpochMillis: Long? = null,
     val physicalPath: String = entry.relativePath,
+    val permissions: String? = null,
 )
 
 internal data class DesktopRemoteScanDirectory(

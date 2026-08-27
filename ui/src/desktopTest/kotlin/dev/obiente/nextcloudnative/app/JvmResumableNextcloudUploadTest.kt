@@ -44,6 +44,30 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
+    fun `large update uses direct streaming when its parent denies stage creation`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val remote = RecordingUploadRemote(
+            collectionCreated = true,
+            directUpload = true,
+            ownedStageCreationAllowed = false,
+        )
+        try {
+            val uploaded = jvmResumableNextcloudUpload(
+                source, "shared/large.bin", "local-1", "remote-etag", null,
+                newUploadId = { error("An update-only share must not allocate a sibling stage.") },
+                persistCheckpoint = {},
+                remote = remote,
+            )
+
+            assertEquals("direct-etag", uploaded.etag)
+            assertEquals(listOf("direct-upload", "direct-verify"), remote.finalizationEvents)
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `resume continues after the last durable chunk`() {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
@@ -413,11 +437,14 @@ class JvmResumableNextcloudUploadTest {
         private val ownedStageEtag: String? = null,
         private val publishedFile: RemoteSyncEntry? = null,
         private val failPublishedCompletion: Boolean = false,
+        private val ownedStageCreationAllowed: Boolean? = null,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val discardedStageEtags = mutableListOf<String?>()
         val finalizationEvents = mutableListOf<String>()
         var discardCount = 0
+
+        override fun ownedStageCreationAllowed(relativePath: String): Boolean? = ownedStageCreationAllowed
 
         override fun uploadDirect(
             source: File,

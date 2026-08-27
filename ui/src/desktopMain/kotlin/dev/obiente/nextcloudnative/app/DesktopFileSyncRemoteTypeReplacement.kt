@@ -31,7 +31,7 @@ internal fun DesktopFileSyncRemoteTree.replaceWithFile(
         relativePath,
         shouldContinue = shouldContinue,
     )
-    val staged = requireNotNull(resolveOwnedUploadStage(ownedStagePath)) {
+    val staged = requireNotNull(resolveOwnedUploadStage(ownedStagePath, shouldContinue)) {
         "The replacement upload stage disappeared."
     }
     require(!staged.isDirectory && staged.entry.size == source.length()) {
@@ -92,7 +92,9 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
             mutationRelativePaths = arrayOf(relativePath),
             shouldContinue = shouldContinue,
         )
-        val after = requireNotNull(resolvePhysical(relativePath)) { "The uploaded server file disappeared." }
+        val after = requireNotNull(resolvePhysical(relativePath, shouldContinue)) {
+            "The uploaded server file disappeared."
+        }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
         return after.entry
     } catch (failure: Throwable) {
@@ -112,10 +114,12 @@ internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(
     relativePath: String,
     uploadId: String,
     expectedBackupEtag: String,
+    shouldContinue: (() -> Boolean)? = null,
 ) {
     deleteOwnedReplacementBackup(
         fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId)),
         expectedBackupEtag,
+        shouldContinue,
     )
 }
 
@@ -135,7 +139,7 @@ internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
     shouldContinue: () -> Boolean,
 ): Boolean? {
     val expectedBackupEtag = ownedReplacementBackupEtags[uploadId] ?: return null
-    val destination = resolvePhysical(relativePath) ?: return null
+    val destination = resolvePhysical(relativePath, shouldContinue) ?: return null
     if (destination.isDirectory) return null
     if (expectedSizeBytes == null || expectedContentHash == null) return false
     if (destination.entry.size != expectedSizeBytes) return false
@@ -156,6 +160,7 @@ internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
         relativePath,
         uploadId,
         expectedBackupEtag,
+        shouldContinue,
     )
     return true
 }
@@ -164,26 +169,27 @@ internal fun DesktopFileSyncRemoteTree.discardReplacementBackup(
     relativePath: String,
     uploadId: String,
     assembledStageEtag: String?,
+    shouldContinue: (() -> Boolean)? = null,
 ): Boolean {
     val destinationPath = fullPath(relativePath)
     val backupPath = fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId))
-    val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""))
+    val documents = rawListDirectory(destinationPath.substringBeforeLast('/', ""), shouldContinue)
     val backup = documents.firstOrNull { it.entry.relativePath == backupPath } ?: return true
     val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
     require(backup.isDirectory) { "The owned replacement backup changed type." }
     require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
     val destination = documents.firstOrNull { it.entry.relativePath == destinationPath }
     if (destination == null) {
-        moveRemoteDocument(backup, destinationPath, relativePath)
+        moveRemoteDocument(backup, destinationPath, relativePath, shouldContinue = shouldContinue)
         return true
     }
     if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
-        deleteRemoteDocument(destination)
-        moveRemoteDocument(backup, destinationPath, relativePath)
+        deleteRemoteDocument(destination, shouldContinue)
+        moveRemoteDocument(backup, destinationPath, relativePath, shouldContinue = shouldContinue)
         return true
     }
     val conflictPath = fullPath(jvmOwnedReplacementConflictPath(relativePath, uploadId))
     if (documents.any { it.entry.relativePath == conflictPath }) return false
-    moveRemoteDocument(backup, conflictPath, relativePath)
+    moveRemoteDocument(backup, conflictPath, relativePath, shouldContinue = shouldContinue)
     return true
 }

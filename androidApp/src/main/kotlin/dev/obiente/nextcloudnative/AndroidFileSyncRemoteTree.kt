@@ -18,18 +18,17 @@ import dev.obiente.nextcloudnative.app.shouldProjectJvmOwnedReplacementBackup
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
-import java.security.MessageDigest
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 /** Recursive, bounded and revision-guarded view of one Nextcloud Files subtree. */
 internal class AndroidFileSyncRemoteTree(
-    private val session: NextcloudSession,
-    private val userId: String,
+    internal val session: NextcloudSession,
+    internal val userId: String,
     remoteRootPath: String,
-    private val webDav: NextcloudDocumentWebDav,
+    internal val webDav: NextcloudDocumentWebDav,
     private val ownedUploadIds: Set<String> = emptySet(),
-    private val transferCancellation: DocumentRequestCancellation = AndroidFileSyncRunCancellation {
+    internal val transferCancellation: DocumentRequestCancellation = AndroidFileSyncRunCancellation {
         !Thread.currentThread().isInterrupted
     },
     private val ownedStageEtags: Map<String, String> = emptyMap(),
@@ -119,6 +118,7 @@ internal class AndroidFileSyncRemoteTree(
             userId,
             target.substringBeforeLast('/', ""),
             MAX_CHILDREN,
+            transferCancellation,
         ).files.firstOrNull { it.path.trim('/') == target }
             ?.let { file -> file.toRemoteDocument(relativePath) }
     }
@@ -145,77 +145,13 @@ internal class AndroidFileSyncRemoteTree(
             destination = destination,
             maximumBytes = maximumBytes,
             expectedEtag = expectedRemoteEtag,
+            cancellation = transferCancellation,
         )
         val after = requireNotNull(resolve(relativePath)) { "The server file disappeared while downloading." }
         require(after.entry.etag == expectedRemoteEtag) {
             "The server file changed while downloading."
         }
         return after.entry
-    }
-
-    /**
-     * Verifies a DAV checksum hint against bytes read from the exact ETag generation.
-     *
-     * Nextcloud documents that regular-upload checksum properties are client supplied and are not
-     * always server validated. They can narrow candidates, but only this bounded GET makes them
-     * safe evidence for automatically accepting identical local and remote content.
-     */
-    fun verifyContentHash(
-        relativePath: String,
-        expectedRemoteEtag: String,
-        expectedContentHash: String,
-        expectedBytes: Long,
-        maximumBytes: Long,
-    ): Boolean {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val sink = object : OutputStream() {
-            override fun write(byte: Int) {
-                digest.update(byte.toByte())
-            }
-
-            override fun write(bytes: ByteArray, offset: Int, length: Int) {
-                digest.update(bytes, offset, length)
-            }
-        }
-        val result = webDav.readFile(
-            session = session,
-            userId = userId,
-            path = fullPath(relativePath),
-            destination = sink,
-            maximumBytes = maximumBytes,
-            expectedEtag = expectedRemoteEtag,
-        )
-        require(result.byteCount == expectedBytes) { "The server returned truncated content during verification." }
-        require(result.etag == null || result.etag == expectedRemoteEtag) {
-            "The server file changed during content verification."
-        }
-        val actual = "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-        return actual == expectedContentHash
-    }
-
-    fun contentRangeHash(
-        relativePath: String,
-        expectedRemoteEtag: String,
-        expectedBytes: Long,
-        offset: Long,
-        length: Int,
-    ): String {
-        val hash = webDav.readFileRangeHash(
-            session = session,
-            userId = userId,
-            path = fullPath(relativePath),
-            expectedEtag = expectedRemoteEtag,
-            expectedBytes = expectedBytes,
-            offset = offset,
-            length = length,
-        )
-        val after = requireNotNull(resolve(relativePath)) {
-            "The server file disappeared during content verification."
-        }
-        require(after.entry.etag == expectedRemoteEtag && after.entry.size == expectedBytes && !after.isDirectory) {
-            "The server file changed during content verification."
-        }
-        return hash
     }
 
     fun createDirectory(relativePath: String, expectedRemoteEtag: String?) {
@@ -263,6 +199,12 @@ internal class AndroidFileSyncRemoteTree(
         relativePath: String,
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry = writeFile(relativePath, source, expectedRemoteEtag)
+
+    override fun ownedStageCreationAllowed(relativePath: String): Boolean? {
+        val parent = relativePath.substringBeforeLast('/', "")
+        val access = webDav.inspectDirectoryAccess(session, userId, fullPath(parent), transferCancellation)
+        return access.canCreateFiles.takeIf { access.permissionsKnown }
+    }
 
     override fun verifyDirectUpload(
         source: File,
@@ -415,7 +357,14 @@ internal class AndroidFileSyncRemoteTree(
         resolveIncludingOwnedStage(backupPath)?.let { backup ->
             require(backup.isDirectory) { "The owned replacement backup changed type." }
             require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
-            webDav.delete(session, userId, fullPath(backupPath), expectedBackupEtag, isDirectory = true)
+            webDav.delete(
+                session,
+                userId,
+                fullPath(backupPath),
+                expectedBackupEtag,
+                isDirectory = true,
+                cancellation = transferCancellation,
+            )
         }
     }
     override fun publishOwnedStage(
@@ -466,7 +415,14 @@ internal class AndroidFileSyncRemoteTree(
             )
         } else {
             try {
-                webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
+                webDav.delete(
+                    session,
+                    userId,
+                    fullPath(stagePath),
+                    assembledStageEtag,
+                    isDirectory = false,
+                    cancellation = transferCancellation,
+                )
                 true
             } catch (failure: DocumentWebDavException) {
                 when (failure.error) {
@@ -503,7 +459,14 @@ internal class AndroidFileSyncRemoteTree(
             return false
         }
         try {
-            webDav.delete(session, userId, fullPath(stagePath), stage.entry.etag, isDirectory = false)
+            webDav.delete(
+                session,
+                userId,
+                fullPath(stagePath),
+                stage.entry.etag,
+                isDirectory = false,
+                cancellation = transferCancellation,
+            )
             return true
         } catch (failure: DocumentWebDavException) {
             return when (failure.error) {
@@ -630,6 +593,7 @@ internal class AndroidFileSyncRemoteTree(
             fullPath(relativePath),
             expectedRemoteEtag,
             isDirectory = current.isDirectory,
+            cancellation = transferCancellation,
         )
     }
 
@@ -637,7 +601,9 @@ internal class AndroidFileSyncRemoteTree(
         listSyncDirectoryAt(fullPath(relativeParent))
 
     private fun listSyncDirectoryAt(directoryPath: String): DocumentDirectoryResult {
-        var listing = webDav.listDirectory(session, userId, directoryPath, MAX_CHILDREN)
+        var listing = webDav.listDirectory(
+            session, userId, directoryPath, MAX_CHILDREN, transferCancellation,
+        )
         val listedPaths = listing.files.mapTo(mutableSetOf()) { it.path.trim('/') }
         val ownedBackups = listing.files.mapNotNull { file ->
             val parsed = jvmOwnedReplacementBackupDestination(file.path.trim('/'), ownedDestinationPaths)
@@ -661,7 +627,9 @@ internal class AndroidFileSyncRemoteTree(
             recovered = true
         }
         if (recovered) {
-            listing = webDav.listDirectory(session, userId, directoryPath, MAX_CHILDREN)
+            listing = webDav.listDirectory(
+                session, userId, directoryPath, MAX_CHILDREN, transferCancellation,
+            )
         }
         return listing
     }
@@ -747,7 +715,14 @@ internal class AndroidFileSyncRemoteTree(
             return true
         }
         if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
-            webDav.delete(session, userId, fullPath(relativePath), destination.entry.etag, isDirectory = false)
+            webDav.delete(
+                session,
+                userId,
+                fullPath(relativePath),
+                destination.entry.etag,
+                isDirectory = false,
+                cancellation = transferCancellation,
+            )
             moveReplacementDirectory(fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
             return true
         }
@@ -760,7 +735,7 @@ internal class AndroidFileSyncRemoteTree(
     private fun moveReplacementDirectory(sourcePath: String, destinationPath: String, expectedEtag: String) =
         webDav.moveDirectory(session, userId, sourcePath, destinationPath, expectedEtag, transferCancellation)
 
-    private fun fullPath(relativePath: String): String =
+    internal fun fullPath(relativePath: String): String =
         listOf(rootPath, relativePath.trim('/')).filter(String::isNotBlank).joinToString("/")
 
     private fun logicalChildPath(parent: String, name: String): String =

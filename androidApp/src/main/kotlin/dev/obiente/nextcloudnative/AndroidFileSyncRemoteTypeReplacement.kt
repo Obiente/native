@@ -25,6 +25,8 @@ private class AndroidFileSyncDirectoryReplacementUploadRemote(
     private val tree: AndroidFileSyncRemoteTree,
     private val expectedDirectoryEtag: String,
 ) : JvmResumableNextcloudUploadRemote by tree {
+    override fun ownedStageCreationAllowed(relativePath: String): Boolean = true
+
     override fun uploadDirect(
         source: File,
         relativePath: String,

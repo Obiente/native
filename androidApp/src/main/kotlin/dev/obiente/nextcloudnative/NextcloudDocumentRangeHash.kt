@@ -14,6 +14,7 @@ internal fun NextcloudDocumentWebDav.readFileRangeHash(
     expectedBytes: Long,
     offset: Long,
     length: Int,
+    cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
 ): String {
     require(expectedEtag.isNotBlank())
     require(offset >= 0L && length >= 0 && offset <= expectedBytes - length)
@@ -27,16 +28,24 @@ internal fun NextcloudDocumentWebDav.readFileRangeHash(
         .header("Range", "bytes=$offset-$endInclusive")
         .get()
         .build()
-    return client.newCall(request).execute().use { response ->
-        check(response.code == 206) {
-            "The server did not honor bounded content verification (HTTP ${response.code})."
+    cancellation.throwIfCancelled()
+    val call = client.newCall(request)
+    cancellation.setOnCancelAction(call::cancel)
+    try {
+        return call.execute().use { response ->
+            check(response.code == 206) {
+                "The server did not honor bounded content verification (HTTP ${response.code})."
+            }
+            require(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
+                "The server returned a different content-verification range."
+            }
+            response.header("ETag")?.let { returned ->
+                require(returned == expectedEtag) { "The server file changed during content verification." }
+            }
+            hashExactJvmFileSyncSlice(response.body.byteStream(), length, requireExhausted = true)
         }
-        require(isExactHttpByteContentRange(response.header("Content-Range"), offset, endInclusive)) {
-            "The server returned a different content-verification range."
-        }
-        response.header("ETag")?.let { returned ->
-            require(returned == expectedEtag) { "The server file changed during content verification." }
-        }
-        hashExactJvmFileSyncSlice(response.body.byteStream(), length, requireExhausted = true)
+    } finally {
+        cancellation.setOnCancelAction(null)
+        cancellation.throwIfCancelled()
     }
 }

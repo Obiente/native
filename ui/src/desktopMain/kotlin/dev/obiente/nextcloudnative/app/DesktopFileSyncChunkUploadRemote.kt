@@ -27,15 +27,20 @@ internal class DesktopFileSyncChunkUploadRemote(
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry {
         check(replacingDirectoryEtag == null) { "Directory replacement must use an owned upload stage." }
-        return tree.writeFile(relativePath, source, expectedRemoteEtag)
+        return tree.writeFileCancellable(relativePath, source, expectedRemoteEtag, shouldContinue)
     }
+
+    override fun ownedStageCreationAllowed(relativePath: String): Boolean? =
+        if (replacingDirectoryEtag != null) true else tree.ownedStageCreationAllowed(relativePath, shouldContinue)
 
     override fun verifyDirectUpload(
         source: File,
         relativePath: String,
         uploaded: RemoteSyncEntry,
     ): RemoteSyncEntry {
-        val exact = requireNotNull(tree.resolvePhysical(relativePath)) { "The directly uploaded file disappeared." }
+        val exact = requireNotNull(tree.resolvePhysical(relativePath, shouldContinue)) {
+            "The directly uploaded file disappeared."
+        }
         require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
             "The directly uploaded file changed before verification."
         }
@@ -71,7 +76,7 @@ internal class DesktopFileSyncChunkUploadRemote(
     }
 
     override fun completePublishedFile(uploadId: String, relativePath: String) {
-        replacingDirectoryEtag?.let { tree.completeReplacementBackup(relativePath, uploadId, it) }
+        replacingDirectoryEtag?.let { tree.completeReplacementBackup(relativePath, uploadId, it, shouldContinue) }
     }
 
     override fun createChunkCollection(
@@ -165,7 +170,7 @@ internal class DesktopFileSyncChunkUploadRemote(
         expectedStageEtag: String?,
     ): String {
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
-        val stage = requireNotNull(tree.resolveOwnedUploadStage(stagePath)) {
+        val stage = requireNotNull(tree.resolveOwnedUploadStage(stagePath, shouldContinue)) {
             "The assembled upload stage disappeared."
         }
         require(!stage.isDirectory && stage.entry.size == source.length()) {
@@ -206,10 +211,10 @@ internal class DesktopFileSyncChunkUploadRemote(
     }
 
     override fun ownedStageEtag(uploadId: String, relativePath: String): String? =
-        tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
+        tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId), shouldContinue)?.entry?.etag
 
     override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? =
-        tree.resolvePhysical(relativePath)?.takeUnless { it.isDirectory }?.entry
+        tree.resolvePhysical(relativePath, shouldContinue)?.takeUnless { it.isDirectory }?.entry
 
     override fun publishOwnedStage(
         uploadId: String,
@@ -281,7 +286,9 @@ internal class DesktopFileSyncChunkUploadRemote(
                 accepted = { it in 200..299 || it == 404 || it == 412 },
             ) != 412
         }
-        return stageCleaned && tree.discardReplacementBackup(relativePath, uploadId, assembledStageEtag)
+        return stageCleaned && tree.discardReplacementBackup(
+            relativePath, uploadId, assembledStageEtag, shouldContinue,
+        )
     }
 
     private fun reconcileUnrecordedOwnedStage(

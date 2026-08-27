@@ -253,6 +253,7 @@ internal class NextcloudDocumentWebDav(
         return DocumentDirectoryAccess(
             canCreateFiles = permissions?.contains('C') == true,
             canCreateDirectories = permissions?.contains('K') == true,
+            permissionsKnown = permissions != null,
         )
     }
 
@@ -393,6 +394,7 @@ internal class NextcloudDocumentWebDav(
         path: String,
         expectedEtag: String?,
         isDirectory: Boolean = false,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
     ) {
         require(!expectedEtag.isNullOrBlank()) { "An ETag is required for conflict-protected deletion." }
         val resourceUrl = buildNextcloudFileUrl(session.serverUrl, userId, path)
@@ -405,6 +407,7 @@ internal class NextcloudDocumentWebDav(
         execute(
             request = builder.delete().build(),
             operation = "delete document",
+            cancellation = cancellation,
         )
     }
 
