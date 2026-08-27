@@ -55,10 +55,12 @@ class FileSyncCoordinatorSnapshotTest {
                     ),
                     pendingUploadCleanups = listOf(
                         FileSyncPendingUploadCleanup(
-                            "01234567-89ab-cdef-0123-456789abcdef",
-                            "archive.bin",
-                            "stage-etag",
-                            "directory-etag",
+                            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                            relativePath = "archive.bin",
+                            assembledStageEtag = "stage-etag",
+                            replacementBackupEtag = "directory-etag",
+                            expectedStageSizeBytes = 4,
+                            expectedStageContentHash = "sha256:" + "55".repeat(32),
                         ),
                     ),
                 )

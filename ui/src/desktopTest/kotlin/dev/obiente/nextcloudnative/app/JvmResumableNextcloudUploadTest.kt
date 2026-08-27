@@ -460,6 +460,8 @@ class JvmResumableNextcloudUploadTest {
             uploadId: String,
             relativePath: String,
             assembledStageEtag: String?,
+            expectedStageSizeBytes: Long?,
+            expectedStageContentHash: String?,
         ): Boolean {
             discardCount += 1
             discardedStageEtags += assembledStageEtag

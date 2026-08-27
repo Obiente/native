@@ -97,6 +97,8 @@ fun encodeFileSyncPendingUploadCleanupRecord(
         cleanup.relativePath,
         cleanup.assembledStageEtag,
         cleanup.replacementBackupEtag,
+        cleanup.expectedStageSizeBytes,
+        cleanup.expectedStageContentHash,
     ),
 ).encodeToByteArray().also { encoded ->
     require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
@@ -114,6 +116,8 @@ fun decodeFileSyncPendingUploadCleanupRecord(
         snapshot.relativePath,
         snapshot.assembledStageEtag,
         snapshot.replacementBackupEtag,
+        snapshot.expectedStageSizeBytes,
+        snapshot.expectedStageContentHash,
     )
 }
 
@@ -156,6 +160,8 @@ private data class FileSyncPendingUploadCleanupSnapshotV1(
     val relativePath: String,
     val assembledStageEtag: String? = null,
     val replacementBackupEtag: String? = null,
+    val expectedStageSizeBytes: Long? = null,
+    val expectedStageContentHash: String? = null,
 )
 
 @Serializable
@@ -270,7 +276,12 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
         .sortedBy(FileSyncPendingUploadCleanup::uploadId)
         .map {
             FileSyncPendingUploadCleanupSnapshotV1(
-                it.uploadId, it.relativePath, it.assembledStageEtag, it.replacementBackupEtag,
+                it.uploadId,
+                it.relativePath,
+                it.assembledStageEtag,
+                it.replacementBackupEtag,
+                it.expectedStageSizeBytes,
+                it.expectedStageContentHash,
             )
         },
     nextWorkId = nextWorkId,
@@ -299,7 +310,12 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
     pendingUploadCleanups = pendingUploadCleanups.map {
         FileSyncPendingUploadCleanup(
-            it.uploadId, it.relativePath, it.assembledStageEtag, it.replacementBackupEtag,
+            it.uploadId,
+            it.relativePath,
+            it.assembledStageEtag,
+            it.replacementBackupEtag,
+            it.expectedStageSizeBytes,
+            it.expectedStageContentHash,
         )
     },
     nextWorkId = nextWorkId,

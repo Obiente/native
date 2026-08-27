@@ -25,6 +25,26 @@ fun hashExactJvmFileSyncSlice(
     return digest.digest().toSyncSha256()
 }
 
+fun hashExactJvmFileSyncContent(
+    input: InputStream,
+    expectedBytes: Long,
+    shouldContinue: () -> Boolean = { true },
+): String {
+    require(expectedBytes >= 0L)
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var remaining = expectedBytes
+    while (remaining > 0L) {
+        if (!shouldContinue()) throw CancellationException("File identity verification cancelled.")
+        val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+        check(read >= 0) { "The file ended before the expected byte count." }
+        digest.update(buffer, 0, read)
+        remaining -= read
+    }
+    check(input.read() == -1) { "The file exceeded the expected byte count." }
+    return digest.digest().toSyncSha256()
+}
+
 fun skipExactJvmFileSyncBytes(
     input: InputStream,
     byteCount: Long,

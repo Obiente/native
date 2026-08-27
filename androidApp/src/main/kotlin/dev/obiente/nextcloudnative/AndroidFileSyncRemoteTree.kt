@@ -477,11 +477,17 @@ internal class AndroidFileSyncRemoteTree(
         uploadId: String,
         relativePath: String,
         assembledStageEtag: String?,
+        expectedStageSizeBytes: Long?,
+        expectedStageContentHash: String?,
     ): Boolean {
         deleteChunkUpload(uploadId, transferCancellation)
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stageCleaned = if (assembledStageEtag == null) {
-            resolveIncludingOwnedStage(stagePath) == null
+            reconcileUnrecordedOwnedStage(
+                stagePath,
+                expectedStageSizeBytes,
+                expectedStageContentHash,
+            )
         } else {
             try {
                 webDav.delete(session, userId, fullPath(stagePath), assembledStageEtag, isDirectory = false)
@@ -495,6 +501,33 @@ internal class AndroidFileSyncRemoteTree(
             uploadId,
             assembledStageEtag,
         )
+    }
+
+    private fun reconcileUnrecordedOwnedStage(
+        stagePath: String,
+        expectedStageSizeBytes: Long?,
+        expectedStageContentHash: String?,
+    ): Boolean {
+        val stage = resolveIncludingOwnedStage(stagePath) ?: return true
+        if (expectedStageSizeBytes == null || expectedStageContentHash == null) return false
+        if (stage.isDirectory || stage.entry.size != expectedStageSizeBytes) return false
+        if (
+            !verifyContentHash(
+                stagePath,
+                stage.entry.etag,
+                expectedStageContentHash,
+                expectedStageSizeBytes,
+                expectedStageSizeBytes.coerceAtLeast(1L),
+            )
+        ) {
+            return false
+        }
+        try {
+            webDav.delete(session, userId, fullPath(stagePath), stage.entry.etag, isDirectory = false)
+        } catch (failure: DocumentWebDavException) {
+            if (failure.error !in setOf(DocumentWebDavError.NotFound, DocumentWebDavError.Conflict)) throw failure
+        }
+        return true
     }
 
     /** Lists known destination names once; [complete] is false when the bounded DAV page was truncated. */

@@ -231,6 +231,8 @@ internal class DesktopFileSyncChunkUploadRemote(
         uploadId: String,
         relativePath: String,
         assembledStageEtag: String?,
+        expectedStageSizeBytes: Long?,
+        expectedStageContentHash: String?,
     ): Boolean {
         execute(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId)).delete().build(),
@@ -238,7 +240,12 @@ internal class DesktopFileSyncChunkUploadRemote(
             accepted = { it in 200..299 || it == 404 },
         )
         val stageCleaned = if (assembledStageEtag == null) {
-            tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId)) == null
+            reconcileUnrecordedOwnedStage(
+                uploadId,
+                relativePath,
+                expectedStageSizeBytes,
+                expectedStageContentHash,
+            )
         } else {
             execute(
                 requestBuilder(fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
@@ -250,6 +257,40 @@ internal class DesktopFileSyncChunkUploadRemote(
             true
         }
         return stageCleaned && tree.discardReplacementBackup(relativePath, uploadId, assembledStageEtag)
+    }
+
+    private fun reconcileUnrecordedOwnedStage(
+        uploadId: String,
+        relativePath: String,
+        expectedStageSizeBytes: Long?,
+        expectedStageContentHash: String?,
+    ): Boolean {
+        val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
+        val stage = tree.resolveOwnedUploadStage(stagePath) ?: return true
+        if (expectedStageSizeBytes == null || expectedStageContentHash == null) return false
+        if (stage.isDirectory || stage.entry.size != expectedStageSizeBytes) return false
+        if (
+            !tree.verifyContentHash(
+                stagePath,
+                stage.entry.etag,
+                expectedStageSizeBytes,
+                expectedStageContentHash,
+                expectedStageSizeBytes.coerceAtLeast(1L),
+                shouldContinue,
+                ownedStage = true,
+            )
+        ) {
+            return false
+        }
+        execute(
+            requestBuilder(fileUrl(stagePath))
+                .header("If-Match", safeEtag(stage.entry.etag))
+                .delete()
+                .build(),
+            "discard verified assembled upload",
+            accepted = { it in 200..299 || it == 404 || it == 412 },
+        )
+        return true
     }
 
     private fun execute(

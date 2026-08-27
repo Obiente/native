@@ -69,7 +69,20 @@ internal fun replaceDesktopFileSyncRemoteType(
     shouldContinue: () -> Boolean,
 ): RemoteSyncEntry {
     val uploadId = UUID.randomUUID().toString()
-    val ownership = FileSyncPendingUploadCleanup(uploadId, relativePath)
+    val expectedStageContentHash = source.inputStream().buffered().use { input ->
+        hashExactJvmFileSyncContent(
+            input = input,
+            expectedBytes = source.length(),
+            shouldContinue = shouldContinue,
+        )
+    }
+    val ownership = FileSyncPendingUploadCleanup(
+        uploadId = uploadId,
+        relativePath = relativePath,
+        replacementBackupEtag = expectedRemoteEtag,
+        expectedStageSizeBytes = source.length(),
+        expectedStageContentHash = expectedStageContentHash,
+    )
     retainCleanup(ownership)
     return remote.replaceWithFile(
         relativePath, source, expectedRemoteEtag, uploadId, shouldContinue,

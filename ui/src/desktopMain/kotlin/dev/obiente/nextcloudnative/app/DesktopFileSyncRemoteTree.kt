@@ -173,6 +173,7 @@ internal class DesktopFileSyncRemoteTree(
         expectedContentHash: String,
         maximumBytes: Long,
         shouldContinue: () -> Boolean,
+        ownedStage: Boolean = false,
     ): Boolean {
         require(expectedBytes in 0L..maximumBytes)
         require(normalizeSyncSha256(expectedContentHash) == expectedContentHash)
@@ -209,7 +210,9 @@ internal class DesktopFileSyncRemoteTree(
             }
         }
         require(total == expectedBytes) { "The server returned truncated content during verification." }
-        val after = requireNotNull(resolve(relativePath)) {
+        val after = requireNotNull(
+            if (ownedStage) resolveOwnedUploadStage(relativePath) else resolve(relativePath),
+        ) {
             "The server file disappeared during content verification."
         }
         require(after.entry.etag == expectedRemoteEtag && !after.isDirectory) {

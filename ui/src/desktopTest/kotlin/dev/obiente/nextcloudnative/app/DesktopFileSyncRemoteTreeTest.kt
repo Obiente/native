@@ -20,6 +20,101 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 class DesktopFileSyncRemoteTreeTest {
     @Test
+    fun `cleanup verifies an etagless direct replacement stage before deleting it`() {
+        val requests = mutableListOf<Request>()
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val stageName = ".nextcloud-native-$uploadId.upload"
+        val payload = "owned-stage".encodeToByteArray()
+        val expectedHash = hashExactJvmFileSyncContent(payload.inputStream(), payload.size.toLong())
+        var listingCount = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "DELETE" -> response(chain.request(), if (requests.size == 1) 404 else 204)
+                "GET" -> binaryResponse(chain.request(), 200, payload)
+                "PROPFIND" -> {
+                    listingCount += 1
+                    response(
+                        chain.request(),
+                        207,
+                        if (listingCount <= 2) davFile(stageName, "recovered-stage-etag", payload.size.toLong())
+                        else "<d:multistatus xmlns:d=\"DAV:\"></d:multistatus>",
+                    )
+                }
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+            ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+        )
+
+        val completed = tree.resumableUploadRemote().discardOwnedUpload(
+            uploadId,
+            "archive.bin",
+            assembledStageEtag = null,
+            expectedStageSizeBytes = payload.size.toLong(),
+            expectedStageContentHash = expectedHash,
+        )
+
+        assertTrue(completed)
+        assertEquals(
+            listOf("DELETE", "PROPFIND", "GET", "PROPFIND", "DELETE", "PROPFIND"),
+            requests.map { it.method },
+        )
+        assertEquals("recovered-stage-etag", requests[4].header("If-Match"))
+    }
+
+    @Test
+    fun `direct replacement persists stage and backup identity before upload`() {
+        val retained = mutableListOf<FileSyncPendingUploadCleanup>()
+        val payload = "new file".encodeToByteArray()
+        val expectedHash = hashExactJvmFileSyncContent(payload.inputStream(), payload.size.toLong())
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            when (chain.request().method) {
+                "PROPFIND" -> response(chain.request(), 207, davDirectory("archive.bin", "directory-etag"))
+                "PUT" -> throw IOException("response lost")
+                else -> error("Unexpected ${chain.request().method} request")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+        )
+        val source = Files.createTempFile("nextcloud-sync-direct-replacement", ".tmp").toFile()
+        try {
+            source.writeBytes(payload)
+
+            assertFails {
+                replaceDesktopFileSyncRemoteType(
+                    source,
+                    "archive.bin",
+                    "directory-etag",
+                    tree,
+                    retained::add,
+                    completeCleanup = {},
+                    shouldContinue = { true },
+                )
+            }
+
+            val ownership = retained.single()
+            assertEquals("archive.bin", ownership.relativePath)
+            assertEquals("directory-etag", ownership.replacementBackupEtag)
+            assertEquals(payload.size.toLong(), ownership.expectedStageSizeBytes)
+            assertEquals(expectedHash, ownership.expectedStageContentHash)
+            assertEquals(null, ownership.assembledStageEtag)
+        } finally {
+            assertTrue(source.delete())
+        }
+    }
+
+    @Test
     fun `cleanup conditionally deletes a reconciled replacement stage`() {
         val requests = mutableListOf<Request>()
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"

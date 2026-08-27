@@ -6,6 +6,8 @@ data class FileSyncPendingUploadCleanup(
     val relativePath: String,
     val assembledStageEtag: String? = null,
     val replacementBackupEtag: String? = null,
+    val expectedStageSizeBytes: Long? = null,
+    val expectedStageContentHash: String? = null,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
@@ -14,6 +16,9 @@ data class FileSyncPendingUploadCleanup(
         require(assembledStageEtag == null || assembledStageEtag.none { it == '\r' || it == '\n' })
         require(replacementBackupEtag == null || replacementBackupEtag.isNotBlank())
         require(replacementBackupEtag == null || replacementBackupEtag.none { it == '\r' || it == '\n' })
+        require((expectedStageSizeBytes == null) == (expectedStageContentHash == null))
+        require(expectedStageSizeBytes == null || expectedStageSizeBytes >= 0L)
+        require(expectedStageContentHash == null || normalizeSyncSha256(expectedStageContentHash) == expectedStageContentHash)
     }
 }
 

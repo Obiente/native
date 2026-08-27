@@ -302,15 +302,10 @@ internal class AndroidFileSyncEngine(context: Context) {
                     "This folder sync pair belongs to another account.",
                 )
             }
-            val remote = AndroidFileSyncRemoteTree(
-                session,
-                userId,
-                pair.remoteRootPath,
-                webDav,
-                fileSyncOwnedUploads(pair).mapTo(mutableSetOf()) { it.uploadId },
-            )
+            val ownedUploads = fileSyncOwnedUploads(pair)
+            val remote = androidFileSyncOwnedRemoteTree(session, userId, pair, webDav)
             val cleanupCoordinator = cleanupJvmFileSyncOwnedUploads(
-                remote, current.coordinator, pairId, fileSyncOwnedUploads(pair),
+                remote, current.coordinator, pairId, ownedUploads,
             )
             val remaining = removeFileSyncPair(cleanupCoordinator, pairId)
             val mediaStore = createAndroidMediaBackupLedgerStore(
@@ -399,16 +394,9 @@ internal class AndroidFileSyncEngine(context: Context) {
             )
         }
         return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
-        val remote = AndroidFileSyncRemoteTree(
-            session = session,
-            userId = userId,
-            remoteRootPath = initialPair.remoteRootPath,
-            webDav = webDav,
-            ownedUploadIds = fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
+        val remote = androidFileSyncOwnedRemoteTree(
+            session, userId, initialPair, webDav,
             transferCancellation = transferCancellation,
-            ownedStageEtags = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadStageEtags(initialPair),
-            ownedUploadPaths = dev.obiente.nextcloudnative.app.fileSyncOwnedUploadPaths(initialPair),
-            ownedReplacementBackupEtags = dev.obiente.nextcloudnative.app.fileSyncOwnedReplacementBackupEtags(initialPair),
         )
         cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,

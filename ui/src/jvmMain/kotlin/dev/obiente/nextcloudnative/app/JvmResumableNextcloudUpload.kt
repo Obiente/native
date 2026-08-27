@@ -109,7 +109,13 @@ interface JvmResumableNextcloudUploadRemote {
     ): RemoteSyncEntry
 
     /** Returns false when an unverified stage must remain durably owned and hidden. */
-    fun discardOwnedUpload(uploadId: String, relativePath: String, assembledStageEtag: String?): Boolean
+    fun discardOwnedUpload(
+        uploadId: String,
+        relativePath: String,
+        assembledStageEtag: String?,
+        expectedStageSizeBytes: Long? = null,
+        expectedStageContentHash: String? = null,
+    ): Boolean
 }
 
 fun cleanupJvmFileSyncOwnedUploads(
@@ -126,6 +132,8 @@ fun cleanupJvmFileSyncOwnedUploads(
                 cleanup.uploadId,
                 cleanup.relativePath,
                 cleanup.assembledStageEtag,
+                cleanup.expectedStageSizeBytes,
+                cleanup.expectedStageContentHash,
             )
         ) {
             updated = completeFileSyncUploadCleanup(updated, pairId, cleanup.uploadId)
