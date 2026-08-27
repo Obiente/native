@@ -1176,61 +1176,6 @@ private fun LoginScreen(
 }
 
 @Composable
-private fun ServerCertificateReviewDialog(
-    review: ServerCertificateReview,
-    checking: Boolean,
-    error: String?,
-    confirmLabel: String,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = {
-            if (!checking) onDismiss()
-        },
-        title = { Text("Unverified server certificate") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                Text(
-                    "Android cannot verify the identity of ${review.serverDisplayName}. " +
-                        "Only continue if you obtained this fingerprint from your server administrator through a separate trusted channel.",
-                )
-                Text("Subject", style = MaterialTheme.typography.labelLarge)
-                Text(review.subject, style = MaterialTheme.typography.bodySmall)
-                Text("Issuer", style = MaterialTheme.typography.labelLarge)
-                Text(review.issuer, style = MaterialTheme.typography.bodySmall)
-                Text("SHA-256 fingerprint", style = MaterialTheme.typography.labelLarge)
-                Text(review.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
-                Text("Valid from ${review.validFrom} until ${review.validUntil}", style = MaterialTheme.typography.bodySmall)
-                Text(
-                    "Approval is limited to this exact certificate and server address. A changed or expired certificate will require a new review.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                error?.let { message ->
-                    Text(message, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(
-                enabled = !checking,
-                onClick = onDismiss,
-            ) { Text("Cancel") }
-        },
-        confirmButton = {
-            Button(
-                enabled = !checking,
-                onClick = onConfirm,
-            ) { Text(if (checking) "Checking..." else confirmLabel) }
-        },
-    )
-}
-
-@Composable
 private fun AuthenticatedApp(
     services: NextcloudPlatformServices,
     session: NextcloudSession,
@@ -6288,21 +6233,6 @@ internal data class DynamicAppNavigationState(
 
 internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
     selectedViewId != null || selectedRecord != null || history.isNotEmpty()
-
-internal fun retainedChoresNavigationContext(
-    retainedTeamContext: DynamicResourceRecordContext?,
-    currentRecordContext: DynamicResourceRecordContext?,
-): DynamicResourceRecordContext? = retainedTeamContext ?: currentRecordContext
-
-internal fun retainedChoresFormActionContext(
-    workspaceKind: NativeChoresWorkspaceKind?,
-    retainedTeamContext: DynamicResourceRecordContext?,
-    currentRecordContext: DynamicResourceRecordContext?,
-): DynamicResourceRecordContext? = if (nativeChoresWorkspaceUsesTeamContext(workspaceKind)) {
-    retainedTeamContext ?: currentRecordContext
-} else {
-    currentRecordContext
-}
 
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()

@@ -55,9 +55,7 @@ import dev.obiente.nextcloudnative.app.GroupwareDavRequest
 import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
 import dev.obiente.nextcloudnative.app.NextcloudConditionalRead
-import dev.obiente.nextcloudnative.app.NextcloudDocumentCreatorCapability
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditingCapabilities
-import dev.obiente.nextcloudnative.app.NextcloudDocumentEditorCapability
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSession
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSessionRequest
 import dev.obiente.nextcloudnative.app.NextcloudFile
@@ -273,8 +271,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import okhttp3.Call
 import okhttp3.Callback
-import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -283,181 +279,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
-
-internal fun resolveAndroidNextcloudRedirectLocation(
-    requestUrl: HttpUrl,
-    serverUrl: String,
-    location: String?,
-): String? {
-    val target = location?.let(requestUrl::resolve) ?: return null
-    if (target.fragment != null) return null
-    val account = serverUrl.toHttpUrlOrNull() ?: return null
-    if (
-        target.scheme != account.scheme ||
-        target.host != account.host ||
-        target.port != account.port
-    ) {
-        return null
-    }
-    val accountPath = account.encodedPath.trimEnd('/').takeUnless { it == "/" }.orEmpty()
-    if (
-        accountPath.isNotEmpty() &&
-        target.encodedPath != accountPath &&
-        !target.encodedPath.startsWith("$accountPath/")
-    ) {
-        return null
-    }
-    val relativePath = target.encodedPath.removePrefix(accountPath)
-    if (!relativePath.startsWith('/') || relativePath.startsWith("//")) return null
-    return buildString {
-        append(relativePath)
-        target.encodedQuery?.let { query ->
-            append('?')
-            append(query)
-        }
-    }
-}
-
-internal const val ANDROID_DIRECT_EDITING_INFO_RELATIVE_PATH =
-    "/ocs/v2.php/apps/files/api/v1/directEditing?format=json"
-
-internal const val ANDROID_NEXTCLOUD_CAPABILITIES_RELATIVE_PATH =
-    "/ocs/v1.php/cloud/capabilities?format=json"
-
-internal const val ANDROID_DIRECT_EDITING_OPEN_RELATIVE_PATH =
-    "/ocs/v2.php/apps/files/api/v1/directEditing/open?format=json"
-
-private const val MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES = 512L * 1024L
-private const val MAX_DOCUMENT_EDIT_SESSION_RESPONSE_BYTES = 64L * 1024L
-private val TRUSTED_ANDROID_DIRECT_EDITING_EDITOR_IDS = setOf("richdocuments", "whiteboard")
-
-internal fun androidDocumentEditingConditionalHeaders(expectedEtag: String?): Map<String, String> =
-    expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-None-Match" to it) }.orEmpty()
-
-internal fun parseAndroidDocumentEditingCapabilities(
-    body: String,
-    supportsFileId: Boolean,
-): NextcloudDocumentEditingCapabilities {
-    val data = JSONObject(body).getJSONObject("ocs").getJSONObject("data")
-    val editorObject = data.optJSONObject("editors") ?: JSONObject()
-    val creatorObject = data.optJSONObject("creators") ?: JSONObject()
-    val editors = editorObject.keys().asSequence().mapNotNull { key ->
-        val item = editorObject.optJSONObject(key) ?: return@mapNotNull null
-        val id = item.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
-        id to NextcloudDocumentEditorCapability(
-            id = id,
-            displayName = item.optString("name").ifBlank { id },
-            mimeTypes = item.optJSONArray("mimetypes").toAndroidStringSet(),
-            optionalMimeTypes = item.optJSONArray("optionalMimetypes").toAndroidStringSet(),
-            secure = item.optBoolean("secure", false),
-        )
-    }.toMap()
-    val creators = creatorObject.keys().asSequence().mapNotNull { key ->
-        val item = creatorObject.optJSONObject(key) ?: return@mapNotNull null
-        val id = item.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
-        val editorId = item.optString("editor").takeIf(String::isNotBlank) ?: return@mapNotNull null
-        id to NextcloudDocumentCreatorCapability(
-            id = id,
-            editorId = editorId,
-            displayName = item.optString("name").ifBlank { id },
-            extension = item.optString("extension"),
-            templates = item.optBoolean("templates", false),
-            mimeType = item.optString("mimetype").takeIf(String::isNotBlank)
-                ?: item.optJSONArray("mimetypes")?.optString(0)?.takeIf(String::isNotBlank),
-        )
-    }.toMap()
-    return NextcloudDocumentEditingCapabilities(editors, creators, supportsFileId)
-}
-
-internal fun parseAndroidDirectEditingSupportsFileId(body: String): Boolean =
-    JSONObject(body)
-        .getJSONObject("ocs")
-        .getJSONObject("data")
-        .getJSONObject("capabilities")
-        .optJSONObject("files")
-        ?.optJSONObject("directEditing")
-        ?.optBoolean("supportsFileId", false)
-        ?: false
-
-internal fun androidDirectEditingOpenForm(request: NextcloudDocumentEditSessionRequest): String {
-    require(request.path.isSafeAndroidDocumentLookupPath()) { "The document path is unsafe." }
-    require(request.fileId >= 0L) { "The document ID is invalid." }
-    require(request.editorId in TRUSTED_ANDROID_DIRECT_EDITING_EDITOR_IDS) {
-        "The document editor is not trusted."
-    }
-    require(request.expectedEtag.isNotBlank()) { "The document version is missing." }
-    return listOf(
-        "path" to request.path,
-        "editorId" to request.editorId,
-        "fileId" to request.fileId.toString(),
-    ).joinToString("&") { (key, value) ->
-        "${URLEncoder.encode(key, StandardCharsets.UTF_8.name())}=" +
-            URLEncoder.encode(value, StandardCharsets.UTF_8.name())
-    }
-}
-
-internal fun validatedAndroidDirectEditingHandoffUrl(serverUrl: String, candidate: String): String {
-    require(candidate.isNotBlank() && candidate.none(Char::isISOControl)) {
-        "Nextcloud returned an invalid direct-editing handoff."
-    }
-    val server = URI(serverUrl.trimEnd('/') + "/")
-    require(server.scheme.equals("https", ignoreCase = true) && !server.host.isNullOrBlank()) {
-        "The Nextcloud account origin is invalid."
-    }
-    val resolved = server.resolve(candidate)
-    require(
-        resolved.scheme.equals(server.scheme, ignoreCase = true) &&
-            resolved.host.equals(server.host, ignoreCase = true) &&
-            resolved.effectiveAndroidDirectEditingPort() == server.effectiveAndroidDirectEditingPort() &&
-            resolved.userInfo == null &&
-            resolved.rawQuery == null &&
-            resolved.rawFragment == null,
-    ) {
-        "Nextcloud returned a cross-origin direct-editing handoff."
-    }
-    val basePath = server.rawPath.trimEnd('/')
-    val routePrefix = listOf(
-        "$basePath/apps/files/directEditing/",
-        "$basePath/index.php/apps/files/directEditing/",
-    ).firstOrNull { prefix -> resolved.rawPath.startsWith(prefix) }.orEmpty()
-    val rawPath = resolved.rawPath
-    val token = rawPath.removePrefix(routePrefix)
-    require(
-        routePrefix.isNotEmpty() &&
-            token.isNotBlank() &&
-            '/' !in token &&
-            '\\' !in token &&
-            !token.contains("%2e", ignoreCase = true) &&
-            !token.contains("%2f", ignoreCase = true) &&
-            !token.contains("%5c", ignoreCase = true),
-    ) {
-        "Nextcloud returned an unexpected direct-editing handoff route."
-    }
-    return resolved.toASCIIString()
-}
-
-private fun String.isSafeAndroidDocumentLookupPath(): Boolean =
-    this == "/" ||
-        (
-            isNotBlank() &&
-                length <= 4_096 &&
-                !startsWith('/') &&
-                none(Char::isISOControl) &&
-                split('/').all { segment -> segment.isNotBlank() && segment != "." && segment != ".." }
-            )
-
-private fun URI.effectiveAndroidDirectEditingPort(): Int = if (port >= 0) port else when {
-    scheme.equals("https", ignoreCase = true) -> 443
-    scheme.equals("http", ignoreCase = true) -> 80
-    else -> -1
-}
-
-private fun JSONArray?.toAndroidStringSet(): Set<String> = buildSet {
-    val source = this@toAndroidStringSet ?: return@buildSet
-    for (index in 0 until source.length()) {
-        source.optString(index).trim().lowercase().takeIf(String::isNotBlank)?.let(::add)
-    }
-}
 
 private fun ConnectivityManager.activeNetworkIsValidated(): Boolean {
     val network = activeNetwork ?: return false
@@ -599,6 +420,25 @@ internal class AndroidNextcloudServices(
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val documentEditingTransport = AndroidDocumentEditingTransport { session, specification ->
+        val response = request(
+            method = specification.method,
+            url = session.serverUrl + specification.relativePath,
+            session = session,
+            body = specification.body,
+            contentType = specification.contentType,
+            ocsRequest = true,
+            headers = specification.headers,
+            maxResponseBytes = specification.maxResponseBytes,
+            client = noRedirectHttpClient,
+        )
+        AndroidDocumentEditingHttpResponse(
+            status = response.status,
+            body = response.text,
+            etag = response.etag,
+            location = response.location,
+        )
+    }
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
@@ -3253,65 +3093,13 @@ internal class AndroidNextcloudServices(
     override suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
-    ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> = withContext(Dispatchers.IO) {
-        val response = request(
-            method = "GET",
-            url = session.serverUrl + ANDROID_DIRECT_EDITING_INFO_RELATIVE_PATH,
-            session = session,
-            ocsRequest = true,
-            headers = androidDocumentEditingConditionalHeaders(expectedEtag),
-            maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
-            client = noRedirectHttpClient,
-        )
-        if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-        check(response.status in 200..299 && response.location == null) {
-            "Loading document editing capabilities failed (HTTP ${response.status})."
-        }
-        val capabilitiesResponse = request(
-            method = "GET",
-            url = session.serverUrl + ANDROID_NEXTCLOUD_CAPABILITIES_RELATIVE_PATH,
-            session = session,
-            ocsRequest = true,
-            maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
-            client = noRedirectHttpClient,
-        )
-        check(capabilitiesResponse.status in 200..299 && capabilitiesResponse.location == null) {
-            "Loading direct-editing support failed (HTTP ${capabilitiesResponse.status})."
-        }
-        NextcloudConditionalRead.Modified(
-            value = parseAndroidDocumentEditingCapabilities(
-                response.text,
-                supportsFileId = parseAndroidDirectEditingSupportsFileId(capabilitiesResponse.text),
-            ),
-            responseEtag = response.etag,
-        )
-    }
+    ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> =
+        documentEditingTransport.loadCapabilities(session, expectedEtag)
 
     override suspend fun beginDocumentEditSession(
         session: NextcloudSession,
         request: NextcloudDocumentEditSessionRequest,
-    ): NextcloudDocumentEditSession = withContext(Dispatchers.IO) {
-        val response = request(
-            method = "POST",
-            url = session.serverUrl + ANDROID_DIRECT_EDITING_OPEN_RELATIVE_PATH,
-            session = session,
-            body = androidDirectEditingOpenForm(request),
-            contentType = "application/x-www-form-urlencoded",
-            ocsRequest = true,
-            maxResponseBytes = MAX_DOCUMENT_EDIT_SESSION_RESPONSE_BYTES,
-            client = noRedirectHttpClient,
-        )
-        check(response.status in 200..299 && response.location == null) {
-            "Starting the Office edit session failed (HTTP ${response.status})."
-        }
-        val candidate = JSONObject(response.text)
-            .getJSONObject("ocs")
-            .getJSONObject("data")
-            .getString("url")
-        NextcloudDocumentEditSession(
-            validatedAndroidDirectEditingHandoffUrl(session.serverUrl, candidate),
-        )
-    }
+    ): NextcloudDocumentEditSession = documentEditingTransport.beginSession(session, request)
 
     override suspend fun listNotes(session: NextcloudSession): List<NextcloudNote> =
         withContext(Dispatchers.IO) {
