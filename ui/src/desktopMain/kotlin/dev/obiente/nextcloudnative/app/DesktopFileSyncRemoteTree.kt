@@ -77,6 +77,14 @@ internal class DesktopFileSyncRemoteTree(
             ?.let { it.copy(entry = it.entry.copy(relativePath = relativePath)) }
     }
 
+    internal fun resolvePhysical(relativePath: String): DesktopRemoteSyncDocument? {
+        requireValidSyncPath(relativePath)
+        val target = fullPath(relativePath)
+        return rawListDirectory(target.substringBeforeLast('/', ""))
+            .firstOrNull { it.entry.relativePath == target }
+            ?.let { it.copy(entry = it.entry.copy(relativePath = relativePath)) }
+    }
+
     override fun resolveFile(relativePath: String): RemoteSyncEntry? =
         resolve(relativePath)?.takeIf { !it.isDirectory }?.entry
 
@@ -519,6 +527,15 @@ internal class DesktopFileSyncRemoteTree(
                 .firstOrNull { it.entry.relativePath == backupPath }
                 ?.let(::deleteRemoteDocument)
         }
+    }
+
+    internal fun deleteOwnedReplacementBackup(backupPath: String) {
+        rawListDirectory(backupPath.substringBeforeLast('/', ""))
+            .firstOrNull { it.entry.relativePath == backupPath }
+            ?.let { backup ->
+                require(backup.isDirectory) { "The owned replacement backup changed type." }
+                deleteRemoteDocument(backup)
+            }
     }
 
     internal fun deleteRemoteDocument(document: DesktopRemoteSyncDocument) {

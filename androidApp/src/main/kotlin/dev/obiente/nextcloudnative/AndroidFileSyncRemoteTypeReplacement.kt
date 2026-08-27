@@ -46,12 +46,7 @@ private class AndroidFileSyncDirectoryReplacementUploadRemote(
         )
     }
 
-    override fun verifyPublishedFile(
-        uploadId: String,
-        source: File,
-        relativePath: String,
-        published: RemoteSyncEntry,
-    ): RemoteSyncEntry = tree.verifyDirectUpload(source, relativePath, published).also {
+    override fun completePublishedFile(uploadId: String, relativePath: String) {
         tree.completeReplacementBackup(relativePath, uploadId)
     }
 }

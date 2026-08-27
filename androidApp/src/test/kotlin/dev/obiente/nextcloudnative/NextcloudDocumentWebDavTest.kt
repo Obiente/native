@@ -205,6 +205,7 @@ class NextcloudDocumentWebDavTest {
                         4,
                     ),
                 )
+                remote.completePublishedFile(uploadId, "archive.bin")
 
                 assertEquals("published-etag", verified.etag)
                 val cleanup = server.request(3)

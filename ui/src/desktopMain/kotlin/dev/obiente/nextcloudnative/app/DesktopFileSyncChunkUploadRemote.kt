@@ -35,7 +35,7 @@ internal class DesktopFileSyncChunkUploadRemote(
         relativePath: String,
         uploaded: RemoteSyncEntry,
     ): RemoteSyncEntry {
-        val exact = requireNotNull(tree.resolve(relativePath)) { "The directly uploaded file disappeared." }
+        val exact = requireNotNull(tree.resolvePhysical(relativePath)) { "The directly uploaded file disappeared." }
         require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
             "The directly uploaded file changed before verification."
         }
@@ -67,12 +67,7 @@ internal class DesktopFileSyncChunkUploadRemote(
         return exact.entry
     }
 
-    override fun verifyPublishedFile(
-        uploadId: String,
-        source: File,
-        relativePath: String,
-        published: RemoteSyncEntry,
-    ): RemoteSyncEntry = verifyDirectUpload(source, relativePath, published).also {
+    override fun completePublishedFile(uploadId: String, relativePath: String) {
         if (replacingDirectoryEtag != null) tree.completeReplacementBackup(relativePath, uploadId)
     }
 
@@ -199,7 +194,7 @@ internal class DesktopFileSyncChunkUploadRemote(
         tree.resolveOwnedUploadStage(jvmOwnedUploadStagePath(relativePath, uploadId))?.entry?.etag
 
     override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? =
-        tree.resolve(relativePath)?.takeUnless { it.isDirectory }?.entry
+        tree.resolvePhysical(relativePath)?.takeUnless { it.isDirectory }?.entry
 
     override fun publishOwnedStage(
         uploadId: String,

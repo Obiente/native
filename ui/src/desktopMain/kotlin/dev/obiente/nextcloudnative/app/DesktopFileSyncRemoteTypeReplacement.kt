@@ -77,9 +77,9 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
             stagingPath, destinationPath, verifiedStageEtag, sourceIsDirectory = false,
             mutationRelativePaths = arrayOf(relativePath),
         )
-        val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
+        val after = requireNotNull(resolvePhysical(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
-        deleteRemoteBackup(backupPath)
+        deleteOwnedReplacementBackup(backupPath)
         return after.entry
     } catch (failure: Throwable) {
         if (protected) restoreRemoteBackup(destinationPath, backupPath, relativePath)
@@ -88,7 +88,7 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
 }
 
 internal fun DesktopFileSyncRemoteTree.completeReplacementBackup(relativePath: String, uploadId: String) {
-    deleteRemoteBackup(fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId)))
+    deleteOwnedReplacementBackup(fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId)))
 }
 
 internal fun DesktopFileSyncRemoteTree.discardReplacementBackup(

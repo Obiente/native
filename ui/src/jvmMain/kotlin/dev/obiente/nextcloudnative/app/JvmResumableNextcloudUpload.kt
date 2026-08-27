@@ -93,6 +93,9 @@ interface JvmResumableNextcloudUploadRemote {
         published: RemoteSyncEntry,
     ): RemoteSyncEntry = verifyDirectUpload(source, relativePath, published)
 
+    /** Completes durable publication bookkeeping after the visible file has been verified. */
+    fun completePublishedFile(uploadId: String, relativePath: String) = Unit
+
     fun publishOwnedStage(
         uploadId: String,
         relativePath: String,
@@ -206,11 +209,17 @@ fun jvmResumableNextcloudUpload(
         }
         remote.resolvePublishedFile(relativePath)?.let { published ->
             ensureActive()
-            try {
-                return remote.verifyPublishedFile(matchingCheckpoint.uploadId, source, relativePath, published)
+            val verified = try {
+                remote.verifyPublishedFile(matchingCheckpoint.uploadId, source, relativePath, published)
             } catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
                 ensureActive()
+                null
+            }
+            if (verified != null) {
+                ensureActive()
+                remote.completePublishedFile(matchingCheckpoint.uploadId, relativePath)
+                return verified
             }
         }
     }

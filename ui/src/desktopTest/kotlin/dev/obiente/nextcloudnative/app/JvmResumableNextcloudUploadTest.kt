@@ -235,7 +235,40 @@ class JvmResumableNextcloudUploadTest {
 
             assertEquals("direct-etag", uploaded.etag)
             assertTrue(remote.uploadedChunkNumbers.isEmpty())
-            assertEquals(listOf("direct-verify"), remote.finalizationEvents)
+            assertEquals(listOf("direct-verify", "complete-published"), remote.finalizationEvents)
+            assertEquals(0, remote.discardCount)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun `published bookkeeping failure does not discard or retransmit the verified destination`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(UPLOAD_ID, "local-1", plan).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+            assembledStageEtag = "published-stage",
+        )
+        val remote = RecordingUploadRemote(
+            collectionCreated = false,
+            directUpload = true,
+            publishedFile = RemoteSyncEntry("large.bin", SyncEntryKind.File, "direct-etag", source.length()),
+            failPublishedCompletion = true,
+        )
+        try {
+            assertFailsWith<IllegalStateException> {
+                jvmResumableNextcloudUpload(
+                    source, "large.bin", "local-1", null, checkpoint,
+                    newUploadId = { error("A verified destination must not be retransmitted.") },
+                    persistCheckpoint = {},
+                    remote = remote,
+                )
+            }
+
+            assertEquals(listOf("direct-verify", "complete-published"), remote.finalizationEvents)
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
             assertEquals(0, remote.discardCount)
         } finally {
             source.delete()
@@ -321,6 +354,7 @@ class JvmResumableNextcloudUploadTest {
         private val cleanupComplete: Boolean = true,
         private val ownedStageEtag: String? = null,
         private val publishedFile: RemoteSyncEntry? = null,
+        private val failPublishedCompletion: Boolean = false,
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val discardedStageEtags = mutableListOf<String?>()
@@ -389,6 +423,11 @@ class JvmResumableNextcloudUploadTest {
         override fun ownedStageEtag(uploadId: String, relativePath: String): String? = ownedStageEtag
 
         override fun resolvePublishedFile(relativePath: String): RemoteSyncEntry? = publishedFile
+
+        override fun completePublishedFile(uploadId: String, relativePath: String) {
+            finalizationEvents += "complete-published"
+            check(!failPublishedCompletion) { "Published bookkeeping failed." }
+        }
 
         override fun publishOwnedStage(
             uploadId: String,
