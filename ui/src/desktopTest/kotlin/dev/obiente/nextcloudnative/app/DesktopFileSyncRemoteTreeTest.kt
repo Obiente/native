@@ -233,6 +233,13 @@ class DesktopFileSyncRemoteTreeTest {
                 "MOVE" -> response(chain.request(), 201).newBuilder().header("ETag", "etag-1").build()
                 "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
                 "PROPFIND" -> {
+                    if (chain.request().header("Depth") == "0") {
+                        return@addInterceptor response(
+                            chain.request(),
+                            207,
+                            desktopDavDirectoryAccess("RGDNVCKW"),
+                        )
+                    }
                     propfindCount += 1
                     val name = if (propfindCount == 1) stageName else "large.bin"
                     val etag = if (propfindCount == 1) "etag-1" else "etag-2"
@@ -305,6 +312,13 @@ class DesktopFileSyncRemoteTreeTest {
                 "MOVE" -> response(chain.request(), 201).newBuilder().header("ETag", "stage-etag").build()
                 "GET" -> binaryResponse(chain.request(), 200, ByteArray(21 * 1024 * 1024))
                 "PROPFIND" -> {
+                    if (chain.request().header("Depth") == "0") {
+                        return@addInterceptor response(
+                            chain.request(),
+                            207,
+                            desktopDavDirectoryAccess("RGDNVCKW"),
+                        )
+                    }
                     propfindCount += 1
                     val body = when (propfindCount) {
                         1 -> davDirectory("archive.bin", "directory-etag")

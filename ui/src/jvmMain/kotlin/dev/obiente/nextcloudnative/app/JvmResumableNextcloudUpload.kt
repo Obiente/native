@@ -205,6 +205,32 @@ fun jvmResumableNextcloudUpload(
         return verified
     }
     val preferredPlan = nextcloudUploadTransferPlan(source.length())
+    val preferredCheckpoint = checkpoint?.takeIf {
+        it.localRevision == localRevision && it.contentRevision == contentRevision &&
+            it.contentHash == contentHash && it.transferPlan == preferredPlan
+    }
+    if (preferredPlan is NextcloudUploadTransferPlan.Chunked && preferredCheckpoint?.commitInFlight == true) {
+        val stageEtag = remote.ownedStageEtag(preferredCheckpoint.uploadId, relativePath)
+        if (stageEtag != null) {
+            val verifiedStageEtag = remote.verifyOwnedStage(
+                preferredCheckpoint.uploadId,
+                relativePath,
+                source,
+                preferredCheckpoint.assembledStageEtag ?: stageEtag,
+            )
+            if (preferredCheckpoint.assembledStageEtag != verifiedStageEtag) {
+                persistCheckpoint(preferredCheckpoint.copy(assembledStageEtag = verifiedStageEtag))
+            }
+            return publishVerifiedStage(preferredCheckpoint.uploadId, verifiedStageEtag)
+        }
+        remote.resolvePublishedFile(relativePath)?.let { published ->
+            ensureActive()
+            val verified = remote.verifyPublishedFile(preferredCheckpoint.uploadId, source, relativePath, published)
+            ensureActive()
+            remote.completePublishedFile(preferredCheckpoint.uploadId, relativePath)
+            return verified
+        }
+    }
     val plan = if (
         preferredPlan is NextcloudUploadTransferPlan.Chunked &&
         expectedRemoteEtag != null &&
@@ -229,28 +255,6 @@ fun jvmResumableNextcloudUpload(
     val matchingCheckpoint = checkpoint?.takeIf {
         it.localRevision == localRevision && it.contentRevision == contentRevision &&
             it.contentHash == contentHash && it.transferPlan == plan
-    }
-    if (matchingCheckpoint?.commitInFlight == true) {
-        val stageEtag = remote.ownedStageEtag(matchingCheckpoint.uploadId, relativePath)
-        if (stageEtag != null) {
-            val verifiedStageEtag = remote.verifyOwnedStage(
-                matchingCheckpoint.uploadId,
-                relativePath,
-                source,
-                matchingCheckpoint.assembledStageEtag ?: stageEtag,
-            )
-            if (matchingCheckpoint.assembledStageEtag != verifiedStageEtag) {
-                persistCheckpoint(matchingCheckpoint.copy(assembledStageEtag = verifiedStageEtag))
-            }
-            return publishVerifiedStage(matchingCheckpoint.uploadId, verifiedStageEtag)
-        }
-        remote.resolvePublishedFile(relativePath)?.let { published ->
-            ensureActive()
-            val verified = remote.verifyPublishedFile(matchingCheckpoint.uploadId, source, relativePath, published)
-            ensureActive()
-            remote.completePublishedFile(matchingCheckpoint.uploadId, relativePath)
-            return verified
-        }
     }
 
     val resumable = matchingCheckpoint?.takeIf { !it.commitInFlight }

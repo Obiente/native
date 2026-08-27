@@ -12,10 +12,10 @@ class DesktopFileSyncPermissionsTest {
     @Test
     fun `large overwrite staging follows explicit parent create permission`() {
         MockWebServer().use { server ->
-            server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVW</oc:permissions>"))
-            server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVCKW</oc:permissions>"))
+            server.enqueue(directoryAccessResponse("RGDNVW"))
+            server.enqueue(directoryAccessResponse("RGDNVCKW"))
             server.enqueue(directoryAccessResponse(""))
-            server.enqueue(directoryAccessResponse("<oc:permissions>RGDNVW</oc:permissions>"))
+            server.enqueue(directoryAccessResponse("RGDNVW"))
             server.start()
             val remote = DesktopFileSyncRemoteTree(
                 NextcloudSession(server.url("/").toString(), "alice", "secret"),
@@ -43,14 +43,19 @@ class DesktopFileSyncPermissionsTest {
     }
 
     private fun directoryAccessResponse(permissions: String) =
-        MockResponse.Builder().code(207).body(
-            """
-            <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response>
-              <d:href>/remote.php/dav/files/alice/Vault/Shared</d:href>
-              <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
-                <d:resourcetype><d:collection/></d:resourcetype>$permissions
-              </d:prop></d:propstat>
-            </d:response></d:multistatus>
-            """.trimIndent(),
-        ).build()
+        MockResponse.Builder().code(207).body(desktopDavDirectoryAccess(permissions, "Shared")).build()
+}
+
+internal fun desktopDavDirectoryAccess(permissions: String, name: String = ""): String {
+    val suffix = name.takeIf(String::isNotEmpty)?.let { "/$it" }.orEmpty()
+    val permissionProperty = permissions.takeIf(String::isNotEmpty)
+        ?.let { "<oc:permissions>$it</oc:permissions>" }.orEmpty()
+    return """
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault$suffix/</d:href>
+          <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+            <d:resourcetype><d:collection/></d:resourcetype>$permissionProperty
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+    """.trimIndent()
 }
