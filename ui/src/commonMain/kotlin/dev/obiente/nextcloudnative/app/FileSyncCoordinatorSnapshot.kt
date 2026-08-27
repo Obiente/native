@@ -236,6 +236,7 @@ private data class FileSyncUploadCheckpointSnapshotV1(
     val commitInFlight: Boolean,
     val assembledStageEtag: String? = null,
     val contentRevision: String? = null,
+    val contentHash: String? = null,
 )
 
 @Serializable
@@ -439,6 +440,7 @@ private fun FileSyncUploadCheckpoint.toSnapshot() = FileSyncUploadCheckpointSnap
     commitInFlight,
     assembledStageEtag,
     contentRevision,
+    contentHash,
 )
 
 private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckpoint(
@@ -451,6 +453,7 @@ private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckp
     commitInFlight,
     assembledStageEtag,
     contentRevision ?: localRevision,
+    contentHash,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

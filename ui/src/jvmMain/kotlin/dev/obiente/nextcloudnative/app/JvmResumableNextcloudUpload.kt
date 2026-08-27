@@ -164,6 +164,7 @@ fun jvmResumableNextcloudUpload(
     remote: JvmResumableNextcloudUploadRemote,
     shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
     contentRevision: String = localRevision,
+    contentHash: String? = null,
 ): RemoteSyncEntry {
     fun ensureActive() {
         if (!shouldContinue()) throw CancellationException("Resumable upload cancelled.")
@@ -201,7 +202,8 @@ fun jvmResumableNextcloudUpload(
     require(plan is NextcloudUploadTransferPlan.Chunked)
 
     val matchingCheckpoint = checkpoint?.takeIf {
-        it.localRevision == localRevision && it.contentRevision == contentRevision && it.transferPlan == plan
+        it.localRevision == localRevision && it.contentRevision == contentRevision &&
+            it.contentHash == contentHash && it.transferPlan == plan
     }
     if (matchingCheckpoint?.commitInFlight == true) {
         val stageEtag = remote.ownedStageEtag(matchingCheckpoint.uploadId, relativePath)
@@ -234,7 +236,7 @@ fun jvmResumableNextcloudUpload(
     }
     val resumed = resumable != null
     var progress = resumable ?: newFileSyncUploadCheckpoint(
-        newUploadId(), localRevision, plan, contentRevision,
+        newUploadId(), localRevision, plan, contentRevision, contentHash,
     )
         .also(persistCheckpoint)
 

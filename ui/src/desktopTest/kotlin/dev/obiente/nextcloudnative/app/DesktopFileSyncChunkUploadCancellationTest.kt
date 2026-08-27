@@ -91,4 +91,61 @@ class DesktopFileSyncChunkUploadCancellationTest {
             assertTrue(ambiguous.get(), "Cancellation after network exchange must trigger reconciliation.")
         }
     }
+
+    @Test
+    fun `pausing sync cancels direct replacement publication`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder().code(207).body(
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/alice/Vault/archive.bin/</d:href>
+                      <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+                        <d:resourcetype><d:collection/></d:resourcetype>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                ).build(),
+            )
+            server.enqueue(MockResponse.Builder().code(201).build())
+            server.enqueue(
+                MockResponse.Builder().code(201).headersDelay(30, TimeUnit.SECONDS).build(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(207).body(
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/alice/Vault/archive.bin/</d:href>
+                      <d:propstat><d:prop><d:getetag>directory-etag</d:getetag>
+                        <d:resourcetype><d:collection/></d:resourcetype>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                ).build(),
+            )
+            server.start()
+            val active = AtomicBoolean(true)
+            val failure = AtomicReference<Throwable?>()
+            val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
+            val tree = DesktopFileSyncRemoteTree(session, "alice", "Vault", OkHttpClient())
+            val upload = thread(name = "desktop-direct-publication-test") {
+                runCatching {
+                    tree.publishOwnedStageReplacingDirectory(
+                        "archive.bin",
+                        "01234567-89ab-cdef-0123-456789abcdef",
+                        "stage-etag",
+                        "directory-etag",
+                        active::get,
+                    )
+                }.exceptionOrNull()?.let(failure::set)
+            }
+
+            repeat(3) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+            active.set(false)
+            upload.join(2_000L)
+
+            assertFalse(upload.isAlive, "The paused direct publication call did not release promptly.")
+            assertIs<CancellationException>(failure.get())
+        }
+    }
 }

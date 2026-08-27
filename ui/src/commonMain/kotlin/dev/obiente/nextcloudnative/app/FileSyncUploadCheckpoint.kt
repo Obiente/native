@@ -11,6 +11,7 @@ data class FileSyncUploadCheckpoint(
     val commitInFlight: Boolean = false,
     val assembledStageEtag: String? = null,
     val contentRevision: String = localRevision,
+    val contentHash: String? = null,
 ) {
     init {
         require(isValidNextcloudChunkUploadId(uploadId))
@@ -22,6 +23,7 @@ data class FileSyncUploadCheckpoint(
         require(assembledStageEtag == null || commitInFlight)
         require(assembledStageEtag == null || assembledStageEtag.isNotBlank())
         require(assembledStageEtag == null || assembledStageEtag.none { it == '\r' || it == '\n' })
+        require(contentHash == null || normalizeSyncSha256(contentHash) == contentHash)
     }
 
     val transferPlan: NextcloudUploadTransferPlan.Chunked
@@ -33,6 +35,7 @@ fun newFileSyncUploadCheckpoint(
     localRevision: String,
     plan: NextcloudUploadTransferPlan.Chunked,
     contentRevision: String = localRevision,
+    contentHash: String? = null,
 ): FileSyncUploadCheckpoint = FileSyncUploadCheckpoint(
     uploadId = uploadId,
     localRevision = localRevision,
@@ -40,6 +43,7 @@ fun newFileSyncUploadCheckpoint(
     chunkBytes = plan.chunkBytes,
     chunkCount = plan.chunkCount,
     contentRevision = contentRevision,
+    contentHash = contentHash,
 )
 
 internal fun requireValidFileSyncUploadCheckpoint(work: FileSyncWorkItem) {

@@ -26,21 +26,13 @@ data class FileSyncPendingUploadCleanup(
         require(!publicationInFlight || assembledStageEtag != null) {
             "Publication recovery requires a verified upload stage."
         }
-        require(!publicationInFlight || expectedStageSizeBytes != null) {
-            "Publication recovery requires exact content evidence."
-        }
     }
 }
 
 fun fileSyncOwnedUploads(pair: FileSyncPair): List<FileSyncPendingUploadCleanup> =
     (pair.pendingUploadCleanups + pair.workItems.mapNotNull { work ->
         work.uploadCheckpoint?.let { checkpoint ->
-            FileSyncPendingUploadCleanup(
-                checkpoint.uploadId,
-                work.relativePath,
-                checkpoint.assembledStageEtag,
-                work.replacementBackupEtag(),
-            )
+            work.pendingCleanup(checkpoint)
         }
     }).distinctBy(FileSyncPendingUploadCleanup::uploadId)
 
@@ -122,17 +114,29 @@ internal fun retainFileSyncUploadOwnership(
     val retainedUploadIds = currentWork.mapNotNullTo(mutableSetOf()) { it.uploadCheckpoint?.uploadId }
     val abandonedUploads = previous.workItems.mapNotNull { work ->
         work.uploadCheckpoint?.takeIf { it.uploadId !in retainedUploadIds }?.let { checkpoint ->
-            FileSyncPendingUploadCleanup(
-                checkpoint.uploadId,
-                work.relativePath,
-                checkpoint.assembledStageEtag,
-                work.replacementBackupEtag(),
-            )
+            work.pendingCleanup(checkpoint)
         }
     }
     return (previous.pendingUploadCleanups + abandonedUploads)
         .distinctBy(FileSyncPendingUploadCleanup::uploadId)
         .filterNot { it.uploadId in retainedUploadIds }
+}
+
+private fun FileSyncWorkItem.pendingCleanup(
+    checkpoint: FileSyncUploadCheckpoint,
+): FileSyncPendingUploadCleanup {
+    val backupEtag = replacementBackupEtag()
+    val publicationInFlight = checkpoint.commitInFlight &&
+        checkpoint.assembledStageEtag != null && backupEtag != null
+    return FileSyncPendingUploadCleanup(
+        uploadId = checkpoint.uploadId,
+        relativePath = relativePath,
+        assembledStageEtag = checkpoint.assembledStageEtag,
+        replacementBackupEtag = backupEtag,
+        expectedStageSizeBytes = checkpoint.contentHash?.let { checkpoint.sizeBytes },
+        expectedStageContentHash = checkpoint.contentHash,
+        publicationInFlight = publicationInFlight,
+    )
 }
 
 internal fun requireValidFileSyncUploadOwnership(pair: FileSyncPair) {

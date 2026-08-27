@@ -2,8 +2,10 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.FileSyncPendingUploadCleanup
+import dev.obiente.nextcloudnative.app.cleanupJvmFileSyncOwnedUploads
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -12,6 +14,83 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 
 class AndroidFileSyncReplacementOwnershipTest {
+    @Test
+    fun `published chunk replacement is verified before its backup is retired`() {
+        MockWebServer().use { server ->
+            server.start()
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            val listing = """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
+                    <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+                      <d:getetag>published-etag</d:getetag><d:getcontentlength>4</d:getcontentlength>
+                      <d:resourcetype/>
+                    </d:prop></d:propstat>
+                  </d:response>
+                  <d:response>
+                    <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
+                    <d:propstat><d:prop>
+                      <d:displayname>.nextcloud-native-backup-$uploadId</d:displayname>
+                      <d:getetag>directory-etag</d:getetag>
+                      <d:resourcetype><d:collection/></d:resourcetype>
+                    </d:prop></d:propstat>
+                  </d:response>
+                </d:multistatus>
+            """.trimIndent()
+            server.enqueue(MockResponse.Builder().code(404).build())
+            server.enqueue(
+                MockResponse.Builder().code(207).addHeader("Content-Type", "application/xml")
+                    .body(listing).build(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(200).addHeader("ETag", "published-etag")
+                    .body("same").build(),
+            )
+            repeat(2) {
+                server.enqueue(
+                    MockResponse.Builder().code(207).addHeader("Content-Type", "application/xml")
+                        .body(listing).build(),
+                )
+            }
+            server.enqueue(MockResponse.Builder().code(204).build())
+            val cleanup = FileSyncPendingUploadCleanup(
+                uploadId = uploadId,
+                relativePath = "archive.bin",
+                assembledStageEtag = "stage-etag",
+                replacementBackupEtag = "directory-etag",
+                expectedStageSizeBytes = 4,
+                expectedStageContentHash =
+                    "sha256:0967115f2813a3541eaef77de9d9d5773f1c0c04314b0bbfe4ff3b3b1c55b5d5",
+                publicationInFlight = true,
+            )
+            val pair = FileSyncPair(
+                id = "pair",
+                accountId = "account",
+                localRootId = "root",
+                remoteRootPath = "Vault",
+                configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+                pendingUploadCleanups = listOf(cleanup),
+            )
+            val remote = androidFileSyncOwnedRemoteTree(
+                NextcloudSession(server.url("/").toString().trimEnd('/'), "alice", "app-password"),
+                "alice",
+                pair,
+                NextcloudDocumentWebDav(),
+            )
+
+            val cleaned = cleanupJvmFileSyncOwnedUploads(
+                remote,
+                FileSyncCoordinatorState(listOf(pair)),
+                pair.id,
+                listOf(cleanup),
+            )
+
+            assertTrue(cleaned.pairs.single().pendingUploadCleanups.isEmpty())
+            assertEquals(listOf("DELETE", "PROPFIND", "GET", "PROPFIND", "PROPFIND", "DELETE"),
+                List(6) { server.takeRequest().method })
+        }
+    }
+
     @Test
     fun `pair removal remote retains replacement backup ownership`() {
         MockWebServer().use { server ->

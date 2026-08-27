@@ -210,7 +210,7 @@ internal class DesktopFileSyncChunkUploadRemote(
         if (replacingDirectoryEtag != null) {
             require(expectedRemoteEtag == replacingDirectoryEtag)
             return tree.publishOwnedStageReplacingDirectory(
-                relativePath, uploadId, verifiedStageEtag, replacingDirectoryEtag,
+                relativePath, uploadId, verifiedStageEtag, replacingDirectoryEtag, shouldContinue,
             )
         }
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)

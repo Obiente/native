@@ -21,18 +21,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
-internal data class DesktopRemoteSyncDocument(
-    val entry: RemoteSyncEntry,
-    val isDirectory: Boolean,
-    val lastModifiedEpochMillis: Long? = null,
-    val physicalPath: String = entry.relativePath,
-)
-
-private data class DesktopRemoteScanDirectory(
-    val logicalRelativePath: String,
-    val physicalPath: String,
-)
-
 /** Recursive, bounded and revision-guarded WebDAV adapter used by desktop sync. */
 internal class DesktopFileSyncRemoteTree(
     private val session: NextcloudSession,
@@ -512,6 +500,7 @@ internal class DesktopFileSyncRemoteTree(
         source: DesktopRemoteSyncDocument,
         destinationPath: String,
         vararg mutationRelativePaths: String,
+        shouldContinue: (() -> Boolean)? = null,
     ) {
         moveRemotePath(
             sourcePath = source.entry.relativePath,
@@ -519,6 +508,7 @@ internal class DesktopFileSyncRemoteTree(
             sourceEtag = source.entry.etag,
             sourceIsDirectory = source.isDirectory,
             mutationRelativePaths = mutationRelativePaths,
+            shouldContinue = shouldContinue,
         )
     }
 
@@ -528,6 +518,7 @@ internal class DesktopFileSyncRemoteTree(
         sourceEtag: String?,
         sourceIsDirectory: Boolean,
         mutationRelativePaths: Array<out String> = emptyArray(),
+        shouldContinue: (() -> Boolean)? = null,
     ) {
         val sourceUrl = fileUrl(sourcePath)
         val builder = requestBuilder(sourceUrl)
@@ -537,7 +528,12 @@ internal class DesktopFileSyncRemoteTree(
             if (sourceIsDirectory) builder.header("If", "<$sourceUrl> ([${safeEtag(sourceEtag)}])")
             else builder.header("If-Match", safeEtag(sourceEtag))
         }
-        executeMutation(builder.method("MOVE", EMPTY_BODY).build(), "move item", *mutationRelativePaths)
+        executeMutation(
+            builder.method("MOVE", EMPTY_BODY).build(),
+            "move item",
+            *mutationRelativePaths,
+            shouldContinue = shouldContinue,
+        )
     }
 
     internal fun restoreRemoteBackup(
@@ -633,10 +629,12 @@ internal class DesktopFileSyncRemoteTree(
         vararg mutationRelativePaths: String,
         expectedStatus: Int? = null,
         maximumResponseBytes: Long = MAX_ERROR_RESPONSE_BYTES,
+        shouldContinue: (() -> Boolean)? = null,
     ): ByteArray = mutationExecutor.execute(
         request = request,
         onAmbiguousNetworkResult = { notifyAmbiguousMutationResult(*mutationRelativePaths) },
         onAcceptedResponse = { notifyMutationCommitted(*mutationRelativePaths) },
+        shouldContinue = shouldContinue,
     ) { response ->
         val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
         response.requireAccepted(accepted, operation)

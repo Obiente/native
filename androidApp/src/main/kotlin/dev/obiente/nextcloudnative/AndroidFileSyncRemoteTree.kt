@@ -4,7 +4,6 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.JvmResumableNextcloudUploadRemote
 import dev.obiente.nextcloudnative.app.JvmExactFileComparisonOutputStream
 import dev.obiente.nextcloudnative.app.NextcloudUploadChunk
-import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.isValidNextcloudChunkUploadId
@@ -22,26 +21,6 @@ import java.io.OutputStream
 import java.security.MessageDigest
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-
-internal data class AndroidRemoteSyncDocument(
-    val entry: RemoteSyncEntry,
-    val isDirectory: Boolean,
-)
-
-internal data class AndroidRemoteChildNameSnapshot(
-    val names: Set<String>,
-    val complete: Boolean,
-)
-
-private data class AndroidRemoteScanDirectory(
-    val logicalRelativePath: String,
-    val physicalPath: String,
-)
-
-private data class AndroidRemoteScanChild(
-    val file: NextcloudFile,
-    val logicalRelativePath: String,
-)
 
 /** Recursive, bounded and revision-guarded view of one Nextcloud Files subtree. */
 internal class AndroidFileSyncRemoteTree(
@@ -130,25 +109,18 @@ internal class AndroidFileSyncRemoteTree(
         return listSyncDirectory(parent)
             .files
             .firstOrNull { it.path.trim('/') == target }
-            ?.let { file ->
-                val etag = file.etag?.takeIf(String::isNotBlank)
-                    ?: error("The server item has no usable revision.")
-                AndroidRemoteSyncDocument(
-                    RemoteSyncEntry(
-                        relativePath = relativePath,
-                        kind = if (file.isDirectory) SyncEntryKind.Directory else SyncEntryKind.File,
-                        etag = etag,
-                        size = if (file.isDirectory) null else file.size,
-                        modifiedEpochMillis = file.lastModified.androidFileSyncModifiedEpochMillis(),
-                        contentHash = if (file.isDirectory) {
-                            null
-                        } else {
-                            file.checksums.firstNotNullOfOrNull(::normalizeSyncSha256)
-                        },
-                    ),
-                    file.isDirectory,
-                )
-            }
+            ?.let { file -> file.toRemoteDocument(relativePath) }
+    }
+
+    internal fun resolvePhysical(relativePath: String): AndroidRemoteSyncDocument? {
+        val target = fullPath(relativePath)
+        return webDav.listDirectory(
+            session,
+            userId,
+            target.substringBeforeLast('/', ""),
+            MAX_CHILDREN,
+        ).files.firstOrNull { it.path.trim('/') == target }
+            ?.let { file -> file.toRemoteDocument(relativePath) }
     }
 
     fun stageDownload(
@@ -475,8 +447,16 @@ internal class AndroidFileSyncRemoteTree(
         expectedStageContentHash: String?,
         publicationInFlight: Boolean,
     ): Boolean {
-        require(!publicationInFlight) { "Android upload cleanup cannot own desktop publication state." }
         deleteChunkUpload(uploadId, transferCancellation)
+        if (publicationInFlight) {
+            reconcilePublishedReplacement(
+                relativePath,
+                uploadId,
+                expectedStageSizeBytes,
+                expectedStageContentHash,
+                ownedReplacementBackupEtags[uploadId],
+            )?.let { return it }
+        }
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
         val stageCleaned = if (assembledStageEtag == null) {
             reconcileUnrecordedOwnedStage(
@@ -502,6 +482,7 @@ internal class AndroidFileSyncRemoteTree(
             assembledStageEtag,
         )
     }
+
     private fun reconcileUnrecordedOwnedStage(
         stagePath: String,
         expectedStageSizeBytes: Long?,

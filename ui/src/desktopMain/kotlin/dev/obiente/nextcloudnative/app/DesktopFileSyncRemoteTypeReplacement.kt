@@ -42,7 +42,13 @@ internal fun DesktopFileSyncRemoteTree.replaceWithFile(
     val stagedEtag = resumableUploadRemote(shouldContinue).verifyOwnedStage(
         uploadId, relativePath, source, staged.entry.etag,
     )
-    return publishOwnedStageReplacingDirectory(relativePath, uploadId, stagedEtag, expectedRemoteEtag)
+    return publishOwnedStageReplacingDirectory(
+        relativePath,
+        uploadId,
+        stagedEtag,
+        expectedRemoteEtag,
+        shouldContinue,
+    )
 }
 
 internal fun DesktopFileSyncRemoteTree.requireDirectoryGeneration(
@@ -60,6 +66,7 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
     uploadId: String,
     verifiedStageEtag: String,
     expectedRemoteEtag: String,
+    shouldContinue: (() -> Boolean)? = null,
 ): RemoteSyncEntry {
     require(isValidNextcloudChunkUploadId(uploadId))
     val current = requireNotNull(resolve(relativePath)) { "The server item was already removed." }
@@ -71,11 +78,17 @@ internal fun DesktopFileSyncRemoteTree.publishOwnedStageReplacingDirectory(
     val backupPath = fullPath(jvmOwnedReplacementBackupPath(relativePath, uploadId))
     var protected = false
     try {
-        moveRemoteDocument(current.copy(entry = current.entry.copy(relativePath = destinationPath)), backupPath, relativePath)
+        moveRemoteDocument(
+            current.copy(entry = current.entry.copy(relativePath = destinationPath)),
+            backupPath,
+            relativePath,
+            shouldContinue = shouldContinue,
+        )
         protected = true
         moveRemotePath(
             stagingPath, destinationPath, verifiedStageEtag, sourceIsDirectory = false,
             mutationRelativePaths = arrayOf(relativePath),
+            shouldContinue = shouldContinue,
         )
         val after = requireNotNull(resolvePhysical(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }

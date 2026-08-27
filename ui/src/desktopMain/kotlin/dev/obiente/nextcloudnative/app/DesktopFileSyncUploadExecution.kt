@@ -63,6 +63,7 @@ internal fun resumeDesktopFileSyncUpload(
     persistCheckpoint = persistCheckpoint,
     remote = remote.resumableUploadRemote(shouldContinue, replacingDirectoryEtag),
     shouldContinue = shouldContinue,
+    contentHash = exactLocal.contentHash,
 )
 
 internal fun replaceDesktopFileSyncRemoteType(

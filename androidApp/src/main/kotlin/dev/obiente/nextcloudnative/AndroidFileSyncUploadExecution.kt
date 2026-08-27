@@ -124,4 +124,5 @@ internal fun resumeAndroidFileSyncUpload(
     remote = remote.resumableUploadRemote(replacingDirectoryEtag),
     shouldContinue = remote::shouldContinueTransfer,
     contentRevision = exactLocal.revision,
+    contentHash = exactLocal.contentHash,
 )
