@@ -121,6 +121,37 @@ class GroupwareContactsLoadingTest {
     }
 
     @Test
+    fun `server failed multiget falls back to bounded object reads`() = runBlocking {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+        val hrefs = listOf("${addressBookHref}one.vcf", "${addressBookHref}two.vcf")
+        val methods = mutableListOf<String>()
+
+        val contacts = loadGroupwareContactsInBatches(addressBookHref) { request ->
+            methods += request.method
+            when (request.method) {
+                "PROPFIND" -> listingResponse(addressBookHref, hrefs)
+                "REPORT" -> NextcloudApiResponse(
+                    status = 500,
+                    contentType = "application/xml",
+                    etag = null,
+                    body = "<error />".encodeToByteArray(),
+                )
+                "GET" -> NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/vcard",
+                    etag = null,
+                    body = vCard(request.relativePath.substringAfterLast('/').substringBefore('.')).encodeToByteArray(),
+                )
+                else -> error("Unexpected request method ${request.method}.")
+            }
+        }
+
+        assertEquals(listOf("PROPFIND", "REPORT", "GET", "GET"), methods)
+        assertEquals(listOf("one", "two"), contacts.map(GroupwareContact::uid))
+        assertTrue(contacts.all { it.etag == "\"listing-etag\"" })
+    }
+
+    @Test
     fun `retention budget discards raw cards and rejects excess summaries`() {
         val budget = GroupwareContactRetentionBudget(maximumContacts = 2, maximumEstimatedBytes = 16_384L)
         val first = budget.retain(contact("one", rawVCard = "PHOTO:${"A".repeat(8_192)}"))

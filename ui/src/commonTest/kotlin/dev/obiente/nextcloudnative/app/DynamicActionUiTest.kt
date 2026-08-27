@@ -92,6 +92,65 @@ class DynamicActionUiTest {
     }
 
     @Test
+    fun `verified create can target the exact active singleton route across schema resource identities`() {
+        val create = action(
+            "create-team",
+            ActionIntent.create,
+            ActionRisk.mutating,
+            HttpMethod.POST,
+        ).copy(
+            resourceId = "create-team-body",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.POST,
+                path = "/apps/chores/api/v1.0/team",
+                operationId = "create-team",
+                bodyFieldNames = listOf("name"),
+                requiredBodyFieldNames = listOf("name"),
+                bodyContentType = "application/json",
+            ),
+        )
+        val form = view(
+            id = "create-team.form",
+            resourceId = create.resourceId,
+            component = NativeComponent.form,
+            sourceActionId = create.id,
+        ).copy(confidence = Confidence.verified)
+        val read = action(
+            "get-team",
+            ActionIntent.read,
+            ActionRisk.readOnly,
+            HttpMethod.GET,
+        ).copy(
+            resourceId = "team-response",
+            confidence = Confidence.verified,
+            binding = ApiBinding(
+                method = HttpMethod.GET,
+                path = "/apps/chores/api/v1.0/team",
+                operationId = "get-team",
+            ),
+        )
+        val active = view(
+            id = "get-team.detail",
+            resourceId = read.resourceId,
+            component = NativeComponent.detail,
+            sourceActionId = read.id,
+        )
+
+        assertTrue(dynamicRootFormTargetsActiveSurface(create, form, active, read, null))
+        assertFalse(
+            dynamicRootFormTargetsActiveSurface(
+                create.copy(binding = create.binding.copy(path = "/apps/chores/api/v1.0/teams")),
+                form,
+                active,
+                read,
+                null,
+            ),
+        )
+        assertFalse(dynamicRootFormTargetsActiveSurface(create, form, active, read, "trash"))
+    }
+
+    @Test
     fun `verified upload targets only its active read surface with complete bindings`() {
         val upload = action(
             "upload-image",

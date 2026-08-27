@@ -2988,6 +2988,7 @@ private fun AppInfoScreen(
                 session = session,
                 currentUserId = currentUserId,
                 discovery = resolved,
+                advertisedWebHref = app.href,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
                 onRetryDiscovery = ::retryDiscoveryAndServerInfo,
@@ -3028,6 +3029,7 @@ private fun DynamicDiscoveredAppScreen(
     session: NextcloudSession,
     currentUserId: String,
     discovery: DynamicDescriptorDiscovery,
+    advertisedWebHref: String?,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onRetryDiscovery: () -> Unit,
@@ -3035,6 +3037,21 @@ private fun DynamicDiscoveredAppScreen(
     modifier: Modifier = Modifier,
 ) {
     val descriptor = discovery.descriptor
+    val webAppUrl = remember(session.serverUrl, descriptor.app.id, advertisedWebHref) {
+        verifiedEmbeddedWebAppUrl(session.serverUrl, descriptor.app.id, advertisedWebHref)
+    }
+    if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback && webAppUrl != null) {
+        Column(modifier = modifier.fillMaxSize()) {
+            ScreenHeader(descriptor.app.name, null, onExit)
+            PlatformEmbeddedNextcloudWebApp(
+                session = session,
+                initialUrl = webAppUrl,
+                onExit = onExit,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        }
+        return
+    }
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
             .forDynamicContractVersion(discovery.versionStatus)
@@ -4549,8 +4566,18 @@ private fun DynamicDiscoveredAppScreen(
         val planned = buildList {
             addAll(if (selectedRecord == null) {
                 navigationPlan.rootFormActions.filter { action ->
-                    action.resourceId == selectedView.resourceId &&
-                        selectedCollectionState == null
+                    val spec = schema.action(action.actionId)
+                        ?: return@filter false
+                    val formView = schema.views.singleOrNull { candidate ->
+                        candidate.id == action.formId
+                    } ?: return@filter false
+                    dynamicRootFormTargetsActiveSurface(
+                        action = spec,
+                        formView = formView,
+                        activeView = selectedView,
+                        activeReadAction = schema.action(selectedView.sourceActionId),
+                        selectedCollectionState = selectedCollectionState,
+                    )
                 }
             } else {
                 val currentResourceId = selectedRecordResourceId.orEmpty()
@@ -5272,7 +5299,8 @@ private fun DynamicDiscoveredAppScreen(
                 ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
-        val hasHeaderActions = overflowActionViews.isNotEmpty() ||
+        val hasHeaderActions = primaryCreateAction != null ||
+            overflowActionViews.isNotEmpty() ||
             secondaryNavigationDestinations.isNotEmpty()
 
         NextcloudCollectionWorkspaceScaffold(
@@ -5306,64 +5334,17 @@ private fun DynamicDiscoveredAppScreen(
             },
             headerActions = {
                 if (!showContextDestinationMenu && hasHeaderActions) {
-                    Box {
-                        IconButton(onClick = { actionMenuExpanded = true }) {
-                            Icon(NextcloudIcons.More, contentDescription = "More options")
-                        }
-                        DropdownMenu(
-                            expanded = actionMenuExpanded,
-                            onDismissRequest = { actionMenuExpanded = false },
-                        ) {
-                            overflowActionViews.forEach { (action, view) ->
-                                val actionSpec = schema.action(action.actionId)
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            actionSpec?.let { spec ->
-                                                dynamicHeaderActionLabel(
-                                                    spec,
-                                                    view.dynamicActionLabel(),
-                                                )
-                                            } ?: view.dynamicActionLabel(),
-                                        )
-                                    },
-                                    onClick = { selectDynamicAction(action, view) },
-                                )
-                            }
-                            if (
-                                overflowActionViews.isNotEmpty() &&
-                                secondaryNavigationDestinations.isNotEmpty()
-                            ) {
-                                HorizontalDivider()
-                            }
-                            secondaryNavigationDestinations.forEach { (destination, view) ->
-                                val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
-                                val duplicate = secondaryNavigationDestinations.count {
-                                        (candidate, _) ->
-                                    candidate.label.dynamicUiLabel(descriptor.app.name)
-                                        .equals(baseLabel, ignoreCase = true)
-                                } > 1
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            dynamicSecondaryDestinationLabel(
-                                                destinationLabel = baseLabel,
-                                                resourceLabel = schema.resource(view.resourceId)?.name
-                                                    ?: view.resourceId,
-                                                duplicate = duplicate,
-                                            ),
-                                        )
-                                    },
-                                    modifier = Modifier.semantics {
-                                        contentDescription = "Open $baseLabel"
-                                    },
-                                    onClick = {
-                                        selectCollectionDestination(destination, view)
-                                    },
-                                )
-                            }
-                        }
-                    }
+                    DynamicCollectionHeaderActions(
+                        schema = schema,
+                        appName = descriptor.app.name,
+                        primaryAction = primaryCreateAction,
+                        overflowActions = overflowActionViews,
+                        secondaryDestinations = secondaryNavigationDestinations,
+                        menuExpanded = actionMenuExpanded,
+                        onMenuExpandedChange = { actionMenuExpanded = it },
+                        onActionSelected = ::selectDynamicAction,
+                        onDestinationSelected = ::selectCollectionDestination,
+                    )
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -6500,15 +6481,6 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
     return DynamicPaginationState(viewId, this, continuationPageNumber, nextValue)
 }
 
-private fun String.dynamicUiLabel(appName: String): String {
-    val cleaned = removePrefix("API ").removePrefix("Api ").removePrefix("api ").trim()
-    return when {
-        cleaned.equals("general", ignoreCase = true) -> appName
-        cleaned.equals("prefs", ignoreCase = true) -> "Preferences"
-        else -> cleaned
-    }
-}
-
 private fun String.dynamicResourceWords(): Set<String> = lowercase()
     .map { character -> if (character.isLetterOrDigit()) character else ' ' }
     .joinToString("")
@@ -7007,11 +6979,6 @@ private fun ViewSpec.dynamicNavigationLabel(appName: String): String {
         .trim()
     return if (cleaned.equals("general", ignoreCase = true)) appName else cleaned
 }
-
-private fun ViewSpec.dynamicActionLabel(): String = title
-    .replace(Regex("^\\[api\\s+v?[0-9.]+]\\s*", RegexOption.IGNORE_CASE), "")
-    .trim()
-    .replaceFirstChar { character -> character.titlecase() }
 
 private fun ViewSpec.dynamicActionMenuKey(): String = dynamicActionLabel()
     .lowercase()

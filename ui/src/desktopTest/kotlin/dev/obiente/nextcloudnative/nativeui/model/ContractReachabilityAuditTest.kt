@@ -1,8 +1,11 @@
 package dev.obiente.nextcloudnative.nativeui.model
 
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
+import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
+import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
+import java.io.File
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 
@@ -10,7 +13,17 @@ class ContractReachabilityAuditTest {
     @Test
     fun `live signed package reachability audit is sanitized and read only`() {
         if (System.getenv("RUN_LIVE_NEXTCLOUD_REACHABILITY_AUDIT") != "1") return
-        val targets = listOf(
+        val requestedAppIds = System.getenv("NEXTCLOUD_REACHABILITY_APP_IDS")
+            ?.split(',')
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.distinct()
+            ?.takeIf(List<String>::isNotEmpty)
+        require(requestedAppIds.orEmpty().size <= 500) { "The audit app list is outside the limit." }
+        require(requestedAppIds.orEmpty().all { appId -> appId.matches(Regex("^[a-z0-9_]{1,64}$")) }) {
+            "The audit app list contains an invalid app ID."
+        }
+        val targets = requestedAppIds?.map { appId -> appId to null } ?: listOf(
             "deck" to "1.18.2",
             "mail" to "5.10.9",
             "music" to "3.1.1",
@@ -22,12 +35,23 @@ class ContractReachabilityAuditTest {
             "spreed" to null,
             "memories" to null,
         )
-        val acquirer = SignedAppStoreContractAcquirer()
+        val cacheRoot = File(System.getProperty("user.home"), ".cache/nextcloud-native/contracts")
+        val acquirer = SignedAppStoreContractAcquirer(
+            catalogCache = FileAppStoreCatalogCache(File(cacheRoot, "catalogs")),
+            verifiedContractCache = FileVerifiedContractCache(File(cacheRoot, "verified")),
+        )
         targets.forEach { (appId, installedVersion) ->
             val contract = runCatching {
                 acquirer.acquire(ContractAcquisitionRequest(appId, "34.0.1", installedVersion))
             }.getOrElse { failure ->
-                println("reachability-audit app=$appId outcome=error:${failure::class.simpleName}")
+                val reason = failure.message.orEmpty()
+                    .replace(Regex("\\s+"), " ")
+                    .replace(Regex("https?://[^ ]+"), "<url>")
+                    .take(240)
+                println(
+                    "reachability-audit app=$appId outcome=error:${failure::class.simpleName} " +
+                        "reason=$reason",
+                )
                 return@forEach
             }
             if (contract == null) {
@@ -65,22 +89,23 @@ class ContractReachabilityAuditTest {
                     ),
                 )
             }.getOrElse { failure ->
-                println("reachability-audit app=$appId outcome=compile-error:${failure::class.simpleName}")
+                if (System.getenv("NEXTCLOUD_REACHABILITY_FAIL_ON_COMPILE_ERROR") == "1") {
+                    throw failure
+                }
+                val reason = failure.message.orEmpty()
+                    .replace(Regex("\\s+"), " ")
+                    .replace(Regex("https?://[^ ]+"), "<url>")
+                    .take(240)
+                println(
+                    "reachability-audit app=$appId outcome=compile-error:${failure::class.simpleName} " +
+                        "reason=$reason",
+                )
                 return@forEach
             }
             val rootActionIds = descriptor.planDynamicNavigation()
                 .rootDestinations
                 .mapTo(mutableSetOf(), DynamicNavigationDestination::actionId)
-            val linkedActionIds = descriptor.links.mapNotNull { link ->
-                (link.target as? DynamicLinkTarget.Action)?.actionId
-            }.toSet()
-            val surfacedActionIds = descriptor.layouts.mapNotNull(DynamicLayout::sourceActionId).toSet()
-            val stranded = descriptor.actions.filter { action ->
-                action.id in surfacedActionIds &&
-                    action.id !in rootActionIds &&
-                    action.id !in linkedActionIds &&
-                    action.binding.requiredInputNames().isNotEmpty()
-            }
+            val operationAudit = descriptor.auditDynamicOperationSurfaces()
             val embeddedVersions = descriptor.actions.filter { action ->
                 action.binding.pathParameters.any { parameter ->
                     parameter.name.equals("version", true) ||
@@ -93,8 +118,14 @@ class ContractReachabilityAuditTest {
             println(
                 "reachability-audit app=$appId outcome=success kind=${contract.contractKind} " +
                     "actions=${descriptor.actions.size} layouts=${descriptor.layouts.size} " +
-                    "roots=${rootActionIds.size} stranded=${stranded.size} " +
+                    "roots=${rootActionIds.size} unsurfaced=${operationAudit.unsurfacedActionIds.size} " +
                     "version-placeholders=${embeddedVersions.size} duplicates=${duplicates.size}",
+            )
+            println(
+                "reachability-surfaces app=$appId values=" +
+                    DynamicOperationSurface.entries.joinToString(",") { surface ->
+                        "${surface.name}:${operationAudit.counts[surface] ?: 0}"
+                    },
             )
             if (appId == "budget") {
                 println(
@@ -111,10 +142,11 @@ class ContractReachabilityAuditTest {
                             .joinToString(",") { (intent, count) -> "${intent.name}:$count" },
                 )
             }
-            stranded.forEach { action ->
+            operationAudit.unsurfacedActionIds.forEach { actionId ->
+                val action = descriptor.actions.single { candidate -> candidate.id == actionId }
                 println(
-                    "reachability-stranded app=$appId action=${action.id} " +
-                        "inputs=${action.binding.requiredInputNames().sorted().joinToString(",")}",
+                    "reachability-unsurfaced app=$appId action=$actionId " +
+                        "intent=${action.intent} method=${action.binding.method} path=${action.binding.path}",
                 )
             }
             embeddedVersions.forEach { action ->
@@ -126,10 +158,12 @@ class ContractReachabilityAuditTest {
                         "actions=${actions.map(DynamicAction::id).sorted().joinToString(",")}",
                 )
             }
+            if (System.getenv("NEXTCLOUD_REACHABILITY_FAIL_ON_UNSURFACED") == "1") {
+                check(operationAudit.unsurfacedActionIds.isEmpty()) {
+                    "$appId has unsurfaced dynamic operations: " +
+                        operationAudit.unsurfacedActionIds.joinToString(",")
+                }
+            }
         }
     }
 }
-
-private fun DynamicHttpBinding.requiredInputNames(): Set<String> =
-    (pathParameters + queryParameters.filter(HttpParameter::required))
-        .mapTo(linkedSetOf(), HttpParameter::name)

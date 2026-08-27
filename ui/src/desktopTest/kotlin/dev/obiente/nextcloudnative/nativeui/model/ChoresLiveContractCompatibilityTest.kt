@@ -4,7 +4,9 @@ import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
+import dev.obiente.nextcloudnative.app.dynamicRootFormTargetsActiveSurface
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordActions
+import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -148,6 +150,13 @@ class ChoresLiveContractCompatibilityTest {
                 "actionFields=${nativeSchema.actions.single { it.id == createChore.id }.binding.bodyFieldNames}",
         )
         val choreInputs = assertNotNull(createPlan.fields.single().repeatableObjectInput).fields
+        assertEquals(
+            listOf(createPlan.fields.single().id),
+            editableNativeFields(
+                nativeChores,
+                nativeSchema.actions.single { action -> action.id == createChore.id },
+            ).map { field -> field.id },
+        )
         val repeatInput = choreInputs.single { field -> field.id == "repeat" }
         assertEquals("Does not repeat", repeatInput.enumLabels?.get("s:1:-"))
         assertEquals("Every week", repeatInput.enumLabels?.get("w:1"))
@@ -189,6 +198,24 @@ class ChoresLiveContractCompatibilityTest {
         assertTrue(
             root.any { destination -> destination.actionId == teamRead.id },
             "root=${root.map { destination -> destination.actionId }}",
+        )
+        assertTrue(
+            descriptor.planDynamicNavigation().rootFormActions.any { form ->
+                form.actionId == createTeam.id
+            },
+            "root forms=${descriptor.planDynamicNavigation().rootFormActions}",
+        )
+        val teamView = nativeSchema.views.single { view -> view.sourceActionId == teamRead.id }
+        val createTeamView = nativeSchema.views.single { view -> view.sourceActionId == createTeam.id }
+        assertTrue(
+            dynamicRootFormTargetsActiveSurface(
+                action = nativeSchema.actions.single { action -> action.id == createTeam.id },
+                formView = createTeamView,
+                activeView = teamView,
+                activeReadAction = nativeSchema.actions.single { action -> action.id == teamRead.id },
+                selectedCollectionState = null,
+            ),
+            "team view=${teamView.resourceId}; create=${createTeam.resourceId}",
         )
         assertTrue(
             descriptor.planDynamicNavigation().rootFormActions.none { form ->

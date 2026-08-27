@@ -1,0 +1,18 @@
+# app_id             surface  requirement  purpose
+contacts             native   required     CardDAV contacts and groups
+calendar             native   required     CalDAV events
+tasks                native   required     CalDAV tasks
+notes                native   required     Notes API and Markdown editing
+deck                 native   required     Boards stacks and cards
+tables               native   required     Tables columns rows and views
+chores               native   required     Teams members and chores
+cospend              native   required     Projects members and bills
+budget               native   optional     Budgets accounts and transactions
+cookbook             native   required     Recipe collections
+music                native   required     Artists albums playlists and playback
+pantry               native   required     Houses checklists and products
+mail                 native   required     Accounts mailboxes messages and composer
+memories             native   optional     Photo timeline albums and editing handoff
+recognize            native   optional     Face and media recognition APIs
+richdocuments        embedded required     Nextcloud Office integration
+richdocumentscode    embedded optional     Built-in Collabora CODE server

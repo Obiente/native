@@ -80,7 +80,7 @@ internal class ScopedTestWriteAuthorization private constructor(
 
 private fun String.isSafeScopedTestApiPrefix(): Boolean {
     if (
-        !startsWith("/ocs/v2.php/apps/") ||
+        !startsWith('/') ||
         contains('\\') ||
         contains('?') ||
         contains('#') ||
@@ -89,7 +89,18 @@ private fun String.isSafeScopedTestApiPrefix(): Boolean {
         return false
     }
     val segments = split('/').filter(String::isNotEmpty)
-    if (segments.size < 7 || segments.getOrNull(4) != "api") return false
+    val apiSegmentIndex = when {
+        segments.take(3) == listOf("ocs", "v2.php", "apps") -> 4
+        segments.take(2) == listOf("index.php", "apps") -> 3
+        segments.firstOrNull() == "apps" -> 2
+        else -> return false
+    }
+    if (
+        segments.getOrNull(apiSegmentIndex) != "api" ||
+        segments.size < apiSegmentIndex + 3
+    ) {
+        return false
+    }
     return segments.all { segment ->
         segment !in setOf(".", "..") &&
             segment.isNotEmpty() &&

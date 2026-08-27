@@ -374,7 +374,6 @@ fun DynamicAppDescriptor.planDynamicNavigation(
     val navigationLinks = acyclicNavigationLinks(actionsById)
     val rootDestinations = layouts
         .asSequence()
-        .filter(DynamicLayout::isRootNavigationLayout)
         .mapNotNull { layout ->
             val action = layout.sourceActionId?.let(actionsById::get) ?: return@mapNotNull null
             action.takeIf(DynamicAction::isRootReadAction)
@@ -804,24 +803,6 @@ private fun DynamicLayout.isCollectionNavigationLayout(): Boolean = kind == Layo
 private fun DynamicLayout.isContextualNavigationLayout(): Boolean =
     isCollectionNavigationLayout() || kind == LayoutKind.detail
 
-private fun DynamicLayout.isRootNavigationLayout(): Boolean =
-    isCollectionNavigationLayout() || kind == LayoutKind.detail && resourceId.rootSingletonIdentity() in ROOT_SINGLETON_IDENTITIES
-
-private fun String.rootSingletonIdentity(): String = lowercase().filter(Char::isLetterOrDigit)
-
-private val ROOT_SINGLETON_IDENTITIES = setOf(
-    "capabilities",
-    "config",
-    "configuration",
-    "household",
-    "prefs",
-    "preferences",
-    "profile",
-    "settings",
-    "status",
-    "team",
-)
-
 private fun DynamicAction.isCollectionReadAction(): Boolean =
     binding.method == HttpMethod.GET && intent == ActionIntent.list && risk == ActionRisk.readOnly
 
@@ -832,7 +813,8 @@ private fun DynamicAction.isRootReadAction(): Boolean =
     binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&
         risk == ActionRisk.readOnly &&
         !binding.hasUnboundRequiredBodyFields() &&
-        !isInteractiveLookupHelper()
+        !isInteractiveLookupHelper() &&
+        !looksLikeStateChangingGet()
 
 /**
  * Search-as-you-type endpoints are data sources for relation pickers, not standalone app roots.

@@ -311,7 +311,9 @@ class SignedAppStoreContractAcquirer(
                     }
                 }
             } ?: listOfNotNull(acquireCodeloadCandidate(source, release, sourceRoot))
-            selectOpenApiCandidate(contracts)?.let { selected ->
+            selectOpenApiCandidate(contracts, release.appId)
+                ?.withProvenAppServerBase(release.appId)
+                ?.let { selected ->
                 val bundled = bundleGitHubSchemaReferences(sourceRoot, selected)
                 return VerifiedOpenApiContract(
                     appId = release.appId,
@@ -800,7 +802,7 @@ private fun parseGitHubReleaseLocation(
     return GitHubReleaseLocation(GitHubRepository(owner, repository), tag)
 }
 
-private fun compareSemanticVersions(left: String, right: String): Int {
+internal fun compareSemanticVersions(left: String, right: String): Int {
     val leftVersion = parseVersion(left) ?: return left.compareTo(right)
     val rightVersion = parseVersion(right) ?: return left.compareTo(right)
     repeat(maxOf(leftVersion.numeric.size, rightVersion.numeric.size)) { index ->
@@ -911,8 +913,9 @@ private fun extractOpenApiContract(
             }
         }
         .take(MAX_OPEN_API_CANDIDATES)
-    val selected = selectOpenApiCandidate(candidates)?.let { candidate ->
-        VerifiedPackageContract(release.appId, release.version, candidate.path, candidate.document)
+    val selected = selectOpenApiCandidate(candidates, release.appId)?.let { candidate ->
+        val normalized = candidate.withProvenAppServerBase(release.appId)
+        VerifiedPackageContract(release.appId, release.version, normalized.path, normalized.document)
     }
     val verifiedReadRoutes = synthesizeReadOnlyRouteContract(release.appId, release.version, files)
     if (selected != null) {
@@ -925,13 +928,6 @@ private fun extractOpenApiContract(
             "The signed app package does not contain a usable OpenAPI 3 contract or safe static read routes.",
         )
 }
-
-private data class OpenApiCandidate(
-    val path: String,
-    val document: String,
-    val apiVersion: String?,
-    val sourceUrl: String = "",
-)
 
 private fun parseOpenApiCandidate(path: String, bytes: ByteArray): OpenApiCandidate? {
     val document = parseStructuredObject(path, bytes) ?: return null
@@ -995,22 +991,6 @@ private fun resolveJsonPointer(root: JSONObject, pointer: String): Any? {
         if (value == null) return null
     }
     return value
-}
-
-private fun selectOpenApiCandidate(candidates: List<OpenApiCandidate>): OpenApiCandidate? =
-    candidates.sortedWith { left, right ->
-        val preference = openApiPreference(left.path).compareTo(openApiPreference(right.path))
-        if (preference != 0) {
-            preference
-        } else {
-            val version = compareSemanticVersions(right.apiVersion.orEmpty(), left.apiVersion.orEmpty())
-            if (version != 0) version else left.path.compareTo(right.path)
-        }
-    }.firstOrNull()
-
-private fun openApiPreference(path: String): Int {
-    val normalized = path.lowercase()
-    return OPEN_API_FILE_PREFERENCE.indexOf(normalized).takeIf { index -> index >= 0 } ?: Int.MAX_VALUE
 }
 
 internal fun parseYamlObject(source: String): JSONObject? {
@@ -1084,21 +1064,37 @@ private fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
     val selected = linkedMapOf<String, ByteArray>()
     GZIPInputStream(ByteArrayInputStream(archive)).use { input ->
         var totalUncompressed = 0L
+        var pendingLongPath: String? = null
         while (true) {
             val header = input.readExactlyOrNull(TAR_BLOCK_BYTES) ?: break
             if (header.all { byte -> byte == 0.toByte() }) break
             val name = header.tarText(0, 100)
             val prefix = header.tarText(345, 155)
-            val fullName = if (prefix.isBlank()) name else "$prefix/$name"
+            val headerName = if (prefix.isBlank()) name else "$prefix/$name"
             val size = header.tarOctal(124, 12)
             check(size in 0..MAX_TAR_ENTRY_BYTES) { "An app package entry is too large." }
             totalUncompressed += size
             check(totalUncompressed <= MAX_TAR_UNCOMPRESSED_BYTES) { "The app package expands beyond the safety limit." }
             val type = header[156].toInt().toChar()
+            if (type == 'L') {
+                check(size <= MAX_TAR_PATH_BYTES) { "An app package path exceeds the safety limit." }
+                pendingLongPath = decodeTarLongPath(input.readExactly(size.toInt()))
+                val longPathPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
+                input.skipExactly(longPathPadding)
+                continue
+            }
             if (type in TAR_METADATA_TYPES) {
                 input.skipExactly(size)
                 val metadataPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
                 input.skipExactly(metadataPadding)
+                continue
+            }
+            val fullName = pendingLongPath ?: headerName
+            pendingLongPath = null
+            if (isCanonicalTarRootDirectory(fullName, type)) {
+                input.skipExactly(size)
+                val rootPadding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
+                input.skipExactly(rootPadding)
                 continue
             }
             validateArchivePath(fullName)
@@ -1120,6 +1116,7 @@ private fun readSelectedTarFiles(archive: ByteArray): Map<String, ByteArray> {
             val padding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES
             input.skipExactly(padding)
         }
+        check(pendingLongPath == null) { "The app package ends with an incomplete path record." }
     }
     return selected
 }
@@ -1220,16 +1217,10 @@ private const val MAX_EXTERNAL_REFERENCE_DEPTH = 24
 private const val MAX_YAML_ALIASES = 32
 private const val MAX_YAML_DEPTH = 100
 private const val MAX_YAML_NODES = 250_000
-private val OPEN_API_FILE_PREFERENCE = listOf(
-    "openapi.json",
-    "openapi.yaml",
-    "openapi.yml",
-    "openapi-full.json",
-    "openapi-public.json",
-)
 private val OPEN_API_FILE_PATTERN = Regex("(?i)openapi(?:[-_][A-Za-z0-9][A-Za-z0-9._-]*)?\\.(?:json|yaml|yml)")
 private val GITHUB_REPOSITORY_COMPONENT = Regex("[A-Za-z0-9_.-]+")
 private val SAFE_REPOSITORY_PATH_SEGMENT = Regex("[A-Za-z0-9_.-]+")
 private val GITHUB_TAG_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._+-]*")
 private val PRE_RELEASE_MARKERS = listOf("alpha", "beta", "rc", "dev", "nightly")
-private val TAR_METADATA_TYPES = setOf('g', 'x', 'L', 'K')
+private val TAR_METADATA_TYPES = setOf('g', 'x', 'K')
+private const val MAX_TAR_PATH_BYTES = 4_096L

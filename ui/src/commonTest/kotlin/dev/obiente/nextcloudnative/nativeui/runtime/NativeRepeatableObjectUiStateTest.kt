@@ -52,6 +52,27 @@ class NativeRepeatableObjectUiStateTest {
     }
 
     @Test
+    fun `create draft treats a blank scalar placeholder as an absent structured value`() {
+        assertEquals(
+            mapOf(
+                "entries" to listOf(
+                    RepeatableObjectInputRow(mapOf("enabled" to "false")),
+                ),
+            ),
+            initialNativeCreateRepeatableObjectDraft(
+                fields = listOf(field),
+                initialValues = mapOf("entries" to ""),
+            ),
+        )
+        assertNull(
+            initialNativeRepeatableObjectDraft(
+                fields = listOf(field),
+                initialValues = mapOf("entries" to ""),
+            ),
+        )
+    }
+
+    @Test
     fun `add and remove remain inside schema bounds`() {
         val initial = listOf(RepeatableObjectInputRow())
         val two = addNativeRepeatableObjectRow(initial, spec)

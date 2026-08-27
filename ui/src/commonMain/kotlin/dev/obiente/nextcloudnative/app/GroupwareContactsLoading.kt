@@ -120,38 +120,59 @@ private suspend fun loadGroupwareContactBatch(
     addressBookHref: String,
     objects: List<GroupwareAddressBookObject>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareContact> = try {
-    parseGroupwareAddressBookMultiGetResponse(
-        addressBookHref = addressBookHref,
-        requestedHrefs = objects.map(GroupwareAddressBookObject::href),
-        response = execute(
+): List<GroupwareContact> {
+    val response = try {
+        execute(
             groupwareDavAddressBookMultiGetRequest(
                 addressBookHref,
                 objects.map(GroupwareAddressBookObject::href),
             ),
-        ),
-    )
-} catch (failure: NextcloudResponseTooLargeException) {
-    if (failure.responseStatus?.let { it in 200..299 } != true) throw failure
-    if (objects.size == 1) {
-        val objectMetadata = objects.single()
-        val response = execute(groupwareDavDetailRequest(objectMetadata.href))
-        require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
-        listOf(
-            requireNotNull(
-                parseGroupwareContact(
-                    addressBookHref = addressBookHref,
-                    href = objectMetadata.href,
-                    etag = response.etag ?: objectMetadata.etag,
-                    content = response.body.decodeToString(),
-                ),
-            ) { "The selected contact is malformed." },
         )
-    } else {
-        val midpoint = objects.size / 2
-        loadGroupwareContactBatch(addressBookHref, objects.take(midpoint), execute) +
-            loadGroupwareContactBatch(addressBookHref, objects.drop(midpoint), execute)
+    } catch (failure: NextcloudResponseTooLargeException) {
+        if (failure.responseStatus?.let { it in 200..299 } != true) throw failure
+        return loadGroupwareContactBatchWithoutOversizedReport(addressBookHref, objects, execute)
     }
+    if (response.status in 200..299) {
+        return parseGroupwareAddressBookMultiGetResponse(
+            addressBookHref = addressBookHref,
+            requestedHrefs = objects.map(GroupwareAddressBookObject::href),
+            response = response,
+        )
+    }
+    if (response.status in 500..599 || response.status in setOf(405, 501)) {
+        return loadGroupwareContactsIndividually(addressBookHref, objects, execute)
+    }
+    error("Contact loading failed (HTTP ${response.status}).")
+}
+
+private suspend fun loadGroupwareContactBatchWithoutOversizedReport(
+    addressBookHref: String,
+    objects: List<GroupwareAddressBookObject>,
+    execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
+): List<GroupwareContact> {
+    if (objects.size == 1) {
+        return loadGroupwareContactsIndividually(addressBookHref, objects, execute)
+    }
+    val midpoint = objects.size / 2
+    return loadGroupwareContactBatch(addressBookHref, objects.take(midpoint), execute) +
+        loadGroupwareContactBatch(addressBookHref, objects.drop(midpoint), execute)
+}
+
+private suspend fun loadGroupwareContactsIndividually(
+    addressBookHref: String,
+    objects: List<GroupwareAddressBookObject>,
+    execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
+): List<GroupwareContact> = objects.map { objectMetadata ->
+    val response = execute(groupwareDavDetailRequest(objectMetadata.href))
+    require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
+    requireNotNull(
+        parseGroupwareContact(
+            addressBookHref = addressBookHref,
+            href = objectMetadata.href,
+            etag = response.etag ?: objectMetadata.etag,
+            content = response.body.decodeToString(),
+        ),
+    ) { "The selected contact is malformed." }
 }
 
 private fun parseGroupwareAddressBookMultiGetResponse(

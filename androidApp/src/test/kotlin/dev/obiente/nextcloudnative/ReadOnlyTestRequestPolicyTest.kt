@@ -68,12 +68,37 @@ class ReadOnlyTestRequestPolicyTest {
     }
 
     @Test
+    fun `debug write scope recognizes direct and front controller app APIs`() {
+        listOf(
+            "/apps/chores/api/v1.0/team" to
+                "https://cloud.example.test/apps/chores/api/v1.0/team/chores",
+            "/index.php/apps/tables/api/1/rows" to
+                "https://cloud.example.test/index.php/apps/tables/api/1/rows/24",
+        ).forEach { (prefix, requestUrl) ->
+            val scope = assertNotNull(
+                ScopedTestWriteAuthorization.create(
+                    serverUrl = "https://cloud.example.test",
+                    apiPathPrefix = prefix,
+                ),
+                prefix,
+            )
+            assertTrue(scope.allows("POST", requestUrl), requestUrl)
+        }
+    }
+
+    @Test
     fun `debug write scope rejects broad malformed and non app prefixes`() {
         listOf(
             "/ocs/v2.php/apps/example/api",
             "/ocs/v2.php/apps/example/api/houses",
             "/ocs/v2.php/apps/example/api/houses/..",
             "/ocs/v2.php/apps/example/api/houses/1?all=true",
+            "/apps/chores/api",
+            "/apps/chores/api/v1.0",
+            "/apps/chores/not-api/v1.0/team",
+            "/apps/chores/api/v1.0/../team",
+            "/index.php/apps/tables/api/1",
+            "/index.php/apps/tables/api/1/rows?all=true",
             "/remote.php/dav/files/test",
         ).forEach { path ->
             assertNull(ScopedTestWriteAuthorization.create("https://cloud.example.test", path), path)

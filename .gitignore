@@ -17,6 +17,8 @@
 .env
 .env.*
 !.env.example
+/integration/nextcloud-demo/.state/
+/integration/nextcloud-demo/reports/
 *.jks
 *.keystore
 *.p12

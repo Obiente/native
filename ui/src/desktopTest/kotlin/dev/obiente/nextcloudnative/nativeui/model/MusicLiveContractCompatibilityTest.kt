@@ -70,7 +70,7 @@ class MusicLiveContractCompatibilityTest {
         }
         val settingForms = descriptor.forms.filter { it.resourceId == "settings" }
         assertEquals(
-            setOf("excludedPaths", "ignoredArticles", "path", "scanMetadata"),
+            setOf("path", "scanMetadata"),
             settingForms.flatMap { form -> form.fields.map { it.fieldId } }.toSet(),
         )
         assertTrue(settingForms.all { form ->

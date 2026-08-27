@@ -786,8 +786,8 @@ private fun JsonArray.parseDashboardItemList(widgetId: String): List<NativeDashb
             title = item.requiredDashboardText("title", MAX_DASHBOARD_TEXT_LENGTH),
             subtitle = item.optionalDashboardText("subtitle", MAX_DASHBOARD_TEXT_LENGTH),
             link = item.optionalDashboardLink("link"),
-            iconUrl = item.optionalDashboardLink("iconUrl"),
-            overlayIconUrl = item.optionalDashboardLink("overlayIconUrl"),
+            iconUrl = item.optionalDashboardIconLink("iconUrl"),
+            overlayIconUrl = item.optionalDashboardIconLink("overlayIconUrl"),
             sinceId = item.requiredDashboardText("sinceId", MAX_DASHBOARD_CURSOR_LENGTH),
         )
     }
@@ -849,6 +849,9 @@ private fun JsonObject.optionalDashboardLink(name: String): String? {
     require(value.isSafeDashboardLink()) { "The dashboard $name is unsafe." }
     return value
 }
+
+private fun JsonObject.optionalDashboardIconLink(name: String): String? =
+    optionalDashboardText(name, MAX_DASHBOARD_LINK_LENGTH)?.takeIf(String::isSafeDashboardLink)
 
 private fun String.isSafeDashboardLink(): Boolean {
     if (any { it.isISOControl() || it.isWhitespace() } || '\\' in this || startsWith("//")) return false

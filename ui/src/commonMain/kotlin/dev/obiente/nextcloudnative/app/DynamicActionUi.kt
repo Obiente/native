@@ -68,6 +68,40 @@ internal fun dynamicActionUiMode(
 }
 
 /**
+ * Places a planner-issued root form on its active native read surface.
+ *
+ * Most contracts give the read and create operations the same resource identity. Some generators
+ * derive different identities from their response and request schemas even though GET and POST
+ * use one exact singleton route. Accept that narrow case only when both operations and the form
+ * retain verified contract evidence.
+ */
+internal fun dynamicRootFormTargetsActiveSurface(
+    action: ActionSpec,
+    formView: ViewSpec,
+    activeView: ViewSpec,
+    activeReadAction: ActionSpec?,
+    selectedCollectionState: String?,
+): Boolean {
+    if (selectedCollectionState != null) return false
+    if (action.resourceId.sameDynamicResourceAs(activeView.resourceId)) return true
+    if (
+        action.intent != ActionIntent.create ||
+        formView.resourceId != action.resourceId ||
+        !formView.hasVerifiedNativeContractEvidence() ||
+        !action.hasVerifiedNativeContractEvidence()
+    ) {
+        return false
+    }
+    val verifiedActiveRead = activeReadAction?.takeIf { read ->
+        read.id == activeView.sourceActionId &&
+            read.binding.method == HttpMethod.GET &&
+            read.risk == ActionRisk.readOnly &&
+            read.hasVerifiedNativeContractEvidence()
+    } ?: return false
+    return verifiedActiveRead.binding.isExactNativeSingletonRoute(action.binding)
+}
+
+/**
  * Places only planner-issued contextual forms on the active native surface.
  *
  * Ordinary updates and deletes still require the selected-record path. The two cross-resource

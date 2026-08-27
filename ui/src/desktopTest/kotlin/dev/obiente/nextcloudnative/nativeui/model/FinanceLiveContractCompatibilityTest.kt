@@ -38,8 +38,8 @@ class FinanceLiveContractCompatibilityTest {
             descriptor.actions.single { it.id == destination.actionId }.binding.path
         }
 
-        assertTrue(childPaths.any { it.endsWith("/projects/{id}/bills") })
-        assertTrue(childPaths.any { it.endsWith("/projects/{id}/members") })
+        assertTrue(childPaths.any { it.endsWith("/projects/{projectId}/bills") })
+        assertTrue(childPaths.any { it.endsWith("/projects/{projectId}/members") })
         assertFalse(projectPlan.contextualChildDestinations.any { it.resourceId == root.resourceId })
         assertTrue(projectPlan.contextualChildDestinations.all {
             "project-7" in it.pathParameterValues.values

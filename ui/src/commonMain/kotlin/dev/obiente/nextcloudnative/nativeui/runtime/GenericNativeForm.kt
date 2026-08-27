@@ -44,6 +44,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
@@ -174,7 +175,32 @@ internal fun GenericNativeForm(
         editableFields = fields,
         autoBoundValues = autoBoundValues,
     )
-    val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty()
+    val structuredSpecs = remember(fields) {
+        fields.mapNotNull { field ->
+            field.repeatableObjectInput?.let { spec -> field.id to spec }
+        }.toMap()
+    }
+    val initialStructuredDraft = remember(fields, initialDraft.values) {
+        if (action.intent == ActionIntent.create) {
+            initialNativeCreateRepeatableObjectDraft(fields, initialDraft.values)
+        } else {
+            initialNativeRepeatableObjectDraft(fields, initialDraft.values)
+        }
+    }
+    val emptyStructuredDraft = remember(fields, structuredSpecs) {
+        requireNotNull(initialNativeRepeatableObjectDraft(fields, emptyMap()))
+    }
+    var repeatableObjectValues by remember(
+        formSchema,
+        view,
+        formResource,
+        initialRecord,
+        initialStructuredDraft,
+    ) {
+        mutableStateOf(initialStructuredDraft ?: emptyStructuredDraft)
+    }
+    val structuredDraftSafe = initialStructuredDraft != null
+    val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty() || !structuredDraftSafe
     val settingsWrite = action.isSettingsWrite(resource)
     val hasChanges = draft.hasChangesFrom(initialDraft)
     val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
@@ -253,6 +279,20 @@ internal fun GenericNativeForm(
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
                         fields.forEach { field ->
+                            val repeatableSpec = field.repeatableObjectInput
+                            if (repeatableSpec != null) {
+                                GenericRepeatableObjectField(
+                                    field = field,
+                                    spec = repeatableSpec,
+                                    rows = repeatableObjectValues[field.id].orEmpty(),
+                                    enabled = !submissionBlocked && structuredDraftSafe,
+                                    onRowsChange = { rows ->
+                                        coordinator.clearStatus()
+                                        repeatableObjectValues = repeatableObjectValues + (field.id to rows)
+                                    },
+                                )
+                                return@forEach
+                            }
                             val relationOptions =
                                 nativeRelationOptions(field, formResource, schema, datasetContext)
                             if (nativeRelationFieldRequiresChoice(field, formResource, schema, datasetContext)) {
@@ -379,8 +419,11 @@ internal fun GenericNativeForm(
                             (!settingsWrite || hasChanges),
                     onClick = {
                         scope.launch {
+                            val structuredValues = repeatableObjectValues.mapValues { (fieldId, rows) ->
+                                structuredSpecs.getValue(fieldId).encode(rows)
+                            }
                             coordinator.submit(
-                                values = draft.values,
+                                values = (draft.values - structuredSpecs.keys) + structuredValues,
                                 reconciliationGeneration = mutationReconciliationGeneration,
                             )
                         }

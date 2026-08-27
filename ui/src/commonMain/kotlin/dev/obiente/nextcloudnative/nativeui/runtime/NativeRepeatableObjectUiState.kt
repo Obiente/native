@@ -24,6 +24,21 @@ internal fun initialNativeRepeatableObjectDraft(
     }
 }
 
+internal fun initialNativeCreateRepeatableObjectDraft(
+    fields: List<FieldSpec>,
+    initialValues: Map<String, String>,
+): Map<String, List<RepeatableObjectInputRow>>? {
+    val repeatableFieldIds = fields
+        .filter { field -> field.repeatableObjectInput != null }
+        .mapTo(hashSetOf(), FieldSpec::id)
+    return initialNativeRepeatableObjectDraft(
+        fields = fields,
+        initialValues = initialValues.filterNot { (fieldId, value) ->
+            fieldId in repeatableFieldIds && value.isBlank()
+        },
+    )
+}
+
 internal fun addNativeRepeatableObjectRow(
     rows: List<RepeatableObjectInputRow>,
     spec: RepeatableObjectInputSpec,

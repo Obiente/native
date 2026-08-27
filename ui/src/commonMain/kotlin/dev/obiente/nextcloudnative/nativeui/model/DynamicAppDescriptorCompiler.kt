@@ -183,7 +183,7 @@ class DynamicAppDescriptorCompiler {
             )
         }
         val inferredReadRouteResourceIdentities = paths.entries.mapNotNull { (openApiPath, itemElement) ->
-            val path = combinePaths(serverBase, openApiPath)
+            val path = resolveOpenApiPath(serverBase, openApiPath, input.endpointPolicy)
             val pathItem = itemElement as? JsonObject ?: return@mapNotNull null
             state.routeResourceIdentity(path, pathItem)?.let { identity -> path to identity }
         }.toMap()
@@ -202,7 +202,7 @@ class DynamicAppDescriptorCompiler {
             require(openApiPath.startsWith('/') && !openApiPath.startsWith("//")) {
                 "Invalid OpenAPI path: $openApiPath"
             }
-            val path = combinePaths(serverBase, openApiPath)
+            val path = resolveOpenApiPath(serverBase, openApiPath, input.endpointPolicy)
             require(path.isApproved(input.endpointPolicy)) { "Unapproved OpenAPI path: $path" }
             val pathItem = itemElement as? JsonObject ?: return@forEach
             val inheritedParameters = pathItem["parameters"] as? JsonArray
@@ -1855,7 +1855,7 @@ private data class NormalizedOpenApiServer(
     val original: String,
 )
 
-private fun openApiServerBase(
+internal fun openApiServerBase(
     document: JsonObject,
     origin: String,
     allowTrustedRebase: Boolean,
@@ -1867,11 +1867,11 @@ private fun openApiServerBase(
     if (servers.isEmpty()) return ""
     if (servers.size == 1) {
         val value = servers.single()
-        require(!value.contains('{') && !value.contains('?') && !value.contains('#')) {
+        require(!value.contains('?') && !value.contains('#')) {
             "Templated or qualified OpenAPI server URL is unsupported: $value"
         }
         return normalizeOpenApiServer(value, origin).also { normalized ->
-            require(!normalized.requiresTrustedRebase) { "Cross-origin OpenAPI server: $value" }
+            require(!normalized.requiresTrustedRebase || allowTrustedRebase) { "Cross-origin OpenAPI server: $value" }
         }.pathBase
     }
 
@@ -1916,12 +1916,6 @@ private fun normalizeOpenApiServer(value: String, origin: String): NormalizedOpe
         declaredOrigin.trimEnd('/').equals(origin.trimEnd('/'), ignoreCase = true)
     return NormalizedOpenApiServer(path.trimEnd('/'), !sameOrigin, value)
 }
-
-private fun combinePaths(base: String, path: String): String =
-    "${base.trimEnd('/')}/${path.trimStart('/')}"
-
-private fun String.isApproved(policy: EndpointPolicy): Boolean =
-    isSafeRelativePath() && policy.approvedApiPrefixes.any(::matchesPrefix)
 
 private fun String.isSameOriginDocument(origin: String): Boolean = when {
     startsWith('/') -> !startsWith("//") && !contains('\\')
