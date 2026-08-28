@@ -488,17 +488,26 @@ internal class DesktopFileSyncRemoteTree(
         var documents = rawListDirectory(path)
         var recovered = false
         val documentsByPath = documents.associateBy { document -> document.entry.relativePath }
-        desktopOwnedBackupRecoveryPlan(
+        val legacyRecoveries = desktopLegacyBackupRecoveryPlan(
+            documentsByPath.keys,
+            MAX_RECOVERY_ITEMS,
+        )
+        val ownedRecoveries = desktopOwnedBackupRecoveryPlan(
             documentsByPath.keys,
             ownedDestinationPaths,
-            MAX_RECOVERY_ITEMS,
-        ).forEach { (source, destination) ->
-            val uploadId = requireNotNull(
-                jvmOwnedReplacementBackupDestination(source, ownedDestinationPaths),
-            ).second
-            val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[uploadId])
+            MAX_RECOVERY_ITEMS - legacyRecoveries.size,
+        )
+        val recoveries = legacyRecoveries + ownedRecoveries
+        require(recoveries.map { it.second }.distinct().size == recoveries.size) {
+            "A Nextcloud folder contains duplicate replacement recoveries."
+        }
+        recoveries.forEach { (source, destination) ->
             val backup = requireNotNull(documentsByPath[source])
-            require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
+            val uploadId = jvmOwnedReplacementBackupDestination(source, ownedDestinationPaths)?.second
+            uploadId?.let {
+                val expectedBackupEtag = requireNotNull(ownedReplacementBackupEtags[it])
+                require(backup.entry.etag == expectedBackupEtag) { "The owned replacement backup changed." }
+            }
             val recoveredRelativePath = toRelativePath(destination)
             moveRemoteDocument(
                 backup,

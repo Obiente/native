@@ -15,7 +15,9 @@ internal fun AndroidFileSyncRemoteTree.reconcilePublishedReplacement(
     val destination = resolvePhysical(relativePath) ?: return null
     if (destination.isDirectory) return null
     if (expectedSizeBytes == null || expectedContentHash == null) return false
-    if (destination.entry.size != expectedSizeBytes) return false
+    if (destination.entry.size != expectedSizeBytes) {
+        return discardReplacementBackup(relativePath, uploadId, assembledStageEtag = null)
+    }
     if (
         !verifyContentHash(
             relativePath,
@@ -25,7 +27,7 @@ internal fun AndroidFileSyncRemoteTree.reconcilePublishedReplacement(
             expectedSizeBytes.coerceAtLeast(1L),
         )
     ) {
-        return false
+        return discardReplacementBackup(relativePath, uploadId, assembledStageEtag = null)
     }
     val after = requireNotNull(resolvePhysical(relativePath)) {
         "The published server file disappeared during recovery."

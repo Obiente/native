@@ -1,7 +1,36 @@
 package dev.obiente.nextcloudnative.app
 
+import java.util.UUID
+
 internal fun isDesktopOwnedUploadStage(relativePath: String): Boolean =
     isJvmOwnedUploadStagePath(relativePath)
+
+internal fun desktopLegacyReplacementBackupDestination(relativePath: String): String? {
+    val name = relativePath.substringAfterLast('/')
+    val markerIndex = name.lastIndexOf(LEGACY_DESKTOP_REPLACEMENT_BACKUP_MARKER)
+    if (!name.startsWith('.') || markerIndex <= 1) return null
+    val token = name.substring(markerIndex + LEGACY_DESKTOP_REPLACEMENT_BACKUP_MARKER.length)
+    if (runCatching { UUID.fromString(token) }.isFailure) return null
+    val destinationName = name.substring(1, markerIndex)
+    if (destinationName.isBlank()) return null
+    val parent = relativePath.substringBeforeLast('/', "")
+    return listOf(parent, destinationName).filter(String::isNotBlank).joinToString("/")
+}
+
+internal fun desktopLegacyBackupRecoveryPlan(
+    relativePaths: Collection<String>,
+    maximumRecoveryItems: Int,
+): List<Pair<String, String>> {
+    require(maximumRecoveryItems >= 0)
+    val listedPaths = relativePaths.toHashSet()
+    val recoveries = relativePaths.mapNotNull { source ->
+        desktopLegacyReplacementBackupDestination(source)?.let { destination -> source to destination }
+    }.filterNot { (_, destination) -> destination in listedPaths }
+    require(recoveries.size <= maximumRecoveryItems) {
+        "A Nextcloud folder contains too many legacy recovery items."
+    }
+    return recoveries
+}
 
 internal fun desktopOwnedBackupRecoveryPlan(
     relativePaths: Collection<String>,
@@ -55,3 +84,5 @@ internal fun projectDesktopOwnedReplacementBackups(
         projected?.copy(entry = projected.entry.copy(relativePath = document.entry.relativePath)) ?: document
     }
 }
+
+private const val LEGACY_DESKTOP_REPLACEMENT_BACKUP_MARKER = ".nextcloud-native-backup-"

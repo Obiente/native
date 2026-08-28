@@ -799,6 +799,7 @@ class FileSyncCoordinatorTest {
         assertEquals(null, replanned.uploadCheckpoint)
         assertEquals("concurrent-etag", (replanned.operation as FileSyncOperation.Upload).expectedRemoteEtag)
         assertEquals(checkpoint.uploadId, coordinator.pair().pendingUploadCleanups.single().uploadId)
+        assertNull(claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 40L).command)
     }
 
     @Test

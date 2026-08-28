@@ -93,6 +93,65 @@ class AndroidFileSyncReplacementOwnershipTest {
     }
 
     @Test
+    fun `definitive published mismatch preserves the protected directory as a conflict`() {
+        MockWebServer().use { server ->
+            server.start()
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            val listing = """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
+                    <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+                      <d:getetag>concurrent-etag</d:getetag><d:getcontentlength>5</d:getcontentlength>
+                      <d:resourcetype/>
+                    </d:prop></d:propstat>
+                  </d:response>
+                  <d:response>
+                    <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
+                    <d:propstat><d:prop>
+                      <d:displayname>.nextcloud-native-backup-$uploadId</d:displayname>
+                      <d:getetag>directory-etag</d:getetag>
+                      <d:resourcetype><d:collection/></d:resourcetype>
+                    </d:prop></d:propstat>
+                  </d:response>
+                </d:multistatus>
+            """.trimIndent()
+            repeat(5) {
+                server.enqueue(
+                    MockResponse.Builder().code(207).addHeader("Content-Type", "application/xml")
+                        .body(listing).build(),
+                )
+            }
+            server.enqueue(MockResponse.Builder().code(201).build())
+            val tree = AndroidFileSyncRemoteTree(
+                NextcloudSession(server.url("/").toString().trimEnd('/'), "alice", "app-password"),
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+                ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+                ownedReplacementBackupEtags = mapOf(uploadId to "directory-etag"),
+            )
+
+            val reconciled = tree.reconcilePublishedReplacement(
+                relativePath = "archive.bin",
+                uploadId = uploadId,
+                expectedSizeBytes = 4,
+                expectedContentHash = "sha256:" + "55".repeat(32),
+                expectedBackupEtag = "directory-etag",
+            )
+
+            assertEquals(true, reconciled)
+            val requests = List(server.requestCount) { server.takeRequest() }
+            val move = requests.single { it.method == "MOVE" }
+            assertTrue(move.url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId"))
+            assertTrue(
+                move.headers["Destination"].orEmpty().endsWith(".nextcloud-native-conflict-$uploadId"),
+            )
+            assertTrue(requests.none { it.method == "GET" || it.method == "DELETE" })
+        }
+    }
+
+    @Test
     fun `pair removal remote retains replacement backup ownership`() {
         MockWebServer().use { server ->
             server.start()

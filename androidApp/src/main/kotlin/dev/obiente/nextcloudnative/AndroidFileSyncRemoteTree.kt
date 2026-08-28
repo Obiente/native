@@ -698,7 +698,7 @@ internal class AndroidFileSyncRemoteTree(
         }
     }
 
-    private fun discardReplacementBackup(
+    internal fun discardReplacementBackup(
         relativePath: String,
         uploadId: String,
         assembledStageEtag: String?,
