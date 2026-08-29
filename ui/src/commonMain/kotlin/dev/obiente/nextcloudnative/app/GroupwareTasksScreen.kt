@@ -532,7 +532,7 @@ fun NativeGroupwareTasksScreen(
 
     deleting?.takeIf { task ->
         selectedTaskDeleteSafe &&
-            ready?.calendars?.any { calendar -> calendar.href == task.calendarHref && calendar.writable } == true
+            ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
     }?.let { task ->
         AlertDialog(
             onDismissRequest = { if (!interactionBlocked) deleting = null },

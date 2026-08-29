@@ -205,9 +205,18 @@ class GroupwareTasksDavTest {
         assertTrue(postcondition.isSatisfiedBy(response))
         assertEquals(TaskRecoveryVerification.Applied, postcondition.verify(response))
         assertFalse(postcondition.isSatisfiedBy(response.copy(status = 404)))
+        val unchangedResponse = response.copy(
+            etag = "\"one\"",
+            body = createGroupwareTaskContent(
+                uid = "task-1",
+                title = "Previous task",
+                dueDate = null,
+                completed = false,
+            ).encodeToByteArray(),
+        )
         assertEquals(
             TaskRecoveryVerification.Unapplied,
-            postcondition.verify(response.copy(etag = "\"one\"")),
+            postcondition.verify(unchangedResponse),
         )
         assertEquals(
             TaskRecoveryVerification.Unapplied,
