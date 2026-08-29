@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -418,13 +420,13 @@ fun NativeGroupwareTasksScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable && selectedTaskDeleteSafe,
+                    enabled = !interactionBlocked && selectedTaskWritable,
                     onClick = { editing = true },
                 ) { Text("Edit") }
             },
             dismissButton = {
                 TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable,
+                    enabled = !interactionBlocked && selectedTaskWritable && selectedTaskDeleteSafe,
                     onClick = { deleting = task },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
@@ -671,7 +673,10 @@ private fun TaskEditorDialog(
                 }
                 if (calendars.size > 1) item {
                     Text("Task list", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                    ) {
                         calendars.forEach { candidate ->
                             FilterChip(
                                 selected = candidate.href == calendar?.href,

@@ -160,6 +160,35 @@ class GroupwareTasksDavTest {
     }
 
     @Test
+    fun `task edits preserve nested alarm properties`() {
+        val href = "/remote.php/dav/calendars/person/tasks/alarm.ics"
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val original = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            UID:alarm
+            BEGIN:VALARM
+            ACTION:DISPLAY
+            DESCRIPTION:Reminder text
+            SUMMARY:Reminder title
+            TRIGGER:-PT15M
+            END:VALARM
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+        val task = requireNotNull(parseGroupwareTask(calendarHref, href, "\"one\"", original))
+
+        assertEquals("Untitled task", task.title)
+        assertNull(task.description)
+        val updated = updateGroupwareTaskContent(task, "Task title", null, false, null)
+
+        assertTrue("DESCRIPTION:Reminder text" in updated)
+        assertTrue("SUMMARY:Reminder title" in updated)
+        assertEquals("Task title", parseGroupwareTask(calendarHref, href, "\"two\"", updated)?.title)
+    }
+
+    @Test
     fun `task due dates reject impossible Gregorian dates`() {
         assertTrue(isValidGroupwareTaskDueDate("20240229"))
         assertFalse(isValidGroupwareTaskDueDate("20230229"))

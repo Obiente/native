@@ -176,6 +176,34 @@ class NativeRepeatableObjectUiStateTest {
     }
 
     @Test
+    fun `initial rows discard only contract proven read only members`() {
+        val writableSpec = spec.copy(observedReadOnlyFieldIds = setOf("serverId"))
+        val writableField = field.copy(repeatableObjectInput = writableSpec)
+
+        assertEquals(
+            listOf(
+                RepeatableObjectInputRow(
+                    mapOf("label" to "Milk", "enabled" to "true"),
+                ),
+            ),
+            initialNativeRepeatableObjectDraft(
+                fields = listOf(writableField),
+                initialValues = mapOf(
+                    "entries" to """[{"serverId":"42","label":"Milk","enabled":true}]""",
+                ),
+            )?.get("entries"),
+        )
+        assertNull(
+            initialNativeRepeatableObjectDraft(
+                fields = listOf(writableField),
+                initialValues = mapOf(
+                    "entries" to """[{"unknown":"unsafe","label":"Milk","enabled":true}]""",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `structured draft saver preserves incomplete required rows`() {
         val values = mapOf(
             "entries" to listOf(

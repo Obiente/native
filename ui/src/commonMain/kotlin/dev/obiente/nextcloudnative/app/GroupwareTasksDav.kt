@@ -46,14 +46,25 @@ internal fun parseGroupwareTasksFromContent(
     etag: String?,
     content: String,
 ): List<GroupwareTask> = content.unfoldCalendarLines().calendarComponentLines("VTODO").mapNotNull { lines ->
-    fun property(name: String): CalendarProperty? = lines.firstNotNullOfOrNull { line ->
-        val separator = line.indexOf(':')
-        if (separator <= 0) return@firstNotNullOfOrNull null
-        val declaration = line.substring(0, separator)
-        if (!declaration.substringBefore(';').equals(name, ignoreCase = true)) {
-            return@firstNotNullOfOrNull null
+    fun property(name: String): CalendarProperty? {
+        var nestedDepth = 0
+        lines.forEach { line ->
+            when {
+                line.startsWith("BEGIN:", ignoreCase = true) -> nestedDepth += 1
+                line.startsWith("END:", ignoreCase = true) -> nestedDepth = maxOf(0, nestedDepth - 1)
+                nestedDepth != 0 -> Unit
+                else -> {
+                    val separator = line.indexOf(':')
+                    if (separator <= 0) return@forEach
+                    val declaration = line.substring(0, separator)
+                    if (!declaration.substringBefore(';').equals(name, ignoreCase = true)) {
+                        return@forEach
+                    }
+                    return CalendarProperty(declaration, line.substring(separator + 1))
+                }
+            }
         }
-        CalendarProperty(declaration, line.substring(separator + 1))
+        return null
     }
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
@@ -143,9 +154,7 @@ fun updateGroupwareTaskContent(
         replacements["DUE"] = due?.let { "DUE;VALUE=DATE:$it" }
     }
     replacements.forEach { (name, replacement) ->
-        val index = (taskStart + 1 until taskEnd).firstOrNull { lineIndex ->
-            original[lineIndex].substringBefore(':').substringBefore(';').equals(name, true)
-        }
+        val index = original.directCalendarPropertyIndex(taskStart, taskEnd, name)
         when {
             index != null && replacement != null -> original[index] = replacement
             index != null -> {

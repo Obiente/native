@@ -978,9 +978,7 @@ fun updateGroupwareCalendarEventContent(
         "RRULE" to recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { "RRULE:$it" },
     )
     replacements.forEach { (name, replacement) ->
-        val index = (eventStart + 1 until eventEnd).firstOrNull { lineIndex ->
-            original[lineIndex].substringBefore(':').substringBefore(';').equals(name, ignoreCase = true)
-        }
+        val index = original.directCalendarPropertyIndex(eventStart, eventEnd, name)
         when {
             index != null && replacement != null -> original[index] = replacement
             index != null -> {
@@ -994,30 +992,6 @@ fun updateGroupwareCalendarEventContent(
         }
     }
     return original.joinToString("\r\n", postfix = "\r\n")
-}
-
-internal fun List<String>.calendarComponentRanges(componentName: String): List<IntRange> {
-    val result = mutableListOf<IntRange>()
-    var start = -1
-    forEachIndexed { index, line ->
-        when {
-            line.equals("BEGIN:$componentName", ignoreCase = true) -> start = index
-            line.equals("END:$componentName", ignoreCase = true) && start >= 0 -> {
-                result += start..index
-                start = -1
-            }
-        }
-    }
-    return result
-}
-
-internal fun List<String>.calendarPropertyValue(name: String): String? = firstNotNullOfOrNull { line ->
-    val separator = line.indexOf(':')
-    if (separator <= 0 || !line.substring(0, separator).substringBefore(';').equals(name, ignoreCase = true)) {
-        null
-    } else {
-        line.substring(separator + 1).trim().takeIf(String::isNotBlank)
-    }
 }
 
 private fun requireValidCalendarRecurrenceRule(value: String) {

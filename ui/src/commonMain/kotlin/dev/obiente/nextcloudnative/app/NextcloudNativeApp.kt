@@ -1438,6 +1438,9 @@ private fun AuthenticatedApp(
         val reviewResult = runCatching {
             services.inspectServerCertificateFailure(session.serverUrl, failure)
         }
+        reviewResult.exceptionOrNull()?.let { inspectionFailure ->
+            if (inspectionFailure is CancellationException) throw inspectionFailure
+        }
         val review = reviewResult.getOrNull()
         if (review != null) {
             certificateReview = review
