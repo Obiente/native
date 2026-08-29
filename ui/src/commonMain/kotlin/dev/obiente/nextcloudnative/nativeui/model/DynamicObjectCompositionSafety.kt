@@ -18,14 +18,15 @@ private val UNSUPPORTED_FLATTENED_OBJECT_CONSTRAINTS = setOf(
     "unevaluatedProperties",
 )
 
-internal fun JsonObject.provesClosedFlattenedObjectShape(
+internal fun JsonObject.isSafeToFlattenObjectShape(
     properties: JsonObject?,
     requiredProperties: List<String>,
+    allowImplicitlyOpen: Boolean,
 ): Boolean {
     if (keys.any(UNSUPPORTED_FLATTENED_OBJECT_CONSTRAINTS::contains)) return false
     val additionalProperties = get("additionalProperties")
     if (additionalProperties != null) {
         return (additionalProperties as? JsonPrimitive)?.booleanOrNull == false
     }
-    return properties == null && requiredProperties.isEmpty()
+    return allowImplicitlyOpen || properties == null && requiredProperties.isEmpty()
 }

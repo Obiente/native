@@ -1360,7 +1360,9 @@ private class KotlinCompilerState(
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
         val normalizedObjectSchema = if (jsonBody) {
-            declaredSchema.flattenDynamicObjectComposition()
+            declaredSchema.flattenDynamicObjectComposition(
+                allowImplicitlyOpenFragments = cookbookRecipeWriteOperationId(operation) != null,
+            )
                 ?.withCookbookRecipeWriteCompatibility(operation)
                 ?: return null
         } else {
@@ -1383,14 +1385,17 @@ private class KotlinCompilerState(
         )
     }
 
-    private fun JsonElement.flattenDynamicObjectComposition(depth: Int = 0): JsonObject? {
+    private fun JsonElement.flattenDynamicObjectComposition(
+        allowImplicitlyOpenFragments: Boolean,
+        depth: Int = 0,
+    ): JsonObject? {
         require(depth <= 24) { "OpenAPI object composition depth exceeded" }
         val resolved = resolveLocal(this) as? JsonObject ?: return null
         val allOf = resolved["allOf"] as? JsonArray ?: return resolved
         if (allOf.isEmpty()) return null
 
         val fragments = allOf.map { member ->
-            member.flattenDynamicObjectComposition(depth + 1) ?: return null
+            member.flattenDynamicObjectComposition(allowImplicitlyOpenFragments, depth + 1) ?: return null
         }
         val mergedProperties = linkedMapOf<String, JsonElement>()
         val required = linkedSetOf<String>()
@@ -1399,7 +1404,9 @@ private class KotlinCompilerState(
             val properties = fragment.objectValue("properties")
             val requiredProperties = fragment.stringArray("required").orEmpty()
             if (type != null && type != "object") return null
-            if (!fragment.provesClosedFlattenedObjectShape(properties, requiredProperties)) return null
+            if (!fragment.isSafeToFlattenObjectShape(properties, requiredProperties, allowImplicitlyOpenFragments)) {
+                return null
+            }
             properties.orEmpty().forEach { (id, field) ->
                 val existing = mergedProperties[id]
                 if (existing != null && resolveFieldSchema(existing) != resolveFieldSchema(field)) return null
@@ -1421,14 +1428,7 @@ private class KotlinCompilerState(
     }
 
     private fun JsonObject.withCookbookRecipeWriteCompatibility(operation: JsonObject): JsonObject {
-        val operationId = operation.string("operationId")?.stableId() ?: return this
-        if (
-            input.app.id != "cookbook" || input.app.version !in setOf("0.11.9", "0.11.10") ||
-            source.kind != ProvenanceKind.appStoreLinkedSourceTag ||
-            operationId !in setOf("newrecipe", "updaterecipe")
-        ) {
-            return this
-        }
+        val operationId = cookbookRecipeWriteOperationId(operation) ?: return this
         val properties = objectValue("properties") ?: return this
         if (!setOf("id", "name", "recipeIngredient", "recipeInstructions", "tool").all(properties::containsKey)) {
             return this
@@ -1467,6 +1467,17 @@ private class KotlinCompilerState(
                 )) +
                 ("additionalProperties" to JsonPrimitive(false)),
         )
+    }
+
+    private fun cookbookRecipeWriteOperationId(operation: JsonObject): String? {
+        if (
+            input.app.id != "cookbook" || input.app.version !in setOf("0.11.9", "0.11.10") ||
+            source.kind != ProvenanceKind.appStoreLinkedSourceTag
+        ) {
+            return null
+        }
+        return operation.string("operationId")?.stableId()
+            ?.takeIf { operationId -> operationId in setOf("newrecipe", "updaterecipe") }
     }
 
     private fun JsonElement.hasUnnormalizableReadOnlyRepeatableObjectProperty(): Boolean {
