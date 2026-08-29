@@ -97,7 +97,7 @@ internal fun TaskEditorDialog(
             ),
         )
     }
-    val calendar = calendars.firstOrNull { it.href == editorState.calendarHref } ?: calendars.firstOrNull()
+    val calendar = selectedGroupwareTaskCalendar(calendars, editorState.calendarHref)
     val dateValid = editorState.dueDate.isBlank() ||
         editorState.dueDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) &&
         isValidGroupwareTaskDueDate(editorState.dueDate.replace("-", ""))
@@ -146,8 +146,14 @@ internal fun TaskEditorDialog(
                         Text("Completed")
                     }
                 }
-                if (calendars.size > 1) item {
+                if (calendars.size > 1 || calendar == null) item {
                     Text("Task list", style = MaterialTheme.typography.labelLarge)
+                    if (editorState.calendarHref != null && calendar == null) {
+                        Text(
+                            "The previously selected task list is unavailable. Choose another list to continue.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -187,3 +193,8 @@ internal fun TaskEditorDialog(
         },
     )
 }
+
+internal fun selectedGroupwareTaskCalendar(
+    calendars: List<GroupwareCalendar>,
+    selectedHref: String?,
+): GroupwareCalendar? = calendars.firstOrNull { calendar -> calendar.href == selectedHref }

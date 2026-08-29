@@ -67,6 +67,7 @@ class GroupwareTasksDavTest {
             dueDate = "20260830",
             completed = false,
             description = "Synthetic task",
+            dtstamp = "20260829T101112Z",
         ).replace("END:VTODO", "X-NEXTCLOUD-EXTRA:keep-me\r\nEND:VTODO")
         val parsed = requireNotNull(parseGroupwareTask(calendarHref, href, "\"one\"", created))
 
@@ -74,6 +75,7 @@ class GroupwareTasksDavTest {
         assertEquals("20260830", parsed.due)
         assertTrue(parsed.dueAllDay)
         assertFalse(parsed.completed)
+        assertTrue("DTSTAMP:20260829T101112Z" in created)
 
         val updated = updateGroupwareTaskContent(
             task = parsed,

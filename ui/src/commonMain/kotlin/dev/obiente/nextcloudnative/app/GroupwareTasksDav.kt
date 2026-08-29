@@ -97,6 +97,7 @@ fun createGroupwareTaskContent(
     dueDate: String?,
     completed: Boolean,
     description: String? = null,
+    dtstamp: String = currentGroupwareTaskCompletionTimestamp(),
 ): String {
     require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The task id is invalid." }
     require(title.isNotBlank()) { "A task title is required." }
@@ -107,6 +108,7 @@ fun createGroupwareTaskContent(
         add("PRODID:-//Obiente//Nextcloud Native//EN")
         add("BEGIN:VTODO")
         add("UID:${uid.escapeCalendarText()}")
+        add("DTSTAMP:${dtstamp.also(::requireValidGroupwareTaskCompletionTimestamp)}")
         add("SUMMARY:${title.escapeCalendarText()}")
         due?.let { add("DUE;VALUE=DATE:$it") }
         add("STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}")

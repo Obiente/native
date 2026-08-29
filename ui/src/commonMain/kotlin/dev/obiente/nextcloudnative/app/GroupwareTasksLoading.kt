@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 internal data class GroupwareTaskCalendarLoadResult(
     val tasks: List<GroupwareTask>,
     val failedCalendarNames: List<String>,
+    val concurrentlyDeletedObjectCount: Int = 0,
 )
 
 private data class GroupwareTaskObjectReference(
@@ -16,14 +17,19 @@ internal suspend fun loadGroupwareTaskCalendars(
 ): GroupwareTaskCalendarLoadResult {
     val tasks = mutableListOf<GroupwareTask>()
     val failures = mutableListOf<String>()
+    var concurrentlyDeletedObjectCount = 0
     calendars.forEach { calendar ->
         runCatchingPreservingCancellation {
-            loadGroupwareTasksInBatches(calendar.href, execute)
+            loadGroupwareTasksInBatches(
+                calendarHref = calendar.href,
+                onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
+                execute = execute,
+            )
         }.onSuccess(tasks::addAll).onFailure {
             failures += calendar.displayName
         }
     }
-    return GroupwareTaskCalendarLoadResult(tasks, failures)
+    return GroupwareTaskCalendarLoadResult(tasks, failures, concurrentlyDeletedObjectCount)
 }
 
 internal fun groupwareDavCalendarObjectListingRequest(calendarHref: String): GroupwareDavRequest =
@@ -76,17 +82,34 @@ internal fun groupwareDavCalendarMultiGetRequest(
 
 internal suspend fun loadGroupwareTasksInBatches(
     calendarHref: String,
+    onConcurrentDeletion: (Int) -> Unit = {},
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): List<GroupwareTask> {
     val objectReferences = parseGroupwareCalendarObjectReferences(
         calendarHref,
         execute(groupwareDavCalendarObjectListingRequest(calendarHref)),
     )
-    return buildList {
+    var concurrentlyDeletedObjectCount = 0
+    val tasks = buildList {
         objectReferences.chunked(MAX_TASK_DAV_MULTIGET_ITEMS).forEach { batch ->
-            addAll(loadGroupwareTaskBatch(calendarHref, batch, execute))
+            val loaded = loadGroupwareTaskBatch(calendarHref, batch, execute)
+            addAll(loaded.tasks)
+            concurrentlyDeletedObjectCount += loaded.concurrentlyDeletedObjectCount
         }
     }
+    if (concurrentlyDeletedObjectCount > 0) onConcurrentDeletion(concurrentlyDeletedObjectCount)
+    return tasks
+}
+
+private data class GroupwareTaskBatchLoadResult(
+    val tasks: List<GroupwareTask>,
+    val concurrentlyDeletedObjectCount: Int = 0,
+) {
+    operator fun plus(other: GroupwareTaskBatchLoadResult): GroupwareTaskBatchLoadResult =
+        GroupwareTaskBatchLoadResult(
+            tasks = tasks + other.tasks,
+            concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount + other.concurrentlyDeletedObjectCount,
+        )
 }
 
 private fun parseGroupwareCalendarObjectReferences(
@@ -120,7 +143,7 @@ private suspend fun loadGroupwareTaskBatch(
     calendarHref: String,
     objectReferences: List<GroupwareTaskObjectReference>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareTask> {
+): GroupwareTaskBatchLoadResult {
     val objectHrefs = objectReferences.map(GroupwareTaskObjectReference::href)
     val response = try {
         execute(groupwareDavCalendarMultiGetRequest(calendarHref, objectHrefs))
@@ -147,11 +170,12 @@ private fun parseGroupwareCalendarMultiGetResponse(
     calendarHref: String,
     requestedHrefs: List<String>,
     response: NextcloudApiResponse,
-): List<GroupwareTask> {
+): GroupwareTaskBatchLoadResult {
     require(response.status in 200..299) { "Task loading failed (HTTP ${response.status})." }
     val requested = requestedHrefs.toSet()
     require(requested.size == requestedHrefs.size)
     val returned = mutableSetOf<String>()
+    var concurrentlyDeletedObjectCount = 0
     val tasks = response.body.decodeToString().xmlElements("response").flatMap { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
             ?: error("The CalDAV multiget response omitted an object href.")
@@ -159,6 +183,10 @@ private fun parseGroupwareCalendarMultiGetResponse(
             "The CalDAV multiget response contained an unrequested or duplicate object."
         }
         block.xmlText("status")?.taskDavStatusCode()?.let { status ->
+            if (status == 404 || status == 410) {
+                concurrentlyDeletedObjectCount += 1
+                return@flatMap emptyList()
+            }
             require(status in 200..299) { "The CalDAV multiget response contained a failed object." }
         }
         val successfulProperty = block.xmlElements("propstat").singleOrNull { property ->
@@ -171,25 +199,31 @@ private fun parseGroupwareCalendarMultiGetResponse(
             ?: error("The CalDAV multiget response omitted calendar data.")
         parseGroupwareTasksFromContent(calendarHref, href, etag, content)
     }
-    require(returned == requested) {
-        "The CalDAV multiget response did not return every requested object successfully."
-    }
-    return tasks
+    concurrentlyDeletedObjectCount += requested.size - returned.size
+    return GroupwareTaskBatchLoadResult(tasks, concurrentlyDeletedObjectCount)
 }
 
 private suspend fun loadGroupwareTaskObjectsIndividually(
     calendarHref: String,
     objectReferences: List<GroupwareTaskObjectReference>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareTask> = objectReferences.flatMap { reference ->
-    val response = execute(groupwareDavDetailRequest(reference.href))
-    require(response.status in 200..299) { "Task loading failed (HTTP ${response.status})." }
-    parseGroupwareTasksFromContent(
-        calendarHref = calendarHref,
-        href = reference.href,
-        etag = response.etag ?: reference.etag,
-        content = response.body.decodeToString(),
-    )
+): GroupwareTaskBatchLoadResult {
+    var concurrentlyDeletedObjectCount = 0
+    val tasks = objectReferences.flatMap { reference ->
+        val response = execute(groupwareDavDetailRequest(reference.href))
+        if (response.status == 404 || response.status == 410) {
+            concurrentlyDeletedObjectCount += 1
+            return@flatMap emptyList()
+        }
+        require(response.status in 200..299) { "Task loading failed (HTTP ${response.status})." }
+        parseGroupwareTasksFromContent(
+            calendarHref = calendarHref,
+            href = reference.href,
+            etag = response.etag ?: reference.etag,
+            content = response.body.decodeToString(),
+        )
+    }
+    return GroupwareTaskBatchLoadResult(tasks, concurrentlyDeletedObjectCount)
 }
 
 private fun String.requireTaskCalendarCollectionHref(): String = requireSafeDavHref().also {

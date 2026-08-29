@@ -1,6 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +18,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -223,12 +225,24 @@ fun NativeGroupwareTasksScreen(
             }.thenBy {
                 it.title.lowercase()
             })
+            val partialFailureMessage = buildList {
+                loaded.failedCalendarNames.takeIf(List<String>::isNotEmpty)?.let { names ->
+                    add(
+                        "Some task lists could not be refreshed: ${names.joinToString()}. " +
+                            "Other task lists remain available.",
+                    )
+                }
+                if (loaded.concurrentlyDeletedObjectCount > 0) {
+                    add(
+                        "${loaded.concurrentlyDeletedObjectCount} task object changed during refresh; " +
+                            "the remaining tasks are current.",
+                    )
+                }
+            }.joinToString(" ").takeIf(String::isNotEmpty)
             TasksLoadState.Ready(
                 calendars = calendars,
                 tasks = tasks,
-                partialFailureMessage = loaded.failedCalendarNames.takeIf(List<String>::isNotEmpty)?.let { names ->
-                    "Some task lists could not be refreshed: ${names.joinToString()}. Other task lists remain available."
-                },
+                partialFailureMessage = partialFailureMessage,
             )
         }.onSuccess { loaded ->
             state = loaded
@@ -403,8 +417,18 @@ fun NativeGroupwareTasksScreen(
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
                     items(visibleTasks, key = GroupwareTask::instanceId) { task ->
+                        var menuExpanded by remember(task.instanceId) { mutableStateOf(false) }
+                        val taskWritable = current.calendars.any { calendar ->
+                            calendar.href == task.calendarHref && calendar.writable
+                        }
+                        val taskDeleteSafe = current.tasks.count { candidate -> candidate.href == task.href } == 1
                         Card(
-                            modifier = Modifier.fillMaxWidth().clickable { selectedTaskHref = task.instanceId },
+                            modifier = Modifier.fillMaxWidth().combinedClickable(
+                                onClickLabel = "Open ${task.title}",
+                                onLongClickLabel = "Show actions for ${task.title}",
+                                onClick = { selectedTaskHref = task.instanceId },
+                                onLongClick = { menuExpanded = true },
+                            ),
                             colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                         ) {
                             Row(
@@ -423,7 +447,41 @@ fun NativeGroupwareTasksScreen(
                                         Text("Due ${due.displayTaskDueDate()}", style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
-                                Icon(NextcloudIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Box {
+                                    IconButton(onClick = { menuExpanded = true }) {
+                                        Icon(NextcloudIcons.More, contentDescription = "Actions for ${task.title}")
+                                    }
+                                    DropdownMenu(
+                                        expanded = menuExpanded,
+                                        onDismissRequest = { menuExpanded = false },
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("View details") },
+                                            onClick = {
+                                                menuExpanded = false
+                                                selectedTaskHref = task.instanceId
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Edit") },
+                                            enabled = !interactionBlocked && taskWritable,
+                                            onClick = {
+                                                menuExpanded = false
+                                                selectedTaskHref = task.instanceId
+                                                editing = true
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete") },
+                                            enabled = !interactionBlocked && taskWritable && taskDeleteSafe,
+                                            onClick = {
+                                                menuExpanded = false
+                                                selectedTaskHref = task.instanceId
+                                                deleting = task
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

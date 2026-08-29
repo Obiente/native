@@ -45,4 +45,17 @@ class GroupwareTaskEditorStateTest {
         assertEquals(MAX_GROUPWARE_TASK_QUERY_LENGTH, bounded.length)
         assertEquals(oversized.take(MAX_GROUPWARE_TASK_QUERY_LENGTH), bounded)
     }
+
+    @Test
+    fun `restored task draft never falls back to another calendar`() {
+        val remaining = GroupwareCalendar("/remote.php/dav/calendars/person/remaining/", "Remaining")
+
+        assertNull(
+            selectedGroupwareTaskCalendar(
+                calendars = listOf(remaining),
+                selectedHref = "/remote.php/dav/calendars/person/deleted/",
+            ),
+        )
+        assertEquals(remaining, selectedGroupwareTaskCalendar(listOf(remaining), remaining.href))
+    }
 }

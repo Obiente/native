@@ -70,6 +70,39 @@ class GroupwareTasksLoadingTest {
         assertEquals("\"etag\"", tasks.single().etag)
     }
 
+    @Test
+    fun `concurrent multiget deletions retain healthy tasks and report a partial refresh`() = runBlocking {
+        val calendar = GroupwareCalendar("/remote.php/dav/calendars/person/tasks/", "Tasks")
+        val healthyHref = "${calendar.href}healthy.ics"
+        val deletedHref = "${calendar.href}deleted.ics"
+        val omittedHref = "${calendar.href}omitted.ics"
+
+        val result = loadGroupwareTaskCalendars(listOf(calendar)) { request ->
+            if (request.method == "PROPFIND") {
+                listingResponse(calendar.href, listOf(healthyHref, deletedHref, omittedHref))
+            } else {
+                val content = createGroupwareTaskContent("healthy", "Healthy task", null, false)
+                NextcloudApiResponse(
+                    status = 207,
+                    contentType = "application/xml",
+                    etag = null,
+                    body = """
+                        <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                          <d:response><d:href>$healthyHref</d:href><d:propstat><d:prop>
+                            <d:getetag>&quot;healthy&quot;</d:getetag><c:calendar-data>$content</c:calendar-data>
+                          </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+                          <d:response><d:href>$deletedHref</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+                        </d:multistatus>
+                    """.trimIndent().encodeToByteArray(),
+                )
+            }
+        }
+
+        assertEquals(listOf("Healthy task"), result.tasks.map(GroupwareTask::title))
+        assertTrue(result.failedCalendarNames.isEmpty())
+        assertEquals(2, result.concurrentlyDeletedObjectCount)
+    }
+
     private fun listingResponse(calendarHref: String, hrefs: List<String>): NextcloudApiResponse =
         NextcloudApiResponse(
             status = 207,
