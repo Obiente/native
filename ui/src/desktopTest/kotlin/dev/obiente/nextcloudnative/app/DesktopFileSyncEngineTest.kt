@@ -190,6 +190,39 @@ class DesktopFileSyncEngineTest {
     }
 
     @Test
+    fun `desktop execution stops after a failed operation retains upload cleanup`() {
+        val cleanup = FileSyncPendingUploadCleanup(
+            uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+            relativePath = "cover.jpg",
+            assembledStageEtag = "stage-1",
+        )
+        val state = DesktopFileSyncPersistedState(
+            coordinator = FileSyncCoordinatorState(
+                listOf(
+                    FileSyncPair(
+                        id = "pair",
+                        accountId = "account",
+                        localRootId = "root",
+                        remoteRootPath = "Pictures",
+                        configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+                        pendingUploadCleanups = listOf(cleanup),
+                    ),
+                ),
+            ),
+            roots = listOf(DesktopFileSyncRootRecord("root", "/files", "Files")),
+        )
+
+        assertTrue(state.hasPendingDesktopUploadCleanup())
+        assertFalse(
+            state.copy(
+                coordinator = FileSyncCoordinatorState(
+                    listOf(state.coordinator.pairs.single().copy(pendingUploadCleanups = emptyList())),
+                ),
+            ).hasPendingDesktopUploadCleanup(),
+        )
+    }
+
+    @Test
     fun `remote mutation paths include the configured pair root`() {
         assertEquals(
             "Photography/Albums/2026/cover.jpg",

@@ -14,6 +14,9 @@ internal fun DesktopFileSyncPersistedState.scopedToDesktopWork(
     ),
 )
 
+internal fun DesktopFileSyncPersistedState.hasPendingDesktopUploadCleanup(): Boolean =
+    coordinator.pairs.single().pendingUploadCleanups.isNotEmpty()
+
 internal fun requireDesktopFileSyncBaselineCapacity(
     operation: FileSyncOperation,
     baselinePaths: Set<String>,

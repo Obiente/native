@@ -584,6 +584,7 @@ internal class DesktopFileSyncEngine(
                         failureKind = desktopFileSyncFailureKind(failure),
                     ),
                 )
+                if (execution.hasPendingDesktopUploadCleanup()) break
             }
         }
         val message = buildString {
