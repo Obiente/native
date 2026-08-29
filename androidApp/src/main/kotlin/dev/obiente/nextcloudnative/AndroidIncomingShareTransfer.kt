@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.incomingShareUploadNameCandidates
+import dev.obiente.nextcloudnative.app.nextcloudUploadChunk
 import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import java.io.File
 import java.io.FileInputStream
@@ -163,15 +164,14 @@ internal class AndroidIncomingShareFileTransfer(
             }
             var upload = requireNotNull(current.chunkSession)
             for (chunkIndex in upload.uploadedChunks until plan.chunkCount) {
-                val offset = Math.multiplyExact(chunkIndex.toLong(), plan.chunkBytes)
-                val length = minOf(plan.chunkBytes, stagedFile.length() - offset)
+                val chunk = nextcloudUploadChunk(plan, stagedFile.length(), chunkIndex)
                 remote.uploadChunk(
                     upload.uploadId,
                     upload.targetName,
                     stagedFile,
-                    offset,
-                    length,
-                    chunkIndex + 1,
+                    chunk.offsetBytes,
+                    chunk.sizeBytes,
+                    chunk.number,
                     cancellation,
                 )
                 current = store.recordUploadedChunk(requestId, chunkIndex)

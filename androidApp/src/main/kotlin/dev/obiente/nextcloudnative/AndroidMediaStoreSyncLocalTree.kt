@@ -103,29 +103,27 @@ internal class AndroidMediaStoreSyncLocalTree(
         return hash
     }
 
-    override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
+    override fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean,
+    ): LocalSyncEntry {
         val before = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(before.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
         require((before.entry.size ?: 0L) <= maximumBytes) { "The local file exceeds the sync size limit." }
-        FileInputStream(before.uri.toFile()).use { input ->
-            FileOutputStream(destination).use { output ->
-                var copied = 0L
-                val buffer = ByteArray(BUFFER_BYTES)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    copied += count
-                    require(copied <= maximumBytes) { "The local file exceeds the sync size limit." }
-                    output.write(buffer, 0, count)
-                }
-                output.fd.sync()
-            }
+        val stagedContentHash = FileInputStream(before.uri.toFile()).use { input ->
+            stageAndroidFileSyncUpload(input, destination, before.entry.size, maximumBytes, shouldContinue)
         }
         val after = requireNotNull(resolve(path)) { "The local file disappeared while it was read." }
-        require(after.entry.revision == before.entry.revision) {
+        require(after.entry.revision == before.entry.revision && after.entry.size == before.entry.size) {
             "The local file changed while it was being prepared for upload."
         }
-        return after.entry
+        return after.entry.copy(
+            revision = androidStagedFileSyncRevision(stagedContentHash),
+            size = destination.length(),
+            contentHash = stagedContentHash,
+        )
     }
 
     override fun createDirectory(path: String, expectedLocalRevision: String?) {
@@ -203,7 +201,6 @@ internal class AndroidMediaStoreSyncLocalTree(
     private fun Uri.toFile(): File = File(requireNotNull(path))
 
     private companion object {
-        const val BUFFER_BYTES = 64 * 1024
     }
 }
 

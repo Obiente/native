@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
+import dev.obiente.nextcloudnative.app.normalizeSyncSha256
 import dev.obiente.nextcloudnative.app.skipExactJvmFileSyncBytes
 import java.io.File
 import java.io.FileInputStream
@@ -58,7 +59,12 @@ internal interface AndroidFileSyncLocalTree {
         offset: Long,
         length: Int,
     ): String? = null
-    fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry
+    fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    ): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
     fun writeFileFromStream(
@@ -186,30 +192,29 @@ internal class AndroidSafFileSyncLocalTree(
         return hash
     }
 
-    override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry {
+    override fun stageForUpload(
+        path: String,
+        destination: File,
+        maximumBytes: Long,
+        shouldContinue: () -> Boolean,
+    ): LocalSyncEntry {
         val document = requireNotNull(resolve(path)) { "The local file no longer exists." }
         require(document.entry.kind == SyncEntryKind.File) { "Only files can be uploaded as file content." }
         require((document.entry.size ?: 0L) <= maximumBytes) { "The local file exceeds the sync size limit." }
-        resolver.openInputStream(document.uri).use { source ->
-            requireNotNull(source) { "The local file could not be opened." }
-            FileOutputStream(destination).use { output ->
-                var copied = 0L
-                val buffer = ByteArray(BUFFER_BYTES)
-                while (true) {
-                    val count = source.read(buffer)
-                    if (count < 0) break
-                    copied += count
-                    require(copied <= maximumBytes) { "The local file exceeds the sync size limit." }
-                    output.write(buffer, 0, count)
-                }
-                output.fd.sync()
-            }
+        val stagedContentHash = requireNotNull(resolver.openInputStream(document.uri)) {
+            "The local file could not be opened."
+        }.use { source ->
+            stageAndroidFileSyncUpload(source, destination, document.entry.size, maximumBytes, shouldContinue)
         }
         val after = requireNotNull(resolve(path)) { "The local file disappeared while it was read." }
-        require(after.entry.revision == document.entry.revision) {
+        require(after.entry.revision == document.entry.revision && after.entry.size == document.entry.size) {
             "The local file changed while it was being prepared for upload."
         }
-        return after.entry
+        return after.entry.copy(
+            revision = androidStagedFileSyncRevision(stagedContentHash),
+            size = destination.length(),
+            contentHash = stagedContentHash,
+        )
     }
 
     override fun createDirectory(path: String, expectedLocalRevision: String?) {
@@ -446,4 +451,41 @@ internal fun sha256SyncContentHashRead(
         "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) },
         total,
     )
+}
+
+internal fun stageAndroidFileSyncUpload(
+    input: InputStream,
+    destination: File,
+    expectedBytes: Long?,
+    maximumBytes: Long,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+): String {
+    require(expectedBytes == null || expectedBytes >= 0L)
+    require(maximumBytes > 0L)
+    val digest = MessageDigest.getInstance("SHA-256")
+    var copied = 0L
+    FileOutputStream(destination).use { output ->
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+                throw kotlinx.coroutines.CancellationException("Sync upload staging cancelled.")
+            }
+            val count = input.read(buffer)
+            if (count < 0) break
+            copied += count
+            require(copied <= maximumBytes) { "The local file exceeds the sync size limit." }
+            digest.update(buffer, 0, count)
+            output.write(buffer, 0, count)
+        }
+        output.fd.sync()
+    }
+    require(expectedBytes == null || copied == expectedBytes) {
+        "The local file size changed while it was being prepared for upload."
+    }
+    return "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+}
+
+internal fun androidStagedFileSyncRevision(contentHash: String): String {
+    require(normalizeSyncSha256(contentHash) == contentHash)
+    return "staged-$contentHash"
 }

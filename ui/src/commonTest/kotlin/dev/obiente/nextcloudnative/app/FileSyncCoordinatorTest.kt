@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -655,6 +656,197 @@ class FileSyncCoordinatorTest {
         assertEquals(FileSyncExecutionState.Ready, reset.state)
         assertEquals(0, reset.attemptCount)
         assertNull(reset.failureMessage)
+    }
+
+    @Test
+    fun `rescan retains abandoned upload ownership until remote cleanup completes`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val workId = coordinator.pair().workItems.single().id
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, 20L).state
+        coordinator = checkpointFileSyncUpload(
+            coordinator,
+            PAIR_ID,
+            workId,
+            newFileSyncUploadCheckpoint(
+                "01234567-89ab-cdef-0123-456789abcdef",
+                local.revision,
+                nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+                contentRevision = "sha256:${"4".repeat(64)}",
+            ).let { checkpoint ->
+                checkpoint.copy(
+                    uploadedChunks = checkpoint.chunkCount,
+                    commitInFlight = true,
+                    assembledStageEtag = "stage-etag",
+                )
+            },
+        )
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, workId, "Interrupted upload")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 30L,
+        )
+
+        val cleanup = coordinator.pair().pendingUploadCleanups.single()
+        assertEquals("large.bin", cleanup.relativePath)
+        assertEquals("stage-etag", cleanup.assembledStageEtag)
+        assertEquals(cleanup, fileSyncOwnedUploads(coordinator.pair()).single())
+        assertFailsWith<IllegalArgumentException> { removeFileSyncPair(coordinator, PAIR_ID) }
+
+        coordinator = completeFileSyncUploadCleanup(coordinator, PAIR_ID, cleanup.uploadId)
+        assertTrue(fileSyncOwnedUploads(coordinator.pair()).isEmpty())
+        assertTrue(removeFileSyncPair(coordinator, PAIR_ID).pairs.isEmpty())
+    }
+
+    @Test
+    fun `rescan retains commit in flight work when publication changed the destination etag`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val original = coordinator.pair().workItems.single()
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+            contentRevision = "sha256:${"4".repeat(64)}",
+        ).let { progress ->
+            progress.copy(
+                uploadedChunks = progress.chunkCount,
+                commitInFlight = true,
+                assembledStageEtag = "published-etag",
+            )
+        }
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, original.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, original.id, "Publication response was lost")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(RemoteSyncEntry("large.bin", SyncEntryKind.File, "published-etag", local.size)),
+            nowEpochMillis = 30L,
+        )
+
+        val retained = coordinator.pair().workItems.single()
+        assertEquals(original.id, retained.id)
+        assertEquals(checkpoint, retained.uploadCheckpoint)
+        assertEquals(original.operation, retained.operation)
+        assertTrue(coordinator.pair().pendingUploadCleanups.isEmpty())
+    }
+
+    @Test
+    fun `rescan replans commit in flight work when another client changed the destination`() {
+        val local = LocalSyncEntry("large.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            nowEpochMillis = 10L,
+        )
+        val original = coordinator.pair().workItems.single()
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+        ).let { progress ->
+            progress.copy(
+                uploadedChunks = progress.chunkCount,
+                commitInFlight = true,
+                assembledStageEtag = "owned-stage-etag",
+            )
+        }
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, original.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, original.id, "Guarded publication failed")
+
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(RemoteSyncEntry("large.bin", SyncEntryKind.File, "concurrent-etag", local.size)),
+            nowEpochMillis = 30L,
+        )
+
+        val replanned = coordinator.pair().workItems.single()
+        assertFalse(replanned.id == original.id)
+        assertEquals(null, replanned.uploadCheckpoint)
+        assertEquals("concurrent-etag", (replanned.operation as FileSyncOperation.Upload).expectedRemoteEtag)
+        assertEquals(checkpoint.uploadId, coordinator.pair().pendingUploadCleanups.single().uploadId)
+        assertNull(claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 40L).command)
+    }
+
+    @Test
+    fun `replacement backup generation remains durable after upload work is abandoned`() {
+        val local = LocalSyncEntry("archive.bin", SyncEntryKind.File, "local-v1", size = 25L * 1024L * 1024L)
+        val remote = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
+        var coordinator = scanFileSyncPair(
+            state(
+                configuration = FileSyncConfiguration(
+                    direction = FileSyncDirection.UploadOnly,
+                    deviceLabel = "Test phone",
+                ),
+            ),
+            PAIR_ID,
+            localEntries = listOf(local),
+            remoteEntries = listOf(remote),
+            nowEpochMillis = 10L,
+        )
+        val work = coordinator.pair().workItems.single()
+        coordinator = resolveFileSyncDecision(
+            coordinator,
+            PAIR_ID,
+            work.id,
+            FileSyncDecisionChoice.UseLocal,
+        )
+        val checkpoint = newFileSyncUploadCheckpoint(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            local.revision,
+            nextcloudUploadTransferPlan(requireNotNull(local.size)) as NextcloudUploadTransferPlan.Chunked,
+        )
+        coordinator = claimNextFileSyncOperation(coordinator, PAIR_ID, nowEpochMillis = 20L).state
+        coordinator = checkpointFileSyncUpload(coordinator, PAIR_ID, work.id, checkpoint)
+        coordinator = failFileSyncOperation(coordinator, PAIR_ID, work.id, "Upload interrupted")
+
+        assertEquals(
+            mapOf(checkpoint.uploadId to remote.etag),
+            fileSyncOwnedReplacementBackupEtags(coordinator.pair()),
+        )
+        coordinator = scanFileSyncPair(
+            coordinator,
+            PAIR_ID,
+            localEntries = emptyList(),
+            remoteEntries = listOf(remote),
+            nowEpochMillis = 30L,
+        )
+
+        assertEquals(remote.etag, coordinator.pair().pendingUploadCleanups.single().replacementBackupEtag)
     }
 
     @Test

@@ -1,8 +1,12 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationCandidate
 import dev.obiente.nextcloudnative.app.FileSyncContentVerificationResult
+import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import java.io.OutputStream
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 
 /**
  * Verifies one complete SAF generation in one background pass.
@@ -40,3 +44,31 @@ internal fun streamAndroidFileSyncDownload(
     val maximumBytes = declaredByteCount?.coerceAtLeast(1L) ?: Long.MAX_VALUE
     writeLocal { destination -> readRemote(destination, maximumBytes) }
 }
+
+internal fun normalizeRemoteRoot(path: String): String {
+    val normalized = path.trim().trim('/')
+    if (normalized.isEmpty()) return ""
+    require(normalized.length <= 8_192)
+    require(normalized.split('/').all {
+        it.isNotBlank() && it !in setOf(".", "..") && it.none(Char::isISOControl)
+    }) { "The Nextcloud folder path is invalid." }
+    return normalized
+}
+
+internal fun safeFailureMessage(failure: Throwable, fallback: String): String =
+    failure.message
+        ?.map { if (it.isISOControl()) ' ' else it }
+        ?.joinToString("")
+        ?.trim()
+        ?.take(1_024)
+        ?.takeIf(String::isNotBlank)
+        ?: fallback
+
+internal fun androidFileSyncHttpClient(context: Context): OkHttpClient = OkHttpClient.Builder()
+    .useAndroidNextcloudCertificateTrust(context)
+    .readTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
+    .writeTimeout(FILE_SYNC_NETWORK_INACTIVITY_MINUTES, TimeUnit.MINUTES)
+    .callTimeout(0L, TimeUnit.MILLISECONDS)
+    .build()
+
+private const val FILE_SYNC_NETWORK_INACTIVITY_MINUTES = 30L

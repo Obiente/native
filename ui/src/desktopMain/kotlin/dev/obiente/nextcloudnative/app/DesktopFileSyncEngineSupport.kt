@@ -14,6 +14,9 @@ internal fun DesktopFileSyncPersistedState.scopedToDesktopWork(
     ),
 )
 
+internal fun DesktopFileSyncPersistedState.hasPendingDesktopUploadCleanup(): Boolean =
+    coordinator.pairs.single().pendingUploadCleanups.isNotEmpty()
+
 internal fun requireDesktopFileSyncBaselineCapacity(
     operation: FileSyncOperation,
     baselinePaths: Set<String>,
@@ -98,6 +101,78 @@ internal fun requiredDesktopDownloadFreeBytes(
         downloadBytes
     }
     return if (reserveBytes > Long.MAX_VALUE - contentBytes) Long.MAX_VALUE else contentBytes + reserveBytes
+}
+
+internal inline fun <T> withDesktopFileSyncStagingFile(
+    stagingRoot: File,
+    stagingReservations: DesktopStagingSpaceReservations,
+    minimumFreeSpaceBytes: () -> Long,
+    prefix: String,
+    expectedBytes: Long?,
+    block: (File, maximumBytes: Long) -> T,
+): T {
+    check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
+    require(prefix in DESKTOP_FILE_SYNC_STAGE_PREFIXES)
+    val canonicalRoot = stagingRoot.canonicalFile
+    stagingReservations.reserve(
+        root = canonicalRoot,
+        declaredByteCount = expectedBytes,
+        reserveBytes = minimumFreeSpaceBytes(),
+    ).use { reservation ->
+        val file = File(canonicalRoot, "nextcloud-native-$prefix-${UUID.randomUUID()}.tmp")
+        check(file.createNewFile()) { "Could not create sync staging file." }
+        return try {
+            block(file, reservation.maximumBytes)
+        } finally {
+            file.delete()
+        }
+    }
+}
+
+internal fun maximumSafeDesktopFileSyncDownloadBytes(
+    stagingRoot: File,
+    minimumFreeSpaceBytes: () -> Long,
+    local: DesktopFileSyncLocalTree,
+    relativePath: String,
+): Long {
+    val reserve = minimumFreeSpaceBytes()
+    require(reserve >= 0L)
+    check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
+    val stagingStore = Files.getFileStore(stagingRoot.toPath())
+    val destinationStore = local.fileStore(relativePath)
+    val stagingSafe = (stagingStore.usableSpace - reserve).coerceAtLeast(0L)
+    val destinationSafe = (destinationStore.usableSpace - reserve).coerceAtLeast(0L)
+    val maximum = if (stagingStore == destinationStore) stagingSafe / 2L else minOf(stagingSafe, destinationSafe)
+    check(maximum > 0L) { "There is not enough free space to stage this synchronized file safely." }
+    return maximum
+}
+
+internal fun requireDesktopFileSyncDownloadCapacity(
+    stagingRoot: File,
+    minimumFreeSpaceBytes: () -> Long,
+    local: DesktopFileSyncLocalTree,
+    relativePath: String,
+    downloadBytes: Long,
+) {
+    require(downloadBytes >= 0L)
+    val reserve = minimumFreeSpaceBytes()
+    require(reserve >= 0L)
+    check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
+    val stagingStore = Files.getFileStore(stagingRoot.toPath())
+    val destinationStore = local.fileStore(relativePath)
+    if (stagingStore == destinationStore) {
+        require(stagingStore.usableSpace >= requiredDesktopDownloadFreeBytes(downloadBytes, reserve, true)) {
+            "There is not enough free space to stage this synchronized file safely."
+        }
+    } else {
+        val required = requiredDesktopDownloadFreeBytes(downloadBytes, reserve, false)
+        require(stagingStore.usableSpace >= required) {
+            "The sync staging location does not have enough reserved free space."
+        }
+        require(destinationStore.usableSpace >= required) {
+            "The destination folder does not have enough reserved free space."
+        }
+    }
 }
 
 internal fun desktopSyncRootsOverlap(first: String, second: String): Boolean {

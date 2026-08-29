@@ -89,6 +89,40 @@ internal fun decodeFileSyncWorkRecord(bytes: ByteArray): FileSyncWorkItem {
     return syncCoordinatorJson.decodeFromString<FileSyncWorkSnapshotV1>(strictSyncRecordText(bytes)).toDomain()
 }
 
+fun encodeFileSyncPendingUploadCleanupRecord(
+    cleanup: FileSyncPendingUploadCleanup,
+): ByteArray = syncCoordinatorJson.encodeToString(
+    FileSyncPendingUploadCleanupSnapshotV1(
+        cleanup.uploadId,
+        cleanup.relativePath,
+        cleanup.assembledStageEtag,
+        cleanup.replacementBackupEtag,
+        cleanup.expectedStageSizeBytes,
+        cleanup.expectedStageContentHash,
+        cleanup.publicationInFlight,
+    ),
+).encodeToByteArray().also { encoded ->
+    require(encoded.size <= MAX_FILE_SYNC_ROW_BYTES) { "The sync upload cleanup record is too large." }
+}
+
+fun decodeFileSyncPendingUploadCleanupRecord(
+    bytes: ByteArray,
+): FileSyncPendingUploadCleanup {
+    require(bytes.isNotEmpty() && bytes.size <= MAX_FILE_SYNC_ROW_BYTES)
+    val snapshot = syncCoordinatorJson.decodeFromString<FileSyncPendingUploadCleanupSnapshotV1>(
+        strictSyncRecordText(bytes),
+    )
+    return FileSyncPendingUploadCleanup(
+        snapshot.uploadId,
+        snapshot.relativePath,
+        snapshot.assembledStageEtag,
+        snapshot.replacementBackupEtag,
+        snapshot.expectedStageSizeBytes,
+        snapshot.expectedStageContentHash,
+        snapshot.publicationInFlight,
+    )
+}
+
 private fun strictSyncRecordText(bytes: ByteArray): String = bytes.decodeToString().also { text ->
     require(text.encodeToByteArray().contentEquals(bytes)) { "The sync database record is not valid UTF-8." }
 }
@@ -117,8 +151,20 @@ private data class FileSyncPairSnapshotV1(
     val baselines: List<FileSyncBaselineSnapshotV1>,
     val contentVerificationProgress: List<FileSyncContentVerificationProgressSnapshotV1> = emptyList(),
     val workItems: List<FileSyncWorkSnapshotV1>,
+    val pendingUploadCleanups: List<FileSyncPendingUploadCleanupSnapshotV1> = emptyList(),
     val nextWorkId: Long,
     val lastScanEpochMillis: Long?,
+)
+
+@Serializable
+private data class FileSyncPendingUploadCleanupSnapshotV1(
+    val uploadId: String,
+    val relativePath: String,
+    val assembledStageEtag: String? = null,
+    val replacementBackupEtag: String? = null,
+    val expectedStageSizeBytes: Long? = null,
+    val expectedStageContentHash: String? = null,
+    val publicationInFlight: Boolean = false,
 )
 
 @Serializable
@@ -176,6 +222,21 @@ private data class FileSyncWorkSnapshotV1(
     val failureMessage: String?,
     val contentMismatchVerified: Boolean = false,
     val contentMismatchLocalHash: String? = null,
+    val uploadCheckpoint: FileSyncUploadCheckpointSnapshotV1? = null,
+)
+
+@Serializable
+private data class FileSyncUploadCheckpointSnapshotV1(
+    val uploadId: String,
+    val localRevision: String,
+    val sizeBytes: Long,
+    val chunkBytes: Long,
+    val chunkCount: Int,
+    val uploadedChunks: Int,
+    val commitInFlight: Boolean,
+    val assembledStageEtag: String? = null,
+    val contentRevision: String? = null,
+    val contentHash: String? = null,
 )
 
 @Serializable
@@ -215,6 +276,19 @@ private fun FileSyncPair.toSnapshot(): FileSyncPairSnapshotV1 = FileSyncPairSnap
         .sortedBy { it.candidate.relativePath }
         .map(FileSyncContentVerificationProgress::toSnapshot),
     workItems = workItems.sortedBy(FileSyncWorkItem::id).map(FileSyncWorkItem::toSnapshot),
+    pendingUploadCleanups = pendingUploadCleanups
+        .sortedBy(FileSyncPendingUploadCleanup::uploadId)
+        .map {
+            FileSyncPendingUploadCleanupSnapshotV1(
+                it.uploadId,
+                it.relativePath,
+                it.assembledStageEtag,
+                it.replacementBackupEtag,
+                it.expectedStageSizeBytes,
+                it.expectedStageContentHash,
+                it.publicationInFlight,
+            )
+        },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )
@@ -239,6 +313,17 @@ private fun FileSyncPairSnapshotV1.toDomain(): FileSyncPair = FileSyncPair(
     contentVerificationProgress = contentVerificationProgress
         .map(FileSyncContentVerificationProgressSnapshotV1::toDomain),
     workItems = workItems.map(FileSyncWorkSnapshotV1::toDomain),
+    pendingUploadCleanups = pendingUploadCleanups.map {
+        FileSyncPendingUploadCleanup(
+            it.uploadId,
+            it.relativePath,
+            it.assembledStageEtag,
+            it.replacementBackupEtag,
+            it.expectedStageSizeBytes,
+            it.expectedStageContentHash,
+            it.publicationInFlight,
+        )
+    },
     nextWorkId = nextWorkId,
     lastScanEpochMillis = lastScanEpochMillis,
 )
@@ -326,6 +411,7 @@ private fun FileSyncWorkItem.toSnapshot(): FileSyncWorkSnapshotV1 = FileSyncWork
     failureMessage = failureMessage,
     contentMismatchVerified = contentMismatchVerified,
     contentMismatchLocalHash = contentMismatchLocalHash,
+    uploadCheckpoint = uploadCheckpoint?.toSnapshot(),
 )
 
 private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkItem(
@@ -342,6 +428,33 @@ private fun FileSyncWorkSnapshotV1.toDomain(): FileSyncWorkItem = FileSyncWorkIt
     failureMessage = failureMessage,
     contentMismatchVerified = contentMismatchVerified,
     contentMismatchLocalHash = contentMismatchLocalHash,
+    uploadCheckpoint = uploadCheckpoint?.toDomain(),
+)
+
+private fun FileSyncUploadCheckpoint.toSnapshot() = FileSyncUploadCheckpointSnapshotV1(
+    uploadId,
+    localRevision,
+    sizeBytes,
+    chunkBytes,
+    chunkCount,
+    uploadedChunks,
+    commitInFlight,
+    assembledStageEtag,
+    contentRevision,
+    contentHash,
+)
+
+private fun FileSyncUploadCheckpointSnapshotV1.toDomain() = FileSyncUploadCheckpoint(
+    uploadId,
+    localRevision,
+    sizeBytes,
+    chunkBytes,
+    chunkCount,
+    uploadedChunks,
+    commitInFlight,
+    assembledStageEtag,
+    contentRevision ?: localRevision,
+    contentHash,
 )
 
 private fun FileSyncOperation.toSnapshot(): FileSyncOperationSnapshotV1 = when (this) {

@@ -23,6 +23,196 @@ import okhttp3.OkHttpClient
 
 class NextcloudDocumentWebDavTest {
     @Test
+    fun ownedUploadCleanupRetainsAReplacedStageWithoutListingItsParent() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(404)
+            server.enqueue(412)
+            val remote = AndroidFileSyncRemoteTree(
+                server.session,
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+                ownedUploadPaths = mapOf(uploadId to "nested/large.bin"),
+            )
+
+            assertFalse(remote.discardOwnedUpload(uploadId, "nested/large.bin", "owned-stage-etag"))
+
+            val collectionDelete = server.request(0)
+            val stageDelete = server.request(1)
+            assertEquals("DELETE", collectionDelete.method)
+            assertTrue(collectionDelete.path.endsWith("/uploads/alice/$uploadId"))
+            assertEquals("DELETE", stageDelete.method)
+            assertTrue(stageDelete.path.endsWith("/Vault/nested/.nextcloud-native-$uploadId.upload"))
+            assertEquals("owned-stage-etag", stageDelete.header("If-Match"))
+        }
+
+    @Test
+    fun remoteSyncScanHidesOnlyUploadStagesDurablyOwnedByThisPair() = RecordingServer().use { server ->
+        val ownedId = "01234567-89ab-cdef-0123-456789abcdef"
+        val userId = "fedcba98-7654-3210-fedc-ba9876543210"
+        server.enqueue(
+            207,
+            body = """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/</d:href><d:propstat><d:prop>
+                    <d:displayname>Vault</d:displayname><d:resourcetype><d:collection/></d:resourcetype>
+                    </d:prop></d:propstat></d:response>
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-$ownedId.upload</d:href>
+                    <d:propstat><d:prop><d:displayname>.nextcloud-native-$ownedId.upload</d:displayname>
+                      <d:getetag>owned-etag</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                  <d:response><d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-$userId.upload</d:href>
+                    <d:propstat><d:prop><d:displayname>.nextcloud-native-$userId.upload</d:displayname>
+                      <d:getetag>user-etag</d:getetag><d:getcontentlength>1</d:getcontentlength>
+                      <d:resourcetype/></d:prop></d:propstat></d:response>
+                </d:multistatus>
+            """.trimIndent(),
+        )
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Vault",
+            NextcloudDocumentWebDav(),
+            ownedUploadIds = setOf(ownedId),
+        )
+
+        assertEquals(
+            listOf(".nextcloud-native-$userId.upload"),
+            remote.scan().map { it.entry.relativePath },
+        )
+    }
+
+    @Test
+    fun `remote sync scan retains the protected directory while publication awaits verification`() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+            server.enqueue(207, body = protectedDirectoryListing(uploadId))
+            val remote = AndroidFileSyncRemoteTree(
+                server.session,
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+                ownedStageEtags = mapOf(uploadId to "published-etag"),
+                ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+            )
+
+            val scanned = remote.scan()
+
+            assertEquals(listOf("archive.bin", "archive.bin/inside.txt"), scanned.map { it.entry.relativePath })
+            assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.Directory, scanned.first().entry.kind)
+            assertEquals("directory-etag", scanned.first().entry.etag)
+            assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.File, scanned.last().entry.kind)
+            val protectedDirectoryRead = server.request(1)
+            assertTrue(protectedDirectoryRead.path.endsWith("/Vault/.nextcloud-native-backup-$uploadId"))
+        }
+
+    @Test
+    fun `remote sync scan surfaces a concurrent destination instead of its owned backup`() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+            val remote = AndroidFileSyncRemoteTree(
+                server.session,
+                "alice",
+                "Vault",
+                NextcloudDocumentWebDav(),
+                ownedUploadIds = setOf(uploadId),
+                ownedStageEtags = mapOf(uploadId to "stage-etag"),
+                ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+            )
+
+            val scanned = remote.scan()
+
+            assertEquals(listOf("archive.bin"), scanned.map { it.entry.relativePath })
+            assertEquals(dev.obiente.nextcloudnative.app.SyncEntryKind.File, scanned.single().entry.kind)
+            assertEquals("published-etag", scanned.single().entry.etag)
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun `verified chunk stage retains its protected backup until destination verification`() =
+        RecordingServer().use { server ->
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        server.enqueue(207, body = directoryListing())
+        server.enqueue(207, body = directoryListing())
+        server.enqueue(201)
+        server.enqueue(201)
+        server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true))
+        val remote = AndroidFileSyncRemoteTree(
+            server.session,
+            "alice",
+            "Vault",
+            NextcloudDocumentWebDav(),
+            ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+        )
+
+        val published = remote.publishOwnedStageReplacingDirectory(
+            uploadId,
+            "archive.bin",
+            "stage-etag",
+            "directory-etag",
+        )
+
+        assertEquals("published-etag", published.etag)
+        val protect = server.request(2)
+        assertEquals("MOVE", protect.method)
+        assertEquals("F", protect.header("Overwrite"))
+        assertTrue(protect.header("If").orEmpty().contains("directory-etag"))
+        val publish = server.request(3)
+        assertEquals("MOVE", publish.method)
+        assertEquals("F", publish.header("Overwrite"))
+        assertEquals("stage-etag", publish.header("If-Match"))
+        assertEquals(5, server.requestCount)
+    }
+
+    @Test
+    fun `ambiguous replacement publication verifies bytes and retires its directory backup`() =
+        RecordingServer().use { server ->
+            val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+            val source = Files.createTempFile("android-published-replacement-", ".bin").toFile()
+            try {
+                source.writeText("same")
+                server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true, publishedBytes = 4))
+                server.enqueue(200, headers = mapOf("ETag" to "published-etag"), body = "same")
+                server.enqueue(207, body = replacementListing(uploadId, includePublishedFile = true, publishedBytes = 4))
+                server.enqueue(204)
+                val remote = AndroidFileSyncRemoteTree(
+                    server.session,
+                    "alice",
+                    "Vault",
+                    NextcloudDocumentWebDav(),
+                    ownedUploadIds = setOf(uploadId),
+                    ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+                ).resumableUploadRemote("directory-etag")
+
+                val verified = remote.verifyPublishedFile(
+                    uploadId,
+                    source,
+                    "archive.bin",
+                    dev.obiente.nextcloudnative.app.RemoteSyncEntry(
+                        "archive.bin",
+                        dev.obiente.nextcloudnative.app.SyncEntryKind.File,
+                        "published-etag",
+                        4,
+                    ),
+                )
+                remote.completePublishedFile(uploadId, "archive.bin")
+
+                assertEquals("published-etag", verified.etag)
+                val cleanup = server.request(3)
+                assertEquals("DELETE", cleanup.method)
+                assertTrue(cleanup.path.contains(".nextcloud-native-backup-$uploadId"))
+            } finally {
+                source.delete()
+            }
+        }
+
+    @Test
     fun largeDavUploadsSkipOnlyTheOptionalPrecomputedChecksumPass() {
         assertTrue(shouldPrecomputeDavChecksum(byteCount = 64L * 1024L * 1024L))
         assertFalse(shouldPrecomputeDavChecksum(byteCount = 12L * 1024L * 1024L * 1024L))
@@ -438,6 +628,54 @@ class NextcloudDocumentWebDavTest {
     }
 
     @Test
+    fun resumableUploadReadsTheAuthoritativeServerChunkPrefix() = RecordingServer().use { server ->
+        server.enqueue(
+            MockResponse.Builder().code(207).body(
+                """
+                <d:multistatus xmlns:d="DAV:">
+                  <d:response><d:href>/remote.php/dav/uploads/alice/upload/</d:href></d:response>
+                  <d:response><d:href>/remote.php/dav/uploads/alice/upload/00001</d:href>
+                    <d:propstat><d:prop><d:getcontentlength>10485760</d:getcontentlength></d:prop></d:propstat>
+                  </d:response>
+                </d:multistatus>
+                """.trimIndent(),
+            ).build(),
+        )
+
+        val chunks = NextcloudDocumentWebDav().listChunkUpload(
+            server.session,
+            "alice",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            TestCancellation(),
+        )
+
+        assertEquals(mapOf(1 to 10L * 1024L * 1024L), chunks)
+        assertEquals("PROPFIND", server.request(0).method)
+        assertEquals("1", server.request(0).header("Depth"))
+    }
+
+    @Test
+    fun resumableUploadStreamsVerboseChunkMetadataPastTheDirectoryReadBudget() = RecordingServer().use { server ->
+        val xml = buildString {
+            append("<d:multistatus xmlns:d=\"DAV:\"><!--")
+            append("x".repeat(5 * 1024 * 1024))
+            append("--><d:response><d:href>/remote.php/dav/uploads/alice/upload/00001</d:href>")
+            append("<d:propstat><d:prop><d:getcontentlength>1</d:getcontentlength>")
+            append("</d:prop></d:propstat></d:response></d:multistatus>")
+        }
+        server.enqueue(MockResponse.Builder().code(207).body(xml).build())
+
+        val chunks = NextcloudDocumentWebDav().listChunkUpload(
+            server.session,
+            "alice",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            TestCancellation(),
+        )
+
+        assertEquals(mapOf(1 to 1L), chunks)
+    }
+
+    @Test
     fun chunkCommitRejectsSuccessfulStatusThatDoesNotConfirmCreation() = RecordingServer().use { server ->
         server.enqueue(204)
 
@@ -457,6 +695,28 @@ class NextcloudDocumentWebDavTest {
         assertEquals(204, failure.status)
         assertTrue(failure.message.orEmpty().contains("did not confirm"))
         assertEquals("F", server.request(0).header("Overwrite"))
+    }
+
+    @Test
+    fun assembledChunkStageUsesSourceAndDestinationGenerationGuards() = RecordingServer().use { server ->
+        server.enqueue(204)
+        val destination = server.baseUrl + "/remote.php/dav/files/alice/Shared/archive.bin"
+
+        NextcloudDocumentWebDav().publishChunkUploadStage(
+            server.session,
+            "alice",
+            "Shared/.nextcloud-native-01234567-89ab-cdef-0123-456789abcdef.upload",
+            "Shared/archive.bin",
+            stagedEtag = "stage-etag",
+            expectedRemoteEtag = "old-etag",
+        )
+
+        val request = server.request(0)
+        assertEquals("MOVE", request.method)
+        assertEquals("stage-etag", request.header("If-Match"))
+        assertEquals("T", request.header("Overwrite"))
+        assertEquals(destination, request.header("Destination"))
+        assertEquals("<$destination> ([old-etag])", request.header("If"))
     }
 
     @Test
@@ -819,6 +1079,51 @@ class NextcloudDocumentWebDavTest {
         assertTrue(parsed.isEmpty())
     }
 
+    private fun directoryListing(): String =
+        """
+        <d:multistatus xmlns:d="DAV:"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault/archive.bin/</d:href>
+          <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+            <d:getetag>directory-etag</d:getetag><d:resourcetype><d:collection/></d:resourcetype>
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+        """.trimIndent()
+
+    private fun replacementListing(
+        uploadId: String,
+        includePublishedFile: Boolean,
+        publishedBytes: Long = 22_020_096L,
+    ): String =
+        """
+        <d:multistatus xmlns:d="DAV:">
+          ${if (includePublishedFile) """
+          <d:response><d:href>/remote.php/dav/files/alice/Vault/archive.bin</d:href>
+            <d:propstat><d:prop><d:displayname>archive.bin</d:displayname>
+              <d:getetag>published-etag</d:getetag><d:getcontentlength>$publishedBytes</d:getcontentlength>
+              <d:resourcetype/>
+            </d:prop></d:propstat>
+          </d:response>
+          """.trimIndent() else ""}
+          <d:response>
+            <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/</d:href>
+            <d:propstat><d:prop>
+              <d:displayname>.nextcloud-native-backup-$uploadId</d:displayname>
+              <d:getetag>directory-etag</d:getetag><d:resourcetype><d:collection/></d:resourcetype>
+            </d:prop></d:propstat>
+          </d:response>
+        </d:multistatus>
+        """.trimIndent()
+
+    private fun protectedDirectoryListing(uploadId: String): String =
+        """
+        <d:multistatus xmlns:d="DAV:"><d:response>
+          <d:href>/remote.php/dav/files/alice/Vault/.nextcloud-native-backup-$uploadId/inside.txt</d:href>
+          <d:propstat><d:prop><d:displayname>inside.txt</d:displayname>
+            <d:getetag>inside-etag</d:getetag><d:getcontentlength>4</d:getcontentlength><d:resourcetype/>
+          </d:prop></d:propstat>
+        </d:response></d:multistatus>
+        """.trimIndent()
+
     private class RecordingServer : AutoCloseable {
         private val server = MockWebServer()
         private val requests = mutableListOf<RecordedRequest>()
@@ -859,9 +1164,7 @@ class NextcloudDocumentWebDavTest {
     }
 
     private val RecordedRequest.path: String get() = url.encodedPath
-
     private fun RecordedRequest.header(name: String): String? = headers[name]
-
     private class TestCancellation : DocumentRequestCancellation {
         val attached = CountDownLatch(1)
         val detached = CountDownLatch(1)

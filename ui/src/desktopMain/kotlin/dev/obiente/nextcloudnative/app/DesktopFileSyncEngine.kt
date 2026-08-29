@@ -173,7 +173,11 @@ internal class DesktopFileSyncEngine(
         }
     }
 
-    suspend fun removePair(session: NextcloudSession, pairId: String): FileSyncCenterActionResult = lock.withLock {
+    suspend fun removePair(
+        session: NextcloudSession,
+        userId: String,
+        pairId: String,
+    ): FileSyncCenterActionResult = lock.withLock {
         store.withExclusiveAccess transaction@ {
             val current = store.loadPair(pairId)
             val pair = current.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -183,7 +187,24 @@ internal class DesktopFileSyncEngine(
                     "This folder sync pair belongs to another account.",
                 )
             }
-            removeFileSyncPair(current.coordinator, pairId)
+            val remote = DesktopFileSyncRemoteTree(
+                session = session,
+                userId = userId,
+                remoteRootPath = pair.remoteRootPath,
+                ownedUploadIds = fileSyncOwnedUploads(pair).mapTo(mutableSetOf()) { it.uploadId },
+                ownedStageEtags = fileSyncOwnedUploadStageEtags(pair),
+                ownedUploadPaths = fileSyncOwnedUploadPaths(pair),
+                ownedReplacementBackupEtags = fileSyncOwnedReplacementBackupEtags(pair),
+            )
+            val cleanupResult = cleanupJvmFileSyncOwnedUploads(
+                remote.resumableUploadRemote(), current.coordinator, pairId, fileSyncOwnedUploads(pair),
+            )
+            if (cleanupResult.unresolvedUploads.isNotEmpty()) {
+                return@transaction FileSyncCenterActionResult.Rejected(
+                    "A previous upload still needs safe recovery. Run this folder sync before removing it.",
+                )
+            }
+            removeFileSyncPair(cleanupResult.state, pairId)
             val overview = store.load()
             store.deletePair(
                 pairId = pairId,
@@ -306,7 +327,26 @@ internal class DesktopFileSyncEngine(
                 val path = desktopFileSyncRemoteMutationPath(initialPair.remoteRootPath, relativePath)
                 runCatching { onRemoteMutationCommitted(session, userId, path) }
             },
+            ownedUploadIds = fileSyncOwnedUploads(initialPair).mapTo(mutableSetOf()) { it.uploadId },
+            ownedStageEtags = fileSyncOwnedUploadStageEtags(initialPair),
+            ownedUploadPaths = fileSyncOwnedUploadPaths(initialPair),
+            ownedReplacementBackupEtags = fileSyncOwnedReplacementBackupEtags(initialPair),
         )
+        val cleanupResult = cleanupJvmFileSyncOwnedUploads(
+            remote.resumableUploadRemote(shouldContinue),
+            persisted.coordinator,
+            pairId,
+            initialPair.pendingUploadCleanups,
+        ) { coordinator ->
+            persisted = persisted.copy(coordinator = coordinator)
+            store.savePair(persisted, pairId)
+        }
+        if (cleanupResult.unresolvedUploads.isNotEmpty()) {
+            return FileSyncCenterActionResult.Rejected(
+                "A previous upload still needs safe recovery. No new file changes were started.",
+                FileSyncRejectionScope.Preflight,
+            )
+        }
         val includes = { path: String, kind: SyncEntryKind -> initialPair.configuration.includesSyncPath(path, kind) }
         val cachedLocalRevisions = initialPair.baselines.mapNotNull { baseline ->
             baseline.localRevision?.let { revision -> baseline.relativePath to revision }
@@ -453,9 +493,22 @@ internal class DesktopFileSyncEngine(
                     stage = DesktopFileSyncProgressStage.Started,
                 ),
             )
+            val checkpoints = DesktopFileSyncCheckpointPersistence(
+                execution, store, pairId, command.workId,
+            )
             try {
                 requireDesktopFileSyncBaselineCapacity(command.operation, baselinePaths)
-                val success = execute(command, runningWork, local, remote)
+                val success = execute(
+                    command = command,
+                    work = runningWork,
+                    local = local,
+                    remote = remote,
+                    persistUploadCheckpoint = checkpoints::persist,
+                    retainUploadCleanup = checkpoints::retainCleanup,
+                    completeUploadCleanup = checkpoints::completeCleanup,
+                    shouldContinue = shouldContinue,
+                )
+                execution = checkpoints.state
                 execution = execution.copy(
                     coordinator = completeFileSyncOperation(
                         execution.coordinator,
@@ -491,12 +544,21 @@ internal class DesktopFileSyncEngine(
                     ),
                 )
             } catch (cancellation: CancellationException) {
+                execution = checkpoints.state.copy(
+                    coordinator = releaseCancelledFileSyncOperation(
+                        checkpoints.state.coordinator,
+                        pairId,
+                        command.workId,
+                    ),
+                )
+                val releasedWork = execution.coordinator.pairs.single().workItems.single()
+                store.saveExecutionTransition(execution, pairId, command.workId, releasedWork)
                 throw cancellation
             } catch (failure: Throwable) {
                 val safeMessage = safeFailureMessage(failure, "The sync operation failed.")
-                execution = execution.copy(
+                execution = checkpoints.state.copy(
                     coordinator = failFileSyncOperation(
-                        execution.coordinator,
+                        checkpoints.state.coordinator,
                         pairId,
                         command.workId,
                         safeMessage,
@@ -522,6 +584,7 @@ internal class DesktopFileSyncEngine(
                         failureKind = desktopFileSyncFailureKind(failure),
                     ),
                 )
+                if (execution.hasPendingDesktopUploadCleanup()) break
             }
         }
         val message = buildString {
@@ -543,6 +606,10 @@ internal class DesktopFileSyncEngine(
         work: FileSyncWorkItem,
         local: DesktopFileSyncLocalTree,
         remote: DesktopFileSyncRemoteTree,
+        persistUploadCheckpoint: (FileSyncUploadCheckpoint) -> Unit,
+        retainUploadCleanup: (FileSyncPendingUploadCleanup) -> Unit,
+        completeUploadCleanup: (String) -> Unit,
+        shouldContinue: () -> Boolean,
     ): FileSyncExecutionSuccess {
         require(work.id == command.workId && work.operation == command.operation)
         return when (val operation = command.operation) {
@@ -561,26 +628,15 @@ internal class DesktopFileSyncEngine(
                 } else {
                     withStagingFile("upload", source.size) { staged, maximumBytes ->
                         exactLocal = local.stageForUpload(operation.relativePath, staged, maximumBytes)
-                        val uploaded = if (replacingType) {
-                            remote.replaceWithFile(
-                                operation.relativePath,
-                                staged,
-                                requireNotNull(operation.expectedRemoteEtag),
-                            )
-                        } else {
-                            remote.writeFile(operation.relativePath, staged, operation.expectedRemoteEtag)
-                        }
-                        withStagingFile("verify-upload", staged.length()) { verified, verificationMaximumBytes ->
-                            exactRemote = remote.stageDownload(
-                                operation.relativePath,
-                                uploaded.etag,
-                                verified,
-                                verificationMaximumBytes,
-                            )
-                            require(filesMatch(staged, verified)) {
-                                "The uploaded server file does not match the staged local generation."
-                            }
-                        }
+                        val uploaded = executeDesktopFileSyncUpload(
+                            staged, operation.relativePath, requireNotNull(exactLocal),
+                            operation.expectedRemoteEtag, work.uploadCheckpoint, replacingType,
+                            persistUploadCheckpoint, retainUploadCleanup, completeUploadCleanup,
+                            remote, shouldContinue,
+                        )
+                        // Every direct, chunked, and type-replacement upload byte-compares this
+                        // exact generation before the synchronized baseline is recorded.
+                        exactRemote = uploaded
                     }
                 }
                 if (source.kind == SyncEntryKind.File) {
@@ -792,70 +848,24 @@ internal class DesktopFileSyncEngine(
         prefix: String,
         expectedBytes: Long?,
         block: (File, maximumBytes: Long) -> T,
-    ): T {
-        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
-        require(prefix in DESKTOP_FILE_SYNC_STAGE_PREFIXES)
-        val canonicalRoot = stagingRoot.canonicalFile
-        stagingReservations.reserve(
-            root = canonicalRoot,
-            declaredByteCount = expectedBytes,
-            reserveBytes = minimumFreeSpaceBytes(),
-        ).use { reservation ->
-            val file = File(canonicalRoot, "nextcloud-native-$prefix-${UUID.randomUUID()}.tmp")
-            check(file.createNewFile()) { "Could not create sync staging file." }
-            return try {
-                block(file, reservation.maximumBytes)
-            } finally {
-                file.delete()
-            }
-        }
-    }
+    ): T = withDesktopFileSyncStagingFile(
+        stagingRoot, stagingReservations, minimumFreeSpaceBytes, prefix, expectedBytes, block,
+    )
 
     private fun maximumSafeDesktopDownloadBytes(
         local: DesktopFileSyncLocalTree,
         relativePath: String,
-    ): Long {
-        val reserve = minimumFreeSpaceBytes()
-        require(reserve >= 0L)
-        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
-        val stagingStore = Files.getFileStore(stagingRoot.toPath())
-        val destinationStore = local.fileStore(relativePath)
-        val stagingSafe = (stagingStore.usableSpace - reserve).coerceAtLeast(0L)
-        val destinationSafe = (destinationStore.usableSpace - reserve).coerceAtLeast(0L)
-        val maximum = if (stagingStore == destinationStore) {
-            stagingSafe / 2L
-        } else {
-            minOf(stagingSafe, destinationSafe)
-        }
-        check(maximum > 0L) { "There is not enough free space to stage this synchronized file safely." }
-        return maximum
-    }
+    ): Long = maximumSafeDesktopFileSyncDownloadBytes(
+        stagingRoot, minimumFreeSpaceBytes, local, relativePath,
+    )
 
     private fun requireDownloadCapacity(
         local: DesktopFileSyncLocalTree,
         relativePath: String,
         downloadBytes: Long,
-    ) {
-        require(downloadBytes >= 0L)
-        val reserve = minimumFreeSpaceBytes()
-        require(reserve >= 0L)
-        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) { "Could not create sync staging storage." }
-        val stagingStore = Files.getFileStore(stagingRoot.toPath())
-        val destinationStore = local.fileStore(relativePath)
-        if (stagingStore == destinationStore) {
-            require(
-                stagingStore.usableSpace >= requiredDesktopDownloadFreeBytes(downloadBytes, reserve, sameStore = true),
-            ) { "There is not enough free space to stage this synchronized file safely." }
-        } else {
-            val required = requiredDesktopDownloadFreeBytes(downloadBytes, reserve, sameStore = false)
-            require(stagingStore.usableSpace >= required) {
-                "The sync staging location does not have enough reserved free space."
-            }
-            require(destinationStore.usableSpace >= required) {
-                "The destination folder does not have enough reserved free space."
-            }
-        }
-    }
+    ) = requireDesktopFileSyncDownloadCapacity(
+        stagingRoot, minimumFreeSpaceBytes, local, relativePath, downloadBytes,
+    )
 
     private fun normalizeRemoteRoot(path: String): String {
         val normalized = path.trim().trim('/')

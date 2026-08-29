@@ -179,7 +179,12 @@ class AndroidFileSyncContentEvidenceTest {
             maximumBytes: Long,
         ): String? = error("Hashless deletion evidence must not read content")
 
-        override fun stageForUpload(path: String, destination: File, maximumBytes: Long): LocalSyncEntry =
+        override fun stageForUpload(
+            path: String,
+            destination: File,
+            maximumBytes: Long,
+            shouldContinue: () -> Boolean,
+        ): LocalSyncEntry =
             error("Not used")
 
         override fun createDirectory(path: String, expectedLocalRevision: String?) = error("Not used")

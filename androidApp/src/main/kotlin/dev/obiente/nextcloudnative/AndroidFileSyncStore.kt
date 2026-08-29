@@ -27,7 +27,18 @@ internal data class AndroidFileSyncPersistedState(
     }
 }
 
-internal class AndroidFileSyncStore internal constructor(private val stateFile: File) {
+internal class AndroidFileSyncStore internal constructor(
+    private val stateFile: File,
+    private val maximumSnapshotBytes: Int = MAX_SNAPSHOT_BYTES,
+) {
+    init {
+        require(maximumSnapshotBytes in 1..MAX_SNAPSHOT_BYTES)
+    }
+
+    private val uploadCleanupStore = AndroidFileSyncUploadCleanupStore(
+        File(checkNotNull(stateFile.parentFile), "${stateFile.name}.upload-cleanups"),
+    )
+
     constructor(context: Context) : this(File(context.filesDir, STATE_FILE_NAME))
 
     @Synchronized
@@ -36,12 +47,12 @@ internal class AndroidFileSyncStore internal constructor(private val stateFile: 
         if (!stateFile.isFile || stateFile.length() !in 1..MAX_STATE_BYTES) {
             throw IllegalStateException("Folder sync state exceeds its safe storage limit.")
         }
-        return try {
+        val stored = try {
             DataInputStream(BufferedInputStream(FileInputStream(stateFile))).use { input ->
                 check(input.readInt() == MAGIC) { "Folder sync state has an invalid header." }
                 check(input.readInt() == FORMAT_VERSION) { "Folder sync state version is unsupported." }
                 val snapshotLength = input.readInt()
-                check(snapshotLength in 1..MAX_SNAPSHOT_BYTES) { "Folder sync snapshot has an invalid size." }
+                check(snapshotLength in 1..maximumSnapshotBytes) { "Folder sync snapshot has an invalid size." }
                 val coordinator = decodeFileSyncCoordinatorSnapshot(ByteArray(snapshotLength).also(input::readFully))
                 val nameCount = input.readInt()
                 check(nameCount in 0..MAX_PAIR_COUNT) { "Folder sync metadata contains too many pairs." }
@@ -61,12 +72,38 @@ internal class AndroidFileSyncStore internal constructor(private val stateFile: 
             if (failure is IllegalStateException) throw failure
             throw IllegalStateException("Folder sync state is invalid.", failure)
         }
+        val external = uploadCleanupStore.read()
+        return stored.copy(
+            coordinator = FileSyncCoordinatorState(
+                stored.coordinator.pairs.map { pair ->
+                    val externalCleanups = external[pair.id].orEmpty()
+                    val externallyAbandonedIds = externalCleanups
+                        .mapTo(mutableSetOf(), dev.obiente.nextcloudnative.app.FileSyncPendingUploadCleanup::uploadId)
+                    pair.copy(
+                        workItems = pair.workItems.map { work ->
+                            if (work.uploadCheckpoint?.uploadId in externallyAbandonedIds) {
+                                work.copy(uploadCheckpoint = null)
+                            } else {
+                                work
+                            }
+                        },
+                        pendingUploadCleanups = (externalCleanups + pair.pendingUploadCleanups)
+                            .distinctBy { it.uploadId },
+                    )
+                },
+            ),
+        )
     }
 
     @Synchronized
     fun save(state: AndroidFileSyncPersistedState) {
-        val snapshot = encodeFileSyncCoordinatorSnapshot(state.coordinator)
-        check(snapshot.size <= MAX_SNAPSHOT_BYTES)
+        val cleanups = state.coordinator.pairs.associate { it.id to it.pendingUploadCleanups }
+        uploadCleanupStore.retain(cleanups)
+        val snapshotCoordinator = FileSyncCoordinatorState(
+            state.coordinator.pairs.map { it.copy(pendingUploadCleanups = emptyList()) },
+        )
+        val snapshot = encodeFileSyncCoordinatorSnapshot(snapshotCoordinator)
+        check(snapshot.size <= maximumSnapshotBytes)
         val parent = checkNotNull(stateFile.parentFile)
         check(parent.isDirectory || parent.mkdirs()) { "Could not create folder sync storage." }
         val temporary = File.createTempFile("${stateFile.name}.", ".tmp", parent)
@@ -97,6 +134,7 @@ internal class AndroidFileSyncStore internal constructor(private val stateFile: 
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(temporary.toPath(), stateFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
+            uploadCleanupStore.replace(cleanups)
         } finally {
             temporary.delete()
         }

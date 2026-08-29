@@ -51,6 +51,7 @@ internal class NextcloudFileSyncWorker(
         val engine = AndroidFileSyncEngine(applicationContext)
         val result = runCatching { engine.runPair(session, userId, pairId) }
             .getOrElse { failure ->
+                rethrowAndroidFileSyncCancellation(failure)
                 val disposition = backgroundSyncFailureDisposition(runAttemptCount)
                 services.recordSupportDiagnosticForAccountIdentity(
                     accountId,

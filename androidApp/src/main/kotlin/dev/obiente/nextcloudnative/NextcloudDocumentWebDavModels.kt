@@ -96,4 +96,5 @@ internal data class DocumentDirectoryResult(
 internal data class DocumentDirectoryAccess(
     val canCreateFiles: Boolean,
     val canCreateDirectories: Boolean,
+    val permissionsKnown: Boolean = true,
 )

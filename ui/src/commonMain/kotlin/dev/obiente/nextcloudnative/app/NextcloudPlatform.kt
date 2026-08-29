@@ -1714,6 +1714,12 @@ fun buildNextcloudFileUrl(serverUrl: String, userId: String, path: String): Stri
     return serverUrl.trimEnd('/') + "/remote.php/dav/files/$encodedUserId/" + encodedPath
 }
 
+fun buildNextcloudChunkUploadUrl(serverUrl: String, userId: String, uploadId: String): String {
+    require(isValidNextcloudChunkUploadId(uploadId)) { "The chunk upload ID is invalid." }
+    return serverUrl.trimEnd('/') + "/remote.php/dav/uploads/" +
+        encodeUrlPathSegment(userId) + "/" + encodeUrlPathSegment(uploadId)
+}
+
 private fun encodeUrlPathSegment(value: String): String = encodeUrlComponent(value)
 
 private fun encodeUrlComponent(value: String): String = buildString {

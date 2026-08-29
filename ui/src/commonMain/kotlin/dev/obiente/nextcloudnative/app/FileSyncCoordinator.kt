@@ -16,6 +16,7 @@ data class FileSyncPair(
     val baselines: List<FileSyncBaseline> = emptyList(),
     val contentVerificationProgress: List<FileSyncContentVerificationProgress> = emptyList(),
     val workItems: List<FileSyncWorkItem> = emptyList(),
+    val pendingUploadCleanups: List<FileSyncPendingUploadCleanup> = emptyList(),
     val nextWorkId: Long = 1,
     val lastScanEpochMillis: Long? = null,
 ) {
@@ -23,7 +24,6 @@ data class FileSyncPair(
         requireValidFileSyncPair(this)
     }
 }
-
 data class FileSyncCoordinatorState(
     val pairs: List<FileSyncPair> = emptyList(),
 ) {
@@ -89,6 +89,7 @@ data class FileSyncWorkItem(
     val failureMessage: String? = null,
     val contentMismatchVerified: Boolean = false,
     val contentMismatchLocalHash: String? = null,
+    val uploadCheckpoint: FileSyncUploadCheckpoint? = null,
 ) {
     init {
         require(id > 0)
@@ -101,6 +102,7 @@ data class FileSyncWorkItem(
         require(lastAttemptEpochMillis == null || lastAttemptEpochMillis >= 0)
         require(failureMessage == null || failureMessage.isSafeSyncText(MAX_FILE_SYNC_FAILURE_LENGTH))
         requireValidFileSyncContentMismatchEvidence(this)
+        requireValidFileSyncUploadCheckpoint(this)
         requireValidWorkState()
     }
 
@@ -188,6 +190,7 @@ fun removeFileSyncPair(
     require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
         "A sync pair cannot be removed while work is running."
     }
+    requireNoFileSyncUploadOwnership(pair)
     return state.copy(pairs = state.pairs.filterNot { it.id == pairId })
 }
 
@@ -252,6 +255,7 @@ fun scanFileSyncPair(
         val local = localByPath[path]
         val remote = remoteByPath[path]
         val baseline = baselineByPath[path]
+        current.retainCommitInFlightUpload(local, remote)?.let { return it }
         return current.takeIf { it.sameGeneration(operation, local, remote, baseline) }
             ?.copy(observedLocal = local, observedRemote = remote)
             ?: current.rebindResolvedSourceGeneration(operation, local, remote, baseline)
@@ -368,6 +372,7 @@ fun scanFileSyncPair(
                 contentVerifiedBaselines
             ).sortedBy(FileSyncBaseline::relativePath),
         workItems = work,
+        pendingUploadCleanups = retainFileSyncUploadOwnership(pair, work),
         contentVerificationProgress = contentVerificationProgress,
         nextWorkId = nextId,
         lastScanEpochMillis = nowEpochMillis,
@@ -435,31 +440,6 @@ fun resolveFileSyncDecision(
             decision = decision.copy(state = FileSyncDecisionState.Resolved(choice)),
         )
     }
-}
-
-fun claimNextFileSyncOperation(
-    state: FileSyncCoordinatorState,
-    pairId: String,
-    nowEpochMillis: Long,
-): FileSyncClaim {
-    require(nowEpochMillis >= 0)
-    val pair = state.requirePair(pairId)
-    require(pair.workItems.none { it.state == FileSyncExecutionState.Running }) {
-        "Only one operation per sync pair may run at a time."
-    }
-    val next = pair.workItems.firstOrNull { it.state == FileSyncExecutionState.Ready }
-        ?: return FileSyncClaim(state, null)
-    require(next.attemptCount < MAX_FILE_SYNC_ATTEMPTS) { "The sync work item exceeded its retry limit." }
-    val updated = state.updatePair(pairId) { current ->
-        current.updateWork(next.id) { work ->
-            work.copy(
-                state = FileSyncExecutionState.Running,
-                attemptCount = work.attemptCount + 1,
-                lastAttemptEpochMillis = nowEpochMillis,
-            )
-        }
-    }
-    return FileSyncClaim(updated, FileSyncExecutionCommand(pairId, next.id, next.operation))
 }
 
 fun completeFileSyncOperation(
@@ -836,7 +816,7 @@ private fun FileSyncOperation.executionFootprint(): Set<String> = when (this) {
     else -> setOf(relativePath)
 }
 
-private fun FileSyncPair.updateWork(
+internal fun FileSyncPair.updateWork(
     workId: Long,
     update: (FileSyncWorkItem) -> FileSyncWorkItem,
 ): FileSyncPair {
@@ -852,7 +832,7 @@ private fun FileSyncPair.requireWork(workId: Long): FileSyncWorkItem =
 internal fun FileSyncCoordinatorState.requirePair(pairId: String): FileSyncPair =
     pairs.firstOrNull { it.id == pairId } ?: error("The sync pair does not exist.")
 
-private fun FileSyncCoordinatorState.updatePair(
+internal fun FileSyncCoordinatorState.updatePair(
     pairId: String,
     update: (FileSyncPair) -> FileSyncPair,
 ): FileSyncCoordinatorState {
@@ -875,6 +855,7 @@ private fun requireValidFileSyncPair(pair: FileSyncPair) {
     require(pair.baselines.size <= MAX_FILE_SYNC_ENTRIES) { "The sync pair contains too many baselines." }
     requireBoundedFileSyncContentVerificationProgress(pair.contentVerificationProgress)
     require(pair.workItems.size <= MAX_FILE_SYNC_WORK_ITEMS) { "The sync pair contains too much work." }
+    requireValidFileSyncUploadOwnership(pair)
     requireUniqueCoordinatorPaths(pair.baselines.map(FileSyncBaseline::relativePath), "baseline")
     requireUniqueCoordinatorPaths(pair.workItems.map(FileSyncWorkItem::relativePath), "work")
     require(pair.workItems.map(FileSyncWorkItem::id).distinct().size == pair.workItems.size)
@@ -944,8 +925,7 @@ private fun requireBoundedWorkItem(work: FileSyncWorkItem) {
     }
 }
 
-private fun String.syncDeviceLabel(): String =
-    lowercase().map { if (it.isLetterOrDigit()) it else '-' }
+private fun String.syncDeviceLabel(): String = lowercase().map { if (it.isLetterOrDigit()) it else '-' }
         .joinToString("").trim('-').take(24).ifBlank { "device" }
 
 private fun String.isSafeSyncText(maxLength: Int): Boolean =

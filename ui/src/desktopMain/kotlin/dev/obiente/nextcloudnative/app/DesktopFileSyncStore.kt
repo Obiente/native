@@ -89,7 +89,6 @@ internal class DesktopFileSyncStore(
             connection.close()
         }
     }
-
     @Synchronized
     fun loadPair(pairId: String): DesktopFileSyncPersistedState {
         require(pairId.isNotBlank() && pairId.length <= 256)
@@ -159,6 +158,7 @@ internal class DesktopFileSyncStore(
                     pair.contentVerificationProgress,
                 )
                 persistWork(connection, pairId, before?.workItems.orEmpty(), pair.workItems)
+                persistDesktopFileSyncPairUploadCleanups(connection, pairId, before, pair)
                 putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
             }
         } finally {
@@ -193,6 +193,7 @@ internal class DesktopFileSyncStore(
         workItem: FileSyncWorkItem?,
         synchronizedBaselines: List<FileSyncBaseline> = emptyList(),
         removedBaselinePaths: Set<String> = emptySet(),
+        uploadCleanupChange: DesktopFileSyncUploadCleanupChange? = null,
     ) {
         DesktopFileSyncPersistedState(state.coordinator, state.roots)
         val pair = state.coordinator.pairs.firstOrNull { it.id == pairId }
@@ -204,6 +205,7 @@ internal class DesktopFileSyncStore(
         try {
             initializeSchema(connection)
             migrateLegacyState(connection)
+            val storedUploadCleanups = readDesktopFileSyncUploadCleanups(connection, pairId)
             transaction(connection) {
                 val synchronizedPaths = synchronizedBaselines.map(FileSyncBaseline::relativePath).toSet()
                 val resultingBaselineCount = if (synchronizedPaths.isEmpty() && removedBaselinePaths.isEmpty()) {
@@ -213,6 +215,9 @@ internal class DesktopFileSyncStore(
                 }
                 upsertPairRecord(connection, pair)
                 persistWorkRecord(connection, pairId, workId, workItem)
+                persistDesktopFileSyncExecutionUploadCleanups(
+                    connection, pairId, storedUploadCleanups, uploadCleanupChange,
+                )
                 synchronizedBaselines.forEach { baseline ->
                     upsertDesktopFileSyncBaseline(connection, pairId, baseline)
                 }
@@ -227,7 +232,6 @@ internal class DesktopFileSyncStore(
             connection.close()
         }
     }
-
     private fun requireBaselineCapacity(
         connection: SQLiteConnection,
         pairId: String,
@@ -293,6 +297,7 @@ internal class DesktopFileSyncStore(
                 "PRIMARY KEY(pair_id, work_id), " +
                 "FOREIGN KEY(pair_id) REFERENCES sync_pairs(id) ON DELETE CASCADE)",
         )
+        ensureDesktopFileSyncUploadCleanupTable(connection)
         val schemaVersion = metadataValue(connection, SCHEMA_VERSION_KEY)
         when (schemaVersion) {
             null -> putMetadata(connection, SCHEMA_VERSION_KEY, DATABASE_SCHEMA_VERSION)
@@ -310,6 +315,7 @@ internal class DesktopFileSyncStore(
             "CREATE INDEX IF NOT EXISTS sync_work_pair_state_path " +
                 "ON sync_work(pair_id, state, relative_path, work_id)",
         )
+        migrateInlineDesktopFileSyncUploadCleanups(connection) { pair -> upsertPairRecord(connection, pair) }
     }
 
     private fun migrateWorkIndexColumns(connection: SQLiteConnection) {
@@ -395,6 +401,7 @@ internal class DesktopFileSyncStore(
                                 contentVerificationProgress =
                                     readDesktopFileSyncContentVerificationProgress(connection, pairId),
                                 workItems = readWork(connection, pairId),
+                                pendingUploadCleanups = readDesktopFileSyncUploadCleanups(connection, pairId),
                             ),
                         )
                     }.orEmpty(),
@@ -416,7 +423,9 @@ internal class DesktopFileSyncStore(
                 while (statement.step()) {
                     val pair = decodeFileSyncPairRecord(statement.getBlob(1))
                     require(pair.id == statement.getText(0))
-                    add(pair)
+                    add(pair.copy(
+                        pendingUploadCleanups = readDesktopFileSyncUploadCleanups(connection, pair.id),
+                    ))
                 }
             }
         }
@@ -619,6 +628,7 @@ internal class DesktopFileSyncStore(
                 pair.contentVerificationProgress,
             )
             persistWork(connection, pairId, oldPair?.workItems.orEmpty(), pair.workItems)
+            persistDesktopFileSyncPairUploadCleanups(connection, pairId, oldPair, pair)
             putMetadata(connection, baselineCountKey(pairId), pair.baselines.size.toString())
         }
     }
@@ -658,6 +668,7 @@ internal class DesktopFileSyncStore(
                         baselines = emptyList(),
                         contentVerificationProgress = emptyList(),
                         workItems = emptyList(),
+                        pendingUploadCleanups = emptyList(),
                     ),
                 ),
             )
