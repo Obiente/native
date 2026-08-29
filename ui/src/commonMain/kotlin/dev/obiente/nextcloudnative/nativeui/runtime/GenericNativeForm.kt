@@ -199,6 +199,7 @@ internal fun GenericNativeForm(
         view.id,
         formResource.id,
         initialRecord?.id,
+        initialDraft.values,
         stateSaver = structuredDraftSaver,
     ) {
         mutableStateOf(initialStructuredDraft ?: emptyStructuredDraft)

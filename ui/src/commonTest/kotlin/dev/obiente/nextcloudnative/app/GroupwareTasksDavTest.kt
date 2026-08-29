@@ -130,6 +130,42 @@ class GroupwareTasksDavTest {
     }
 
     @Test
+    fun `unrelated edits preserve non-binary task status and progress`() {
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        listOf(
+            "IN-PROCESS" to 40,
+            "CANCELLED" to 60,
+        ).forEach { (status, progress) ->
+            val href = "$calendarHref${status.lowercase()}.ics"
+            val original = """
+                BEGIN:VCALENDAR
+                VERSION:2.0
+                BEGIN:VTODO
+                UID:$status
+                SUMMARY:Before
+                STATUS:$status
+                PERCENT-COMPLETE:$progress
+                END:VTODO
+                END:VCALENDAR
+            """.trimIndent().replace("\n", "\r\n") + "\r\n"
+            val task = requireNotNull(parseGroupwareTask(calendarHref, href, "\"one\"", original))
+
+            val updated = updateGroupwareTaskContent(
+                task = task,
+                title = "After",
+                dueDate = null,
+                completed = false,
+                description = null,
+            )
+
+            assertTrue("STATUS:$status" in updated)
+            assertTrue("PERCENT-COMPLETE:$progress" in updated)
+            assertFalse("STATUS:NEEDS-ACTION" in updated)
+            assertFalse("PERCENT-COMPLETE:0" in updated)
+        }
+    }
+
+    @Test
     fun `recurring task components have distinct identities and exact component updates`() {
         val href = "/remote.php/dav/calendars/person/tasks/recurring.ics"
         val calendarHref = "/remote.php/dav/calendars/person/tasks/"

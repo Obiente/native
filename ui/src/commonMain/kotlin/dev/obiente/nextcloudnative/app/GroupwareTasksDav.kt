@@ -137,19 +137,22 @@ fun updateGroupwareTaskContent(
     requireNotNull(taskRange) { "The selected task component could not be found." }
     val taskStart = taskRange.first
     var taskEnd = taskRange.last
+    val completionChanged = completed != task.completed
     val replacements = linkedMapOf<String, String?>(
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
-        "STATUS" to "STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}",
-        "PERCENT-COMPLETE" to "PERCENT-COMPLETE:${if (completed) 100 else 0}",
-        "COMPLETED" to when {
-            !completed -> null
-            task.completed -> task.completedAt?.let { "COMPLETED:$it" }
-            else -> "COMPLETED:${completionTimestamp.also(::requireValidGroupwareTaskCompletionTimestamp)}"
-        },
         "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let {
             "DESCRIPTION:${it.escapeCalendarText()}"
         },
     )
+    if (completionChanged) {
+        replacements["STATUS"] = "STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}"
+        replacements["PERCENT-COMPLETE"] = "PERCENT-COMPLETE:${if (completed) 100 else 0}"
+        replacements["COMPLETED"] = if (completed) {
+            "COMPLETED:${completionTimestamp.also(::requireValidGroupwareTaskCompletionTimestamp)}"
+        } else {
+            null
+        }
+    }
     if (!preserveTimedDue) {
         replacements["DUE"] = due?.let { "DUE;VALUE=DATE:$it" }
     }
