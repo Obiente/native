@@ -301,9 +301,7 @@ fun NativeGroupwareTasksScreen(
     val selectedTaskWritable = selectedTask?.let { task ->
         ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
     } == true
-    val selectedTaskDeleteSafe = selectedTask?.let { task ->
-        ready.tasks.count { candidate -> candidate.href == task.href } == 1
-    } == true
+    val selectedTaskDeleteSafe = selectedTask?.let(::isGroupwareTaskObjectDeleteSafe) == true
     LaunchedEffect(selectedTask?.instanceId, selectedTaskWritable) {
         if (selectedTask != null && !selectedTaskWritable) {
             editing = false
@@ -421,7 +419,7 @@ fun NativeGroupwareTasksScreen(
                         val taskWritable = current.calendars.any { calendar ->
                             calendar.href == task.calendarHref && calendar.writable
                         }
-                        val taskDeleteSafe = current.tasks.count { candidate -> candidate.href == task.href } == 1
+                        val taskDeleteSafe = isGroupwareTaskObjectDeleteSafe(task)
                         Card(
                             modifier = Modifier.fillMaxWidth().combinedClickable(
                                 onClickLabel = "Open ${task.title}",

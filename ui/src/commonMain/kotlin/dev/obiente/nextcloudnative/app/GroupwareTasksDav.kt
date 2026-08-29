@@ -188,6 +188,9 @@ internal fun expectedGroupwareTaskDueAfterDateEdit(task: GroupwareTask?, dueDate
     }
 }
 
+internal fun isGroupwareTaskObjectDeleteSafe(task: GroupwareTask): Boolean =
+    task.rawCalendar.unfoldCalendarLines().calendarComponentLines("VTODO").size == 1
+
 private fun String.preserveGroupwareTaskDueTime(task: GroupwareTask, dueDate: String): String? {
     if (task.dueAllDay) return null
     val separator = indexOf(':')

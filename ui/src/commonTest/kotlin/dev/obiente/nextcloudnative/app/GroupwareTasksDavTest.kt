@@ -272,6 +272,28 @@ class GroupwareTasksDavTest {
     }
 
     @Test
+    fun `hidden malformed siblings prevent whole-object task deletion`() {
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val href = "${calendarHref}mixed.ics"
+        val content = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            UID:visible
+            SUMMARY:Visible task
+            END:VTODO
+            BEGIN:VTODO
+            SUMMARY:Malformed hidden sibling
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+
+        val task = parseGroupwareTasksFromContent(calendarHref, href, "\"one\"", content).single()
+
+        assertFalse(isGroupwareTaskObjectDeleteSafe(task))
+    }
+
+    @Test
     fun `task due dates reject impossible Gregorian dates`() {
         assertTrue(isValidGroupwareTaskDueDate("20240229"))
         assertFalse(isValidGroupwareTaskDueDate("20230229"))
