@@ -164,9 +164,11 @@ Reset is deliberately separate and requires an exact confirmation flag:
 tools/nextcloud-demo.sh reset --confirm
 ```
 
-That command deletes only volumes belonging to the `nc-native-demo` Compose
-project. It leaves the ignored credential and certificate directory in place so
-its removal remains a separate, deliberate filesystem operation.
+That command deletes the volumes belonging to the `nc-native-demo` Compose
+project together with its ignored `.env`, cached app-password sessions, scoped
+write authorizations, and private TLS material. Reports and reusable App Store
+metadata remain. Run `tools/nextcloud-demo.sh init [host]` before starting a
+fresh demo.
 
 Validate the repository-side contract without launching containers:
 
