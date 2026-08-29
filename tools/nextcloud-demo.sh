@@ -41,12 +41,13 @@ Commands:
   logs [service]                  Follow raw private container logs. Review and redact
                                   them before sharing any excerpt.
   down                            Stop containers while preserving all volumes.
-  reset --confirm                 Delete this demo stack's containers and volumes.
+  reset --confirm                 Delete this demo stack's containers, volumes,
+                                  credentials, and certificates for reinitialization.
   validate                        Validate scripts, manifests, and Compose expansion.
 
 The instance is disposable, but ordinary down/up commands preserve its data.
-Only reset --confirm removes volumes. Runtime credentials, certificates, and
-reports stay under ignored integration/nextcloud-demo paths.
+Only reset --confirm removes volumes and private initialization state. Reports
+and reusable App Store metadata stay under ignored integration/nextcloud-demo paths.
 EOF
 }
 
@@ -664,9 +665,16 @@ reset_stack() {
         fail "reset deletes this demo stack's volumes; rerun with reset --confirm"
     require_initialized
     compose down --volumes --remove-orphans
-    rm -f -- "$state_root/test-session.json" "$state_root/curl.conf"
+    rm -f -- \
+        "$environment_file" \
+        "$state_root/test-session.json" \
+        "$state_root/curl.conf" \
+        "$state_root/write-scope.json" \
+        "$state_root/write-scope-clear.json"
+    rm -rf -- "$state_root/tls"
     printf 'Removed the nc-native-demo containers and volumes.\n'
-    printf 'Removed cached app-password session files. Private bootstrap credentials and certificates remain in %s.\n' "$state_root"
+    printf 'Removed private bootstrap credentials, certificates, and cached app-password session files.\n'
+    printf 'Run tools/nextcloud-demo.sh init [host] to initialize a fresh demo.\n'
 }
 
 command="${1:-help}"

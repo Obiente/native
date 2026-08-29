@@ -92,11 +92,13 @@ fun NativeGroupwareTasksScreen(
     var recoveryVerification by remember(accountScope, services) {
         mutableStateOf(TaskRecoveryVerification.Unknown)
     }
+    var unreadableRecoveryDiscardRequested by remember(accountScope) { mutableStateOf(false) }
     var filter by rememberSaveable(accountScope) { mutableStateOf(TaskFilter.Open) }
     var query by rememberSaveable(accountScope) { mutableStateOf("") }
     val recoveryPostcondition = remember(accountScope, recoveryEncoded) {
         recoveryEncoded?.let { decodeTaskMutationRecoveryState(it, accountScope) }
     }
+    val unreadableRecovery = recoveryLoaded && recoveryEncoded != null && recoveryPostcondition == null
     val durableMutationInProgress = !recoveryLoaded || mutationRunning || recoveryEncoded != null
     val interactionBlocked = mutationOrLinkCommitBlocksInteraction(
         durableMutationInProgress,
@@ -143,7 +145,7 @@ fun NativeGroupwareTasksScreen(
             false
         }
         if (!cleared) {
-            mutationError = "The verified task recovery record could not be cleared safely. Refresh and try again."
+            mutationError = "The task recovery record could not be cleared safely. Refresh and try again."
             return false
         }
         recoveryEncoded = null
@@ -173,6 +175,9 @@ fun NativeGroupwareTasksScreen(
 
     LaunchedEffect(durableMutationInProgress) {
         onMutationInProgressChanged(durableMutationInProgress)
+    }
+    LaunchedEffect(unreadableRecovery) {
+        if (!unreadableRecovery) unreadableRecoveryDiscardRequested = false
     }
     DisposableEffect(Unit) {
         onDispose { onMutationInProgressChanged(false) }
@@ -317,7 +322,12 @@ fun NativeGroupwareTasksScreen(
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
             if (refreshing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            refreshError?.let { message ->
+            val statusMessage = if (unreadableRecovery) {
+                "A saved task recovery record cannot be read. The server result is unknown; discard the record only after checking the task on another client."
+            } else {
+                refreshError
+            }
+            statusMessage?.let { message ->
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -327,7 +337,11 @@ fun NativeGroupwareTasksScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(message, modifier = Modifier.weight(1f))
-                        if (recoveryVerification == TaskRecoveryVerification.Unapplied) {
+                        if (unreadableRecovery) {
+                            TextButton(onClick = { unreadableRecoveryDiscardRequested = true }) {
+                                Text("Review recovery")
+                            }
+                        } else if (recoveryVerification == TaskRecoveryVerification.Unapplied) {
                             TextButton(
                                 onClick = {
                                     scope.launch {
@@ -590,6 +604,37 @@ fun NativeGroupwareTasksScreen(
                         }
                     },
                 ) { Text("Delete") }
+            },
+        )
+    }
+
+    if (unreadableRecovery && unreadableRecoveryDiscardRequested) {
+        AlertDialog(
+            onDismissRequest = { unreadableRecoveryDiscardRequested = false },
+            title = { Text("Discard unreadable task recovery?") },
+            text = {
+                Text(
+                    "The client cannot verify whether the last task change reached the server. " +
+                        "Check the task from another client first. Discarding this record unlocks Tasks but cannot undo a server change.",
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { unreadableRecoveryDiscardRequested = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            if (clearRecovery()) {
+                                unreadableRecoveryDiscardRequested = false
+                                creating = false
+                                editing = false
+                                deleting = null
+                                loadAttempt += 1
+                            }
+                        }
+                    },
+                ) { Text("Discard and unlock") }
             },
         )
     }

@@ -515,8 +515,6 @@ interface NextcloudPlatformServices {
     val supportsBidirectionalFileSync: Boolean get() = false
 
     /** True only when authenticated same-origin web content can be isolated and rendered in-app. */
-    val supportsEmbeddedNextcloudWebApp: Boolean get() = false
-
     /** Native handoff is opt-in; unsupported platforms must never imply that an action was launched. */
     val externalFileHandoffSupport: ExternalFileHandoffSupport
         get() = ExternalFileHandoffSupport.Unsupported("External file handoff is not supported on this platform.")

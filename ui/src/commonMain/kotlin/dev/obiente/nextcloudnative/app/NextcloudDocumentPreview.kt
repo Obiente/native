@@ -108,30 +108,21 @@ fun NextcloudDocumentPreview(
     Surface(modifier = modifier.fillMaxSize()) {
         val activeEditor = editStatus as? DocumentEditUiState.Editing
         if (activeEditor != null) {
-            if (services.supportsEmbeddedNextcloudWebApp) {
-                PlatformEmbeddedNextcloudWebApp(
-                    session = session,
-                    initialUrl = activeEditor.sameOriginUrl,
-                    onExit = { editStatus = DocumentEditUiState.Idle },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                LaunchedEffect(activeEditor.sameOriginUrl) {
-                    runCatchingPreservingCancellation {
-                        services.openExternalUrl(activeEditor.sameOriginUrl)
-                    }.onSuccess {
-                        editStatus = DocumentEditUiState.Idle
-                    }.onFailure { failure ->
-                        editStatus = DocumentEditUiState.Failed(
-                            failure.message ?: "Could not open the Office editor.",
-                        )
-                    }
+            LaunchedEffect(activeEditor.sameOriginUrl) {
+                runCatchingPreservingCancellation {
+                    services.openExternalUrl(activeEditor.sameOriginUrl)
+                }.onSuccess {
+                    editStatus = DocumentEditUiState.Idle
+                }.onFailure { failure ->
+                    editStatus = DocumentEditUiState.Failed(
+                        failure.message ?: "Could not open the Office editor.",
+                    )
                 }
-                DocumentPreviewMessage(
-                    title = "Opening Office",
-                    detail = "The editor is opening in your browser.",
-                )
             }
+            DocumentPreviewMessage(
+                title = "Opening Office",
+                detail = "The editor is opening in your browser.",
+            )
             return@Surface
         }
         when (val current = state) {
