@@ -85,6 +85,7 @@ enum class OfficeEditBlockedReason {
     DirectEditingUnavailable,
     FileIdHandoffUnavailable,
     InsecureEditor,
+    InsecureAccountOrigin,
     UnsupportedMimeType,
     UnsafePath,
 }
@@ -97,7 +98,11 @@ enum class OfficeEditBlockedReason {
 fun planOfficeEditSession(
     file: NextcloudFile,
     capabilities: NextcloudDocumentEditingCapabilities,
+    accountOriginSecure: Boolean = true,
 ): OfficeEditSessionPlan {
+    if (!accountOriginSecure) {
+        return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.InsecureAccountOrigin)
+    }
     if (file.isDirectory) return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.Directory)
     if (!file.originalAccessAllowed) {
         return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.OriginalAccessRestricted)
@@ -166,6 +171,7 @@ internal fun OfficeEditBlockedReason.userMessage(): String = when (this) {
     OfficeEditBlockedReason.FileIdHandoffUnavailable ->
         "This server cannot bind an Office handoff to the document ID."
     OfficeEditBlockedReason.InsecureEditor -> "The advertised Office handoff is not marked secure."
+    OfficeEditBlockedReason.InsecureAccountOrigin -> "Office editing requires an HTTPS account connection."
     OfficeEditBlockedReason.UnsupportedMimeType -> "Nextcloud Office did not advertise this exact file type."
     OfficeEditBlockedReason.UnsafePath -> "The document path is unsafe."
 }

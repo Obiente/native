@@ -819,7 +819,7 @@ private fun DynamicAction.isRootReadAction(): Boolean =
         risk == ActionRisk.readOnly &&
         !binding.hasUnboundRequiredBodyFields() &&
         !isInteractiveLookupHelper() &&
-        !looksLikeStateChangingGet()
+        hasPositiveRootReadEvidence()
 
 /**
  * Search-as-you-type endpoints are data sources for relation pickers, not standalone app roots.

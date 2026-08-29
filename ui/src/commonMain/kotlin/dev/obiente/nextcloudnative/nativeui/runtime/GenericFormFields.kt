@@ -152,6 +152,7 @@ internal fun GenericRepeatableObjectField(
     field: FieldSpec,
     spec: RepeatableObjectInputSpec,
     rows: List<RepeatableObjectInputRow>,
+    error: String? = null,
     enabled: Boolean,
     onRowsChange: (List<RepeatableObjectInputRow>) -> Unit,
 ) {
@@ -210,6 +211,7 @@ internal fun GenericRepeatableObjectField(
                     }
                 }
             }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
         return
     }
@@ -229,6 +231,7 @@ internal fun GenericRepeatableObjectField(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
             OutlinedButton(
                 enabled = enabled && rows.size < spec.maximumItems,

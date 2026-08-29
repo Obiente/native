@@ -1251,6 +1251,7 @@ private fun AuthenticatedApp(
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
     var certificateReview by remember(session) { mutableStateOf<ServerCertificateReview?>(null) }
+    var certificateReviewFailure by remember(session) { mutableStateOf<String?>(null) }
     var certificateTrustError by remember(session) { mutableStateOf<String?>(null) }
     var trustingCertificate by remember(session) { mutableStateOf(false) }
     var certificateRecoveryAttempt by remember(session) { mutableStateOf(0) }
@@ -1440,6 +1441,7 @@ private fun AuthenticatedApp(
         val review = reviewResult.getOrNull()
         if (review != null) {
             certificateReview = review
+            certificateReviewFailure = failure.message ?: "Could not load server details."
             certificateTrustError = null
         } else {
             discoveryError = reviewResult.exceptionOrNull()?.message
@@ -1456,6 +1458,8 @@ private fun AuthenticatedApp(
             confirmLabel = "Trust and retry",
             onDismiss = {
                 certificateReview = null
+                discoveryError = certificateReviewFailure ?: "Could not load server details."
+                certificateReviewFailure = null
                 certificateTrustError = null
             },
             onConfirm = {
@@ -1465,6 +1469,7 @@ private fun AuthenticatedApp(
                     runCatching { services.trustServerCertificate(review) }
                         .onSuccess {
                             certificateReview = null
+                            certificateReviewFailure = null
                             trustingCertificate = false
                             certificateRecoveryAttempt += 1
                             discoveryAttempt += 1
@@ -3016,7 +3021,6 @@ private fun AppInfoScreen(
                 session = session,
                 currentUserId = currentUserId,
                 discovery = resolved,
-                advertisedWebHref = app.href,
                 restoredNavigation = navigation,
                 onNavigationChanged = onNavigationChanged,
                 onRetryDiscovery = ::retryDiscoveryAndServerInfo,
@@ -3057,7 +3061,6 @@ private fun DynamicDiscoveredAppScreen(
     session: NextcloudSession,
     currentUserId: String,
     discovery: DynamicDescriptorDiscovery,
-    advertisedWebHref: String?,
     restoredNavigation: DynamicAppNavigationState,
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onRetryDiscovery: () -> Unit,
@@ -3065,21 +3068,6 @@ private fun DynamicDiscoveredAppScreen(
     modifier: Modifier = Modifier,
 ) {
     val descriptor = discovery.descriptor
-    val webAppUrl = remember(session.serverUrl, descriptor.app.id, advertisedWebHref) {
-        verifiedEmbeddedWebAppUrl(session.serverUrl, descriptor.app.id, advertisedWebHref)
-    }
-    if (discovery.acquisition == DynamicDescriptorAcquisition.MetadataFallback && webAppUrl != null) {
-        Column(modifier = modifier.fillMaxSize()) {
-            ScreenHeader(descriptor.app.name, null, onExit)
-            PlatformEmbeddedNextcloudWebApp(
-                session = session,
-                initialUrl = webAppUrl,
-                onExit = onExit,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
-        }
-        return
-    }
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
             .forDynamicContractVersion(discovery.versionStatus)

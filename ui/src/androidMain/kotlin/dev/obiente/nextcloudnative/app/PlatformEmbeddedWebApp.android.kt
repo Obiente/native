@@ -6,7 +6,6 @@ import android.net.http.SslError
 import android.net.Uri
 import android.util.Base64
 import android.webkit.CookieManager
-import android.webkit.HttpAuthHandler
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -19,6 +18,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,14 +39,22 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
     onExit: () -> Unit,
     modifier: Modifier,
 ) {
-    val initialOrigin = remember(initialUrl) { embeddedWebOrigin(initialUrl) }
+    val initialOrigin = remember(initialUrl) { requireNotNull(embeddedWebOrigin(initialUrl)) }
     val authorization = remember(session.loginName, session.appPassword) {
         val credentials = "${session.loginName}:${session.appPassword}".encodeToByteArray()
         "Basic ${Base64.encodeToString(credentials, Base64.NO_WRAP)}"
     }
-    var progress by remember(initialUrl) { mutableIntStateOf(0) }
-    var webView by remember { mutableStateOf<WebView?>(null) }
-    var canGoBack by remember(initialUrl) { mutableStateOf(false) }
+    val webSessionKey = remember(session.serverUrl, session.loginName, authorization, initialUrl) {
+        listOf(
+            session.serverUrl,
+            session.loginName,
+            publicContentSha256(authorization.encodeToByteArray()),
+            initialUrl,
+        ).joinToString("\u0000")
+    }
+    var progress by remember(webSessionKey) { mutableIntStateOf(0) }
+    var webView by remember(webSessionKey) { mutableStateOf<WebView?>(null) }
+    var canGoBack by remember(webSessionKey) { mutableStateOf(false) }
     var fileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val fileChooserLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -62,7 +70,7 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
         if (activeWebView?.canGoBack() == true) activeWebView.goBack() else onExit()
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(webSessionKey) {
         onDispose {
             webView?.apply {
                 stopLoading()
@@ -72,15 +80,20 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                 destroy()
             }
             webView = null
+            CookieManager.getInstance().apply {
+                removeAllCookies(null)
+                flush()
+            }
             fileChooserCallback?.onReceiveValue(null)
             fileChooserCallback = null
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { context ->
-                WebView(context).apply {
+        key(webSessionKey) {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
                     webView = this
                     val embeddedWebView = this
                     settings.javaScriptEnabled = true
@@ -94,6 +107,14 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                     CookieManager.getInstance().apply {
                         setAcceptCookie(true)
                         setAcceptThirdPartyCookies(embeddedWebView, true)
+                        removeAllCookies {
+                            flush()
+                            embeddedWebView.post {
+                                if (webView === embeddedWebView) {
+                                    embeddedWebView.loadUrl(initialUrl, mapOf("Authorization" to authorization))
+                                }
+                            }
+                        }
                     }
                     webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -141,20 +162,15 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
 
                         override fun onReceivedHttpAuthRequest(
                             view: WebView?,
-                            handler: HttpAuthHandler?,
+                            handler: android.webkit.HttpAuthHandler?,
                             host: String?,
                             realm: String?,
                         ) {
-                            val requestOrigin = host?.let { candidate ->
-                                val scheme = Uri.parse(initialUrl).scheme ?: return@let null
-                                val port = Uri.parse(initialUrl).port
-                                "$scheme://${candidate.lowercase()}${if (port >= 0) ":$port" else ""}"
-                            }
-                            if (handler != null && requestOrigin == initialOrigin) {
-                                handler.proceed(session.loginName, session.appPassword)
-                            } else {
-                                handler?.cancel()
-                            }
+                            // WebView does not expose the challenged scheme and port here, so host
+                            // equality cannot prove a complete origin. The initial request already
+                            // carries a same-origin Authorization header; never disclose credentials
+                            // through this ambiguous callback.
+                            handler?.cancel()
                         }
 
                         @SuppressLint("WebViewClientOnReceivedSslError")
@@ -174,18 +190,13 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                             if (trusted) handler?.proceed() else handler?.cancel()
                         }
                     }
-                    loadUrl(initialUrl, mapOf("Authorization" to authorization))
-                }
-            },
-            update = { view ->
-                if (view.url == null) {
-                    view.loadUrl(initialUrl, mapOf("Authorization" to authorization))
-                }
-            },
-            modifier = Modifier.fillMaxSize().semantics {
-                contentDescription = "Embedded web app"
-            },
-        )
+                    }
+                },
+                modifier = Modifier.fillMaxSize().semantics {
+                    contentDescription = "Embedded web app"
+                },
+            )
+        }
         if (progress in 0..99) {
             LinearProgressIndicator(progress = { progress / 100f })
         }

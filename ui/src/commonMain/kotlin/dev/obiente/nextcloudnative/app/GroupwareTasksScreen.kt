@@ -154,7 +154,7 @@ fun NativeGroupwareTasksScreen(
         return true
     }
 
-    LaunchedEffect(accountScope, services) {
+    LaunchedEffect(accountScope, services, loadAttempt) {
         recoveryLoaded = false
         recoveryEncoded = null
         try {
@@ -242,6 +242,15 @@ fun NativeGroupwareTasksScreen(
 
     val ready = state as? TasksLoadState.Ready
     val selectedTask = ready?.tasks?.firstOrNull { it.href == selectedTaskHref }
+    val selectedTaskWritable = selectedTask?.let { task ->
+        ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
+    } == true
+    LaunchedEffect(selectedTask?.href, selectedTaskWritable) {
+        if (selectedTask != null && !selectedTaskWritable) {
+            editing = false
+            if (deleting?.href == selectedTask.href) deleting = null
+        }
+    }
     val visibleTasks = remember(ready?.tasks, filter, query) {
         val needle = query.trim().lowercase()
         ready?.tasks.orEmpty().filter { task ->
@@ -367,25 +376,28 @@ fun NativeGroupwareTasksScreen(
                     Text(if (task.completed) "Completed" else "Open")
                     task.due?.let { Text("Due ${it.displayTaskDueDate()}") }
                     task.description?.let { Text(it) }
+                    if (!selectedTaskWritable) {
+                        Text("This task list is read-only.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
             confirmButton = {
                 TextButton(
-                    enabled = !interactionBlocked,
+                    enabled = !interactionBlocked && selectedTaskWritable,
                     onClick = { editing = true },
                 ) { Text("Edit") }
             },
             dismissButton = {
                 TextButton(
-                    enabled = !interactionBlocked,
+                    enabled = !interactionBlocked && selectedTaskWritable,
                     onClick = { deleting = task },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
         )
     }
 
-    if ((creating || editing) && ready != null) {
+    if ((creating || editing && selectedTaskWritable) && ready != null) {
         TaskEditorDialog(
             task = selectedTask.takeIf { editing },
             calendars = if (editing) {
@@ -402,6 +414,10 @@ fun NativeGroupwareTasksScreen(
             },
             onSave = save@{ draft, calendar ->
                 mutationError = null
+                if (!calendar.writable) {
+                    mutationError = "This task list is read-only."
+                    return@save
+                }
                 val normalizedDraft = draft.normalized()
                 val normalizedDue = normalizedDraft.compactDueDateOrNull()
                 val uid = selectedTask?.uid ?: "nextcloud-native-${Clock.System.now().toEpochMilliseconds()}"
@@ -446,6 +462,7 @@ fun NativeGroupwareTasksScreen(
                     expectedUid = uid,
                     previousEtag = selectedTask?.etag,
                     draft = normalizedDraft,
+                    expectedDue = expectedGroupwareTaskDueAfterDateEdit(selectedTask, normalizedDue),
                 )
                 scope.launch {
                     if (!retainRecovery(postcondition)) return@launch
@@ -474,7 +491,9 @@ fun NativeGroupwareTasksScreen(
         )
     }
 
-    deleting?.let { task ->
+    deleting?.takeIf { task ->
+        ready?.calendars?.any { calendar -> calendar.href == task.calendarHref && calendar.writable } == true
+    }?.let { task ->
         AlertDialog(
             onDismissRequest = { if (!interactionBlocked) deleting = null },
             title = { Text("Delete ${task.title}?") },
@@ -572,6 +591,7 @@ internal sealed interface TaskMutationPostcondition {
         val expectedUid: String,
         val previousEtag: String?,
         val draft: TaskDraft,
+        val expectedDue: String? = draft.compactDueDateOrNull(),
     ) : TaskMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
@@ -585,7 +605,7 @@ internal sealed interface TaskMutationPostcondition {
             return task.href == href &&
                 task.uid == expectedUid &&
                 task.title == expected.title &&
-                task.due == expected.compactDueDateOrNull() &&
+                task.due == expectedDue &&
                 task.completed == expected.completed &&
                 task.description.orEmpty() == expected.description
         }

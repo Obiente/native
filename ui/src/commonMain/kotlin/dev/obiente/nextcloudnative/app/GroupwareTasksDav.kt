@@ -105,6 +105,7 @@ fun updateGroupwareTaskContent(
 ): String {
     require(title.isNotBlank()) { "A task title is required." }
     val due = dueDate?.takeIf(String::isNotBlank)?.also(::requireValidGroupwareTaskDueDate)
+    val preserveTimedDue = !task.dueAllDay && task.due?.take(8) == due
     val original = task.rawCalendar.unfoldCalendarLines().toMutableList()
     val taskRange = original.calendarComponentRanges("VTODO").firstOrNull { range ->
         original.subList(range.first + 1, range.last).calendarPropertyValue("UID") == task.uid
@@ -112,9 +113,8 @@ fun updateGroupwareTaskContent(
     requireNotNull(taskRange) { "The selected task component could not be found." }
     val taskStart = taskRange.first
     var taskEnd = taskRange.last
-    val replacements = linkedMapOf(
+    val replacements = linkedMapOf<String, String?>(
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
-        "DUE" to due?.let { "DUE;VALUE=DATE:$it" },
         "STATUS" to "STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}",
         "PERCENT-COMPLETE" to "PERCENT-COMPLETE:${if (completed) 100 else 0}",
         "COMPLETED" to null,
@@ -122,6 +122,9 @@ fun updateGroupwareTaskContent(
             "DESCRIPTION:${it.escapeCalendarText()}"
         },
     )
+    if (!preserveTimedDue) {
+        replacements["DUE"] = due?.let { "DUE;VALUE=DATE:$it" }
+    }
     replacements.forEach { (name, replacement) ->
         val index = (taskStart + 1 until taskEnd).firstOrNull { lineIndex ->
             original[lineIndex].substringBefore(':').substringBefore(';').equals(name, true)
@@ -140,6 +143,9 @@ fun updateGroupwareTaskContent(
     }
     return original.joinToString("\r\n", postfix = "\r\n")
 }
+
+internal fun expectedGroupwareTaskDueAfterDateEdit(task: GroupwareTask?, dueDate: String?): String? =
+    if (task != null && !task.dueAllDay && task.due?.take(8) == dueDate) task.due else dueDate
 
 private fun requireValidGroupwareTaskDueDate(value: String) {
     require(value.length == 8 && value.all(Char::isDigit)) { "The task due date is invalid." }

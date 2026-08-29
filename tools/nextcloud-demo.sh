@@ -38,8 +38,8 @@ Commands:
                                   Authorize one exact app API subtree for writes.
   android-clear-write-scope <instance>
                                   Remove the emulator's scoped write authorization.
-  logs [service]                  Follow sanitized container logs. Do not attach this
-                                  output to public reports without reviewing it.
+  logs [service]                  Follow raw private container logs. Review and redact
+                                  them before sharing any excerpt.
   down                            Stop containers while preserving all volumes.
   reset --confirm                 Delete this demo stack's containers and volumes.
   validate                        Validate scripts, manifests, and Compose expansion.
@@ -165,15 +165,17 @@ initialize() {
     admin_password="$(openssl rand -hex 32)"
     test_password="$(openssl rand -hex 32)"
     local trusted_domains="localhost 127.0.0.1 10.0.2.2"
+    local bind_address="127.0.0.1"
     if [[ "$host" != "localhost" && "$host" != "127.0.0.1" && "$host" != "10.0.2.2" ]]; then
         trusted_domains="$trusted_domains $host"
+        bind_address="0.0.0.0"
     fi
 
     {
         printf 'NC_DEMO_HOST=%s\n' "$host"
         printf 'NC_DEMO_HTTP_PORT=%s\n' "$default_http_port"
         printf 'NC_DEMO_HTTPS_PORT=%s\n' "$default_port"
-        printf 'NC_DEMO_BIND_ADDRESS=0.0.0.0\n'
+        printf 'NC_DEMO_BIND_ADDRESS=%s\n' "$bind_address"
         printf 'NC_DEMO_TRUSTED_DOMAINS=%s\n' "$trusted_domains"
         printf 'NC_DEMO_DATABASE_NAME=nextcloud\n'
         printf 'NC_DEMO_DATABASE_USER=nextcloud\n'
@@ -662,8 +664,9 @@ reset_stack() {
         fail "reset deletes this demo stack's volumes; rerun with reset --confirm"
     require_initialized
     compose down --volumes --remove-orphans
+    rm -f -- "$state_root/test-session.json" "$state_root/curl.conf"
     printf 'Removed the nc-native-demo containers and volumes.\n'
-    printf 'Private credentials and certificates remain in %s until removed deliberately.\n' "$state_root"
+    printf 'Removed cached app-password session files. Private bootstrap credentials and certificates remain in %s.\n' "$state_root"
 }
 
 command="${1:-help}"

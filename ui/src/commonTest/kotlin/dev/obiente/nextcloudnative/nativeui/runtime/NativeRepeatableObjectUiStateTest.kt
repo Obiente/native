@@ -8,6 +8,7 @@ import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKin
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -186,6 +187,31 @@ class NativeRepeatableObjectUiStateTest {
         val saved = encodeNativeRepeatableObjectDraft(values, specs)
 
         assertEquals(values, saved?.let { decodeNativeRepeatableObjectDraft(it, specs) })
+    }
+
+    @Test
+    fun `submit encoding returns field validation instead of throwing`() {
+        val invalid = encodeNativeRepeatableObjectSubmitValues(
+            values = mapOf(
+                "entries" to listOf(RepeatableObjectInputRow(mapOf("enabled" to "false"))),
+            ),
+            specs = mapOf("entries" to spec),
+        )
+        val failure = assertIs<NativeRepeatableObjectSubmitEncoding.Invalid>(invalid)
+        assertTrue(failure.fieldErrors.getValue("entries").contains("Label is required"))
+
+        val valid = encodeNativeRepeatableObjectSubmitValues(
+            values = mapOf(
+                "entries" to listOf(
+                    RepeatableObjectInputRow(mapOf("label" to "Milk", "enabled" to "true")),
+                ),
+            ),
+            specs = mapOf("entries" to spec),
+        )
+        assertEquals(
+            """[{"label":"Milk","enabled":true}]""",
+            assertIs<NativeRepeatableObjectSubmitEncoding.Ready>(valid).values.getValue("entries"),
+        )
     }
 
     @Test

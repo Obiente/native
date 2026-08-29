@@ -12,6 +12,22 @@ internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
         id.semanticConceptTokens().lastOrNull() in STATE_CHANGING_GET_CONCEPTS
 }
 
+/**
+ * Parameterless detail GETs become automatic network work when an app opens. Require affirmative
+ * read evidence instead of assuming that an unfamiliar GET is harmless. Collection intent is an
+ * explicit read-producing contract; detail routes need verified provenance or an
+ * explicit read-producing concept such as status, settings, or overview.
+ */
+internal fun DynamicAction.hasPositiveRootReadEvidence(): Boolean {
+    if (looksLikeStateChangingGet()) return false
+    if (intent == ActionIntent.list) return true
+    if (provenance.any { it.kind in VERIFIED_ROOT_READ_PROVENANCE }) return true
+    val concepts = sequenceOf(binding.path, id, label)
+        .flatMap { it.semanticConceptTokens().asSequence() }
+        .toSet()
+    return concepts.any(POSITIVE_ROOT_READ_CONCEPTS::contains)
+}
+
 private val STATE_CHANGING_GET_CONCEPTS = setOf(
     "clear",
     "clearcache",
@@ -31,4 +47,34 @@ private val STATE_CHANGING_GET_CONCEPTS = setOf(
     "run",
     "toggle",
     "trigger",
+)
+
+private val VERIFIED_ROOT_READ_PROVENANCE = setOf(
+    ProvenanceKind.successfulReadObservation,
+    ProvenanceKind.verifiedAdapter,
+    ProvenanceKind.verifiedAppPackage,
+    ProvenanceKind.appStoreLinkedSourceTag,
+)
+
+private val POSITIVE_ROOT_READ_CONCEPTS = setOf(
+    "capabilities",
+    "configuration",
+    "dashboard",
+    "detail",
+    "details",
+    "get",
+    "health",
+    "info",
+    "overview",
+    "preferences",
+    "profile",
+    "read",
+    "settings",
+    "show",
+    "statistics",
+    "stats",
+    "status",
+    "summary",
+    "version",
+    "view",
 )

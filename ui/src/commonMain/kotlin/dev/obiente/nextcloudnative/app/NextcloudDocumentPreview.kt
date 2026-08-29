@@ -97,19 +97,42 @@ fun NextcloudDocumentPreview(
             }
         }
     }
-    val officePlan = remember(file, editingCapabilities) {
-        planOfficeEditSession(file, editingCapabilities)
+    val officePlan = remember(file, editingCapabilities, session.serverUrl, services.supportsEmbeddedNextcloudWebApp) {
+        planOfficeEditSession(
+            file,
+            editingCapabilities,
+            accountOriginSecure = !services.supportsEmbeddedNextcloudWebApp ||
+                !serverAddressUsesPlainHttp(session.serverUrl),
+        )
     }
 
     Surface(modifier = modifier.fillMaxSize()) {
         val activeEditor = editStatus as? DocumentEditUiState.Editing
         if (activeEditor != null) {
-            PlatformEmbeddedNextcloudWebApp(
-                session = session,
-                initialUrl = activeEditor.sameOriginUrl,
-                onExit = { editStatus = DocumentEditUiState.Idle },
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (services.supportsEmbeddedNextcloudWebApp) {
+                PlatformEmbeddedNextcloudWebApp(
+                    session = session,
+                    initialUrl = activeEditor.sameOriginUrl,
+                    onExit = { editStatus = DocumentEditUiState.Idle },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                LaunchedEffect(activeEditor.sameOriginUrl) {
+                    runCatchingPreservingCancellation {
+                        services.openExternalUrl(activeEditor.sameOriginUrl)
+                    }.onSuccess {
+                        editStatus = DocumentEditUiState.Idle
+                    }.onFailure { failure ->
+                        editStatus = DocumentEditUiState.Failed(
+                            failure.message ?: "Could not open the Office editor.",
+                        )
+                    }
+                }
+                DocumentPreviewMessage(
+                    title = "Opening Office",
+                    detail = "The editor is opening in your browser.",
+                )
+            }
             return@Surface
         }
         when (val current = state) {
@@ -129,7 +152,7 @@ fun NextcloudDocumentPreview(
                         if (editStatus != DocumentEditUiState.Starting) {
                             editStatus = DocumentEditUiState.Starting
                             scope.launch {
-                                runCatching {
+                                runCatchingPreservingCancellation {
                                     services.beginDocumentEditSession(session, request)
                                 }.onSuccess { editSession ->
                                     editStatus = DocumentEditUiState.Editing(editSession.sameOriginUrl)

@@ -37,6 +37,20 @@ class OfficeDocumentWorkflowTest {
     }
 
     @Test
+    fun blocksTokenCreationWhenThePlatformCannotSecureAPlainHttpHandoff() {
+        assertEquals(
+            OfficeEditBlockedReason.InsecureAccountOrigin,
+            assertIs<OfficeEditSessionPlan.Blocked>(
+                planOfficeEditSession(
+                    officeFile(),
+                    officeCapabilities(),
+                    accountOriginSecure = false,
+                ),
+            ).reason,
+        )
+    }
+
+    @Test
     fun blocksUnadvertisedMimeAndUnsafePaths() {
         assertEquals(
             OfficeEditBlockedReason.UnsupportedMimeType,

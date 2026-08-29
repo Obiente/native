@@ -204,6 +204,7 @@ private fun OfficeEditBlockedReason.toIntegratedFileBlockedReason(): IntegratedF
     -> IntegratedFileBlockedReason.MimeNotRegistered
     OfficeEditBlockedReason.DirectEditingUnavailable,
     OfficeEditBlockedReason.InsecureEditor,
+    OfficeEditBlockedReason.InsecureAccountOrigin,
     OfficeEditBlockedReason.Directory,
     -> IntegratedFileBlockedReason.DirectEditingUnavailable
 }

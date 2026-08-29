@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.contracts
 
+import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -13,6 +14,22 @@ class AppOwnedOpenApiContractTest {
                 specPath = "openapi.json",
                 document = document(paths = listOf("/api/balances", "/api/config")),
             ),
+        )
+    }
+
+    @Test
+    fun `empty servers list receives the proven app base`() {
+        val candidate = OpenApiCandidate(
+            path = "openapi.json",
+            document = """{"openapi":"3.0.3","servers":[],"paths":{"/api/items":{}}}""",
+            apiVersion = "1.0.0",
+        ).withProvenAppServerBase("inventorycheck")
+
+        assertTrue(
+            JSONObject(candidate.document)
+                .getJSONArray("servers")
+                .getJSONObject(0)
+                .getString("url") == "/apps/inventorycheck",
         )
     }
 

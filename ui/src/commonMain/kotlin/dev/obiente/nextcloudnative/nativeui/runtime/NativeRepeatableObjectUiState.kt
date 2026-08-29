@@ -39,6 +39,38 @@ internal fun initialNativeCreateRepeatableObjectDraft(
     )
 }
 
+internal sealed interface NativeRepeatableObjectSubmitEncoding {
+    data class Ready(val values: Map<String, String>) : NativeRepeatableObjectSubmitEncoding
+    data class Invalid(val fieldErrors: Map<String, String>) : NativeRepeatableObjectSubmitEncoding
+}
+
+internal fun encodeNativeRepeatableObjectSubmitValues(
+    values: Map<String, List<RepeatableObjectInputRow>>,
+    specs: Map<String, RepeatableObjectInputSpec>,
+): NativeRepeatableObjectSubmitEncoding {
+    if (values.keys != specs.keys) {
+        return NativeRepeatableObjectSubmitEncoding.Invalid(
+            specs.keys.associateWith { "This structured value could not be validated." },
+        )
+    }
+    val encoded = linkedMapOf<String, String>()
+    val errors = linkedMapOf<String, String>()
+    specs.forEach { (fieldId, spec) ->
+        try {
+            encoded[fieldId] = spec.encode(values.getValue(fieldId))
+        } catch (failure: IllegalArgumentException) {
+            errors[fieldId] = failure.message ?: "Review the structured items."
+        } catch (failure: IllegalStateException) {
+            errors[fieldId] = failure.message ?: "Review the structured items."
+        }
+    }
+    return if (errors.isEmpty()) {
+        NativeRepeatableObjectSubmitEncoding.Ready(encoded)
+    } else {
+        NativeRepeatableObjectSubmitEncoding.Invalid(errors)
+    }
+}
+
 internal fun addNativeRepeatableObjectRow(
     rows: List<RepeatableObjectInputRow>,
     spec: RepeatableObjectInputSpec,

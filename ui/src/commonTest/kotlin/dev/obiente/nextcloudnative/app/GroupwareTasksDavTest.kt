@@ -8,6 +8,31 @@ import kotlin.test.assertTrue
 
 class GroupwareTasksDavTest {
     @Test
+    fun `editing another task field preserves an unchanged timed due value`() {
+        val href = "/remote.php/dav/calendars/person/tasks/timed.ics"
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val original = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            UID:timed
+            SUMMARY:Before
+            DUE;TZID=Europe/Amsterdam:20260830T120000
+            STATUS:NEEDS-ACTION
+            PERCENT-COMPLETE:0
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+        val task = requireNotNull(parseGroupwareTask(calendarHref, href, "\"one\"", original))
+
+        val updated = updateGroupwareTaskContent(task, "After", "20260830", false, null)
+
+        assertTrue("DUE;TZID=Europe/Amsterdam:20260830T120000" in updated)
+        assertEquals("20260830T120000", parseGroupwareTask(calendarHref, href, "\"two\"", updated)?.due)
+        assertEquals("20260830T120000", expectedGroupwareTaskDueAfterDateEdit(task, "20260830"))
+    }
+
+    @Test
     fun `CalDAV tasks retain unknown properties across native create read and update`() {
         val href = "/remote.php/dav/calendars/person/tasks/task-1.ics"
         val calendarHref = "/remote.php/dav/calendars/person/tasks/"

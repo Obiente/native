@@ -1262,6 +1262,12 @@ class NativeActionCoordinator(
         }
     }
 
+    fun reportValidationFailure(message: String, fieldErrors: Map<String, String>) {
+        val active = state is NativeActionExecutionState.Running ||
+            state is NativeActionExecutionState.AwaitingReconciliation
+        if (!active) state = NativeActionExecutionState.ValidationFailed(message, fieldErrors)
+    }
+
     fun reconcileAuthoritativeRefresh(reconciliationGeneration: Int) {
         val pending = state as? NativeActionExecutionState.AwaitingReconciliation ?: return
         if (reconciliationGeneration > pending.reconciliationGeneration) {

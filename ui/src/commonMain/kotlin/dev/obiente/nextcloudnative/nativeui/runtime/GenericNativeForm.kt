@@ -202,7 +202,8 @@ internal fun GenericNativeForm(
     val structuredDraftSafe = initialStructuredDraft != null
     val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty() || !structuredDraftSafe
     val settingsWrite = action.isSettingsWrite(resource)
-    val hasChanges = draft.hasChangesFrom(initialDraft)
+    val hasChanges = draft.hasChangesFrom(initialDraft) ||
+        structuredDraftSafe && repeatableObjectValues != initialStructuredDraft
     val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
 
     LaunchedEffect(executionState) {
@@ -285,6 +286,7 @@ internal fun GenericNativeForm(
                                     field = field,
                                     spec = repeatableSpec,
                                     rows = repeatableObjectValues[field.id].orEmpty(),
+                                    error = validationErrors[field.id],
                                     enabled = !submissionBlocked && structuredDraftSafe,
                                     onRowsChange = { rows ->
                                         coordinator.clearStatus()
@@ -419,8 +421,20 @@ internal fun GenericNativeForm(
                             (!settingsWrite || hasChanges),
                     onClick = {
                         scope.launch {
-                            val structuredValues = repeatableObjectValues.mapValues { (fieldId, rows) ->
-                                structuredSpecs.getValue(fieldId).encode(rows)
+                            val structuredValues = when (
+                                val encoded = encodeNativeRepeatableObjectSubmitValues(
+                                    repeatableObjectValues,
+                                    structuredSpecs,
+                                )
+                            ) {
+                                is NativeRepeatableObjectSubmitEncoding.Ready -> encoded.values
+                                is NativeRepeatableObjectSubmitEncoding.Invalid -> {
+                                    coordinator.reportValidationFailure(
+                                        "Review the structured fields and try again.",
+                                        encoded.fieldErrors,
+                                    )
+                                    return@launch
+                                }
                             }
                             coordinator.submit(
                                 values = (draft.values - structuredSpecs.keys) + structuredValues,
@@ -467,6 +481,7 @@ internal fun GenericNativeForm(
                                 onClick = {
                                     coordinator.clearStatus()
                                     draft = initialDraft
+                                    initialStructuredDraft?.let { repeatableObjectValues = it }
                                 },
                             ) {
                                 Text("Reset changes")

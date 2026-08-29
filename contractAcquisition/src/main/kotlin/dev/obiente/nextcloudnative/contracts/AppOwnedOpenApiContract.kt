@@ -58,7 +58,7 @@ internal fun isAppOwnedOpenApiDocument(
 
 internal fun OpenApiCandidate.withProvenAppServerBase(appId: String): OpenApiCandidate {
     val root = runCatching { JSONObject(document) }.getOrNull() ?: return this
-    if (root.optJSONArray("servers") != null) return this
+    if (root.optJSONArray("servers")?.length()?.let { it > 0 } == true) return this
     val paths = root.optJSONObject("paths")?.keys()?.asSequence()?.toList().orEmpty()
     if (path.lowercase().trimStart('/') !in OPEN_API_FILE_PREFERENCE || !paths.areAppRelativeApiPaths()) {
         return this
