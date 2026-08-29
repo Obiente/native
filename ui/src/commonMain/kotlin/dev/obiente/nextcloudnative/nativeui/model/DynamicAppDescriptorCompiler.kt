@@ -1397,13 +1397,15 @@ private class KotlinCompilerState(
         (listOf(resolved) + fragments).forEach { fragment ->
             val type = fragment.string("type")
             val properties = fragment.objectValue("properties")
+            val requiredProperties = fragment.stringArray("required").orEmpty()
             if (type != null && type != "object") return null
+            if (!fragment.provesClosedFlattenedObjectShape(properties, requiredProperties)) return null
             properties.orEmpty().forEach { (id, field) ->
                 val existing = mergedProperties[id]
                 if (existing != null && resolveFieldSchema(existing) != resolveFieldSchema(field)) return null
                 mergedProperties.putIfAbsent(id, field)
             }
-            fragment.stringArray("required").orEmpty().forEach(required::add)
+            requiredProperties.forEach(required::add)
         }
         if (mergedProperties.isEmpty()) return null
         val annotations = resolved.filterKeys { key ->

@@ -17,6 +17,34 @@ class DynamicRootReadSafetyTest {
         )
     }
 
+    @Test
+    fun `trusted catalog provenance does not make command GETs safe automatic roots`() {
+        listOf(ProvenanceKind.verifiedAdapter, ProvenanceKind.verifiedAppPackage).forEach { kind ->
+            val provenance = listOf(
+                Provenance(
+                    kind = kind,
+                    source = "trusted catalog",
+                    detail = "The catalog authenticates the contract source, not GET read semantics.",
+                ),
+            )
+            assertFalse(readAction("start", "/start").copy(provenance = provenance).hasPositiveRootReadEvidence())
+            assertFalse(readAction("scan", "/scan").copy(provenance = provenance).hasPositiveRootReadEvidence())
+        }
+    }
+
+    @Test
+    fun `successful observation remains affirmative read evidence`() {
+        val provenance = listOf(
+            Provenance(
+                kind = ProvenanceKind.successfulReadObservation,
+                source = "observed response",
+                detail = "A successful read was observed.",
+            ),
+        )
+
+        assertTrue(readAction("fetch-widget", "/widget").copy(provenance = provenance).hasPositiveRootReadEvidence())
+    }
+
     private fun readAction(id: String, path: String) = DynamicAction(
         id = id,
         label = id,

@@ -21,7 +21,7 @@ internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
 internal fun DynamicAction.hasPositiveRootReadEvidence(): Boolean {
     if (looksLikeStateChangingGet()) return false
     if (intent == ActionIntent.list) return true
-    if (provenance.any { it.kind in VERIFIED_ROOT_READ_PROVENANCE }) return true
+    if (provenance.any { it.kind == ProvenanceKind.successfulReadObservation }) return true
     val concepts = sequenceOf(resourceId, binding.path, id, label)
         .flatMap { it.semanticConceptTokens().asSequence() }
         .toSet()
@@ -45,15 +45,10 @@ private val STATE_CHANGING_GET_CONCEPTS = setOf(
     "reset",
     "restart",
     "run",
+    "scan",
+    "start",
     "toggle",
     "trigger",
-)
-
-private val VERIFIED_ROOT_READ_PROVENANCE = setOf(
-    ProvenanceKind.successfulReadObservation,
-    ProvenanceKind.verifiedAdapter,
-    ProvenanceKind.verifiedAppPackage,
-    ProvenanceKind.appStoreLinkedSourceTag,
 )
 
 private val POSITIVE_ROOT_READ_CONCEPTS = setOf(

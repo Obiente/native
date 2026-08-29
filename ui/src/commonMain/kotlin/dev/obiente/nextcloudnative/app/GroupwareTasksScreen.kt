@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -255,6 +253,18 @@ fun NativeGroupwareTasksScreen(
 
     val ready = state as? TasksLoadState.Ready
     val selectedTask = ready?.tasks?.firstOrNull { it.instanceId == selectedTaskHref }
+    LaunchedEffect(ready, selectedTaskHref, selectedTask?.instanceId) {
+        if (
+            ready != null &&
+            ready.partialFailureMessage == null &&
+            selectedTaskHref != null &&
+            selectedTask == null
+        ) {
+            selectedTaskHref = null
+            editing = false
+            deleting = null
+        }
+    }
     val selectedTaskWritable = selectedTask?.let { task ->
         ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
     } == true
@@ -448,7 +458,7 @@ fun NativeGroupwareTasksScreen(
                 editing = false
                 if (selectedTask == null) selectedTaskHref = null
             },
-            onSave = save@{ draft, calendar ->
+            onSave = save@{ draft, calendar, editStartEtag ->
                 mutationError = null
                 if (!calendar.writable) {
                     mutationError = "This task list is read-only."
@@ -488,7 +498,7 @@ fun NativeGroupwareTasksScreen(
                             GroupwareDavMutation.Update
                         },
                         objectHref = href,
-                        etag = selectedTask?.etag,
+                        etag = editStartEtag,
                         content = content,
                     ).toGroupwareDavRequest()
                 } ?: return@save
@@ -497,7 +507,7 @@ fun NativeGroupwareTasksScreen(
                     calendarHref = calendar.href,
                     expectedUid = uid,
                     expectedRecurrenceId = selectedTask?.recurrenceId,
-                    previousEtag = selectedTask?.etag,
+                    previousEtag = editStartEtag,
                     draft = normalizedDraft,
                     expectedDue = expectedGroupwareTaskDueAfterDateEdit(selectedTask, normalizedDue),
                 )
@@ -596,112 +606,6 @@ private fun TasksError(message: String, retry: () -> Unit) {
         Text(message, modifier = Modifier.padding(NextcloudSpacing.Medium))
         Button(onClick = retry) { Text("Try again") }
     }
-}
-
-@Composable
-private fun TaskEditorDialog(
-    task: GroupwareTask?,
-    calendars: List<GroupwareCalendar>,
-    mutationInProgress: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onSave: (TaskDraft, GroupwareCalendar) -> Unit,
-) {
-    val editorKey = task?.instanceId ?: "new-task"
-    var title by rememberSaveable(editorKey) { mutableStateOf(task?.title.orEmpty()) }
-    var dueDate by rememberSaveable(editorKey) {
-        mutableStateOf(task?.due?.take(8)?.let { compact ->
-            if (compact.length == 8) {
-                "${compact.take(4)}-${compact.substring(4, 6)}-${compact.takeLast(2)}"
-            } else {
-                ""
-            }
-        }.orEmpty())
-    }
-    var description by rememberSaveable(editorKey) { mutableStateOf(task?.description.orEmpty()) }
-    var completed by rememberSaveable(editorKey) { mutableStateOf(task?.completed == true) }
-    var calendarHref by rememberSaveable(editorKey) {
-        mutableStateOf(task?.calendarHref ?: calendars.firstOrNull()?.href)
-    }
-    val calendar = calendars.firstOrNull { it.href == calendarHref } ?: calendars.firstOrNull()
-    val dateValid = dueDate.isBlank() || dueDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) &&
-        isValidGroupwareTaskDueDate(dueDate.replace("-", ""))
-    AlertDialog(
-        onDismissRequest = { if (!mutationInProgress) onDismiss() },
-        title = { Text(if (task == null) "New task" else "Edit task") },
-        text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                item {
-                    OutlinedTextField(
-                        title,
-                        { title = it },
-                        label = { Text("Title") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        dueDate,
-                        { dueDate = it },
-                        label = { Text("Due date") },
-                        placeholder = { Text("YYYY-MM-DD") },
-                        modifier = Modifier.fillMaxWidth(),
-                        isError = !dateValid,
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        description,
-                        { description = it },
-                        label = { Text("Description") },
-                        minLines = 2,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !mutationInProgress,
-                    )
-                }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = completed,
-                            onCheckedChange = { completed = it },
-                            enabled = !mutationInProgress,
-                        )
-                        Text("Completed")
-                    }
-                }
-                if (calendars.size > 1) item {
-                    Text("Task list", style = MaterialTheme.typography.labelLarge)
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        calendars.forEach { candidate ->
-                            FilterChip(
-                                selected = candidate.href == calendar?.href,
-                                onClick = { calendarHref = candidate.href },
-                                label = { Text(candidate.displayName) },
-                                enabled = !mutationInProgress,
-                            )
-                        }
-                    }
-                }
-                error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
-            }
-        },
-        dismissButton = {
-            TextButton(enabled = !mutationInProgress, onClick = onDismiss) { Text("Cancel") }
-        },
-        confirmButton = {
-            Button(
-                enabled = !mutationInProgress && title.isNotBlank() && dateValid && calendar != null,
-                onClick = {
-                    onSave(TaskDraft(title, dueDate, description, completed), requireNotNull(calendar))
-                },
-            ) { Text("Save") }
-        },
-    )
 }
 
 private fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
