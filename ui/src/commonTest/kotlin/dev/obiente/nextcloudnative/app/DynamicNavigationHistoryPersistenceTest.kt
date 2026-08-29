@@ -35,9 +35,20 @@ class DynamicNavigationHistoryPersistenceTest {
             retainedChoresFormActionContext(NativeChoresWorkspaceKind.Chores, team, null),
         )
         assertEquals(
+            null,
+            retainedChoresFormActionContext(NativeChoresWorkspaceKind.Team, team, null),
+            "The Team header must retain the root create-team action.",
+        )
+        assertEquals(
             invitation,
             retainedChoresFormActionContext(NativeChoresWorkspaceKind.Invitations, team, invitation),
         )
+        assertTrue(
+            showDynamicCollectionCreateAction("team", NativeChoresWorkspaceKind.Team),
+            "The loaded Team roster must retain its contextual invite-member action.",
+        )
+        assertFalse(showDynamicCollectionCreateAction("team", NativeChoresWorkspaceKind.Chores))
+        assertTrue(showDynamicCollectionCreateAction(null, NativeChoresWorkspaceKind.Chores))
     }
 
     @Test

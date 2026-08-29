@@ -30,9 +30,11 @@ Commands:
   credentials-path                Print the path to the private session import JSON.
   android-ca <instance>           Copy the demo CA to an isolated emulator for manual
                                   installation through Android security settings.
-  android-session <instance>      Import the demo account into a debuggable build in
-                                  enforced read-only mode.
-  android-write-scope <instance> <api-prefix>
+  android-session <instance> [server-url]
+                                  Import the demo account into a debuggable build in
+                                  enforced read-only mode. An alternate URL must use
+                                  the configured port and a name in the demo certificate.
+  android-write-scope <instance> <path-prefix>
                                   Authorize one exact app API subtree for writes.
   android-clear-write-scope <instance>
                                   Remove the emulator's scoped write authorization.
@@ -238,12 +240,12 @@ start_stack() {
     compose up -d
     wait_for_server
     compose restart gateway >/dev/null
-    local public_url
-    public_url="$(server_url)"
+    local readiness_url
+    readiness_url="$(local_server_url)"
     local attempt
     for attempt in $(seq 1 30); do
         if curl --silent --show-error --fail --cacert "$state_root/tls/ca.crt" \
-            --max-time 5 --output /dev/null "$public_url/status.php" 2>/dev/null; then
+            --max-time 5 --output /dev/null "$readiness_url/status.php" 2>/dev/null; then
             break
         fi
         [[ "$attempt" -lt 30 ]] || fail "the demo HTTPS gateway did not become ready"
@@ -262,6 +264,32 @@ server_url() {
 
 local_server_url() {
     printf 'https://localhost:%s\n' "$(read_environment_value NC_DEMO_HTTPS_PORT)"
+}
+
+validated_android_server_url() {
+    local candidate="${1:-$(server_url)}"
+    local host
+    local port
+    if [[ "$candidate" =~ ^https://([A-Za-z0-9.-]+):([0-9]{1,5})$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    else
+        fail "Android session URL must be an HTTPS origin without a path, query, or fragment"
+    fi
+    ((10#$port >= 1 && 10#$port <= 65535)) ||
+        fail "Android session URL port is invalid"
+    [[ "$port" == "$(read_environment_value NC_DEMO_HTTPS_PORT)" ]] ||
+        fail "Android session URL must use the configured demo HTTPS port"
+
+    require_command openssl
+    if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        openssl x509 -in "$state_root/tls/server.crt" -noout -checkip "$host" >/dev/null 2>&1 ||
+            fail "Android session URL IP is not present in the demo server certificate"
+    else
+        openssl x509 -in "$state_root/tls/server.crt" -noout -checkhost "$host" >/dev/null 2>&1 ||
+            fail "Android session URL host is not present in the demo server certificate"
+    fi
+    printf '%s\n' "$candidate"
 }
 
 test_user() {
@@ -543,18 +571,24 @@ android_ca() {
 
 android_import() {
     local instance="${1:-}"
+    local requested_server_url="${2:-}"
     [[ -n "$instance" ]] || fail "android-session requires an emulator instance name"
+    [[ "$#" -le 2 ]] || fail "android-session accepts only an instance and optional server URL"
     require_initialized
     create_app_password
+    require_command jq
     local package_name="${NC_DEMO_ANDROID_PACKAGE:-dev.obiente.nextcloudnative}"
     local adb
     local serial
+    local import_server_url
+    import_server_url="$(validated_android_server_url "$requested_server_url")"
     IFS=$'\t' read -r adb serial < <(adb_for_instance "$instance")
     "$adb" -s "$serial" shell run-as "$package_name" true >/dev/null 2>&1 ||
         fail "install a debuggable $package_name build on $serial first"
     "$adb" -s "$serial" shell run-as "$package_name" mkdir -p files
-    "$adb" -s "$serial" shell "run-as '$package_name' sh -c 'umask 077; cat > files/nc-native-test-session.json'" \
-        <"$state_root/test-session.json"
+    jq --arg serverUrl "$import_server_url" '.serverUrl = $serverUrl' "$state_root/test-session.json" |
+        "$adb" -s "$serial" shell \
+            "run-as '$package_name' sh -c 'umask 077; cat > files/nc-native-test-session.json'"
     restart_android_app "$adb" "$serial" "$package_name"
     printf 'Imported the disposable demo account on %s in enforced read-only mode.\n' "$serial"
 }
@@ -563,7 +597,7 @@ android_write_scope() {
     local instance="${1:-}"
     local api_prefix="${2:-}"
     [[ -n "$instance" && -n "$api_prefix" ]] ||
-        fail "android-write-scope requires an instance and exact app API prefix"
+        fail "android-write-scope requires an instance and exact app API or DAV collection prefix"
     require_command jq
     local package_name="${NC_DEMO_ANDROID_PACKAGE:-dev.obiente.nextcloudnative}"
     local adb

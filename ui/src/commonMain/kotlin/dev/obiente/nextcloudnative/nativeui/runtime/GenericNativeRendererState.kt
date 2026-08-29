@@ -1098,11 +1098,19 @@ fun buildNativeSubmitRequest(
     ) {
         return NativeRequestBuildResult.Invalid("The declared action cannot submit this form.")
     }
+    val exactContextBoundBodyValues = action.binding.requiredBodyFieldNames
+        .asSequence()
+        .filter(action.binding.requiredPathParameterNames::contains)
+        .filter(action::hasExactServerManagedBodyFieldEvidence)
+        .mapNotNull { fieldId ->
+            values[fieldId]?.trim()?.takeIf(String::isNotBlank)?.let { value -> fieldId to value }
+        }
+        .toMap()
     if (
         uneditableNativeBodyFieldIds(
             action = action,
             editableFields = editableNativeFields(resource, action),
-            autoBoundValues = emptyMap(),
+            autoBoundValues = exactContextBoundBodyValues,
         ).isNotEmpty()
     ) {
         return NativeRequestBuildResult.Invalid(

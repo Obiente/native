@@ -2176,7 +2176,56 @@ class DynamicAppDescriptorCompilerTest {
                   "post":{"operationId":"widgets-batch-delete","summary":"Delete selected widgets","responses":{"200":{"description":"OK"}}}
                 },
                 "/apps/example/api/widgets/upload":{
-                  "post":{"operationId":"widgets-upload","summary":"Upload widgets","responses":{"200":{"description":"OK"}}}
+                  "post":{
+                    "operationId":"widgets-upload",
+                    "summary":"Upload widgets",
+                    "requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{
+                      "type":"object",
+                      "required":["file"],
+                      "properties":{"file":{"type":"string","format":"binary"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                },
+                "/apps/example/api/widgets/import":{
+                  "post":{
+                    "operationId":"widgets-import",
+                    "summary":"Import widgets from URL",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["url"],
+                      "properties":{"url":{"type":"string","format":"uri"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
+                },
+                "/apps/example/api/categories":{
+                  "get":{
+                    "operationId":"categories-list",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"string"}
+                    }}}}}
+                  }
+                },
+                "/apps/example/api/category/{category}":{
+                  "parameters":[{"name":"category","in":"path","required":true,"schema":{"type":"string"}}],
+                  "get":{
+                    "operationId":"category-items",
+                    "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{
+                      "type":"array",
+                      "items":{"type":"object","properties":{"id":{"type":"integer"},"name":{"type":"string"}}}
+                    }}}}}
+                  },
+                  "put":{
+                    "operationId":"category-rename",
+                    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                      "type":"object",
+                      "required":["name"],
+                      "properties":{"name":{"type":"string"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
                 },
                 "/apps/example/api/workspaces/{workspaceId}":{
                   "parameters":[{"name":"workspaceId","in":"path","required":true,"schema":{"type":"integer"}}],
@@ -2244,6 +2293,8 @@ class DynamicAppDescriptorCompilerTest {
             true,
         )
         assertAction("widgets-upload", ActionEffect.upload, ActionIntent.execute, ActionRisk.mutating, false)
+        assertAction("widgets-import", ActionEffect.execute, ActionIntent.execute, ActionRisk.mutating, false)
+        assertEquals("categories", actions.getValue("category-rename").resourceId)
         assertAction("workspace-leave", ActionEffect.leave, ActionIntent.execute, ActionRisk.destructive, true)
         assertEquals("widgets", actions.getValue("widget-show").resourceId)
         assertTrue(

@@ -9,6 +9,7 @@ manifest="$demo_root/apps/representative.tsv"
 bash -n "$helper"
 "$helper" --help | grep -Fq 'reset --confirm'
 "$helper" --help | grep -Fq 'stage-catalog'
+"$helper" --help | grep -Fq 'android-session <instance> [server-url]'
 
 invalid_app_ids="$(
     awk 'NF && $1 !~ /^#/ { print $1 }' "$manifest" |
@@ -37,6 +38,10 @@ grep -Fq './.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,Z' "$
 grep -Fq '/opt/obiente_native_bridge:ro,Z' "$demo_root/compose.yml"
 grep -Fq 'hooks/pre-installation/10-volume-permissions.sh' "$demo_root/compose.yml"
 grep -Fq 'ensure_ca_bundle' "$helper"
+grep -Fq 'readiness_url="$(local_server_url)"' "$helper"
+grep -Fq 'validated_android_server_url' "$helper"
+grep -Fq 'openssl x509 -in "$state_root/tls/server.crt" -noout -checkip' "$helper"
+grep -Fq "'.serverUrl = \$serverUrl'" "$helper"
 if grep -Fq 'before-starting/10-demo-runtime.sh' "$demo_root/compose.yml" ||
     grep -Fq 'update-ca-certificates' "$demo_root/hooks/pre-installation/10-volume-permissions.sh"; then
     printf 'The demo must not mutate the container CA bundle from an unprivileged startup hook.\n' >&2

@@ -66,6 +66,20 @@ data class GroupwareCalendarEvent(
     val instanceId: String get() = "$href#${recurrenceId ?: start}"
 }
 
+data class GroupwareTask(
+    val href: String,
+    val etag: String?,
+    val calendarHref: String,
+    val uid: String,
+    val title: String,
+    val due: String? = null,
+    val dueAllDay: Boolean = false,
+    val completed: Boolean = false,
+    val description: String? = null,
+    val priority: Int? = null,
+    val rawCalendar: String,
+)
+
 data class GroupwareDavTimeWindow(
     val startUtc: String,
     val endUtc: String,
@@ -365,17 +379,26 @@ fun groupwareAddressBookHomeHref(userId: String): String {
     return "/remote.php/dav/addressbooks/users/${userId.encodeDavPathSegment()}/"
 }
 
-fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> {
+fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
+    parseGroupwareCalendarsForComponent(response, "VEVENT")
+
+fun parseGroupwareTaskCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
+    parseGroupwareCalendarsForComponent(response, "VTODO")
+
+private fun parseGroupwareCalendarsForComponent(
+    response: NextcloudApiResponse,
+    componentName: String,
+): List<GroupwareCalendar> {
     require(response.status in 200..299) { "Calendar discovery failed (HTTP ${response.status})." }
     val xml = response.body.decodeToString()
     return xml.xmlElements("response").mapNotNull { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
             ?: return@mapNotNull null
         if (!block.containsXmlElement("calendar")) return@mapNotNull null
-        val supportsEvents = block.xmlOpeningTags("comp").any { component ->
-            component.xmlAttribute("name")?.equals("VEVENT", ignoreCase = true) == true
+        val supportsComponent = block.xmlOpeningTags("comp").any { component ->
+            component.xmlAttribute("name")?.equals(componentName, ignoreCase = true) == true
         }
-        if (!supportsEvents) return@mapNotNull null
+        if (!supportsComponent) return@mapNotNull null
         val privileges = block.xmlElements("privilege").flatMap { it.xmlElementNames() }
         GroupwareCalendar(
             href = href.requireSafeDavHref(),
@@ -593,6 +616,68 @@ internal fun parseGroupwareCalendarEventsFromContent(
     return lines.calendarEventComponents().mapNotNull { eventLines ->
         parseGroupwareCalendarEventComponent(calendarHref, href, etag, content, eventLines)
     }
+}
+
+fun parseGroupwareTasks(
+    calendarHref: String,
+    response: NextcloudApiResponse,
+): List<GroupwareTask> {
+    require(response.status in 200..299) { "Task loading failed (HTTP ${response.status})." }
+    return response.body.decodeToString().xmlElements("response").flatMap { block ->
+        val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
+            ?: return@flatMap emptyList()
+        val calendar = block.xmlText("calendar-data")?.decodeXmlEntities() ?: return@flatMap emptyList()
+        parseGroupwareTasksFromContent(
+            calendarHref = calendarHref,
+            href = href,
+            etag = block.xmlText("getetag")?.decodeXmlEntities()?.trim(),
+            content = calendar,
+        )
+    }
+}
+
+fun parseGroupwareTask(
+    calendarHref: String,
+    href: String,
+    etag: String?,
+    content: String,
+): GroupwareTask? = parseGroupwareTasksFromContent(calendarHref, href, etag, content).firstOrNull()
+
+private fun parseGroupwareTasksFromContent(
+    calendarHref: String,
+    href: String,
+    etag: String?,
+    content: String,
+): List<GroupwareTask> = content.unfoldCalendarLines().calendarComponentLines("VTODO").mapNotNull { lines ->
+    fun property(name: String): CalendarProperty? = lines.firstNotNullOfOrNull { line ->
+        val separator = line.indexOf(':')
+        if (separator <= 0) return@firstNotNullOfOrNull null
+        val declaration = line.substring(0, separator)
+        if (!declaration.substringBefore(';').equals(name, ignoreCase = true)) {
+            return@firstNotNullOfOrNull null
+        }
+        CalendarProperty(declaration, line.substring(separator + 1))
+    }
+    val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
+        ?: href.substringAfterLast('/').substringBeforeLast('.')
+    val due = property("DUE")
+    val status = property("STATUS")?.value?.trim()
+    val percentComplete = property("PERCENT-COMPLETE")?.value?.trim()?.toIntOrNull()
+    GroupwareTask(
+        href = href.requireSafeDavHref(),
+        etag = etag,
+        calendarHref = calendarHref.requireSafeDavHref(),
+        uid = uid,
+        title = property("SUMMARY")?.value?.decodeCalendarText()?.ifBlank { "Untitled task" }
+            ?: "Untitled task",
+        due = due?.value?.trim()?.takeIf(String::isNotBlank),
+        dueAllDay = due?.declaration?.contains("VALUE=DATE", ignoreCase = true) == true ||
+            due?.value?.let { value -> value.length == 8 && value.all(Char::isDigit) } == true,
+        completed = status.equals("COMPLETED", ignoreCase = true) || percentComplete == 100,
+        description = property("DESCRIPTION")?.value?.decodeCalendarText()?.takeIf(String::isNotBlank),
+        priority = property("PRIORITY")?.value?.trim()?.toIntOrNull()?.takeIf { it in 0..9 },
+        rawCalendar = content,
+    )
 }
 
 private fun parseGroupwareCalendarEventComponent(
@@ -898,13 +983,15 @@ private fun calendarDaysInMonth(year: Int, month: Int): Int = when (month) {
     else -> 31
 }
 
-private fun List<String>.calendarEventComponents(): List<List<String>> {
+private fun List<String>.calendarEventComponents(): List<List<String>> = calendarComponentLines("VEVENT")
+
+private fun List<String>.calendarComponentLines(componentName: String): List<List<String>> {
     val result = mutableListOf<List<String>>()
     var start = -1
     forEachIndexed { index, line ->
         when {
-            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index + 1
-            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
+            line.equals("BEGIN:$componentName", ignoreCase = true) -> start = index + 1
+            line.equals("END:$componentName", ignoreCase = true) && start >= 0 -> {
                 result += subList(start, index)
                 start = -1
             }
@@ -952,6 +1039,81 @@ fun createGroupwareCalendarEventContent(
     }.joinToString("\r\n", postfix = "\r\n")
 }
 
+fun createGroupwareTaskContent(
+    uid: String,
+    title: String,
+    dueDate: String?,
+    completed: Boolean,
+    description: String? = null,
+): String {
+    require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The task id is invalid." }
+    require(title.isNotBlank()) { "A task title is required." }
+    val due = dueDate?.takeIf(String::isNotBlank)?.also { value ->
+        require(value.length == 8 && value.all(Char::isDigit)) { "The task due date is invalid." }
+    }
+    return buildList {
+        add("BEGIN:VCALENDAR")
+        add("VERSION:2.0")
+        add("PRODID:-//Obiente//Nextcloud Native//EN")
+        add("BEGIN:VTODO")
+        add("UID:${uid.escapeCalendarText()}")
+        add("SUMMARY:${title.escapeCalendarText()}")
+        due?.let { add("DUE;VALUE=DATE:$it") }
+        add("STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}")
+        add("PERCENT-COMPLETE:${if (completed) 100 else 0}")
+        description?.takeIf(String::isNotBlank)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
+        add("END:VTODO")
+        add("END:VCALENDAR")
+    }.joinToString("\r\n", postfix = "\r\n")
+}
+
+fun updateGroupwareTaskContent(
+    task: GroupwareTask,
+    title: String,
+    dueDate: String?,
+    completed: Boolean,
+    description: String?,
+): String {
+    require(title.isNotBlank()) { "A task title is required." }
+    val due = dueDate?.takeIf(String::isNotBlank)?.also { value ->
+        require(value.length == 8 && value.all(Char::isDigit)) { "The task due date is invalid." }
+    }
+    val original = task.rawCalendar.unfoldCalendarLines().toMutableList()
+    val taskRange = original.calendarComponentRanges("VTODO").firstOrNull { range ->
+        original.subList(range.first + 1, range.last).calendarPropertyValue("UID") == task.uid
+    }
+    requireNotNull(taskRange) { "The selected task component could not be found." }
+    val taskStart = taskRange.first
+    var taskEnd = taskRange.last
+    val replacements = linkedMapOf(
+        "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
+        "DUE" to due?.let { "DUE;VALUE=DATE:$it" },
+        "STATUS" to "STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}",
+        "PERCENT-COMPLETE" to "PERCENT-COMPLETE:${if (completed) 100 else 0}",
+        "COMPLETED" to null,
+        "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let {
+            "DESCRIPTION:${it.escapeCalendarText()}"
+        },
+    )
+    replacements.forEach { (name, replacement) ->
+        val index = (taskStart + 1 until taskEnd).firstOrNull { lineIndex ->
+            original[lineIndex].substringBefore(':').substringBefore(';').equals(name, ignoreCase = true)
+        }
+        when {
+            index != null && replacement != null -> original[index] = replacement
+            index != null -> {
+                original.removeAt(index)
+                taskEnd -= 1
+            }
+            replacement != null -> {
+                original.add(taskEnd, replacement)
+                taskEnd += 1
+            }
+        }
+    }
+    return original.joinToString("\r\n", postfix = "\r\n")
+}
+
 fun updateGroupwareCalendarEventContent(
     event: GroupwareCalendarEvent,
     title: String,
@@ -964,7 +1126,7 @@ fun updateGroupwareCalendarEventContent(
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
-    val eventRange = original.calendarEventComponentRanges().firstOrNull { range ->
+    val eventRange = original.calendarComponentRanges("VEVENT").firstOrNull { range ->
         val component = original.subList(range.first + 1, range.last)
         val uid = component.calendarPropertyValue("UID")
             ?: event.href.substringAfterLast('/').substringBeforeLast('.')
@@ -1000,13 +1162,13 @@ fun updateGroupwareCalendarEventContent(
     return original.joinToString("\r\n", postfix = "\r\n")
 }
 
-private fun List<String>.calendarEventComponentRanges(): List<IntRange> {
+private fun List<String>.calendarComponentRanges(componentName: String): List<IntRange> {
     val result = mutableListOf<IntRange>()
     var start = -1
     forEachIndexed { index, line ->
         when {
-            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index
-            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
+            line.equals("BEGIN:$componentName", ignoreCase = true) -> start = index
+            line.equals("END:$componentName", ignoreCase = true) && start >= 0 -> {
                 result += start..index
                 start = -1
             }

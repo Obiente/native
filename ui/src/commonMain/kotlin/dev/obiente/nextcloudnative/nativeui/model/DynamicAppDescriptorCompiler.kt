@@ -537,6 +537,48 @@ private val TRUSTED_RECORD_IMAGE_PREVIEW_PROVENANCE = setOf(
 private fun String.isDeclaredRecordImageContentType(): Boolean =
     this == "*/*" || this == "application/octet-stream" || startsWith("image/")
 
+/**
+ * A mutation such as `/category/{category}` acts on the category even when the GET on that exact
+ * route returns a collection of recipes. Prefer the sibling collection only when the terminal
+ * path segment and parameter name agree and exactly one declared collection GET proves the same
+ * route prefix. Generic `{id}` detail routes naturally resolve to their ordinary collection too.
+ */
+private fun terminalSubjectCollectionIdentity(
+    path: String,
+    method: HttpMethod,
+    readRouteResourceIdentities: Map<String, KotlinRouteResourceIdentity>,
+): KotlinRouteResourceIdentity? {
+    if (method == HttpMethod.GET) return null
+    val segments = path.routeSegments()
+    if (segments.size < 2) return null
+    val parameterSegment = segments.last()
+    if (!parameterSegment.startsWith('{') || !parameterSegment.endsWith('}')) return null
+    val parameterName = parameterSegment.removePrefix("{").removeSuffix("}")
+    val subjectSegment = segments[segments.lastIndex - 1]
+    val parameterSubject = parameterName
+        .takeIf { name -> name.endsWith("Id", ignoreCase = true) && name.length > 2 }
+        ?.dropLast(2)
+    if (
+        !parameterName.equals("id", ignoreCase = true) &&
+        parameterSubject?.sameDynamicResourceAs(subjectSegment) != true &&
+        !parameterName.sameDynamicResourceAs(subjectSegment)
+    ) {
+        return null
+    }
+    val subjectPrefix = segments.dropLast(2).map(String::stableId)
+    return readRouteResourceIdentities.entries
+        .filter { (readPath, identity) ->
+            val readSegments = readPath.routeSegments()
+            identity.collection &&
+                readSegments.size == segments.size - 1 &&
+                readSegments.dropLast(1).map(String::stableId) == subjectPrefix &&
+                readSegments.last().sameDynamicResourceAs(subjectSegment)
+        }
+        .map { (_, identity) -> identity }
+        .distinct()
+        .singleOrNull()
+}
+
 private fun DynamicAction.hasResolvableRecordImageShape(resource: KotlinResourceBuilder): Boolean {
     val segments = binding.path.trim('/').split('/').filter(String::isNotBlank)
     val recordToken = segments.getOrNull(segments.lastIndex - 1) ?: return false
@@ -822,12 +864,30 @@ private class KotlinCompilerState(
             operationId = operationId,
             label = label,
             collection = preliminaryCollection,
+            fileUpload = declaredBody?.let { body ->
+                body.contentType.substringBefore(';').trim()
+                    .equals("multipart/form-data", ignoreCase = true) &&
+                    isExactDynamicMultipartSchema(body.schema)
+            } == true,
         )
-        val semanticRouteResourceIdentity = transitionRouteResourceIdentity(
-            path = path,
-            effect = effect,
-            readRouteResourceIdentities = readRouteResourceIdentities,
-        )
+        val semanticRouteResourceIdentity =
+            terminalSubjectCollectionIdentity(path, method, readRouteResourceIdentities)
+                ?: transitionRouteResourceIdentity(
+                    path = path,
+                    effect = if (
+                        effect == ActionEffect.execute &&
+                        actionSemanticWords(path, operationId, label).any { word ->
+                            word == "import" || word == "upload"
+                        }
+                    ) {
+                        // Import is a transfer route for resource grouping even when its request
+                        // is a JSON URL and therefore not a file-upload UI action.
+                        ActionEffect.upload
+                    } else {
+                        effect
+                    },
+                    readRouteResourceIdentities = readRouteResourceIdentities,
+                )
             ?: routeResourceIdentity
         val collection = preliminaryCollection || semanticRouteResourceIdentity?.collection == true
         val resourceId =
@@ -1299,10 +1359,20 @@ private class KotlinCompilerState(
         // serialization depends on exact media encoding/style/explode metadata that the descriptor
         // does not retain, so those bodies must not acquire a JSON-oriented editor format.
         val jsonBody = contentType.substringBefore(';').trim().equals("application/json", ignoreCase = true)
-        if (jsonBody && declaredSchema.hasUnnormalizableReadOnlyRepeatableObjectProperty()) return null
-        if (jsonBody && declaredSchema.hasUnsupportedDynamicStringArrayProperty()) return null
+        val normalizedObjectSchema = if (jsonBody) {
+            declaredSchema.flattenDynamicObjectComposition()
+                ?.withCookbookRecipeWriteCompatibility(operation)
+                ?: return null
+        } else {
+            null
+        }
+        if (jsonBody) {
+            val objectSchema = requireNotNull(normalizedObjectSchema)
+            if (objectSchema.hasUnnormalizableReadOnlyRepeatableObjectProperty()) return null
+            if (objectSchema.hasUnsupportedDynamicStringArrayProperty()) return null
+        }
         val schema = if (jsonBody) {
-            declaredSchema.withDynamicFormFormats()
+            requireNotNull(normalizedObjectSchema).withDynamicFormFormats()
         } else {
             declaredSchema
         }
@@ -1310,6 +1380,90 @@ private class KotlinCompilerState(
             contentType = contentType,
             required = request.boolean("required") ?: false,
             schema = schema,
+        )
+    }
+
+    private fun JsonElement.flattenDynamicObjectComposition(depth: Int = 0): JsonObject? {
+        require(depth <= 24) { "OpenAPI object composition depth exceeded" }
+        val resolved = resolveLocal(this) as? JsonObject ?: return null
+        val allOf = resolved["allOf"] as? JsonArray ?: return resolved
+        if (allOf.isEmpty()) return null
+
+        val fragments = allOf.map { member ->
+            member.flattenDynamicObjectComposition(depth + 1) ?: return null
+        }
+        val mergedProperties = linkedMapOf<String, JsonElement>()
+        val required = linkedSetOf<String>()
+        (listOf(resolved) + fragments).forEach { fragment ->
+            val type = fragment.string("type")
+            val properties = fragment.objectValue("properties")
+            if (type != null && type != "object") return null
+            properties.orEmpty().forEach { (id, field) ->
+                val existing = mergedProperties[id]
+                if (existing != null && resolveFieldSchema(existing) != resolveFieldSchema(field)) return null
+                mergedProperties.putIfAbsent(id, field)
+            }
+            fragment.stringArray("required").orEmpty().forEach(required::add)
+        }
+        if (mergedProperties.isEmpty()) return null
+        val annotations = resolved.filterKeys { key ->
+            key !in setOf("allOf", "type", "properties", "required", "additionalProperties")
+        }
+        return JsonObject(
+            annotations +
+                ("type" to JsonPrimitive("object")) +
+                ("properties" to JsonObject(mergedProperties)) +
+                ("required" to JsonArray(required.map(::JsonPrimitive))) +
+                ("additionalProperties" to JsonPrimitive(false)),
+        )
+    }
+
+    private fun JsonObject.withCookbookRecipeWriteCompatibility(operation: JsonObject): JsonObject {
+        val operationId = operation.string("operationId")?.stableId() ?: return this
+        if (
+            input.app.id != "cookbook" || input.app.version !in setOf("0.11.9", "0.11.10") ||
+            source.kind != ProvenanceKind.appStoreLinkedSourceTag ||
+            operationId !in setOf("newrecipe", "updaterecipe")
+        ) {
+            return this
+        }
+        val properties = objectValue("properties") ?: return this
+        if (!setOf("id", "name", "recipeIngredient", "recipeInstructions", "tool").all(properties::containsKey)) {
+            return this
+        }
+        val allowed = setOf(
+            "id",
+            "name",
+            "description",
+            "keywords",
+            "prepTime",
+            "cookTime",
+            "totalTime",
+            "recipeYield",
+            "recipeCategory",
+            "url",
+            "tool",
+            "recipeIngredient",
+            "recipeInstructions",
+        )
+        val compatibleProperties = properties
+            .filterKeys(allowed::contains)
+            .mapValues { (id, value) ->
+                if (id != "id") value else {
+                    val idSchema = resolveFieldSchema(value) as? JsonObject ?: return this
+                    JsonObject(idSchema + ("readOnly" to JsonPrimitive(true)))
+                }
+            }
+            .toMutableMap()
+        if (operationId == "newrecipe") compatibleProperties.remove("id")
+        return JsonObject(
+            filterKeys { key -> key !in setOf("properties", "required", "additionalProperties") } +
+                ("properties" to JsonObject(compatibleProperties)) +
+                ("required" to JsonArray(
+                    listOfNotNull("id".takeIf { operationId == "updaterecipe" }, "name")
+                        .map(::JsonPrimitive),
+                )) +
+                ("additionalProperties" to JsonPrimitive(false)),
         )
     }
 
@@ -2384,6 +2538,7 @@ private fun actionEffect(
     operationId: String,
     label: String,
     collection: Boolean,
+    fileUpload: Boolean,
 ): ActionEffect {
     if (method == HttpMethod.GET) {
         return when {
@@ -2408,7 +2563,7 @@ private fun actionEffect(
             ("toggle" in words && words.any { it in COMPLETION_STATE_WORDS }) -> ActionEffect.toggle
         "move" in words -> ActionEffect.move
         "copy" in words || "duplicate" in words -> ActionEffect.copy
-        "upload" in words || "import" in words -> ActionEffect.upload
+        fileUpload -> ActionEffect.upload
         "assign" in words || "replace" in words -> ActionEffect.assign
         "leave" in words -> ActionEffect.leave
         "clear" in words -> ActionEffect.clear

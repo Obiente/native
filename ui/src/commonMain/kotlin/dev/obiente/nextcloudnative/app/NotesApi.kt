@@ -56,7 +56,34 @@ fun deleteNoteRequest(noteId: Long): NextcloudApiRequest {
     )
 }
 
+fun notesMutationHeaders(expectedEtag: String?): Map<String, String> {
+    val value = expectedEtag?.trim()?.takeIf(String::isNotEmpty) ?: return emptyMap()
+    require(value.length <= MAX_NOTE_ETAG_CHARACTERS && value.none(Char::isISOControl)) {
+        "The note version is invalid."
+    }
+    val serialized = when {
+        value == "*" -> value
+        value.isQuotedNoteEtag() -> value
+        value.startsWith("W/") -> {
+            require(value.removePrefix("W/").isQuotedNoteEtag()) { "The note version is invalid." }
+            value
+        }
+        else -> {
+            require('"' !in value && '\\' !in value) { "The note version is invalid." }
+            "\"$value\""
+        }
+    }
+    return mapOf("If-Match" to serialized)
+}
+
+private fun String.isQuotedNoteEtag(): Boolean =
+    length >= 2 && first() == '"' && last() == '"' &&
+        substring(1, lastIndex).none { character ->
+            character == '"' || character == '\\' || character.isISOControl()
+        }
+
 private const val NOTES_JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 private const val MAX_NOTE_TITLE_CHARACTERS = 255
 private const val MAX_NOTE_CATEGORY_CHARACTERS = 1_024
 private const val MAX_NOTE_CATEGORY_SEGMENT_CHARACTERS = 255
+private const val MAX_NOTE_ETAG_CHARACTERS = 512

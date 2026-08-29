@@ -1403,7 +1403,8 @@ private fun AuthenticatedApp(
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
             screen is Screen.Calendar ||
-            screen is Screen.Contacts
+            screen is Screen.Contacts ||
+            screen is Screen.Tasks
         ) {
             queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
         } else {
@@ -1515,6 +1516,7 @@ private fun AuthenticatedApp(
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
+            "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
             "activity" -> {
                 destination = NextcloudDestination.Activity
@@ -1911,6 +1913,7 @@ private fun AuthenticatedApp(
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
+            Screen.Tasks,
             Screen.Deck,
             is Screen.AppInfo,
             -> {
@@ -2265,6 +2268,17 @@ private fun AuthenticatedApp(
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Contacts -> NativeGroupwareContactsScreen(
+            services = services,
+            session = session,
+            userId = serverInfo?.userId ?: session.loginName,
+            onBack = ::navigateBack,
+            navigationRequest = pendingEditorNavigationRequest,
+            onNavigationConfirmed = ::applyPendingNavigationRequest,
+            onNavigationCancelled = ::cancelPendingNavigationRequest,
+            navigationCommitInProgress = linkNavigationJob != null,
+            onMutationInProgressChanged = { groupwareMutationInProgress = it },
+        )
+        Screen.Tasks -> NativeGroupwareTasksScreen(
             services = services,
             session = session,
             userId = serverInfo?.userId ?: session.loginName,
@@ -5549,7 +5563,10 @@ private fun DynamicDiscoveredAppScreen(
                             leaveMutatedSurface = false,
                         )
                     },
-                    showCollectionCreateAction = selectedCollectionState == null,
+                    showCollectionCreateAction = showDynamicCollectionCreateAction(
+                        collectionState = selectedCollectionState,
+                        choresWorkspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+                    ),
                     onOpenLink = services::openExternalUrl,
                     imageLoader = imageLoader,
                     audioPlayer = audioSourceCapability?.let {

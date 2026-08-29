@@ -126,6 +126,110 @@ class DynamicNavigationPlannerTest {
     }
 
     @Test
+    fun `verified self contained app command is available without a matching read root`() {
+        val listProjects = action("list-projects", "projects", ActionIntent.list)
+        val importData = action(
+            "import-data",
+            "imports",
+            ActionIntent.execute,
+            method = HttpMethod.POST,
+        ).copy(
+            confidence = Confidence.high,
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.appStoreLinkedSourceTag,
+                    source = "signed catalog release",
+                    detail = "Exact source tag contract",
+                ),
+            ),
+        )
+        val importForm = form(
+            "import-data.form",
+            "Import data",
+            "imports",
+            importData.id,
+        ).copy(
+            confidence = Confidence.high,
+            provenance = importData.provenance,
+        )
+        val descriptor = hierarchyDescriptor().copy(
+            resources = listOf(resource("projects"), resource("imports")),
+            layouts = listOf(layout("projects", listProjects.id)),
+            links = emptyList(),
+            forms = listOf(importForm),
+            actions = listOf(listProjects, importData),
+        )
+
+        assertEquals(
+            listOf(importForm.id),
+            descriptor.planDynamicNavigation().rootFormActions.map(DynamicNavigationFormAction::formId),
+        )
+        assertTrue(
+            descriptor.copy(
+                forms = listOf(importForm.copy(provenance = emptyList())),
+            ).planDynamicNavigation().rootFormActions.isEmpty(),
+        )
+        assertTrue(
+            descriptor.copy(
+                actions = listOf(
+                    listProjects,
+                    importData.copy(
+                        binding = importData.binding.copy(
+                            path = "/imports/{projectId}",
+                            pathParameters = listOf(
+                                HttpParameter(
+                                    "projectId",
+                                    required = true,
+                                    schema = buildJsonObject {},
+                                    source = ParameterSource.resourceField,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ).planDynamicNavigation().rootFormActions.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `root forms with the same label remain distinct across resources`() {
+        val evidence = listOf(
+            Provenance(
+                kind = ProvenanceKind.verifiedAppPackage,
+                source = "signed app package",
+                detail = "Verified root writes",
+            ),
+        )
+        val createAccount = action(
+            "create-account",
+            "accounts",
+            ActionIntent.create,
+            method = HttpMethod.POST,
+        ).copy(label = "Create", provenance = evidence)
+        val createCategory = action(
+            "create-category",
+            "categories",
+            ActionIntent.create,
+            method = HttpMethod.POST,
+        ).copy(label = "Create", provenance = evidence)
+        val descriptor = hierarchyDescriptor().copy(
+            resources = listOf(resource("accounts"), resource("categories")),
+            layouts = emptyList(),
+            links = emptyList(),
+            forms = listOf(
+                form("create-account.form", "Create", "accounts", createAccount.id).copy(provenance = evidence),
+                form("create-category.form", "Create", "categories", createCategory.id).copy(provenance = evidence),
+            ),
+            actions = listOf(createAccount, createCategory),
+        )
+
+        assertEquals(
+            listOf("create-account.form", "create-category.form"),
+            descriptor.planDynamicNavigation().rootFormActions.map(DynamicNavigationFormAction::formId),
+        )
+    }
+
+    @Test
     fun `record id supplies only its matching resource identifier`() {
         val plan = hierarchyDescriptor().planDynamicNavigation(
             DynamicResourceRecordContext(resourceId = "projects", recordId = "project-7"),
@@ -205,6 +309,13 @@ class DynamicNavigationPlannerTest {
         ).copy(
             effect = ActionEffect.upload,
             confidence = Confidence.verified,
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "signed app package",
+                    detail = "Verified multipart contract",
+                ),
+            ),
         )
         val uploadForm = form(
             id = "upload-photo.form",
@@ -221,6 +332,7 @@ class DynamicNavigationPlannerTest {
                 ),
             ),
             confidence = Confidence.verified,
+            provenance = uploadPhoto.provenance,
         )
         val photoLayout = layout("photos", listPhotos.id).copy(
             confidence = Confidence.verified,
@@ -258,7 +370,7 @@ class DynamicNavigationPlannerTest {
             ).contextualFormActions.isEmpty(),
         )
         assertTrue(
-            descriptor.copy(forms = listOf(uploadForm.copy(confidence = Confidence.high)))
+            descriptor.copy(forms = listOf(uploadForm.copy(provenance = emptyList())))
                 .planDynamicNavigation(trustedContext)
                 .contextualFormActions
                 .isEmpty(),

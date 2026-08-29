@@ -122,6 +122,7 @@ import dev.obiente.nextcloudnative.app.NextcloudNote
 import dev.obiente.nextcloudnative.app.NextcloudNotePresence
 import dev.obiente.nextcloudnative.app.createNoteRequest
 import dev.obiente.nextcloudnative.app.deleteNoteRequest
+import dev.obiente.nextcloudnative.app.notesMutationHeaders
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
 import dev.obiente.nextcloudnative.app.loginPollPendingDiagnostic
 import dev.obiente.nextcloudnative.app.shouldRecordHttpStatusDiagnostic
@@ -3167,7 +3168,7 @@ internal class AndroidNextcloudServices(
             session = session,
             body = body,
             contentType = "application/json; charset=utf-8",
-            headers = expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-Match" to it) }.orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -3205,9 +3206,7 @@ internal class AndroidNextcloudServices(
             method = plan.method.name,
             url = session.serverUrl + plan.relativePath,
             session = session,
-            headers = expectedEtag?.takeIf(String::isNotBlank)
-                ?.let { etag -> mapOf("If-Match" to etag) }
-                .orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }

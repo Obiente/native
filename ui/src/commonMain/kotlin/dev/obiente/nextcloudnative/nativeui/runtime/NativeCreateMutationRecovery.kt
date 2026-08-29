@@ -164,7 +164,8 @@ internal fun nativeChoresInviteMutationRecoveryPlan(
         activeReadAction.binding.method != HttpMethod.GET ||
         activeReadAction.binding.path != "/apps/chores/api/v1.0/team" ||
         activeReadAction.resourceId != resource.id ||
-        action.confidence != Confidence.verified || activeReadAction.confidence != Confidence.verified ||
+        !action.hasSignedPackageMutationConfidence() ||
+        !activeReadAction.hasSignedPackageMutationConfidence() ||
         action.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
         activeReadAction.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage }
     ) {
@@ -209,7 +210,8 @@ internal fun nativeCreateMutationRecoveryPlan(
         !collectionComplete || records.size > MAX_CREATE_BASELINE_RECORDS ||
         action.intent != ActionIntent.create || action.effect != ActionEffect.create ||
         action.risk == ActionRisk.readOnly || action.binding.method != HttpMethod.POST ||
-        action.confidence != Confidence.verified || activeReadAction.confidence != Confidence.verified ||
+        !action.hasSignedPackageMutationConfidence() ||
+        !activeReadAction.hasSignedPackageMutationConfidence() ||
         action.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
         activeReadAction.evidence.none { evidence -> evidence.source == EvidenceSource.verifiedAppPackage } ||
         activeReadAction.intent !in setOf(ActionIntent.list, ActionIntent.read) ||
@@ -568,6 +570,10 @@ private fun NativeRecord.completeStructuredObjectList(fieldId: String): List<Map
         }
     }
 }
+
+private fun ActionSpec.hasSignedPackageMutationConfidence(): Boolean =
+    confidence in setOf(Confidence.high, Confidence.verified) &&
+        evidence.any { item -> item.source == EvidenceSource.verifiedAppPackage }
 
 private fun nativeCreateExpectedIdentity(values: Map<String, String>): String = publicContentSha256(
     values.toSortedMap().entries.joinToString("\u0000") { (name, value) -> "$name\u0000$value" }

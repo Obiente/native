@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.nativeui.model
 
 import dev.obiente.nextcloudnative.contracts.ContractAcquisitionRequest
 import dev.obiente.nextcloudnative.contracts.FileAppStoreCatalogCache
+import dev.obiente.nextcloudnative.contracts.FileVerifiedContractCache
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import java.io.File
 import kotlinx.serialization.json.Json
@@ -93,6 +94,61 @@ class MusicLiveContractCompatibilityTest {
                 "${action.id}:${action.binding.method}:${action.binding.path}:${action.binding.body}"
             },
         )
+        assertTrue(descriptor.validationErrors().isEmpty())
+    }
+
+    @Test
+    fun `signed Music 3 1 1 exposes exact native playlist CRUD forms`() {
+        if (System.getenv("RUN_LIVE_NEXTCLOUD_APPSTORE_TEST") != "1") return
+        val contract = assertNotNull(
+            SignedAppStoreContractAcquirer(
+                catalogCache = FileAppStoreCatalogCache(
+                    File(System.getProperty("user.home"), ".cache/nextcloud-native/contracts/catalogs"),
+                ),
+                verifiedContractCache = FileVerifiedContractCache(
+                    File(System.getProperty("java.io.tmpdir"), "nc-native-music-playlist-contract-v1"),
+                ),
+            ).acquire(ContractAcquisitionRequest("music", "34.0.1", "3.1.1")),
+        )
+        val descriptor = DynamicAppDescriptorCompiler().compile(
+            DynamicDiscoveryInput(
+                app = AppIdentity("music", "Music", "3.1.1"),
+                endpointPolicy = EndpointPolicy(
+                    serverOrigin = "https://cloud.example.test",
+                    approvedApiPrefixes = listOf("/apps/music"),
+                ),
+                advertisedOpenApi = AdvertisedOpenApi(
+                    documentUrl = contract.sourceUrl,
+                    document = Json.parseToJsonElement(contract.document),
+                    trust = OpenApiTrust.nextcloudSignedAppPackage,
+                ),
+            ),
+        )
+        val create = descriptor.actions.single { action ->
+            action.binding.method == HttpMethod.POST &&
+                action.binding.path == "/apps/music/api/playlists"
+        }
+        val update = descriptor.actions.single { action ->
+            action.binding.method == HttpMethod.PUT &&
+                action.binding.path == "/apps/music/api/playlists/{id}"
+        }
+        val delete = descriptor.actions.single { action ->
+            action.binding.method == HttpMethod.DELETE &&
+                action.binding.path == "/apps/music/api/playlists/{id}"
+        }
+
+        assertEquals(setOf("playlists"), setOf(create.resourceId, update.resourceId, delete.resourceId))
+        assertTrue(listOf(create, update, delete).all { action -> action.binding.apiRequestHeader })
+        assertEquals(
+            listOf("name"),
+            descriptor.forms.single { form -> form.actionId == create.id }.fields.map(FormField::fieldId),
+        )
+        assertEquals(
+            setOf("name", "comment"),
+            descriptor.forms.single { form -> form.actionId == update.id }
+                .fields.mapTo(mutableSetOf(), FormField::fieldId),
+        )
+        assertTrue(delete.requiresConfirmation)
         assertTrue(descriptor.validationErrors().isEmpty())
     }
 }

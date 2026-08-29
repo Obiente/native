@@ -34,6 +34,8 @@ internal sealed interface Screen {
     @Serializable
     data object Contacts : Screen
     @Serializable
+    data object Tasks : Screen
+    @Serializable
     data object Deck : Screen
     @Serializable
     data object AdminApps : Screen
@@ -87,6 +89,7 @@ internal fun Screen.usesPersistentAppNavigation(): Boolean = when (this) {
     Screen.UserStatus,
     Screen.Calendar,
     Screen.Contacts,
+    Screen.Tasks,
     Screen.Deck,
     Screen.AdminApps,
     Screen.OfflineCenter,
@@ -112,7 +115,8 @@ internal fun Screen.requiresPendingNavigationGuard(groupwareMutationInProgress: 
         this is Screen.TextEditor ||
         this is Screen.MediaViewer ||
         this is Screen.Calendar ||
-        this is Screen.Contacts
+        this is Screen.Contacts ||
+        this is Screen.Tasks
 
 internal fun mutationOrLinkCommitBlocksInteraction(
     mutationInProgress: Boolean,
@@ -189,6 +193,7 @@ internal fun Screen.toSavedScreen(): SavedScreen = when (this) {
     Screen.UserStatus -> SavedScreen("user-status")
     Screen.Calendar -> SavedScreen("calendar")
     Screen.Contacts -> SavedScreen("contacts")
+    Screen.Tasks -> SavedScreen("tasks")
     Screen.Deck -> SavedScreen("deck")
     Screen.AdminApps -> SavedScreen("admin-apps")
     Screen.OfflineCenter -> SavedScreen("offline-center")
@@ -248,6 +253,7 @@ internal fun SavedScreen.toScreen(): Screen = when (kind) {
     "user-status" -> Screen.UserStatus
     "calendar" -> Screen.Calendar
     "contacts" -> Screen.Contacts
+    "tasks" -> Screen.Tasks
     "deck" -> Screen.Deck
     "admin-apps" -> Screen.AdminApps
     "offline-center" -> Screen.OfflineCenter

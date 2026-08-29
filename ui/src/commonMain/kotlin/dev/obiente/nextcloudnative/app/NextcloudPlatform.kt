@@ -14,6 +14,7 @@ enum class ThemePreference {
 enum class DurableMutationRecoveryKind(val storageKey: String) {
     Calendar("calendar-v1"),
     Contacts("contacts-v1"),
+    Tasks("tasks-v1"),
     NoteDeletion("note-deletion-v1"),
 }
 

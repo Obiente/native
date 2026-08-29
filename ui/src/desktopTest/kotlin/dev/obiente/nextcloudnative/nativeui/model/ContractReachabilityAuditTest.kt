@@ -19,6 +19,7 @@ class ContractReachabilityAuditTest {
             ?.filter(String::isNotEmpty)
             ?.distinct()
             ?.takeIf(List<String>::isNotEmpty)
+        val printMutations = System.getenv("NEXTCLOUD_REACHABILITY_PRINT_MUTATIONS") == "1"
         require(requestedAppIds.orEmpty().size <= 500) { "The audit app list is outside the limit." }
         require(requestedAppIds.orEmpty().all { appId -> appId.matches(Regex("^[a-z0-9_]{1,64}$")) }) {
             "The audit app list contains an invalid app ID."
@@ -127,6 +128,19 @@ class ContractReachabilityAuditTest {
                         "${surface.name}:${operationAudit.counts[surface] ?: 0}"
                     },
             )
+            if (printMutations) {
+                descriptor.actions
+                    .filter { action -> action.binding.method != HttpMethod.GET }
+                    .sortedBy(DynamicAction::id)
+                    .forEach { action ->
+                        println(
+                            "reachability-mutation app=$appId action=${action.id} " +
+                                "intent=${action.intent} method=${action.binding.method} " +
+                                "surface=${operationAudit.surfacesByActionId[action.id]} " +
+                                "resource=${action.resourceId} path=${action.binding.path}",
+                        )
+                    }
+            }
             if (appId == "budget") {
                 println(
                     "reachability-roots app=budget resources=" +

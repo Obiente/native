@@ -5,6 +5,9 @@ import dev.obiente.nextcloudnative.contracts.OpenApiContractSourceKind
 import dev.obiente.nextcloudnative.contracts.SignedAppStoreContractAcquirer
 import dev.obiente.nextcloudnative.contracts.VerifiedContractKind
 import dev.obiente.nextcloudnative.app.dynamicRootFormTargetsActiveSurface
+import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.app.parseDynamicRecords
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresInviteMutationRecoveryPlan
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeRecordActions
 import dev.obiente.nextcloudnative.nativeui.runtime.editableNativeFields
 import kotlinx.serialization.json.Json
@@ -126,11 +129,60 @@ class ChoresLiveContractCompatibilityTest {
             contextualTeamCreate?.action?.id,
             "team=${nativeTeam.id}:${nativeTeam.fields.map { field -> field.id to field.readOnly }}; " +
                 "inviteResource=${inviteMember.resourceId}; " +
-                "creates=${nativeSchema.actions.filter { action ->
+            "creates=${nativeSchema.actions.filter { action ->
                     action.resourceId == nativeTeam.id && action.intent == ActionIntent.create
                 }.map { action ->
                     Triple(action.id, action.binding.pathParameterNames, action.binding.bodyFieldNames)
                 }}; selected=${contextualTeamCreate?.action?.id}",
+        )
+        val parsedTeam = parseDynamicRecords(
+            action = teamRead,
+            response = NextcloudApiResponse(
+                status = 200,
+                body = """{
+                    "id": 1,
+                    "name": "Compatibility team",
+                    "owner": "alice",
+                    "members": [{
+                        "team_id": 1,
+                        "member": "alice",
+                        "displayName": "Alice",
+                        "points": 0
+                    }],
+                    "invites": []
+                }""".encodeToByteArray(),
+                contentType = "application/json",
+                etag = null,
+            ),
+            declaredFieldIds = descriptor.resources.single { resource ->
+                resource.id == teamRead.resourceId
+            }.fields.mapTo(linkedSetOf()) { field -> field.id },
+        ).single()
+        val parsedTeamContext = mapOf("teamId" to parsedTeam.id)
+        val parsedTeamCreate = assertNotNull(
+            nativeRecordActions(
+                schema = nativeSchema,
+                resource = nativeTeam,
+                navigationContext = parsedTeamContext,
+            ).create,
+        )
+        assertEquals(inviteMember.id, parsedTeamCreate.action.id)
+        assertNotNull(
+            nativeChoresInviteMutationRecoveryPlan(
+                schema = nativeSchema,
+                activeReadAction = nativeSchema.actions.single { action -> action.id == teamRead.id },
+                resource = nativeTeam,
+                createPlan = parsedTeamCreate,
+                records = listOf(parsedTeam),
+                navigationContext = parsedTeamContext,
+                collectionComplete = true,
+            ),
+            "A complete empty invite list from Chores must keep Invite member recoverable: " +
+                "app=${nativeSchema.app}; parsedId=${parsedTeam.id}; " +
+                "safe=${parsedTeam.actionSafeIdentity}/${parsedTeam.actionBindingProvenanceValid}; " +
+                "structured=${parsedTeam.structuredValues}; " +
+                "read=${nativeSchema.actions.single { action -> action.id == teamRead.id }}; " +
+                "create=${parsedTeamCreate.action}; context=$parsedTeamContext",
         )
         val nativeChores = nativeSchema.resources.single { resource -> resource.id == choreRead.resourceId }
         val assignee = assertNotNull(

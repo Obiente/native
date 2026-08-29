@@ -112,10 +112,28 @@ read-only by default:
 tools/nextcloud-demo.sh android-session compatibility
 ```
 
-Writes require a second, explicit command naming one exact app API subtree. The
-app accepts only HTTPS, the same origin, mutation methods it recognizes, and a
-path under an explicit `/apps/<app>/api/...`,
-`/index.php/apps/<app>/api/...`, or `/ocs/v2.php/apps/<app>/api/...` subtree:
+If the host's LAN address changes, use another HTTPS origin already covered by
+the generated demo certificate. Android emulators can always reach the host at
+the certificate's `10.0.2.2` alias:
+
+```bash
+tools/nextcloud-demo.sh android-session compatibility https://10.0.2.2:8443
+```
+
+The helper rejects HTTP, paths, a different port, and host names or addresses
+that are not in this demo's server certificate. It transforms the private
+session only while streaming it into the app; the credential file is not
+rewritten or printed. The server readiness check uses the certificate's local
+host alias, so an ordinary `up` also remains usable after a LAN address change.
+
+Writes require a second, explicit command naming one exact app API subtree or
+one synthetic CardDAV or CalDAV collection. The app accepts only HTTPS, the
+same origin, mutation methods it recognizes, and a path under an explicit
+`/apps/<app>/api/...`, `/index.php/apps/<app>/api/...`, or
+`/ocs/v2.php/apps/<app>/api/...` subtree. DAV scopes accept only descendants of
+one exact `/remote.php/dav/addressbooks/users/<user>/<book>` or
+`/remote.php/dav/calendars/<user>/<calendar>` collection; the collection itself
+cannot be mutated:
 
 ```bash
 tools/nextcloud-demo.sh android-write-scope compatibility \

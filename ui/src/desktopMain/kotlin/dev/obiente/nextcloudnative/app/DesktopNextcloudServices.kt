@@ -5358,7 +5358,7 @@ class DesktopNextcloudServices(
             session,
             body,
             "application/json; charset=utf-8",
-            headers = expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-Match" to it) }.orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -5396,9 +5396,7 @@ class DesktopNextcloudServices(
             plan.method.name,
             session.serverUrl + plan.relativePath,
             session,
-            headers = expectedEtag?.takeIf(String::isNotBlank)
-                ?.let { etag -> mapOf("If-Match" to etag) }
-                .orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }

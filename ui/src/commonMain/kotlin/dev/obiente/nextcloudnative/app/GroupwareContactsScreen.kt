@@ -216,7 +216,7 @@ fun NativeGroupwareContactsScreen(
     LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
         if (!mutationRecoveryLoaded) return@LaunchedEffect
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
-            runCatching {
+            runCatchingPreservingCancellation {
                 val response = services.executeGroupwareDav(
                     session,
                     groupwareDavDetailRequest(postcondition.href),
@@ -233,7 +233,7 @@ fun NativeGroupwareContactsScreen(
         } else {
             refreshing = true
         }
-        runCatching {
+        runCatchingPreservingCancellation {
             val principal = parseGroupwarePrincipalHref(
                 services.executeGroupwareDav(session, groupwareDavPrincipalDiscoveryRequest()),
             )

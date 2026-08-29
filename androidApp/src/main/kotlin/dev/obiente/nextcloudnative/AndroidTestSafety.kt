@@ -32,6 +32,7 @@ internal class ScopedTestWriteAuthorization private constructor(
     private val host: String,
     private val port: Int,
     private val absolutePathPrefix: String,
+    private val allowExactTarget: Boolean,
 ) {
     fun allows(method: String, url: String): Boolean {
         if (method.uppercase(Locale.ROOT) !in SCOPED_TEST_MUTATION_METHODS) return false
@@ -47,7 +48,8 @@ internal class ScopedTestWriteAuthorization private constructor(
         }
         val path = target.rawPath ?: return false
         if (path.contains('%') || path.contains('\\') || path.contains("//")) return false
-        return path == absolutePathPrefix || path.startsWith("$absolutePathPrefix/")
+        return (allowExactTarget && path == absolutePathPrefix) ||
+            path.startsWith("$absolutePathPrefix/")
     }
 
     companion object {
@@ -64,21 +66,22 @@ internal class ScopedTestWriteAuthorization private constructor(
             ) {
                 return null
             }
-            val normalizedApiPrefix = apiPathPrefix.trim().trimEnd('/')
-            if (!normalizedApiPrefix.isSafeScopedTestApiPrefix()) return null
+            val normalizedPathPrefix = apiPathPrefix.trim().trimEnd('/')
+            val scopeKind = normalizedPathPrefix.safeScopedTestPathKind() ?: return null
             val serverPath = server.rawPath.orEmpty().trimEnd('/')
             if (!serverPath.isSafeServerBasePath()) return null
             return ScopedTestWriteAuthorization(
                 scheme = scheme,
                 host = host,
                 port = server.effectivePort(),
-                absolutePathPrefix = "$serverPath$normalizedApiPrefix",
+                absolutePathPrefix = "$serverPath$normalizedPathPrefix",
+                allowExactTarget = scopeKind == ScopedTestPathKind.AppApi,
             )
         }
     }
 }
 
-private fun String.isSafeScopedTestApiPrefix(): Boolean {
+private fun String.safeScopedTestPathKind(): ScopedTestPathKind? {
     if (
         !startsWith('/') ||
         contains('\\') ||
@@ -86,29 +89,56 @@ private fun String.isSafeScopedTestApiPrefix(): Boolean {
         contains('#') ||
         contains("//")
     ) {
-        return false
+        return null
     }
     val segments = split('/').filter(String::isNotEmpty)
+    if (segments.isSafeScopedTestDavCollection()) {
+        return ScopedTestPathKind.DavCollection
+    }
     val apiSegmentIndex = when {
         segments.take(3) == listOf("ocs", "v2.php", "apps") -> 4
         segments.take(2) == listOf("index.php", "apps") -> 3
         segments.firstOrNull() == "apps" -> 2
-        else -> return false
+        else -> return null
     }
+    if (segments.getOrNull(apiSegmentIndex) != "api") {
+        return null
+    }
+    val scopedSegments = segments.drop(apiSegmentIndex + 1)
     if (
-        segments.getOrNull(apiSegmentIndex) != "api" ||
-        segments.size < apiSegmentIndex + 3
-    ) {
-        return false
-    }
-    return segments.all { segment ->
-        segment !in setOf(".", "..") &&
-            segment.isNotEmpty() &&
-            segment.all { character ->
-                character.isLetterOrDigit() || character in "._~-"
-            }
+        scopedSegments.isEmpty() ||
+        (scopedSegments.first().isApiVersionSegment() && scopedSegments.size < 2)
+    ) return null
+    return if (segments.all(String::isSafeScopedTestPathSegment)) {
+        ScopedTestPathKind.AppApi
+    } else {
+        null
     }
 }
+
+private fun List<String>.isSafeScopedTestDavCollection(): Boolean {
+    val hasRecognizedShape = when {
+        size == 6 -> take(4) == listOf("remote.php", "dav", "addressbooks", "users")
+        size == 5 -> take(3) == listOf("remote.php", "dav", "calendars")
+        else -> false
+    }
+    return hasRecognizedShape && all(String::isSafeScopedTestPathSegment)
+}
+
+private fun String.isSafeScopedTestPathSegment(): Boolean =
+    this !in setOf(".", "..") &&
+        isNotEmpty() &&
+        all { character ->
+            character.isLetterOrDigit() || character in "._~-"
+        }
+
+private enum class ScopedTestPathKind {
+    AppApi,
+    DavCollection,
+}
+
+private fun String.isApiVersionSegment(): Boolean =
+    matches(Regex("v?[0-9]+(?:\\.[0-9]+)*", RegexOption.IGNORE_CASE))
 
 private fun String.isSafeServerBasePath(): Boolean =
     isEmpty() ||
