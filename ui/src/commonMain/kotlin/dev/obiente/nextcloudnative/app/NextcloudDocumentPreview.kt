@@ -97,12 +97,11 @@ fun NextcloudDocumentPreview(
             }
         }
     }
-    val officePlan = remember(file, editingCapabilities, session.serverUrl, services.supportsEmbeddedNextcloudWebApp) {
+    val officePlan = remember(file, editingCapabilities, session.serverUrl) {
         planOfficeEditSession(
             file,
             editingCapabilities,
-            accountOriginSecure = !services.supportsEmbeddedNextcloudWebApp ||
-                !serverAddressUsesPlainHttp(session.serverUrl),
+            accountOriginSecure = !serverAddressUsesPlainHttp(session.serverUrl),
         )
     }
 

@@ -67,7 +67,7 @@ internal fun parseGroupwareTasksFromContent(
         return null
     }
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
-        ?: href.substringAfterLast('/').substringBeforeLast('.')
+        ?: return@mapNotNull null
     val recurrenceId = property("RECURRENCE-ID")?.value?.trim()?.takeIf(String::isNotBlank)
     val due = property("DUE")
     val status = property("STATUS")?.value?.trim()

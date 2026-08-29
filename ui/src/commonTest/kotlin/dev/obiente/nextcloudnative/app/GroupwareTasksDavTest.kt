@@ -189,6 +189,27 @@ class GroupwareTasksDavTest {
     }
 
     @Test
+    fun `task parser withholds malformed components without a UID`() {
+        val content = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            SUMMARY:Missing identity
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+
+        assertTrue(
+            parseGroupwareTasksFromContent(
+                "/remote.php/dav/calendars/person/tasks/",
+                "/remote.php/dav/calendars/person/tasks/malformed.ics",
+                "\"one\"",
+                content,
+            ).isEmpty(),
+        )
+    }
+
+    @Test
     fun `task due dates reject impossible Gregorian dates`() {
         assertTrue(isValidGroupwareTaskDueDate("20240229"))
         assertFalse(isValidGroupwareTaskDueDate("20230229"))

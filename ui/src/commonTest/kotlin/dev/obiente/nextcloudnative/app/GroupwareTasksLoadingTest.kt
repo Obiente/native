@@ -48,6 +48,28 @@ class GroupwareTasksLoadingTest {
         assertEquals(listOf("Unavailable"), result.failedCalendarNames)
     }
 
+    @Test
+    fun `individual GET fallback retains the listing ETag when the response omits it`() = runBlocking {
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val objectHref = "${calendarHref}one.ics"
+
+        val tasks = loadGroupwareTasksInBatches(calendarHref) { request ->
+            when (request.method) {
+                "PROPFIND" -> listingResponse(calendarHref, listOf(objectHref))
+                "REPORT" -> NextcloudApiResponse(405, byteArrayOf(), null, null)
+                "GET" -> NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/calendar",
+                    etag = null,
+                    body = createGroupwareTaskContent("one", "Task one", null, false).encodeToByteArray(),
+                )
+                else -> error("Unexpected ${request.method} request")
+            }
+        }
+
+        assertEquals("\"etag\"", tasks.single().etag)
+    }
+
     private fun listingResponse(calendarHref: String, hrefs: List<String>): NextcloudApiResponse =
         NextcloudApiResponse(
             status = 207,

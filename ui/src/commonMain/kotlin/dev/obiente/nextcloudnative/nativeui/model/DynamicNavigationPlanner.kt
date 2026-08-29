@@ -409,9 +409,7 @@ fun DynamicAppDescriptor.planDynamicNavigation(
             return@mapNotNull null
         }
         val belongsToVisibleRoot = rootResourceIds.any { root -> root.sameResourceAs(form.resourceId) }
-        if (!belongsToVisibleRoot && !action.isTrustedSelfContainedRootForm(form)) {
-            return@mapNotNull null
-        }
+        if (!belongsToVisibleRoot) return@mapNotNull null
         DynamicNavigationFormAction(
             formId = form.id,
             label = form.title,

@@ -5,7 +5,6 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class DynamicRootMutationPlanningTest {
@@ -35,7 +34,7 @@ class DynamicRootMutationPlanningTest {
     }
 
     @Test
-    fun `verified self contained app command is available without a matching read root`() {
+    fun `standalone app command is withheld without durable authoritative recovery`() {
         val listProjects = action("list-projects", "projects", ActionIntent.list)
         val evidence = listOf(
             Provenance(
@@ -57,10 +56,7 @@ class DynamicRootMutationPlanningTest {
             actions = listOf(listProjects, importData),
         )
 
-        assertEquals(
-            listOf(importForm.id),
-            descriptor.planDynamicNavigation().rootFormActions.map(DynamicNavigationFormAction::formId),
-        )
+        assertTrue(descriptor.planDynamicNavigation().rootFormActions.isEmpty())
         assertTrue(
             descriptor.copy(forms = listOf(importForm.copy(provenance = emptyList())))
                 .planDynamicNavigation().rootFormActions.isEmpty(),
@@ -83,7 +79,7 @@ class DynamicRootMutationPlanningTest {
     }
 
     @Test
-    fun `root forms with the same label remain distinct across resources`() {
+    fun `standalone root forms remain withheld even with trusted provenance`() {
         val evidence = listOf(
             Provenance(
                 kind = ProvenanceKind.verifiedAppPackage,
@@ -106,10 +102,7 @@ class DynamicRootMutationPlanningTest {
             actions = listOf(createAccount, createCategory),
         )
 
-        assertEquals(
-            listOf("create-account.form", "create-category.form"),
-            descriptor.planDynamicNavigation().rootFormActions.map(DynamicNavigationFormAction::formId),
-        )
+        assertTrue(descriptor.planDynamicNavigation().rootFormActions.isEmpty())
     }
 
     private fun descriptor(
