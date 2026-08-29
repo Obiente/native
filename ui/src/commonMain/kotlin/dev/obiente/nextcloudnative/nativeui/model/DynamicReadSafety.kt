@@ -22,7 +22,7 @@ internal fun DynamicAction.hasPositiveRootReadEvidence(): Boolean {
     if (looksLikeStateChangingGet()) return false
     if (intent == ActionIntent.list) return true
     if (provenance.any { it.kind in VERIFIED_ROOT_READ_PROVENANCE }) return true
-    val concepts = sequenceOf(binding.path, id, label)
+    val concepts = sequenceOf(resourceId, binding.path, id, label)
         .flatMap { it.semanticConceptTokens().asSequence() }
         .toSet()
     return concepts.any(POSITIVE_ROOT_READ_CONCEPTS::contains)

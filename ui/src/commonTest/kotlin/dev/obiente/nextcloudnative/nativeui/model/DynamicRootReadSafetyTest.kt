@@ -10,6 +10,11 @@ class DynamicRootReadSafetyTest {
         assertFalse(readAction("logout", "/logout").hasPositiveRootReadEvidence())
         assertFalse(readAction("start", "/start").hasPositiveRootReadEvidence())
         assertTrue(readAction("get-status", "/status").hasPositiveRootReadEvidence())
+        assertTrue(
+            readAction("api-general-index", "/init")
+                .copy(resourceId = "overview")
+                .hasPositiveRootReadEvidence(),
+        )
     }
 
     private fun readAction(id: String, path: String) = DynamicAction(
