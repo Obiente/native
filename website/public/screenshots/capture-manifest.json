@@ -567,7 +567,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicMutationTrust.kt": "b09b10cf6829393608515673636b6d685a44c069ba33bbba83f21bc9bde01033",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt": "a1f1b28c89f3850fee8c85834c26fa7d75fcc9471a1ad4acad932d5f5540e3e2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicOpenApiPathResolver.kt": "8b6cba1f42ae5ec8b0d7f9b4c40be83905e368224b1bda7ce2dd325c467e1db1",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicReadSafety.kt": "641cd8023e4db99d408018d60829a0d5f2c69d1a64e1eafce6fee873b0fe3cd7",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicReadSafety.kt": "81365419891592add47b7aac2c5e12176ec9090389499aed1a5a93e8483ef01c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicStructuredForm.kt": "be6fc601f4626e2f89ae3b1f78f4f210e171c2b072e80855ea7b6622cb116b31",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/NativeSchema.kt": "9ada1795618c33d42e7c3002a2872d473af352c188dd877bcb54c37ceed8b43a",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/SemanticConceptTokens.kt": "14bf3d4fcdf65ebc1c6cd8071ccacde698b68415adb3132a27a51b9c56bf89b8",
