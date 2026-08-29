@@ -238,6 +238,12 @@ fun NativeGroupwareTasksScreen(
                             "the remaining tasks are current.",
                     )
                 }
+                if (loaded.omittedObjectCount > 0) {
+                    add(
+                        "${loaded.omittedObjectCount} task objects were not retained because this refresh " +
+                            "reached the safe in-memory task-data budget.",
+                    )
+                }
             }.joinToString(" ").takeIf(String::isNotEmpty)
             TasksLoadState.Ready(
                 calendars = calendars,

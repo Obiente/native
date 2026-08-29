@@ -4,6 +4,7 @@ internal data class GroupwareTaskCalendarLoadResult(
     val tasks: List<GroupwareTask>,
     val failedCalendarNames: List<String>,
     val concurrentlyDeletedObjectCount: Int = 0,
+    val omittedObjectCount: Int = 0,
 )
 
 private data class GroupwareTaskObjectReference(
@@ -18,18 +19,22 @@ internal suspend fun loadGroupwareTaskCalendars(
     val tasks = mutableListOf<GroupwareTask>()
     val failures = mutableListOf<String>()
     var concurrentlyDeletedObjectCount = 0
+    var omittedObjectCount = 0
+    val retentionBudget = GroupwareTaskRetentionBudget()
     calendars.forEach { calendar ->
         runCatchingPreservingCancellation {
             loadGroupwareTasksInBatches(
                 calendarHref = calendar.href,
                 onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
+                onRetentionOmission = { count -> omittedObjectCount += count },
+                retentionBudget = retentionBudget,
                 execute = execute,
             )
         }.onSuccess(tasks::addAll).onFailure {
             failures += calendar.displayName
         }
     }
-    return GroupwareTaskCalendarLoadResult(tasks, failures, concurrentlyDeletedObjectCount)
+    return GroupwareTaskCalendarLoadResult(tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount)
 }
 
 internal fun groupwareDavCalendarObjectListingRequest(calendarHref: String): GroupwareDavRequest =
@@ -83,6 +88,8 @@ internal fun groupwareDavCalendarMultiGetRequest(
 internal suspend fun loadGroupwareTasksInBatches(
     calendarHref: String,
     onConcurrentDeletion: (Int) -> Unit = {},
+    onRetentionOmission: (Int) -> Unit = {},
+    retentionBudget: GroupwareTaskRetentionBudget = GroupwareTaskRetentionBudget(),
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): List<GroupwareTask> {
     val objectReferences = parseGroupwareCalendarObjectReferences(
@@ -90,11 +97,17 @@ internal suspend fun loadGroupwareTasksInBatches(
         execute(groupwareDavCalendarObjectListingRequest(calendarHref)),
     )
     var concurrentlyDeletedObjectCount = 0
+    var processedObjectCount = 0
     val tasks = buildList {
         objectReferences.chunked(MAX_TASK_DAV_MULTIGET_ITEMS).forEach { batch ->
             val loaded = loadGroupwareTaskBatch(calendarHref, batch, execute)
+            if (!retentionBudget.tryRetain(loaded.estimatedRetainedBytes)) {
+                onRetentionOmission(objectReferences.size - processedObjectCount)
+                return@buildList
+            }
             addAll(loaded.tasks)
             concurrentlyDeletedObjectCount += loaded.concurrentlyDeletedObjectCount
+            processedObjectCount += batch.size
         }
     }
     if (concurrentlyDeletedObjectCount > 0) onConcurrentDeletion(concurrentlyDeletedObjectCount)
@@ -104,12 +117,31 @@ internal suspend fun loadGroupwareTasksInBatches(
 private data class GroupwareTaskBatchLoadResult(
     val tasks: List<GroupwareTask>,
     val concurrentlyDeletedObjectCount: Int = 0,
+    val estimatedRetainedBytes: Long = 0L,
 ) {
     operator fun plus(other: GroupwareTaskBatchLoadResult): GroupwareTaskBatchLoadResult =
         GroupwareTaskBatchLoadResult(
             tasks = tasks + other.tasks,
             concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount + other.concurrentlyDeletedObjectCount,
+            estimatedRetainedBytes = estimatedRetainedBytes + other.estimatedRetainedBytes,
         )
+}
+
+internal class GroupwareTaskRetentionBudget(
+    private val maximumEstimatedBytes: Long = MAX_RETAINED_TASK_BYTES,
+) {
+    private var retainedBytes = 0L
+
+    init {
+        require(maximumEstimatedBytes > 0L)
+    }
+
+    fun tryRetain(estimatedBytes: Long): Boolean {
+        require(estimatedBytes >= 0L)
+        if (estimatedBytes > maximumEstimatedBytes - retainedBytes) return false
+        retainedBytes += estimatedBytes
+        return true
+    }
 }
 
 private fun parseGroupwareCalendarObjectReferences(
@@ -200,7 +232,11 @@ private fun parseGroupwareCalendarMultiGetResponse(
         parseGroupwareTasksFromContent(calendarHref, href, etag, content)
     }
     concurrentlyDeletedObjectCount += requested.size - returned.size
-    return GroupwareTaskBatchLoadResult(tasks, concurrentlyDeletedObjectCount)
+    return GroupwareTaskBatchLoadResult(
+        tasks = tasks,
+        concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount,
+        estimatedRetainedBytes = if (tasks.isEmpty()) 0L else response.body.size.toLong(),
+    )
 }
 
 private suspend fun loadGroupwareTaskObjectsIndividually(
@@ -209,6 +245,7 @@ private suspend fun loadGroupwareTaskObjectsIndividually(
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): GroupwareTaskBatchLoadResult {
     var concurrentlyDeletedObjectCount = 0
+    var estimatedRetainedBytes = 0L
     val tasks = objectReferences.flatMap { reference ->
         val response = execute(groupwareDavDetailRequest(reference.href))
         if (response.status == 404 || response.status == 410) {
@@ -216,6 +253,7 @@ private suspend fun loadGroupwareTaskObjectsIndividually(
             return@flatMap emptyList()
         }
         require(response.status in 200..299) { "Task loading failed (HTTP ${response.status})." }
+        estimatedRetainedBytes += response.body.size
         parseGroupwareTasksFromContent(
             calendarHref = calendarHref,
             href = reference.href,
@@ -223,7 +261,7 @@ private suspend fun loadGroupwareTaskObjectsIndividually(
             content = response.body.decodeToString(),
         )
     }
-    return GroupwareTaskBatchLoadResult(tasks, concurrentlyDeletedObjectCount)
+    return GroupwareTaskBatchLoadResult(tasks, concurrentlyDeletedObjectCount, estimatedRetainedBytes)
 }
 
 private fun String.requireTaskCalendarCollectionHref(): String = requireSafeDavHref().also {
@@ -242,6 +280,7 @@ private const val TASK_DAV_XML_CONTENT_TYPE = "application/xml; charset=utf-8"
 private const val TASK_OBJECT_LISTING_RESPONSE_BYTES = 16L * 1024L * 1024L
 private const val TASK_MULTIGET_RESPONSE_BYTES = 16L * 1024L * 1024L
 private const val MAX_TASK_DAV_MULTIGET_ITEMS = 10
+private const val MAX_RETAINED_TASK_BYTES = 16L * 1024L * 1024L
 
 private val TASK_OBJECT_LISTING_BODY = """
     <?xml version="1.0" encoding="UTF-8"?>

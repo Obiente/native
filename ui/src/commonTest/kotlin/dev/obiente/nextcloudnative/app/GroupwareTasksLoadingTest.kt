@@ -103,6 +103,24 @@ class GroupwareTasksLoadingTest {
         assertEquals(2, result.concurrentlyDeletedObjectCount)
     }
 
+    @Test
+    fun `aggregate task retention budget reports omitted objects`() = runBlocking {
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val hrefs = listOf("${calendarHref}one.ics", "${calendarHref}two.ics")
+        var omittedObjectCount = 0
+
+        val tasks = loadGroupwareTasksInBatches(
+            calendarHref = calendarHref,
+            retentionBudget = GroupwareTaskRetentionBudget(maximumEstimatedBytes = 1L),
+            onRetentionOmission = { count -> omittedObjectCount += count },
+        ) { request ->
+            if (request.method == "PROPFIND") listingResponse(calendarHref, hrefs) else multiGetResponse(hrefs)
+        }
+
+        assertTrue(tasks.isEmpty())
+        assertEquals(2, omittedObjectCount)
+    }
+
     private fun listingResponse(calendarHref: String, hrefs: List<String>): NextcloudApiResponse =
         NextcloudApiResponse(
             status = 207,

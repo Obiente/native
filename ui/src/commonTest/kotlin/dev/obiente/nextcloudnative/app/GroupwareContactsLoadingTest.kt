@@ -152,6 +152,32 @@ class GroupwareContactsLoadingTest {
     }
 
     @Test
+    fun `missing individual fallback contact retains healthy contacts and reports deletion`() = runBlocking {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+        val hrefs = listOf("${addressBookHref}one.vcf", "${addressBookHref}deleted.vcf")
+        var concurrentlyDeletedObjectCount = 0
+
+        val contacts = loadGroupwareContactsInBatches(
+            addressBookHref = addressBookHref,
+            onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
+        ) { request ->
+            when (request.method) {
+                "PROPFIND" -> listingResponse(addressBookHref, hrefs)
+                "REPORT" -> NextcloudApiResponse(405, byteArrayOf(), null, null)
+                "GET" -> if (request.relativePath.endsWith("deleted.vcf")) {
+                    NextcloudApiResponse(404, byteArrayOf(), null, null)
+                } else {
+                    NextcloudApiResponse(200, vCard("one").encodeToByteArray(), "text/vcard", null)
+                }
+                else -> error("Unexpected request method ${request.method}.")
+            }
+        }
+
+        assertEquals(listOf("one"), contacts.map(GroupwareContact::uid))
+        assertEquals(1, concurrentlyDeletedObjectCount)
+    }
+
+    @Test
     fun `retention budget discards raw cards and rejects excess summaries`() {
         val budget = GroupwareContactRetentionBudget(maximumContacts = 2, maximumEstimatedBytes = 16_384L)
         val first = budget.retain(contact("one", rawVCard = "PHOTO:${"A".repeat(8_192)}"))

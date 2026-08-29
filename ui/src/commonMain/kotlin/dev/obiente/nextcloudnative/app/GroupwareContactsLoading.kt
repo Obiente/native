@@ -80,6 +80,7 @@ fun groupwareDavAddressBookMultiGetRequest(
 internal suspend fun loadGroupwareContactsInBatches(
     addressBookHref: String,
     retentionBudget: GroupwareContactRetentionBudget = GroupwareContactRetentionBudget(),
+    onConcurrentDeletion: (Int) -> Unit = {},
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): List<GroupwareContact> {
     val objects = parseGroupwareAddressBookObjects(
@@ -91,7 +92,11 @@ internal suspend fun loadGroupwareContactsInBatches(
     }
     return buildList {
         objects.chunked(MAX_DAV_MULTIGET_ITEMS).forEach { batch ->
-            loadGroupwareContactBatch(addressBookHref, batch, execute).forEach { contact ->
+            val loaded = loadGroupwareContactBatch(addressBookHref, batch, execute)
+            if (loaded.concurrentlyDeletedObjectCount > 0) {
+                onConcurrentDeletion(loaded.concurrentlyDeletedObjectCount)
+            }
+            loaded.contacts.forEach { contact ->
                 add(retentionBudget.retain(contact))
             }
         }
@@ -116,11 +121,22 @@ internal suspend fun loadGroupwareContactForEditing(
     ) { "The selected contact is malformed." }
 }
 
+private data class GroupwareContactBatchLoadResult(
+    val contacts: List<GroupwareContact>,
+    val concurrentlyDeletedObjectCount: Int = 0,
+) {
+    operator fun plus(other: GroupwareContactBatchLoadResult): GroupwareContactBatchLoadResult =
+        GroupwareContactBatchLoadResult(
+            contacts = contacts + other.contacts,
+            concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount + other.concurrentlyDeletedObjectCount,
+        )
+}
+
 private suspend fun loadGroupwareContactBatch(
     addressBookHref: String,
     objects: List<GroupwareAddressBookObject>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareContact> {
+): GroupwareContactBatchLoadResult {
     val response = try {
         execute(
             groupwareDavAddressBookMultiGetRequest(
@@ -133,10 +149,12 @@ private suspend fun loadGroupwareContactBatch(
         return loadGroupwareContactBatchWithoutOversizedReport(addressBookHref, objects, execute)
     }
     if (response.status in 200..299) {
-        return parseGroupwareAddressBookMultiGetResponse(
-            addressBookHref = addressBookHref,
-            requestedHrefs = objects.map(GroupwareAddressBookObject::href),
-            response = response,
+        return GroupwareContactBatchLoadResult(
+            parseGroupwareAddressBookMultiGetResponse(
+                addressBookHref = addressBookHref,
+                requestedHrefs = objects.map(GroupwareAddressBookObject::href),
+                response = response,
+            ),
         )
     }
     if (response.status in 500..599 || response.status in setOf(405, 501)) {
@@ -149,7 +167,7 @@ private suspend fun loadGroupwareContactBatchWithoutOversizedReport(
     addressBookHref: String,
     objects: List<GroupwareAddressBookObject>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareContact> {
+): GroupwareContactBatchLoadResult {
     if (objects.size == 1) {
         return loadGroupwareContactsIndividually(addressBookHref, objects, execute)
     }
@@ -162,17 +180,25 @@ private suspend fun loadGroupwareContactsIndividually(
     addressBookHref: String,
     objects: List<GroupwareAddressBookObject>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareContact> = objects.map { objectMetadata ->
-    val response = execute(groupwareDavDetailRequest(objectMetadata.href))
-    require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
-    requireNotNull(
-        parseGroupwareContact(
-            addressBookHref = addressBookHref,
-            href = objectMetadata.href,
-            etag = response.etag ?: objectMetadata.etag,
-            content = response.body.decodeToString(),
-        ),
-    ) { "The selected contact is malformed." }
+): GroupwareContactBatchLoadResult {
+    var concurrentlyDeletedObjectCount = 0
+    val contacts = objects.mapNotNull { objectMetadata ->
+        val response = execute(groupwareDavDetailRequest(objectMetadata.href))
+        if (response.status == 404 || response.status == 410) {
+            concurrentlyDeletedObjectCount += 1
+            return@mapNotNull null
+        }
+        require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
+        requireNotNull(
+            parseGroupwareContact(
+                addressBookHref = addressBookHref,
+                href = objectMetadata.href,
+                etag = response.etag ?: objectMetadata.etag,
+                content = response.body.decodeToString(),
+            ),
+        ) { "The selected contact is malformed." }
+    }
+    return GroupwareContactBatchLoadResult(contacts, concurrentlyDeletedObjectCount)
 }
 
 private fun parseGroupwareAddressBookMultiGetResponse(
