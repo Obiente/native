@@ -375,7 +375,7 @@ fun NativeGroupwareTasksScreen(
             }
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = { query = boundedGroupwareTaskQuery(it) },
                 label = { Text("Search tasks") },
                 leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
                 singleLine = true,
@@ -653,6 +653,11 @@ fun NativeGroupwareTasksScreen(
         )
     }
 }
+
+internal fun boundedGroupwareTaskQuery(value: String): String =
+    value.take(MAX_GROUPWARE_TASK_QUERY_LENGTH)
+
+internal const val MAX_GROUPWARE_TASK_QUERY_LENGTH = 256
 
 @Composable
 private fun TasksError(message: String, retry: () -> Unit) {

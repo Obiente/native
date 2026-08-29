@@ -34,6 +34,30 @@ class GroupwareTasksDavTest {
     }
 
     @Test
+    fun `changing a timed due date preserves its timezone and time`() {
+        val href = "/remote.php/dav/calendars/person/tasks/timed.ics"
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val original = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            UID:timed
+            SUMMARY:Before
+            DUE;TZID=Europe/Amsterdam:20260830T120000
+            STATUS:NEEDS-ACTION
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+        val task = requireNotNull(parseGroupwareTask(calendarHref, href, "\"one\"", original))
+
+        val updated = updateGroupwareTaskContent(task, "After", "20260831", false, null)
+
+        assertTrue("DUE;TZID=Europe/Amsterdam:20260831T120000" in updated)
+        assertEquals("20260831T120000", parseGroupwareTask(calendarHref, href, "\"two\"", updated)?.due)
+        assertEquals("20260831T120000", expectedGroupwareTaskDueAfterDateEdit(task, "20260831"))
+    }
+
+    @Test
     fun `CalDAV tasks retain unknown properties across native create read and update`() {
         val href = "/remote.php/dav/calendars/person/tasks/task-1.ics"
         val calendarHref = "/remote.php/dav/calendars/person/tasks/"

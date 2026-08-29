@@ -127,7 +127,6 @@ fun updateGroupwareTaskContent(
 ): String {
     require(title.isNotBlank()) { "A task title is required." }
     val due = dueDate?.takeIf(String::isNotBlank)?.also(::requireValidGroupwareTaskDueDate)
-    val preserveTimedDue = !task.dueAllDay && task.due?.take(8) == due
     val original = task.rawCalendar.unfoldCalendarLines().toMutableList()
     val taskRange = original.calendarComponentRanges("VTODO").firstOrNull { range ->
         val component = original.subList(range.first + 1, range.last)
@@ -153,8 +152,12 @@ fun updateGroupwareTaskContent(
             null
         }
     }
-    if (!preserveTimedDue) {
-        replacements["DUE"] = due?.let { "DUE;VALUE=DATE:$it" }
+    val existingDueIndex = original.directCalendarPropertyIndex(taskStart, taskEnd, "DUE")
+    replacements["DUE"] = due?.let { date ->
+        existingDueIndex
+            ?.let(original::get)
+            ?.preserveGroupwareTaskDueTime(task, date)
+            ?: "DUE;VALUE=DATE:$date"
     }
     replacements.forEach { (name, replacement) ->
         val index = original.directCalendarPropertyIndex(taskStart, taskEnd, name)
@@ -173,8 +176,29 @@ fun updateGroupwareTaskContent(
     return original.joinToString("\r\n", postfix = "\r\n")
 }
 
-internal fun expectedGroupwareTaskDueAfterDateEdit(task: GroupwareTask?, dueDate: String?): String? =
-    if (task != null && !task.dueAllDay && task.due?.take(8) == dueDate) task.due else dueDate
+internal fun expectedGroupwareTaskDueAfterDateEdit(task: GroupwareTask?, dueDate: String?): String? {
+    if (dueDate == null || task == null || task.dueAllDay) return dueDate
+    val existingDue = task.due ?: return dueDate
+    return if (existingDue.hasGroupwareTaskDatePrefix()) {
+        dueDate + existingDue.drop(8)
+    } else {
+        dueDate
+    }
+}
+
+private fun String.preserveGroupwareTaskDueTime(task: GroupwareTask, dueDate: String): String? {
+    if (task.dueAllDay) return null
+    val separator = indexOf(':')
+    if (separator <= 0) return null
+    val declaration = substring(0, separator)
+    if (!declaration.substringBefore(';').equals("DUE", ignoreCase = true)) return null
+    val value = substring(separator + 1)
+    if (!value.hasGroupwareTaskDatePrefix()) return null
+    return "$declaration:$dueDate${value.drop(8)}"
+}
+
+private fun String.hasGroupwareTaskDatePrefix(): Boolean =
+    length > 8 && take(8).all(Char::isDigit) && this[8] == 'T'
 
 internal fun isValidGroupwareTaskDueDate(value: String): Boolean {
     if (value.length != 8 || !value.all(Char::isDigit)) return false

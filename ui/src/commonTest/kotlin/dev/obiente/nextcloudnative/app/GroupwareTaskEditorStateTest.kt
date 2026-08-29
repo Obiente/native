@@ -35,4 +35,14 @@ class GroupwareTaskEditorStateTest {
         assertEquals(40 * 1_024, state.description.length)
         assertNull(encodeGroupwareTaskEditorStateForSavedState(state))
     }
+
+    @Test
+    fun `task search query is bounded before entering saved state`() {
+        val oversized = "task".repeat(MAX_GROUPWARE_TASK_QUERY_LENGTH)
+
+        val bounded = boundedGroupwareTaskQuery(oversized)
+
+        assertEquals(MAX_GROUPWARE_TASK_QUERY_LENGTH, bounded.length)
+        assertEquals(oversized.take(MAX_GROUPWARE_TASK_QUERY_LENGTH), bounded)
+    }
 }
