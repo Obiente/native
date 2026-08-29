@@ -1,18 +1,25 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlin.time.Clock
+
 data class GroupwareTask(
     val href: String,
     val etag: String?,
     val calendarHref: String,
     val uid: String,
+    val recurrenceId: String? = null,
     val title: String,
     val due: String? = null,
     val dueAllDay: Boolean = false,
     val completed: Boolean = false,
+    val completedAt: String? = null,
     val description: String? = null,
     val priority: Int? = null,
     val rawCalendar: String,
-)
+) {
+    /** Stable across refreshes when one DAV object contains a recurring master and exceptions. */
+    val instanceId: String get() = "$href#${recurrenceId ?: uid}"
+}
 
 fun parseGroupwareTasks(calendarHref: String, response: NextcloudApiResponse): List<GroupwareTask> {
     require(response.status in 200..299) { "Task loading failed (HTTP ${response.status})." }
@@ -33,7 +40,7 @@ fun parseGroupwareTask(
     content: String,
 ): GroupwareTask? = parseGroupwareTasksFromContent(calendarHref, href, etag, content).firstOrNull()
 
-private fun parseGroupwareTasksFromContent(
+internal fun parseGroupwareTasksFromContent(
     calendarHref: String,
     href: String,
     etag: String?,
@@ -50,6 +57,7 @@ private fun parseGroupwareTasksFromContent(
     }
     val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
         ?: href.substringAfterLast('/').substringBeforeLast('.')
+    val recurrenceId = property("RECURRENCE-ID")?.value?.trim()?.takeIf(String::isNotBlank)
     val due = property("DUE")
     val status = property("STATUS")?.value?.trim()
     val percentComplete = property("PERCENT-COMPLETE")?.value?.trim()?.toIntOrNull()
@@ -58,12 +66,14 @@ private fun parseGroupwareTasksFromContent(
         etag = etag,
         calendarHref = calendarHref.requireSafeDavHref(),
         uid = uid,
+        recurrenceId = recurrenceId,
         title = property("SUMMARY")?.value?.decodeCalendarText()?.ifBlank { "Untitled task" }
             ?: "Untitled task",
         due = due?.value?.trim()?.takeIf(String::isNotBlank),
         dueAllDay = due?.declaration?.contains("VALUE=DATE", ignoreCase = true) == true ||
             due?.value?.let { value -> value.length == 8 && value.all(Char::isDigit) } == true,
         completed = status.equals("COMPLETED", ignoreCase = true) || percentComplete == 100,
+        completedAt = property("COMPLETED")?.value?.trim()?.takeIf(String::isNotBlank),
         description = property("DESCRIPTION")?.value?.decodeCalendarText()?.takeIf(String::isNotBlank),
         priority = property("PRIORITY")?.value?.trim()?.toIntOrNull()?.takeIf { it in 0..9 },
         rawCalendar = content,
@@ -102,13 +112,16 @@ fun updateGroupwareTaskContent(
     dueDate: String?,
     completed: Boolean,
     description: String?,
+    completionTimestamp: String = currentGroupwareTaskCompletionTimestamp(),
 ): String {
     require(title.isNotBlank()) { "A task title is required." }
     val due = dueDate?.takeIf(String::isNotBlank)?.also(::requireValidGroupwareTaskDueDate)
     val preserveTimedDue = !task.dueAllDay && task.due?.take(8) == due
     val original = task.rawCalendar.unfoldCalendarLines().toMutableList()
     val taskRange = original.calendarComponentRanges("VTODO").firstOrNull { range ->
-        original.subList(range.first + 1, range.last).calendarPropertyValue("UID") == task.uid
+        val component = original.subList(range.first + 1, range.last)
+        component.calendarPropertyValue("UID") == task.uid &&
+            component.calendarPropertyValue("RECURRENCE-ID") == task.recurrenceId
     }
     requireNotNull(taskRange) { "The selected task component could not be found." }
     val taskStart = taskRange.first
@@ -117,7 +130,11 @@ fun updateGroupwareTaskContent(
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
         "STATUS" to "STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}",
         "PERCENT-COMPLETE" to "PERCENT-COMPLETE:${if (completed) 100 else 0}",
-        "COMPLETED" to null,
+        "COMPLETED" to when {
+            !completed -> null
+            task.completed -> task.completedAt?.let { "COMPLETED:$it" }
+            else -> "COMPLETED:${completionTimestamp.also(::requireValidGroupwareTaskCompletionTimestamp)}"
+        },
         "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let {
             "DESCRIPTION:${it.escapeCalendarText()}"
         },
@@ -147,8 +164,43 @@ fun updateGroupwareTaskContent(
 internal fun expectedGroupwareTaskDueAfterDateEdit(task: GroupwareTask?, dueDate: String?): String? =
     if (task != null && !task.dueAllDay && task.due?.take(8) == dueDate) task.due else dueDate
 
+internal fun isValidGroupwareTaskDueDate(value: String): Boolean {
+    if (value.length != 8 || !value.all(Char::isDigit)) return false
+    val year = value.take(4).toIntOrNull() ?: return false
+    val month = value.substring(4, 6).toIntOrNull() ?: return false
+    val day = value.takeLast(2).toIntOrNull() ?: return false
+    if (year !in 1..9999 || month !in 1..12) return false
+    val days = when (month) {
+        2 -> if (year % 400 == 0 || year % 4 == 0 && year % 100 != 0) 29 else 28
+        4, 6, 9, 11 -> 30
+        else -> 31
+    }
+    return day in 1..days
+}
+
 private fun requireValidGroupwareTaskDueDate(value: String) {
-    require(value.length == 8 && value.all(Char::isDigit)) { "The task due date is invalid." }
+    require(isValidGroupwareTaskDueDate(value)) { "The task due date is invalid." }
+}
+
+private fun requireValidGroupwareTaskCompletionTimestamp(value: String) {
+    require(
+        value.length == 16 && value[8] == 'T' && value.last() == 'Z' &&
+            value.take(8).all(Char::isDigit) && value.substring(9, 15).all(Char::isDigit),
+    ) { "The task completion timestamp is invalid." }
+}
+
+private fun currentGroupwareTaskCompletionTimestamp(): String {
+    val instant = Clock.System.now().toString()
+    return buildString(16) {
+        append(instant.substring(0, 4))
+        append(instant.substring(5, 7))
+        append(instant.substring(8, 10))
+        append('T')
+        append(instant.substring(11, 13))
+        append(instant.substring(14, 16))
+        append(instant.substring(17, 19))
+        append('Z')
+    }
 }
 
 internal fun List<String>.calendarComponentLines(componentName: String): List<List<String>> {

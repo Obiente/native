@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -190,12 +191,15 @@ internal fun GenericNativeForm(
     val emptyStructuredDraft = remember(fields, structuredSpecs) {
         requireNotNull(initialNativeRepeatableObjectDraft(fields, emptyMap()))
     }
-    var repeatableObjectValues by remember(
-        formSchema,
-        view,
-        formResource,
-        initialRecord,
-        initialStructuredDraft,
+    val structuredDraftSaver = remember(structuredSpecs) {
+        nativeRepeatableObjectDraftSaver(structuredSpecs)
+    }
+    var repeatableObjectValues by rememberSaveable(
+        formSchema.app.id,
+        view.id,
+        formResource.id,
+        initialRecord?.id,
+        stateSaver = structuredDraftSaver,
     ) {
         mutableStateOf(initialStructuredDraft ?: emptyStructuredDraft)
     }

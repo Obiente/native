@@ -213,8 +213,17 @@ private fun SslError.onlyReportsUntrustedIssuer(): Boolean =
 
 private fun embeddedWebOrigin(value: String): String? {
     val parsed = Uri.parse(value)
-    val scheme = parsed.scheme?.lowercase() ?: return null
-    val host = parsed.host?.lowercase() ?: return null
-    val port = parsed.port
-    return "$scheme://$host${if (port >= 0) ":$port" else ""}"
+    return canonicalEmbeddedWebOrigin(parsed.scheme, parsed.host, parsed.port)
+}
+
+internal fun canonicalEmbeddedWebOrigin(schemeValue: String?, hostValue: String?, port: Int): String? {
+    val scheme = schemeValue?.lowercase() ?: return null
+    val host = hostValue?.lowercase() ?: return null
+    val effectivePort = when {
+        port >= 0 -> port
+        scheme == "https" -> 443
+        scheme == "http" -> 80
+        else -> return null
+    }
+    return "$scheme://$host:$effectivePort"
 }

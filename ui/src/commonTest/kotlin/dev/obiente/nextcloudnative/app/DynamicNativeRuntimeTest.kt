@@ -402,6 +402,33 @@ class DynamicNativeRuntimeTest {
     }
 
     @Test
+    fun patchCompatibleContractsRemainReadOnlyEvenWhenInstalledVersionWasObserved() {
+        val compatible = AcquiredOpenApiContract(
+            appId = "example",
+            appVersion = "1.2.4",
+            contractVersion = "1.2.3",
+            specFile = "openapi.json",
+            document = "{}",
+            packageUrl = "https://apps.nextcloud.com/packages/example",
+            sourceUrl = "https://apps.nextcloud.com/packages/example#openapi.json",
+            sourceKind = AcquiredOpenApiContractSourceKind.SignedCompatibleAppPackage,
+        )
+        val exact = compatible.copy(
+            contractVersion = compatible.appVersion,
+            sourceKind = AcquiredOpenApiContractSourceKind.SignedAppPackage,
+        )
+
+        assertEquals(
+            DynamicContractVersionStatus.LastKnownReadOnly,
+            compatible.effectiveDynamicContractVersionStatus(DynamicContractVersionStatus.VerifiedCurrent),
+        )
+        assertEquals(
+            DynamicContractVersionStatus.VerifiedCurrent,
+            exact.effectiveDynamicContractVersionStatus(DynamicContractVersionStatus.VerifiedCurrent),
+        )
+    }
+
+    @Test
     fun bindsOnlyDeclaredInputsAndUsesRequestSchemaTypes() {
         val action = createAction()
         val request = buildDynamicApiRequest(

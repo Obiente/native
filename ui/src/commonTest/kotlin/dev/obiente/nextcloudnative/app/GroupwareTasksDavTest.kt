@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class GroupwareTasksDavTest {
     @Test
@@ -65,6 +66,7 @@ class GroupwareTasksDavTest {
         assertTrue("X-NEXTCLOUD-EXTRA:keep-me" in updated)
         assertEquals(1, Regex("STATUS:COMPLETED").findAll(updated).count())
         assertEquals(1, Regex("PERCENT-COMPLETE:100").findAll(updated).count())
+        assertTrue(Regex("COMPLETED:[0-9]{8}T[0-9]{6}Z").containsMatchIn(updated))
 
         val response = NextcloudApiResponse(
             status = 207,
@@ -85,6 +87,87 @@ class GroupwareTasksDavTest {
         assertEquals(reparsed.title, reported.title)
         assertEquals(reparsed.due, reported.due)
         assertEquals(reparsed.completed, reported.completed)
+    }
+
+    @Test
+    fun `completion timestamps survive unrelated edits and change only with completion state`() {
+        val href = "/remote.php/dav/calendars/person/tasks/completed.ics"
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val original = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            UID:completed
+            SUMMARY:Before
+            STATUS:COMPLETED
+            PERCENT-COMPLETE:100
+            COMPLETED:20260829T101112Z
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+        val task = requireNotNull(parseGroupwareTask(calendarHref, href, "\"one\"", original))
+
+        val edited = updateGroupwareTaskContent(
+            task,
+            title = "After",
+            dueDate = null,
+            completed = true,
+            description = null,
+            completionTimestamp = "20260830T000000Z",
+        )
+        val reopened = updateGroupwareTaskContent(
+            task,
+            title = "After",
+            dueDate = null,
+            completed = false,
+            description = null,
+            completionTimestamp = "20260830T000000Z",
+        )
+
+        assertTrue("COMPLETED:20260829T101112Z" in edited)
+        assertFalse("COMPLETED:" in reopened)
+        assertEquals("20260829T101112Z", parseGroupwareTask(calendarHref, href, "\"two\"", edited)?.completedAt)
+    }
+
+    @Test
+    fun `recurring task components have distinct identities and exact component updates`() {
+        val href = "/remote.php/dav/calendars/person/tasks/recurring.ics"
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val original = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            BEGIN:VTODO
+            UID:recurring
+            SUMMARY:Master
+            STATUS:NEEDS-ACTION
+            END:VTODO
+            BEGIN:VTODO
+            UID:recurring
+            RECURRENCE-ID:20260830T090000Z
+            SUMMARY:Exception
+            STATUS:NEEDS-ACTION
+            END:VTODO
+            END:VCALENDAR
+        """.trimIndent().replace("\n", "\r\n") + "\r\n"
+        val tasks = parseGroupwareTasksFromContent(calendarHref, href, "\"one\"", original)
+
+        assertEquals(2, tasks.map(GroupwareTask::instanceId).distinct().size)
+        val exception = tasks.single { it.recurrenceId != null }
+        val updated = updateGroupwareTaskContent(exception, "Changed exception", null, false, null)
+        val reparsed = parseGroupwareTasksFromContent(calendarHref, href, "\"two\"", updated)
+        assertEquals("Master", reparsed.single { it.recurrenceId == null }.title)
+        assertEquals("Changed exception", reparsed.single { it.recurrenceId != null }.title)
+    }
+
+    @Test
+    fun `task due dates reject impossible Gregorian dates`() {
+        assertTrue(isValidGroupwareTaskDueDate("20240229"))
+        assertFalse(isValidGroupwareTaskDueDate("20230229"))
+        assertFalse(isValidGroupwareTaskDueDate("20260231"))
+        assertFalse(isValidGroupwareTaskDueDate("20269901"))
+        assertFailsWith<IllegalArgumentException> {
+            TaskDraft("Impossible", "2026-02-31", "", false).compactDueDateOrNull()
+        }
     }
 
     @Test
@@ -120,8 +203,27 @@ class GroupwareTasksDavTest {
         )
 
         assertTrue(postcondition.isSatisfiedBy(response))
+        assertEquals(TaskRecoveryVerification.Applied, postcondition.verify(response))
         assertFalse(postcondition.isSatisfiedBy(response.copy(status = 404)))
+        assertEquals(
+            TaskRecoveryVerification.Unapplied,
+            postcondition.verify(response.copy(etag = "\"one\"")),
+        )
+        assertEquals(
+            TaskRecoveryVerification.Unapplied,
+            TaskMutationPostcondition.Upsert(
+                href = "$calendarHref-new.ics",
+                calendarHref = calendarHref,
+                expectedUid = "new",
+                previousEtag = null,
+                draft = draft,
+            ).verify(response.copy(status = 404)),
+        )
         assertTrue(TaskMutationPostcondition.Delete(href).isSatisfiedBy(response.copy(status = 404)))
+        assertEquals(
+            TaskRecoveryVerification.Unapplied,
+            TaskMutationPostcondition.Delete(href, "\"one\"").verify(response.copy(etag = "\"one\"")),
+        )
         val encoded = TaskMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
         assertEquals(postcondition, decodeTaskMutationRecoveryState(encoded, accountScope))
         assertNull(decodeTaskMutationRecoveryState(encoded, "$accountScope-other"))

@@ -2098,7 +2098,7 @@ private fun nativeRecordFormDraftSaver(declaredFieldIds: Set<String>) = Saver<Ma
     },
 )
 
-private fun nativeRepeatableObjectDraftSaver(
+internal fun nativeRepeatableObjectDraftSaver(
     specs: Map<String, RepeatableObjectInputSpec>,
 ) = Saver<Map<String, List<RepeatableObjectInputRow>>, List<String>>(
     save = { draft -> encodeNativeRepeatableObjectDraft(draft, specs) },

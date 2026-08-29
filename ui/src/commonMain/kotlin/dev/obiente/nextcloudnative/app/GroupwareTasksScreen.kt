@@ -59,6 +59,7 @@ private sealed interface TasksLoadState {
     data class Ready(
         val calendars: List<GroupwareCalendar>,
         val tasks: List<GroupwareTask>,
+        val partialFailureMessage: String? = null,
     ) : TasksLoadState
     data class Error(val message: String) : TasksLoadState
 }
@@ -92,6 +93,9 @@ fun NativeGroupwareTasksScreen(
     var mutationRunning by remember(accountScope) { mutableStateOf(false) }
     var recoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
     var recoveryEncoded by remember(accountScope, services) { mutableStateOf<String?>(null) }
+    var recoveryVerification by remember(accountScope, services) {
+        mutableStateOf(TaskRecoveryVerification.Unknown)
+    }
     var filter by rememberSaveable(accountScope) { mutableStateOf(TaskFilter.Open) }
     var query by rememberSaveable(accountScope) { mutableStateOf("") }
     val recoveryPostcondition = remember(accountScope, recoveryEncoded) {
@@ -147,6 +151,7 @@ fun NativeGroupwareTasksScreen(
             return false
         }
         recoveryEncoded = null
+        recoveryVerification = TaskRecoveryVerification.Unknown
         mutationRunning = false
         mutationError = null
         refreshError = null
@@ -179,13 +184,13 @@ fun NativeGroupwareTasksScreen(
 
     LaunchedEffect(session, userId, loadAttempt, recoveryLoaded) {
         if (!recoveryLoaded) return@LaunchedEffect
-        val reconciliationConfirmed = recoveryPostcondition?.let { postcondition ->
+        recoveryVerification = recoveryPostcondition?.let { postcondition ->
             runCatchingPreservingCancellation {
-                postcondition.isSatisfiedBy(
+                postcondition.verify(
                     services.executeGroupwareDav(session, groupwareDavDetailRequest(postcondition.href)),
                 )
-            }.getOrDefault(false)
-        } == true
+            }.getOrDefault(TaskRecoveryVerification.Unknown)
+        } ?: TaskRecoveryVerification.Unknown
         val retained = state as? TasksLoadState.Ready
         if (retained == null) state = TasksLoadState.Loading else refreshing = true
         refreshError = null
@@ -195,29 +200,39 @@ fun NativeGroupwareTasksScreen(
                 groupwareDavCollectionDiscoveryRequest(groupwareCalendarHomeHref(userId)),
             )
             val calendars = parseGroupwareTaskCalendars(discovery)
-            val tasks = calendars.flatMap { calendar ->
-                parseGroupwareTasks(
-                    calendar.href,
-                    services.executeGroupwareDav(
-                        session,
-                        groupwareDavCollectionQueryRequest(calendar.href, GroupwareDavKind.Task),
-                    ),
-                )
-            }.sortedWith(compareBy<GroupwareTask> { it.completed }.thenBy { it.due ?: "99999999" }.thenBy {
+            val loaded = loadGroupwareTaskCalendars(calendars) { request ->
+                services.executeGroupwareDav(session, request)
+            }
+            val tasks = loaded.tasks.sortedWith(compareBy<GroupwareTask> { it.completed }.thenBy {
+                it.due ?: "99999999"
+            }.thenBy {
                 it.title.lowercase()
             })
-            TasksLoadState.Ready(calendars, tasks)
+            TasksLoadState.Ready(
+                calendars = calendars,
+                tasks = tasks,
+                partialFailureMessage = loaded.failedCalendarNames.takeIf(List<String>::isNotEmpty)?.let { names ->
+                    "Some task lists could not be refreshed: ${names.joinToString()}. Other task lists remain available."
+                },
+            )
         }.onSuccess { loaded ->
             state = loaded
+            refreshError = loaded.partialFailureMessage
             if (recoveryPostcondition != null) {
-                if (reconciliationConfirmed) {
-                    if (!clearRecovery()) return@onSuccess
-                    selectedTaskHref = null
-                    creating = false
-                    editing = false
-                    deleting = null
-                } else {
-                    refreshError = "The task change has not appeared on the server yet. Refresh to verify it."
+                when (recoveryVerification) {
+                    TaskRecoveryVerification.Applied -> {
+                        if (!clearRecovery()) return@onSuccess
+                        selectedTaskHref = null
+                        creating = false
+                        editing = false
+                        deleting = null
+                    }
+                    TaskRecoveryVerification.Unapplied -> {
+                        refreshError = "The server still has the previous task state. Keep that server version or retry verification."
+                    }
+                    TaskRecoveryVerification.Unknown -> {
+                        refreshError = "The task result is still unknown. Refresh to verify it."
+                    }
                 }
             }
         }.onFailure { failure ->
@@ -241,14 +256,17 @@ fun NativeGroupwareTasksScreen(
     }
 
     val ready = state as? TasksLoadState.Ready
-    val selectedTask = ready?.tasks?.firstOrNull { it.href == selectedTaskHref }
+    val selectedTask = ready?.tasks?.firstOrNull { it.instanceId == selectedTaskHref }
     val selectedTaskWritable = selectedTask?.let { task ->
         ready.calendars.any { calendar -> calendar.href == task.calendarHref && calendar.writable }
     } == true
-    LaunchedEffect(selectedTask?.href, selectedTaskWritable) {
+    val selectedTaskDeleteSafe = selectedTask?.let { task ->
+        ready.tasks.count { candidate -> candidate.href == task.href } == 1
+    } == true
+    LaunchedEffect(selectedTask?.instanceId, selectedTaskWritable) {
         if (selectedTask != null && !selectedTaskWritable) {
             editing = false
-            if (deleting?.href == selectedTask.href) deleting = null
+            if (deleting?.instanceId == selectedTask.instanceId) deleting = null
         }
     }
     val visibleTasks = remember(ready?.tasks, filter, query) {
@@ -301,6 +319,20 @@ fun NativeGroupwareTasksScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(message, modifier = Modifier.weight(1f))
+                        if (recoveryVerification == TaskRecoveryVerification.Unapplied) {
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        if (clearRecovery()) {
+                                            creating = false
+                                            editing = false
+                                            deleting = null
+                                            loadAttempt += 1
+                                        }
+                                    }
+                                },
+                            ) { Text("Keep server version") }
+                        }
                         TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
                     }
                 }
@@ -334,9 +366,9 @@ fun NativeGroupwareTasksScreen(
                     contentPadding = PaddingValues(NextcloudSpacing.Large),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 ) {
-                    items(visibleTasks, key = GroupwareTask::href) { task ->
+                    items(visibleTasks, key = GroupwareTask::instanceId) { task ->
                         Card(
-                            modifier = Modifier.fillMaxWidth().clickable { selectedTaskHref = task.href },
+                            modifier = Modifier.fillMaxWidth().clickable { selectedTaskHref = task.instanceId },
                             colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
                         ) {
                             Row(
@@ -379,12 +411,18 @@ fun NativeGroupwareTasksScreen(
                     if (!selectedTaskWritable) {
                         Text("This task list is read-only.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    if (!selectedTaskDeleteSafe) {
+                        Text(
+                            "This is one component of a recurring task. Edit the selected component; deleting the shared calendar object is withheld.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
             confirmButton = {
                 TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable,
+                    enabled = !interactionBlocked && selectedTaskWritable && selectedTaskDeleteSafe,
                     onClick = { editing = true },
                 ) { Text("Edit") }
             },
@@ -460,6 +498,7 @@ fun NativeGroupwareTasksScreen(
                     href = href,
                     calendarHref = calendar.href,
                     expectedUid = uid,
+                    expectedRecurrenceId = selectedTask?.recurrenceId,
                     previousEtag = selectedTask?.etag,
                     draft = normalizedDraft,
                     expectedDue = expectedGroupwareTaskDueAfterDateEdit(selectedTask, normalizedDue),
@@ -492,7 +531,8 @@ fun NativeGroupwareTasksScreen(
     }
 
     deleting?.takeIf { task ->
-        ready?.calendars?.any { calendar -> calendar.href == task.calendarHref && calendar.writable } == true
+        selectedTaskDeleteSafe &&
+            ready?.calendars?.any { calendar -> calendar.href == task.calendarHref && calendar.writable } == true
     }?.let { task ->
         AlertDialog(
             onDismissRequest = { if (!interactionBlocked) deleting = null },
@@ -516,7 +556,7 @@ fun NativeGroupwareTasksScreen(
                             ).toGroupwareDavRequest()
                         } ?: return@delete
                         scope.launch {
-                            if (!retainRecovery(TaskMutationPostcondition.Delete(task.href))) return@launch
+                            if (!retainRecovery(TaskMutationPostcondition.Delete(task.href, task.etag))) return@launch
                             try {
                                 val response = services.executeGroupwareDav(session, request)
                                 if (response.status !in 200..299 &&
@@ -575,20 +615,35 @@ internal data class TaskDraft(
 
     fun compactDueDateOrNull(): String? = dueDate.trim().takeIf(String::isNotBlank)?.let { value ->
         require(value.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))) { "The due date is invalid." }
-        value.replace("-", "")
+        value.replace("-", "").also { compact ->
+            require(isValidGroupwareTaskDueDate(compact)) { "The due date is invalid." }
+        }
     }
+}
+
+internal enum class TaskRecoveryVerification {
+    Applied,
+    Unapplied,
+    Unknown,
 }
 
 @Serializable
 internal sealed interface TaskMutationPostcondition {
     val href: String
     fun isSatisfiedBy(response: NextcloudApiResponse): Boolean
+    fun verify(response: NextcloudApiResponse): TaskRecoveryVerification = when {
+        isSatisfiedBy(response) -> TaskRecoveryVerification.Applied
+        isProvenUnappliedBy(response) -> TaskRecoveryVerification.Unapplied
+        else -> TaskRecoveryVerification.Unknown
+    }
+    fun isProvenUnappliedBy(response: NextcloudApiResponse): Boolean
 
     @Serializable
     data class Upsert(
         override val href: String,
         val calendarHref: String,
         val expectedUid: String,
+        val expectedRecurrenceId: String? = null,
         val previousEtag: String?,
         val draft: TaskDraft,
         val expectedDue: String? = draft.compactDueDateOrNull(),
@@ -596,25 +651,40 @@ internal sealed interface TaskMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean {
             if (response.status !in 200..299) return false
             val expected = draft.normalized()
-            val task = parseGroupwareTask(
-                calendarHref,
-                href,
-                response.etag,
-                response.body.decodeToString(),
-            ) ?: return false
+            val task = parseGroupwareTasksFromContent(
+                calendarHref = calendarHref,
+                href = href,
+                etag = response.etag,
+                content = response.body.decodeToString(),
+            ).singleOrNull { candidate ->
+                candidate.uid == expectedUid && candidate.recurrenceId == expectedRecurrenceId
+            } ?: return false
             return task.href == href &&
                 task.uid == expectedUid &&
+                task.recurrenceId == expectedRecurrenceId &&
                 task.title == expected.title &&
                 task.due == expectedDue &&
                 task.completed == expected.completed &&
                 task.description.orEmpty() == expected.description
         }
+
+        override fun isProvenUnappliedBy(response: NextcloudApiResponse): Boolean = when {
+            previousEtag == null -> groupwareDeleteResponseProvesAbsence(response.status)
+            response.status in 200..299 -> response.etag == previousEtag
+            else -> false
+        }
     }
 
     @Serializable
-    data class Delete(override val href: String) : TaskMutationPostcondition {
+    data class Delete(
+        override val href: String,
+        val previousEtag: String? = null,
+    ) : TaskMutationPostcondition {
         override fun isSatisfiedBy(response: NextcloudApiResponse): Boolean =
             groupwareDeleteResponseProvesAbsence(response.status)
+
+        override fun isProvenUnappliedBy(response: NextcloudApiResponse): Boolean =
+            previousEtag != null && response.status in 200..299 && response.etag == previousEtag
     }
 }
 
@@ -669,7 +739,8 @@ private fun TaskEditorDialog(
         mutableStateOf(task?.calendarHref ?: calendars.firstOrNull()?.href)
     }
     val calendar = calendars.firstOrNull { it.href == calendarHref } ?: calendars.firstOrNull()
-    val dateValid = dueDate.isBlank() || dueDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))
+    val dateValid = dueDate.isBlank() || dueDate.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) &&
+        isValidGroupwareTaskDueDate(dueDate.replace("-", ""))
     AlertDialog(
         onDismissRequest = { if (!mutationInProgress) onDismiss() },
         title = { Text(if (task == null) "New task" else "Edit task") },

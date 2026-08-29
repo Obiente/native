@@ -143,7 +143,7 @@ suspend fun discoverDynamicAppDescriptor(
     )
     val observedInstalledVersion = discoverInstalledAppVersion(services, session, contractAppId)
     val installedVersion = observedInstalledVersion ?: installedAppVersionHint?.safeDynamicVersionHint()
-    val versionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
+    val observedVersionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
         DynamicContractVersionStatus.VerifiedCurrent
     } else {
         DynamicContractVersionStatus.LastKnownReadOnly
@@ -167,6 +167,7 @@ suspend fun discoverDynamicAppDescriptor(
             "verified static read routes for $contractAppId on Nextcloud $coreVersion. " +
             "Only app metadata is available.",
     )
+    val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = runCatching {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
     }.getOrNull() ?: return sameOrigin.copy(
@@ -258,6 +259,21 @@ suspend fun discoverDynamicAppDescriptor(
             },
         versionStatus = versionStatus,
     )
+}
+
+internal fun AcquiredOpenApiContract.effectiveDynamicContractVersionStatus(
+    observedVersionStatus: DynamicContractVersionStatus,
+): DynamicContractVersionStatus = if (
+    observedVersionStatus == DynamicContractVersionStatus.VerifiedCurrent &&
+    sourceKind in setOf(
+        AcquiredOpenApiContractSourceKind.SignedAppPackage,
+        AcquiredOpenApiContractSourceKind.AppStoreLinkedExactGitHubTag,
+    ) &&
+    contractVersion == appVersion
+) {
+    DynamicContractVersionStatus.VerifiedCurrent
+} else {
+    DynamicContractVersionStatus.LastKnownReadOnly
 }
 
 internal fun DynamicDescriptorAcquisition.usesAppStoreContract(): Boolean = when (this) {
