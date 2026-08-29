@@ -5163,8 +5163,9 @@ class DesktopNextcloudServices(
     override suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> = withContext(Dispatchers.IO) {
-        val response = request(
+        val conditionalInventory = request(
             method = "GET",
             url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
             session = session,
@@ -5173,9 +5174,22 @@ class DesktopNextcloudServices(
             maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
             client = noRedirectHttpClient,
         )
-        if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-        check(response.status in 200..299 && response.location == null) {
-            "Loading document editing capabilities failed (HTTP ${response.status})."
+        val inventory = if (conditionalInventory.status == 304 && cachedCapabilities == null) {
+            request(
+                method = "GET",
+                url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
+                session = session,
+                ocsRequest = true,
+                maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
+                client = noRedirectHttpClient,
+            )
+        } else {
+            conditionalInventory.takeUnless { response -> response.status == 304 }
+        }
+        if (inventory != null) {
+            check(inventory.status in 200..299 && inventory.location == null) {
+                "Loading document editing capabilities failed (HTTP ${inventory.status})."
+            }
         }
         val capabilitiesResponse = request(
             method = "GET",
@@ -5188,13 +5202,11 @@ class DesktopNextcloudServices(
         check(capabilitiesResponse.status in 200..299 && capabilitiesResponse.location == null) {
             "Loading direct-editing support failed (HTTP ${capabilitiesResponse.status})."
         }
-        NextcloudConditionalRead.Modified(
-            value = parseDesktopDocumentEditingCapabilities(
-                response.text,
-                supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text),
-            ),
-            responseEtag = response.etag,
-        )
+        val supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text)
+        val combined = inventory?.let { response ->
+            parseDesktopDocumentEditingCapabilities(response.text, supportsFileId)
+        } ?: requireNotNull(cachedCapabilities).copy(supportsFileId = supportsFileId)
+        NextcloudConditionalRead.Modified(combined, inventory?.etag ?: expectedEtag)
     }
 
     override suspend fun beginDocumentEditSession(

@@ -82,7 +82,11 @@ fun NextcloudDocumentPreview(
     }
     LaunchedEffect(services, session.serverUrl, session.loginName) {
         runCatching {
-            services.loadDocumentEditingCapabilities(session, cachedEditing?.etag)
+            services.loadDocumentEditingCapabilities(
+                session,
+                cachedEditing?.etag,
+                cachedEditing?.capabilities,
+            )
         }.onSuccess { result ->
             when (result) {
                 is NextcloudConditionalRead.Modified -> {

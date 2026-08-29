@@ -1,13 +1,54 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSessionRequest
+import dev.obiente.nextcloudnative.app.NextcloudDocumentEditingCapabilities
+import dev.obiente.nextcloudnative.app.NextcloudConditionalRead
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class AndroidDocumentEditingTest {
+    @Test
+    fun `unchanged editor inventory still revalidates file id capability`() = runBlocking {
+        val requests = mutableListOf<AndroidDocumentEditingHttpRequest>()
+        val transport = AndroidDocumentEditingTransport { _, request ->
+            requests += request
+            when (request.relativePath) {
+                ANDROID_DIRECT_EDITING_INFO_RELATIVE_PATH -> AndroidDocumentEditingHttpResponse(
+                    status = 304,
+                    body = "",
+                    etag = null,
+                    location = null,
+                )
+                ANDROID_NEXTCLOUD_CAPABILITIES_RELATIVE_PATH -> AndroidDocumentEditingHttpResponse(
+                    status = 200,
+                    body = """{"ocs":{"data":{"capabilities":{"files":{"directEditing":{"supportsFileId":false}}}}}}""",
+                    etag = "\"capabilities-v2\"",
+                    location = null,
+                )
+                else -> error("Unexpected request: ${request.relativePath}")
+            }
+        }
+
+        val result = transport.loadCapabilities(
+            session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            expectedEtag = "\"inventory-v1\"",
+            cachedCapabilities = NextcloudDocumentEditingCapabilities.Unavailable.copy(supportsFileId = true),
+        )
+
+        val modified = assertIs<NextcloudConditionalRead.Modified<NextcloudDocumentEditingCapabilities>>(result)
+        assertFalse(modified.value.supportsFileId)
+        assertEquals(
+            listOf(ANDROID_DIRECT_EDITING_INFO_RELATIVE_PATH, ANDROID_NEXTCLOUD_CAPABILITIES_RELATIVE_PATH),
+            requests.map(AndroidDocumentEditingHttpRequest::relativePath),
+        )
+    }
+
     @Test
     fun `capability inventory keeps exact editor metadata and file id support`() {
         val capabilities = parseAndroidDocumentEditingCapabilities(

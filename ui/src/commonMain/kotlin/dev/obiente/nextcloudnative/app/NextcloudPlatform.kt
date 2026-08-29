@@ -1482,12 +1482,14 @@ interface NextcloudPlatformServices {
     /**
      * Reads the server-wide direct-editing inventory without creating an edit token.
      *
-     * Implementations should preserve the response ETag so repeated discovery can use a
-     * conditional request. A token-producing document open is a separate explicit action.
+     * The editor inventory and core file-ID capability have independent validators. Implementations
+     * may conditionally read the inventory only when they can combine a 304 with the supplied cached
+     * value and a fresh core-capabilities response. A token-producing document open is separate.
      */
     suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String? = null,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities? = null,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> =
         NextcloudConditionalRead.Modified(
             NextcloudDocumentEditingCapabilities.Unavailable,

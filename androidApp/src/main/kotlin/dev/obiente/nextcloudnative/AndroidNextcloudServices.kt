@@ -3094,8 +3094,9 @@ internal class AndroidNextcloudServices(
     override suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> =
-        documentEditingTransport.loadCapabilities(session, expectedEtag)
+        documentEditingTransport.loadCapabilities(session, expectedEtag, cachedCapabilities)
 
     override suspend fun beginDocumentEditSession(
         session: NextcloudSession,

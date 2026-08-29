@@ -115,6 +115,21 @@ compose() {
     )
 }
 
+compose_down_for_reset() {
+    require_command podman
+    (
+        cd "$demo_root"
+        export POSTGRES_PASSWORD="$(grep -m1 '^NC_DEMO_DATABASE_PASSWORD=' "$environment_file" || true)"
+        export POSTGRES_PASSWORD="${POSTGRES_PASSWORD#*=}"
+        export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-reset-only-placeholder}"
+        export NEXTCLOUD_ADMIN_PASSWORD="$(grep -m1 '^NC_DEMO_ADMIN_PASSWORD=' "$environment_file" || true)"
+        export NEXTCLOUD_ADMIN_PASSWORD="${NEXTCLOUD_ADMIN_PASSWORD#*=}"
+        export NEXTCLOUD_ADMIN_PASSWORD="${NEXTCLOUD_ADMIN_PASSWORD:-reset-only-placeholder}"
+        podman compose --env-file "$environment_file" -f "$compose_file" \
+            down --volumes --remove-orphans </dev/null
+    )
+}
+
 compose_with_app_timeout() {
     local timeout_seconds="${NC_DEMO_APP_OPERATION_TIMEOUT_SECONDS:-600}"
     [[ "$timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] ||
@@ -663,8 +678,9 @@ validate() {
 reset_stack() {
     [[ "${1:-}" == "--confirm" ]] ||
         fail "reset deletes this demo stack's volumes; rerun with reset --confirm"
-    require_initialized
-    compose down --volumes --remove-orphans
+    if [[ -f "$environment_file" ]]; then
+        compose_down_for_reset
+    fi
     rm -f -- \
         "$environment_file" \
         "$state_root/test-session.json" \
@@ -672,7 +688,7 @@ reset_stack() {
         "$state_root/write-scope.json" \
         "$state_root/write-scope-clear.json"
     rm -rf -- "$state_root/tls"
-    printf 'Removed the nc-native-demo containers and volumes.\n'
+    printf 'Removed any nc-native-demo containers and volumes.\n'
     printf 'Removed private bootstrap credentials, certificates, and cached app-password session files.\n'
     printf 'Run tools/nextcloud-demo.sh init [host] to initialize a fresh demo.\n'
 }

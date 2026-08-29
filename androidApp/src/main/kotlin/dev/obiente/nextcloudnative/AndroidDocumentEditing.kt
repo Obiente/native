@@ -50,8 +50,9 @@ internal class AndroidDocumentEditingTransport(
     suspend fun loadCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> = withContext(Dispatchers.IO) {
-        val response = execute(
+        val conditionalInventory = execute(
             session,
             AndroidDocumentEditingHttpRequest(
                 method = "GET",
@@ -60,9 +61,22 @@ internal class AndroidDocumentEditingTransport(
                 maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
             ),
         )
-        if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-        check(response.status in 200..299 && response.location == null) {
-            "Loading document editing capabilities failed (HTTP ${response.status})."
+        val inventory = if (conditionalInventory.status == 304 && cachedCapabilities == null) {
+            execute(
+                session,
+                AndroidDocumentEditingHttpRequest(
+                    method = "GET",
+                    relativePath = ANDROID_DIRECT_EDITING_INFO_RELATIVE_PATH,
+                    maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
+                ),
+            )
+        } else {
+            conditionalInventory.takeUnless { response -> response.status == 304 }
+        }
+        if (inventory != null) {
+            check(inventory.status in 200..299 && inventory.location == null) {
+                "Loading document editing capabilities failed (HTTP ${inventory.status})."
+            }
         }
         val capabilitiesResponse = execute(
             session,
@@ -75,13 +89,11 @@ internal class AndroidDocumentEditingTransport(
         check(capabilitiesResponse.status in 200..299 && capabilitiesResponse.location == null) {
             "Loading direct-editing support failed (HTTP ${capabilitiesResponse.status})."
         }
-        NextcloudConditionalRead.Modified(
-            value = parseAndroidDocumentEditingCapabilities(
-                response.body,
-                supportsFileId = parseAndroidDirectEditingSupportsFileId(capabilitiesResponse.body),
-            ),
-            responseEtag = response.etag,
-        )
+        val supportsFileId = parseAndroidDirectEditingSupportsFileId(capabilitiesResponse.body)
+        val combined = inventory?.let { response ->
+            parseAndroidDocumentEditingCapabilities(response.body, supportsFileId)
+        } ?: requireNotNull(cachedCapabilities).copy(supportsFileId = supportsFileId)
+        NextcloudConditionalRead.Modified(combined, inventory?.etag ?: expectedEtag)
     }
 
     suspend fun beginSession(

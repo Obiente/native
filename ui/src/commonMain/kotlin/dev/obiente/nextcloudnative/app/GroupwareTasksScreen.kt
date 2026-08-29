@@ -122,9 +122,23 @@ fun NativeGroupwareTasksScreen(
             false
         }
         if (!saved) {
-            mutationError = "The task change could not be recorded safely. Check local storage and try again."
+            var recoveryReloadFailed = false
+            recoveryEncoded = try {
+                services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Tasks)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                recoveryReloadFailed = true
+                recoveryLoaded = false
+                null
+            }
+            mutationError = when {
+                recoveryEncoded != null -> "Another task change is still awaiting server verification."
+                recoveryReloadFailed -> "Task recovery storage could not be reloaded safely. Restart Tasks to verify it."
+                else -> "The task change could not be recorded safely. Check local storage and try again."
+            }
             mutationRunning = false
-            onMutationInProgressChanged(false)
+            onMutationInProgressChanged(recoveryEncoded != null || !recoveryLoaded)
             return false
         }
         recoveryEncoded = encoded

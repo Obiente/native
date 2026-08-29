@@ -39,8 +39,14 @@ grep -Fq './.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,Z' "$
 grep -Fq '/opt/obiente_native_bridge:ro,Z' "$demo_root/compose.yml"
 grep -Fq 'hooks/pre-installation/10-volume-permissions.sh' "$demo_root/compose.yml"
 grep -Fq 'ensure_ca_bundle' "$helper"
+grep -Fq 'compose_down_for_reset' "$helper"
 grep -Fq 'rm -rf -- "$state_root/tls"' "$helper"
 grep -Fq 'Run `tools/nextcloud-demo.sh init [host]` before starting a' "$demo_root/README.md"
+reset_contract="$(sed -n '/^reset_stack()/,/^}/p' "$helper")"
+if grep -Fq 'require_initialized' <<<"$reset_contract"; then
+    printf 'Reset must recover partial initialization without requiring complete TLS state.\n' >&2
+    exit 1
+fi
 grep -Fq 'readiness_url="$(local_server_url)"' "$helper"
 grep -Fq 'validated_android_server_url' "$helper"
 grep -Fq 'openssl x509 -in "$state_root/tls/server.crt" -noout -checkip' "$helper"
