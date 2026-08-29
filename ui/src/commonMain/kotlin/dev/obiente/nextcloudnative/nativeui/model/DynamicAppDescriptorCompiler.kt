@@ -2532,168 +2532,6 @@ private val ALTERNATE_SURFACE_WORDS = setOf(
 
 private val SURFACE_SCOPE_WORDS = ALTERNATE_SURFACE_WORDS + setOf("api", "local", "shared")
 
-private fun actionEffect(
-    method: HttpMethod,
-    path: String,
-    operationId: String,
-    label: String,
-    collection: Boolean,
-    fileUpload: Boolean,
-): ActionEffect {
-    if (method == HttpMethod.GET) {
-        return when {
-            path.endsWithIdentityPlaceholder() -> ActionEffect.read
-            collection -> ActionEffect.list
-            operationId.looksLikeCollectionReadOperation() -> ActionEffect.list
-            path.contains('{') -> ActionEffect.read
-            else -> ActionEffect.read
-        }
-    }
-
-    val words = actionSemanticWords(path, operationId, label)
-    return when {
-        "empty" in words -> ActionEffect.empty
-        words.any { it in PERMANENT_DELETE_WORDS } -> ActionEffect.permanentDelete
-        words.any { it in REORDER_WORDS } -> ActionEffect.reorder
-        "batch" in words -> ActionEffect.batch
-        "restore" in words -> ActionEffect.restore
-        "unarchive" in words -> ActionEffect.unarchive
-        "archive" in words -> ActionEffect.archive
-        words.any { it in COMPLETION_TRANSITION_WORDS } ||
-            ("toggle" in words && words.any { it in COMPLETION_STATE_WORDS }) -> ActionEffect.toggle
-        "move" in words -> ActionEffect.move
-        "copy" in words || "duplicate" in words -> ActionEffect.copy
-        fileUpload -> ActionEffect.upload
-        "assign" in words || "replace" in words -> ActionEffect.assign
-        "leave" in words -> ActionEffect.leave
-        "clear" in words -> ActionEffect.clear
-        method == HttpMethod.DELETE -> ActionEffect.delete
-        words.any { it in CREATE_WORDS } -> ActionEffect.create
-        method == HttpMethod.PUT || method == HttpMethod.PATCH -> ActionEffect.update
-        else -> ActionEffect.execute
-    }
-}
-
-private fun actionRisk(
-    method: HttpMethod,
-    effect: ActionEffect,
-    path: String,
-    operationId: String,
-    label: String,
-): ActionRisk {
-    if (method == HttpMethod.GET) return ActionRisk.readOnly
-    if (
-        effect in setOf(
-            ActionEffect.delete,
-            ActionEffect.permanentDelete,
-            ActionEffect.empty,
-            ActionEffect.leave,
-            ActionEffect.clear,
-        )
-    ) {
-        return ActionRisk.destructive
-    }
-    val words = actionSemanticWords(path, operationId, label)
-    return if (words.any { it in DESTRUCTIVE_ACTION_WORDS }) {
-        ActionRisk.destructive
-    } else {
-        ActionRisk.mutating
-    }
-}
-
-private fun ActionEffect.toActionIntent(): ActionIntent = when (this) {
-    ActionEffect.list -> ActionIntent.list
-    ActionEffect.read -> ActionIntent.read
-    ActionEffect.create -> ActionIntent.create
-    ActionEffect.update,
-    ActionEffect.assign,
-    -> ActionIntent.update
-    ActionEffect.delete,
-    ActionEffect.permanentDelete,
-    ActionEffect.empty,
-    ActionEffect.clear,
-    -> ActionIntent.delete
-    ActionEffect.unspecified,
-    ActionEffect.toggle,
-    ActionEffect.archive,
-    ActionEffect.unarchive,
-    ActionEffect.restore,
-    ActionEffect.move,
-    ActionEffect.copy,
-    ActionEffect.reorder,
-    ActionEffect.batch,
-    ActionEffect.upload,
-    ActionEffect.leave,
-    ActionEffect.execute,
-    -> ActionIntent.execute
-}
-
-private fun actionSemanticWords(
-    path: String,
-    operationId: String,
-    label: String,
-): Set<String> = sequenceOf(path, operationId.humanize(), label)
-    .flatMap { value -> value.stableId().split('-').asSequence() }
-    .filter(String::isNotBlank)
-    .toSet()
-
-private val CREATE_WORDS = setOf("add", "create", "invite", "new")
-private val TOGGLE_WORDS = setOf("toggle", "complete", "reopen")
-private val COMPLETION_TRANSITION_WORDS = setOf("complete", "reopen")
-private val COMPLETION_STATE_WORDS = setOf(
-    "checked",
-    "complete",
-    "completed",
-    "completion",
-    "done",
-)
-private val REORDER_WORDS = setOf("reorder", "reposition", "sort")
-private val PERMANENT_DELETE_WORDS = setOf("permanent", "permanently", "purge")
-private val DESTRUCTIVE_ACTION_WORDS = setOf(
-    "clear",
-    "delete",
-    "destroy",
-    "empty",
-    "permanent",
-    "permanently",
-    "purge",
-    "remove",
-)
-
-/**
- * A terminal identity placeholder proves an item read even when a plural operation name such as
- * `recipeDetails` resembles a collection controller. Non-identity filters such as
- * `/category/{category}` remain eligible for collection classification from their response.
- */
-private fun String.endsWithIdentityPlaceholder(): Boolean {
-    val segment = trimEnd('/').substringAfterLast('/')
-    if (!segment.startsWith('{') || !segment.endsWith('}') || segment.length <= 2) return false
-    val name = segment.substring(1, segment.lastIndex)
-    return name.lowercase() in setOf("id", "uuid", "token") ||
-        name.endsWith("Id") ||
-        name.endsWith("ID") ||
-        name.endsWith("_id") ||
-        name.endsWith("-id")
-}
-
-/**
- * Recognizes conventional collection controller names even when a sparse static contract has no
- * response schema. Parent-scoped routes such as `getItems(parentId)` otherwise look like detail
- * reads solely because their path contains a parent placeholder.
- */
-private fun String.looksLikeCollectionReadOperation(): Boolean {
-    val compact = lowercase().filter(Char::isLetterOrDigit)
-    if ("list" in compact || "findall" in compact || "getall" in compact) return true
-    val target = compact.substringAfterLast("get", missingDelimiterValue = compact)
-    if (target.endsWith("history") || target.endsWith("log") || target.endsWith("feed")) return true
-    if (!target.endsWith('s') || target.endsWith("ss")) return false
-    return COLLECTION_SINGLETON_SUFFIXES.none(target::endsWith)
-}
-
-private val COLLECTION_SINGLETON_SUFFIXES = setOf(
-    "capabilities", "preferences", "settings", "status",
-)
-
 private fun authKind(definition: JsonObject?): AuthKind = when {
     definition?.string("type") == "http" && definition.string("scheme") == "basic" -> AuthKind.basic
     definition?.string("type") == "http" && definition.string("scheme") == "bearer" -> AuthKind.bearer
@@ -2797,7 +2635,7 @@ private fun uniqueId(existing: Set<String>, requested: String): String {
     return "$requested-$suffix"
 }
 
-private fun String.stableId(): String = buildString {
+internal fun String.stableId(): String = buildString {
     var separator = false
     this@stableId.forEach { character ->
         if (character.isLetterOrDigit() && character.code < 128) {
@@ -2810,7 +2648,7 @@ private fun String.stableId(): String = buildString {
     }
 }.trim('-')
 
-private fun String.humanize(): String = buildString(length + 4) {
+internal fun String.humanize(): String = buildString(length + 4) {
     this@humanize.forEachIndexed { index, character ->
         val previous = this@humanize.getOrNull(index - 1)
         val next = this@humanize.getOrNull(index + 1)

@@ -233,7 +233,6 @@ import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TimeSource
 
-
 internal data class DynamicContractResumePlan(
     val serverVersion: String?,
     val installedAppVersionHint: String?,
@@ -2279,16 +2278,10 @@ private fun AuthenticatedApp(
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
         Screen.Tasks -> NativeGroupwareTasksScreen(
-            services = services,
-            session = session,
-            userId = serverInfo?.userId ?: session.loginName,
-            onBack = ::navigateBack,
-            navigationRequest = pendingEditorNavigationRequest,
-            onNavigationConfirmed = ::applyPendingNavigationRequest,
-            onNavigationCancelled = ::cancelPendingNavigationRequest,
-            navigationCommitInProgress = linkNavigationJob != null,
-            onMutationInProgressChanged = { groupwareMutationInProgress = it },
-        )
+            services, session, serverInfo?.userId ?: session.loginName, ::navigateBack,
+            pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
+            ::cancelPendingNavigationRequest, linkNavigationJob != null,
+        ) { groupwareMutationInProgress = it }
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
@@ -12773,17 +12766,6 @@ private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
     else -> NextcloudIcons.File
-}
-
-private fun nativeSubtitle(appId: String): String = when (appId) {
-    "files" -> "Browse your server files"
-    "photos", "memories" -> "Photos, videos and RAW previews"
-    "spreed", "talk" -> "Continue your conversations"
-    "activity" -> "See recent changes across your cloud"
-    "notes" -> "Write and organize Markdown notes"
-    "dashboard" -> "See your cloud at a glance"
-    "user_status" -> "Manage your presence and status message"
-    else -> "Open native experience"
 }
 
 private fun nativeFamily(appId: String): String = when (appId.lowercase()) {
