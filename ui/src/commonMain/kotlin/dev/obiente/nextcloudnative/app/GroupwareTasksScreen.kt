@@ -605,7 +605,7 @@ private fun TaskEditorDialog(
     onDismiss: () -> Unit,
     onSave: (TaskDraft, GroupwareCalendar) -> Unit,
 ) {
-    val editorKey = task?.href ?: "new-task"
+    val editorKey = task?.instanceId ?: "new-task"
     var title by rememberSaveable(editorKey) { mutableStateOf(task?.title.orEmpty()) }
     var dueDate by rememberSaveable(editorKey) {
         mutableStateOf(task?.due?.take(8)?.let { compact ->
