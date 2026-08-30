@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { pageSections } from "../src/page-outline.js";
 import { docsContent } from "../src/generated/docs-content.js";
+import { docs } from "../src/generated/docs.js";
 import { news } from "../src/generated/news.js";
 
 test("page outlines contain major sections without duplicate or empty destinations", () => {
@@ -29,6 +30,24 @@ test("every published outline entry points to a rendered document heading", () =
       assert.ok(page.html.includes(`id="${section.anchor}"`), `${page.path}: missing #${section.anchor}`);
     }
   }
+});
+
+test("shared UI controls have a published searchable route and resolved inbound documentation links", async () => {
+  const route = "/shared-ui-controls/";
+  const page = docsContent.find((entry) => entry.path === route);
+  assert.ok(page, "Shared UI controls must have rendered documentation content");
+  assert.equal(page.file, "docs/shared-ui-controls.md");
+  assert.ok(docs.some((entry) => entry.path === route), "The route must be available to navigation and prerendering");
+  assert.match(page.html, /NextcloudSegmentedControl/);
+  assert.match(page.html, /NextcloudChoiceField/);
+  for (const parentRoute of ["/native-schema/", "/platforms/"]) {
+    const parent = docsContent.find((entry) => entry.path === parentRoute);
+    assert.ok(parent, `Missing parent document ${parentRoute}`);
+    assert.ok(parent.html.includes(`href="${route}"`), `${parentRoute} must link to the published route`);
+    assert.ok(!parent.html.includes('href="docs/shared-ui-controls.md"'), `${parentRoute} must not retain a broken relative Markdown link`);
+  }
+  const searchIndex = JSON.parse(await readFile(new URL("../public/search-index.json", import.meta.url), "utf8"));
+  assert.equal(searchIndex.filter((entry) => entry.path === route).length, 1);
 });
 
 test("section navigation and header menus preserve keyboard behavior and clean up listeners", async () => {

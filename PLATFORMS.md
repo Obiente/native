@@ -127,7 +127,6 @@ confirmation. Message timestamps show UTC without inferring delivery or read sta
 These source behaviors still require native-device interaction validation;
 shared rendering and deterministic tests are not a claim of identical input
 delivery on every operating system or touchpad.
-
 Office uses native document selection. Android embeds only user-requested
 Direct Editing sessions, not the Nextcloud dashboard or app navigation; desktop
 opens editing sessions in the system browser. Preview and Edit are separate

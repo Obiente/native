@@ -45,8 +45,8 @@ data class NextcloudDocumentEditingCapabilities(
  * Token-free parameters for an explicit Office edit action.
  *
  * The ETag is retained as the version the user reviewed. Nextcloud's direct-editing endpoint does
- * not currently accept an If-Match validator, so callers should refresh the file metadata before
- * allowing this plan to remain actionable for a long time.
+ * not accept an If-Match validator. The edit use case must re-resolve the stable ID and compare
+ * the full request against current DAV metadata immediately before creating a session.
  */
 data class NextcloudDocumentEditSessionRequest(
     /** Parent directory used with [fileId] so a rename cannot silently retarget the handoff. */
@@ -235,21 +235,18 @@ internal data class CachedDocumentEditingCapabilities(
 internal class NextcloudDocumentEditingCapabilitiesCache {
     private val entries = mutableMapOf<String, CachedDocumentEditingCapabilities>()
 
-    fun get(session: NextcloudSession): CachedDocumentEditingCapabilities? = entries[session.cacheKey()]
+    fun get(session: NextcloudSession): CachedDocumentEditingCapabilities? = entries[previewCacheDigest(session)]
 
     fun store(
         session: NextcloudSession,
         capabilities: NextcloudDocumentEditingCapabilities,
         etag: String?,
     ) {
-        entries[session.cacheKey()] = CachedDocumentEditingCapabilities(
+        entries[previewCacheDigest(session)] = CachedDocumentEditingCapabilities(
             capabilities = capabilities,
             etag = etag?.takeIf(String::isNotBlank),
         )
     }
-
-    private fun NextcloudSession.cacheKey(): String =
-        serverUrl.trim().trimEnd('/').lowercase() + '\u0000' + loginName
 }
 
 internal val sharedDocumentEditingCapabilitiesCache = NextcloudDocumentEditingCapabilitiesCache()

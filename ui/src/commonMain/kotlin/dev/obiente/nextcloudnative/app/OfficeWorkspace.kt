@@ -18,8 +18,9 @@ internal data class OfficeWorkspaceState(
     val files: List<NextcloudFile> = emptyList(),
     val capabilities: NextcloudDocumentEditingCapabilities = NextcloudDocumentEditingCapabilities.Unavailable,
     val loading: Boolean = true,
-    val networkConfirmed: Boolean = false,
+    val listingNetworkConfirmed: Boolean = false,
     val error: String? = null,
+    val discoveringEditors: Boolean = false,
 )
 
 internal class OfficeWorkspace(private val operations: OfficeWorkspaceOperations) {
@@ -35,28 +36,36 @@ internal class OfficeWorkspace(private val operations: OfficeWorkspaceOperations
             path = path,
             files = previous.files.takeIf { previous.path == path }.orEmpty(),
             capabilities = previous.capabilities,
+            discoveringEditors = true,
         )
         val cached = runCatchingPreservingCancellation { operations.cachedFiles(path) }.getOrNull()
         if (request != generation) return
         if (cached != null) mutableState.value = mutableState.value.copy(files = cached.files)
 
-        val capabilities = runCatchingPreservingCancellation { operations.capabilities() }
-        if (request != generation) return
         val listing = runCatchingPreservingCancellation { operations.files(path) }
         if (request != generation) return
         mutableState.value = mutableState.value.copy(
             files = listing.getOrNull()?.files ?: mutableState.value.files,
-            capabilities = capabilities.getOrNull() ?: mutableState.value.capabilities,
             loading = false,
-            networkConfirmed = capabilities.isSuccess &&
-                listing.getOrNull()?.source == NextcloudFileListingSource.Network,
+            listingNetworkConfirmed = listing.getOrNull()?.source == NextcloudFileListingSource.Network,
             error = when {
                 listing.isFailure -> "Could not refresh this folder. Connect to Nextcloud and retry."
-                capabilities.isFailure -> "Could not discover the server's document editors. Retry to refresh."
                 listing.getOrNull()?.source != NextcloudFileListingSource.Network ->
                     "These files are cached. Connect to Nextcloud before opening an editor."
                 else -> null
             },
+        )
+
+        // Native previews need the confirmed folder, not editor metadata. Publish it before
+        // waiting for discovery so a slow editor endpoint cannot block browsing or restoration.
+        val capabilities = runCatchingPreservingCancellation { operations.capabilities() }
+        if (request != generation) return
+        mutableState.value = mutableState.value.copy(
+            capabilities = capabilities.getOrNull() ?: mutableState.value.capabilities,
+            discoveringEditors = false,
+            error = mutableState.value.error ?: if (capabilities.isFailure) {
+                "Could not discover the server's document editors. Retry to refresh."
+            } else null,
         )
     }
 }
@@ -68,7 +77,7 @@ internal fun officeWorkspaceFiles(state: OfficeWorkspaceState, query: String): L
                 remoteFolderParentPath(file.path) == state.path
         }
         .filter { file ->
-            file.isDirectory || describeDocument(file).officeEditable ||
+            file.isDirectory || describeDocument(file).method != DocumentPreviewMethod.Unsupported ||
                 state.capabilities.editors.values.any { editor ->
                     editor.secure && editor.id.isSafeDocumentCapabilityId() &&
                         describeDocument(file).mimeType.let { mime ->

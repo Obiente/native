@@ -87,6 +87,7 @@ components own presentation and input behavior only; existing navigation guards,
 bindings, mutation recovery and permission checks remain with their callers.
 See [shared native choice controls](docs/shared-ui-controls.md) for reuse rules.
 
+## Bounded form restoration
 Repeatable-object drafts share a 16 Ki-character saved-state budget across all
 fields, including JSON escaping and identifiers. Both workspace and record
 forms reject edits that exceed it, show a size error, and retain the previous

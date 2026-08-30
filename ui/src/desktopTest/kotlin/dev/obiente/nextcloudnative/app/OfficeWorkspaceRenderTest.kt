@@ -33,7 +33,7 @@ class OfficeWorkspaceRenderTest {
                         emptyMap(), true,
                     ),
                     loading = false,
-                    networkConfirmed = true,
+                    listingNetworkConfirmed = true,
                 )
                 listOf(390 to 844, 1280 to 800).forEach { (width, height) ->
                     val scene = ImageComposeScene(

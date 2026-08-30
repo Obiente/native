@@ -72,6 +72,7 @@ fun NextcloudDocumentPreview(
     var editStatus by remember(file.path, file.etag) {
         mutableStateOf<DocumentEditUiState>(DocumentEditUiState.Idle)
     }
+    var officeSourceChanged by remember(file.fileId, file.path, file.etag) { mutableStateOf(false) }
     var externalOpenStatus by remember(file.path, file.etag) {
         mutableStateOf<DocumentExternalOpenUiState>(DocumentExternalOpenUiState.Idle)
     }
@@ -112,8 +113,8 @@ fun NextcloudDocumentPreview(
             accountOriginSecure = !serverAddressUsesPlainHttp(session.serverUrl),
         )
     }
-    val officeChoices = remember(file, editingCapabilities, session.serverUrl) {
-        planOfficeEditorChoices(
+    val officeChoices = remember(file, editingCapabilities, session.serverUrl, officeSourceChanged) {
+        if (officeSourceChanged) emptyList() else planOfficeEditorChoices(
             file = file,
             capabilities = editingCapabilities,
             accountOriginSecure = !serverAddressUsesPlainHttp(session.serverUrl),
@@ -136,14 +137,20 @@ fun NextcloudDocumentPreview(
     }
 
     fun startOfficeEdit(request: NextcloudDocumentEditSessionRequest) {
-        if (editStatus == DocumentEditUiState.Starting) return
+        if (editStatus == DocumentEditUiState.Starting || officeSourceChanged) return
         editStatus = DocumentEditUiState.Starting
         scope.launch {
             runCatchingPreservingCancellation {
-                services.beginDocumentEditSession(session, request)
+                beginRevalidatedOfficeEdit(
+                    request = request,
+                    capabilities = editingCapabilities,
+                    resolveFile = { id -> services.resolveFilesById(session, userId, listOf(id))[id] },
+                    beginSession = { verified -> services.beginDocumentEditSession(session, verified) },
+                )
             }.onSuccess { editSession ->
                 editStatus = DocumentEditUiState.Editing(editSession.sameOriginUrl, request)
             }.onFailure {
+                if (it is OfficeEditSourceChangedException) officeSourceChanged = true
                 editStatus = DocumentEditUiState.Failed(
                     it.message ?: "Could not start the Office editor.",
                 )
@@ -246,7 +253,7 @@ fun NextcloudDocumentPreview(
 }
 
 @Composable
-private fun DocumentWorkflowBar(
+internal fun DocumentWorkflowBar(
     file: NextcloudFile,
     officePlan: OfficeEditSessionPlan,
     officeChoices: List<OfficeEditorChoice>,
@@ -269,7 +276,7 @@ private fun DocumentWorkflowBar(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (descriptor.officeEditable || officeChoices.isNotEmpty()) {
+        if (descriptor.officeEditable || officeChoices.isNotEmpty() || editStatus != DocumentEditUiState.Idle) {
             if (officeChoices.isNotEmpty()) {
                 officeChoices.forEach { choice ->
                     Button(
@@ -554,7 +561,7 @@ private sealed interface DocumentPreviewUiState {
     data object Error : DocumentPreviewUiState
 }
 
-private sealed interface DocumentEditUiState {
+internal sealed interface DocumentEditUiState {
     data object Idle : DocumentEditUiState
     data object Starting : DocumentEditUiState
     data class Editing(
@@ -566,7 +573,7 @@ private sealed interface DocumentEditUiState {
     data class Failed(val message: String) : DocumentEditUiState
 }
 
-private sealed interface DocumentExternalOpenUiState {
+internal sealed interface DocumentExternalOpenUiState {
     data object Idle : DocumentExternalOpenUiState
     data object Preparing : DocumentExternalOpenUiState
     data class Failed(val message: String) : DocumentExternalOpenUiState

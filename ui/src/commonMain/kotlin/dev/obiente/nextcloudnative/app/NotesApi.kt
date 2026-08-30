@@ -57,8 +57,8 @@ fun deleteNoteRequest(noteId: Long): NextcloudApiRequest {
 }
 
 fun notesMutationHeaders(expectedEtag: String?): Map<String, String> {
-    val value = expectedEtag?.trim()?.takeIf(String::isNotEmpty) ?: return emptyMap()
-    require(value.length <= MAX_NOTE_ETAG_CHARACTERS && value.none(Char::isISOControl)) {
+    val value = expectedEtag?.trim(' ', '\t')?.takeIf(String::isNotEmpty) ?: return emptyMap()
+    require(value.length <= MAX_NOTE_ETAG_CHARACTERS) {
         "The note version is invalid."
     }
     val serialized = when {
@@ -69,7 +69,7 @@ fun notesMutationHeaders(expectedEtag: String?): Map<String, String> {
             value
         }
         else -> {
-            require('"' !in value && '\\' !in value) { "The note version is invalid." }
+            require(value.all(Char::isNoteEtagCharacter)) { "The note version is invalid." }
             "\"$value\""
         }
     }
@@ -78,9 +78,10 @@ fun notesMutationHeaders(expectedEtag: String?): Map<String, String> {
 
 private fun String.isQuotedNoteEtag(): Boolean =
     length >= 2 && first() == '"' && last() == '"' &&
-        substring(1, lastIndex).none { character ->
-            character == '"' || character == '\\' || character.isISOControl()
-        }
+        substring(1, lastIndex).all(Char::isNoteEtagCharacter)
+
+// RFC 9110 entity-tags are opaque, not quoted-string escapes. Preserve backslashes verbatim.
+private fun Char.isNoteEtagCharacter(): Boolean = code == 0x21 || code in 0x23..0x7e || code in 0x80..0xff
 
 private const val NOTES_JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 private const val MAX_NOTE_TITLE_CHARACTERS = 255

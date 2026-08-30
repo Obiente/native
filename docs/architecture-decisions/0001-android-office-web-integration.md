@@ -12,7 +12,15 @@ OOXML/ODF collaborative editing requires an Office engine and WOPI lifecycle tha
 
 Office app entries open a native document browser. The browser reads DAV folders and core Direct Editing capabilities; opening it does not create an editing token or open an app dashboard. Cached listings remain visible but must be confirmed online before selecting a document.
 
+File-listing confirmation is independent of editor discovery. The workspace publishes the DAV folder result before awaiting Direct Editing capabilities. Slow, failed, or unsupported editor discovery cannot block native previews or restored preview selection for a successfully loaded folder. Missing-selection and empty-folder messages wait until discovery finishes because some document types require an advertised editor to appear in the browser. Document types with native preview support remain listed without an advertised editor. Editor eligibility remains a separate check in the document workflow.
+
+Workspace recreation restores only a bounded folder path and optional stable file ID, scoped to the shared non-secret account digest. It reloads the folder and resolves the selection from fresh network metadata before reopening the preview. Missing or ambiguous IDs remain unselected with a refresh instruction. Files without a stable ID restore the folder only. File metadata, credentials, and editing-session URLs are not saved. The process-local document capability cache uses the same account digest and never uses raw account details as cache keys.
+
 Preview and Edit are separate actions. Editing is gated by a secure advertised editor for the exact MIME type, file identity, version, and write permission. Eligibility is not restricted to a hard-coded Office format list: PDFs and other advertised formats can have editing choices too. A failed thumbnail must not hide those choices.
+
+Every Edit and editor Retry resolves the stable file ID through DAV immediately before session creation. The current writable file must produce the exact reviewed request, including its ETag and parent path. Changed or unavailable sources cannot create a token; a changed source withholds Edit until the preview is closed and the folder refreshed. This is a preflight check, not an atomic ETag guard: Direct Editing does not accept `If-Match`.
+
+The response validator and embedded navigator share one token policy: 1-1,024 ASCII letters, digits, hyphens, or underscores. Malformed, encoded, and oversized tokens fail at session creation rather than during UI composition.
 
 Android embeds only the validated one-time Direct Editing URL after explicit selection. It never sends account credentials into the WebView. Desktop keeps the system-browser editing handoff.
 

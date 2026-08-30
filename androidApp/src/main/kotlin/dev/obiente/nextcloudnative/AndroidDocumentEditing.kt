@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.isValidOfficeDirectEditingToken
+
 import dev.obiente.nextcloudnative.app.NextcloudConditionalRead
 import dev.obiente.nextcloudnative.app.NextcloudDocumentCreatorCapability
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditingCapabilities
@@ -214,12 +216,7 @@ internal fun validatedAndroidDirectEditingHandoffUrl(serverUrl: String, candidat
     val token = resolved.rawPath.removePrefix(routePrefix)
     require(
         routePrefix.isNotEmpty() &&
-            token.isNotBlank() &&
-            '/' !in token &&
-            '\\' !in token &&
-            !token.contains("%2e", ignoreCase = true) &&
-            !token.contains("%2f", ignoreCase = true) &&
-            !token.contains("%5c", ignoreCase = true),
+            isValidOfficeDirectEditingToken(token),
     ) {
         "Nextcloud returned an unexpected direct-editing handoff route."
     }

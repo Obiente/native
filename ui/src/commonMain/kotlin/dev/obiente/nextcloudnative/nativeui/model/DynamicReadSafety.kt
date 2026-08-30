@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.model
 
+import dev.obiente.nextcloudnative.template.scanBracedTemplate
+
 /**
  * A few third-party route catalogs describe command-like endpoints with GET even though invoking
  * them changes server state. HTTP method alone must not turn those routes into automatic app
@@ -7,10 +9,24 @@ package dev.obiente.nextcloudnative.nativeui.model
  * download, preview, and other read-producing operations remain eligible.
  */
 internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
-    val terminalPathSegment = binding.path.substringBefore('?').trimEnd('/').substringAfterLast('/')
-    return terminalPathSegment.semanticConceptTokens().any(STATE_CHANGING_GET_CONCEPTS::contains) ||
-        id.semanticConceptTokens().lastOrNull() in STATE_CHANGING_GET_CONCEPTS
+    val terminalStaticSegment = binding.path.substringBefore('?').trimEnd('/').split('/')
+        .dropLastWhile { segment ->
+            val scan = segment.scanBracedTemplate()
+            !scan.malformed && scan.tokens.singleOrNull()?.let { token ->
+                token.startIndex == 0 && token.endIndexExclusive == segment.length
+            } == true
+        }.lastOrNull().orEmpty()
+    val idConcepts = id.semanticConceptTokenList()
+    return terminalStaticSegment.semanticConceptTokens().any(STATE_CHANGING_GET_CONCEPTS::contains) ||
+        idConcepts.firstOrNull() in STATE_CHANGING_GET_CONCEPTS ||
+        idConcepts.lastOrNull() in STATE_CHANGING_GET_CONCEPTS ||
+        (idConcepts.any(STATE_CHANGING_GET_CONCEPTS::contains) &&
+            idConcepts.lastOrNull() !in READ_PRODUCING_GET_SUFFIX_CONCEPTS)
 }
+
+internal fun DynamicAction.isContextualReadAction(): Boolean =
+    binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&
+        risk == ActionRisk.readOnly && !looksLikeStateChangingGet()
 
 /**
  * Parameterless detail GETs become automatic network work when an app opens. Require affirmative
@@ -50,6 +66,9 @@ private val STATE_CHANGING_GET_CONCEPTS = setOf(
     "toggle",
     "trigger",
 )
+
+private val READ_PRODUCING_GET_SUFFIX_CONCEPTS = setOf("status", "history", "preview", "export", "download")
+    .flatMap { it.semanticConceptTokens() }.toSet()
 
 private val POSITIVE_ROOT_READ_CONCEPTS = setOf(
     "capabilities",

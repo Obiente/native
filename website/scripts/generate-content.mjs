@@ -122,6 +122,14 @@ const sources = [
       "How Android, iOS, Windows, macOS and Linux share domain rules while keeping native system integrations.",
   },
   {
+    file: "docs/shared-ui-controls.md",
+    path: "/shared-ui-controls/",
+    title: "Shared native choice controls",
+    shortTitle: "Shared controls",
+    description:
+      "Reusable native view switchers and form choices, their real consumers, and the state and permission boundaries they preserve.",
+  },
+  {
     file: "CONTRIBUTING.md",
     path: "/contributing/",
     title: "Contributing",

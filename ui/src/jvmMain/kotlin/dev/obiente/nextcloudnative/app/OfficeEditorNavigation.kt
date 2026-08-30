@@ -15,7 +15,7 @@ internal class OfficeEditorNavigation(serverUrl: String, initialUrl: String) {
             "$basePath/index.php/apps/files/directEditing/",
         ).firstOrNull { document.rawPath.orEmpty().startsWith(it) }
         val token = prefix?.let { document.rawPath.removePrefix(it) }.orEmpty()
-        require(token.isNotBlank() && token.all { it.isLetterOrDigit() || it == '-' || it == '_' })
+        require(isValidOfficeDirectEditingToken(token)) { "Invalid Office session token." }
         require(document.rawQuery == null && document.rawFragment == null)
     }
 

@@ -5,6 +5,7 @@ internal data class GroupwareTaskCalendarLoadResult(
     val failedCalendarNames: List<String>,
     val concurrentlyDeletedObjectCount: Int = 0,
     val omittedObjectCount: Int = 0,
+    val completedCalendarHrefs: Set<String> = emptySet(),
 )
 
 private data class GroupwareTaskObjectReference(
@@ -14,27 +15,34 @@ private data class GroupwareTaskObjectReference(
 
 internal suspend fun loadGroupwareTaskCalendars(
     calendars: List<GroupwareCalendar>,
+    retentionBudget: GroupwareTaskRetentionBudget = GroupwareTaskRetentionBudget(),
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): GroupwareTaskCalendarLoadResult {
     val tasks = mutableListOf<GroupwareTask>()
     val failures = mutableListOf<String>()
     var concurrentlyDeletedObjectCount = 0
     var omittedObjectCount = 0
-    val retentionBudget = GroupwareTaskRetentionBudget()
+    val completedCalendarHrefs = mutableSetOf<String>()
     calendars.forEach { calendar ->
+        var omitted = false
         runCatchingPreservingCancellation {
             loadGroupwareTasksInBatches(
                 calendarHref = calendar.href,
                 onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
-                onRetentionOmission = { count -> omittedObjectCount += count },
+                onRetentionOmission = { count -> omittedObjectCount += count; omitted = true },
                 retentionBudget = retentionBudget,
                 execute = execute,
             )
-        }.onSuccess(tasks::addAll).onFailure {
+        }.onSuccess { loaded ->
+            tasks += loaded
+            if (!omitted) completedCalendarHrefs += calendar.href
+        }.onFailure {
             failures += calendar.displayName
         }
     }
-    return GroupwareTaskCalendarLoadResult(tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount)
+    return GroupwareTaskCalendarLoadResult(
+        tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount, completedCalendarHrefs,
+    )
 }
 
 internal fun groupwareDavCalendarObjectListingRequest(calendarHref: String): GroupwareDavRequest =
@@ -214,14 +222,15 @@ private fun parseGroupwareCalendarMultiGetResponse(
         require(href in requested && returned.add(href)) {
             "The CalDAV multiget response contained an unrequested or duplicate object."
         }
-        block.xmlText("status")?.taskDavStatusCode()?.let { status ->
+        val properties = block.xmlElements("propstat")
+        block.groupwareDavResourceStatus(properties)?.let { status ->
             if (status == 404 || status == 410) {
                 concurrentlyDeletedObjectCount += 1
                 return@flatMap emptyList()
             }
             require(status in 200..299) { "The CalDAV multiget response contained a failed object." }
         }
-        val successfulProperty = block.xmlElements("propstat").singleOrNull { property ->
+        val successfulProperty = properties.singleOrNull { property ->
             property.xmlElements("calendar-data").isNotEmpty() &&
                 property.xmlText("status")?.taskDavStatusCode() in 200..299
         } ?: error("The CalDAV multiget response did not return an object successfully.")
@@ -231,7 +240,7 @@ private fun parseGroupwareCalendarMultiGetResponse(
             ?: error("The CalDAV multiget response omitted calendar data.")
         parseGroupwareTasksFromContent(calendarHref, href, etag, content)
     }
-    concurrentlyDeletedObjectCount += requested.size - returned.size
+    require(returned == requested) { "The CalDAV multiget response did not account for every requested object." }
     return GroupwareTaskBatchLoadResult(
         tasks = tasks,
         concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount,

@@ -52,16 +52,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
-private sealed interface TasksLoadState {
-    data object Loading : TasksLoadState
-    data class Ready(
-        val calendars: List<GroupwareCalendar>,
-        val tasks: List<GroupwareTask>,
-        val partialFailureMessage: String? = null,
-    ) : TasksLoadState
-    data class Error(val message: String) : TasksLoadState
-}
-
 private enum class TaskFilter { Open, All, Completed }
 
 @Composable
@@ -83,12 +73,15 @@ fun NativeGroupwareTasksScreen(
     var loadAttempt by remember { mutableStateOf(0) }
     var refreshing by remember { mutableStateOf(false) }
     var refreshError by remember { mutableStateOf<String?>(null) }
-    var selectedTaskHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var selectedTaskSelection by rememberSaveable(accountScope, stateSaver = GroupwareTaskSelectionSaver) {
+        mutableStateOf<GroupwareTaskSelection?>(null)
+    }
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var editing by rememberSaveable(accountScope) { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<GroupwareTask?>(null) }
     var mutationError by remember { mutableStateOf<String?>(null) }
-    var mutationRunning by remember(accountScope) { mutableStateOf(false) }
+    val operations = remember(accountScope, services) { GroupwareTaskOperations() }
+    val mutationRunning = operations.mutationRunning
     var recoveryLoaded by remember(accountScope, services) { mutableStateOf(false) }
     var recoveryEncoded by remember(accountScope, services) { mutableStateOf<String?>(null) }
     var recoveryVerification by remember(accountScope, services) {
@@ -103,18 +96,18 @@ fun NativeGroupwareTasksScreen(
     val unreadableRecovery = recoveryLoaded && recoveryEncoded != null && recoveryPostcondition == null
     val durableMutationInProgress = !recoveryLoaded || mutationRunning || recoveryEncoded != null
     val interactionBlocked = mutationOrLinkCommitBlocksInteraction(
-        durableMutationInProgress,
+        durableMutationInProgress || operations.busy,
         navigationCommitInProgress,
     )
     val scope = rememberCoroutineScope()
 
     suspend fun retainRecovery(postcondition: TaskMutationPostcondition): Boolean {
-        if (!recoveryLoaded || recoveryEncoded != null || mutationRunning) {
+        if (!recoveryLoaded || recoveryEncoded != null) {
             mutationError = "Another task change is still awaiting server verification."
             return false
         }
         val encoded = TaskMutationRecoveryState(accountScope, postcondition).encodeForSavedState()
-        mutationRunning = true
+        recoveryVerification = TaskRecoveryVerification.Unknown
         onMutationInProgressChanged(true)
         val saved = try {
             services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Tasks, encoded)
@@ -139,7 +132,6 @@ fun NativeGroupwareTasksScreen(
                 recoveryReloadFailed -> "Task recovery storage could not be reloaded safely. Restart Tasks to verify it."
                 else -> "The task change could not be recorded safely. Check local storage and try again."
             }
-            mutationRunning = false
             onMutationInProgressChanged(recoveryEncoded != null || !recoveryLoaded)
             return false
         }
@@ -166,27 +158,10 @@ fun NativeGroupwareTasksScreen(
         }
         recoveryEncoded = null
         recoveryVerification = TaskRecoveryVerification.Unknown
-        mutationRunning = false
         mutationError = null
         refreshError = null
-        onMutationInProgressChanged(false)
+        onMutationInProgressChanged(operations.busy)
         return true
-    }
-
-    LaunchedEffect(accountScope, services, loadAttempt) {
-        recoveryLoaded = false
-        recoveryEncoded = null
-        try {
-            recoveryEncoded = services.loadDurableMutationRecovery(
-                accountScope,
-                DurableMutationRecoveryKind.Tasks,
-            )
-            recoveryLoaded = true
-        } catch (failure: CancellationException) {
-            throw failure
-        } catch (_: Exception) {
-            refreshError = "Task recovery storage could not be read securely."
-        }
     }
 
     LaunchedEffect(durableMutationInProgress) {
@@ -199,82 +174,96 @@ fun NativeGroupwareTasksScreen(
         onDispose { onMutationInProgressChanged(false) }
     }
 
-    LaunchedEffect(session, userId, loadAttempt, recoveryLoaded) {
-        if (!recoveryLoaded) return@LaunchedEffect
-        recoveryVerification = recoveryPostcondition?.let { postcondition ->
+    LaunchedEffect(session, userId, services, loadAttempt) {
+        operations.recover recovery@{
+            recoveryLoaded = false
+            recoveryVerification = TaskRecoveryVerification.Unknown
+            try {
+                recoveryEncoded = services.loadDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Tasks)
+                recoveryLoaded = true
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                refreshError = "Task recovery storage could not be read securely."
+                return@recovery
+            }
+            val currentPostcondition = recoveryEncoded?.let { decodeTaskMutationRecoveryState(it, accountScope) }
+            recoveryVerification = currentPostcondition?.let { postcondition ->
+                runCatchingPreservingCancellation {
+                    postcondition.verify(
+                        services.executeGroupwareDav(session, groupwareDavDetailRequest(postcondition.href)),
+                    )
+                }.getOrDefault(TaskRecoveryVerification.Unknown)
+            } ?: TaskRecoveryVerification.Unknown
+            val retained = state as? TasksLoadState.Ready
+            if (retained == null) state = TasksLoadState.Loading else refreshing = true
+            refreshError = null
             runCatchingPreservingCancellation {
-                postcondition.verify(
-                    services.executeGroupwareDav(session, groupwareDavDetailRequest(postcondition.href)),
+                val discovery = services.executeGroupwareDav(
+                    session,
+                    groupwareDavCollectionDiscoveryRequest(groupwareCalendarHomeHref(userId)),
                 )
-            }.getOrDefault(TaskRecoveryVerification.Unknown)
-        } ?: TaskRecoveryVerification.Unknown
-        val retained = state as? TasksLoadState.Ready
-        if (retained == null) state = TasksLoadState.Loading else refreshing = true
-        refreshError = null
-        runCatchingPreservingCancellation {
-            val discovery = services.executeGroupwareDav(
-                session,
-                groupwareDavCollectionDiscoveryRequest(groupwareCalendarHomeHref(userId)),
-            )
-            val calendars = parseGroupwareTaskCalendars(discovery)
-            val loaded = loadGroupwareTaskCalendars(calendars) { request ->
-                services.executeGroupwareDav(session, request)
+                val calendars = parseGroupwareTaskCalendars(discovery)
+                val loaded = loadGroupwareTaskCalendars(calendars) { request ->
+                    services.executeGroupwareDav(session, request)
+                }
+                val tasks = loaded.tasks.sortedWith(compareBy<GroupwareTask> { it.completed }.thenBy {
+                    it.due ?: "99999999"
+                }.thenBy {
+                    it.title.lowercase()
+                })
+                val partialFailureMessage = buildList {
+                    loaded.failedCalendarNames.takeIf(List<String>::isNotEmpty)?.let { names ->
+                        add(
+                            "Some task lists could not be refreshed: ${names.joinToString()}. " +
+                                "Other task lists remain available.",
+                        )
+                    }
+                    if (loaded.concurrentlyDeletedObjectCount > 0) {
+                        add(
+                            "${loaded.concurrentlyDeletedObjectCount} task object changed during refresh; " +
+                                "the remaining tasks are current.",
+                        )
+                    }
+                    if (loaded.omittedObjectCount > 0) {
+                        add(
+                            "${loaded.omittedObjectCount} task objects were not retained because this refresh " +
+                                "reached the safe in-memory task-data budget.",
+                        )
+                    }
+                }.joinToString(" ").takeIf(String::isNotEmpty)
+                TasksLoadState.Ready(
+                    calendars = calendars,
+                    tasks = tasks,
+                    completedCalendarHrefs = loaded.completedCalendarHrefs,
+                    partialFailureMessage = partialFailureMessage,
+                )
+            }.onSuccess { loaded ->
+                state = loaded
+                refreshError = loaded.partialFailureMessage
+                if (currentPostcondition != null) {
+                    when (recoveryVerification) {
+                        TaskRecoveryVerification.Applied -> {
+                            if (!clearRecovery()) return@onSuccess
+                            selectedTaskSelection = null
+                            creating = false
+                            editing = false
+                            deleting = null
+                        }
+                        TaskRecoveryVerification.Unapplied -> {
+                            refreshError = "The server still has the previous task state. Keep that server version or retry verification."
+                        }
+                        TaskRecoveryVerification.Unknown -> {
+                            refreshError = "The task result is still unknown. Refresh to verify it."
+                        }
+                    }
+                }
+            }.onFailure { failure ->
+                val message = failure.message ?: "Could not load tasks."
+                if (retained == null) state = TasksLoadState.Error(message) else refreshError = message
             }
-            val tasks = loaded.tasks.sortedWith(compareBy<GroupwareTask> { it.completed }.thenBy {
-                it.due ?: "99999999"
-            }.thenBy {
-                it.title.lowercase()
-            })
-            val partialFailureMessage = buildList {
-                loaded.failedCalendarNames.takeIf(List<String>::isNotEmpty)?.let { names ->
-                    add(
-                        "Some task lists could not be refreshed: ${names.joinToString()}. " +
-                            "Other task lists remain available.",
-                    )
-                }
-                if (loaded.concurrentlyDeletedObjectCount > 0) {
-                    add(
-                        "${loaded.concurrentlyDeletedObjectCount} task object changed during refresh; " +
-                            "the remaining tasks are current.",
-                    )
-                }
-                if (loaded.omittedObjectCount > 0) {
-                    add(
-                        "${loaded.omittedObjectCount} task objects were not retained because this refresh " +
-                            "reached the safe in-memory task-data budget.",
-                    )
-                }
-            }.joinToString(" ").takeIf(String::isNotEmpty)
-            TasksLoadState.Ready(
-                calendars = calendars,
-                tasks = tasks,
-                partialFailureMessage = partialFailureMessage,
-            )
-        }.onSuccess { loaded ->
-            state = loaded
-            refreshError = loaded.partialFailureMessage
-            if (recoveryPostcondition != null) {
-                when (recoveryVerification) {
-                    TaskRecoveryVerification.Applied -> {
-                        if (!clearRecovery()) return@onSuccess
-                        selectedTaskHref = null
-                        creating = false
-                        editing = false
-                        deleting = null
-                    }
-                    TaskRecoveryVerification.Unapplied -> {
-                        refreshError = "The server still has the previous task state. Keep that server version or retry verification."
-                    }
-                    TaskRecoveryVerification.Unknown -> {
-                        refreshError = "The task result is still unknown. Refresh to verify it."
-                    }
-                }
-            }
-        }.onFailure { failure ->
-            val message = failure.message ?: "Could not load tasks."
-            if (retained == null) state = TasksLoadState.Error(message) else refreshError = message
+            refreshing = false
         }
-        refreshing = false
     }
 
     LaunchedEffect(navigationCommitInProgress) {
@@ -291,15 +280,10 @@ fun NativeGroupwareTasksScreen(
     }
 
     val ready = state as? TasksLoadState.Ready
-    val selectedTask = ready?.tasks?.firstOrNull { it.instanceId == selectedTaskHref }
-    LaunchedEffect(ready, selectedTaskHref, selectedTask?.instanceId) {
-        if (
-            ready != null &&
-            ready.partialFailureMessage == null &&
-            selectedTaskHref != null &&
-            selectedTask == null
-        ) {
-            selectedTaskHref = null
+    val selectedTask = ready?.tasks?.firstOrNull { it.instanceId == selectedTaskSelection?.instanceId }
+    LaunchedEffect(ready, selectedTaskSelection) {
+        if (selectedTaskSelection?.let { ready?.confirmsSelectionRemoved(it) } == true) {
+            selectedTaskSelection = null
             editing = false
             deleting = null
         }
@@ -339,7 +323,7 @@ fun NativeGroupwareTasksScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { loadAttempt += 1 }) {
+                    IconButton(onClick = { if (!operations.busy) loadAttempt += 1 }, enabled = !operations.busy) {
                         Icon(NextcloudIcons.Refresh, contentDescription = "Refresh tasks")
                     }
                     IconButton(
@@ -370,24 +354,28 @@ fun NativeGroupwareTasksScreen(
                     ) {
                         Text(message, modifier = Modifier.weight(1f))
                         if (unreadableRecovery) {
-                            TextButton(onClick = { unreadableRecoveryDiscardRequested = true }) {
+                            TextButton(enabled = !operations.busy, onClick = { unreadableRecoveryDiscardRequested = true }) {
                                 Text("Review recovery")
                             }
                         } else if (recoveryVerification == TaskRecoveryVerification.Unapplied) {
                             TextButton(
+                                enabled = !operations.busy,
                                 onClick = {
                                     scope.launch {
-                                        if (clearRecovery()) {
-                                            creating = false
-                                            editing = false
-                                            deleting = null
-                                            loadAttempt += 1
+                                        operations.recover {
+                                            if (recoveryVerification != TaskRecoveryVerification.Unapplied) return@recover
+                                            if (clearRecovery()) {
+                                                creating = false
+                                                editing = false
+                                                deleting = null
+                                                loadAttempt += 1
+                                            }
                                         }
                                     }
                                 },
                             ) { Text("Keep server version") }
                         }
-                        TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                        TextButton(enabled = !operations.busy, onClick = { if (!operations.busy) loadAttempt += 1 }) { Text("Retry") }
                     }
                 }
             }
@@ -415,7 +403,7 @@ fun NativeGroupwareTasksScreen(
                 TasksLoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                is TasksLoadState.Error -> TasksError(current.message) { loadAttempt += 1 }
+                is TasksLoadState.Error -> TasksError(current.message) { if (!operations.busy) loadAttempt += 1 }
                 is TasksLoadState.Ready -> LazyColumn(
                     contentPadding = PaddingValues(NextcloudSpacing.Large),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
@@ -430,7 +418,7 @@ fun NativeGroupwareTasksScreen(
                             modifier = Modifier.fillMaxWidth().combinedClickable(
                                 onClickLabel = "Open ${task.title}",
                                 onLongClickLabel = "Show actions for ${task.title}",
-                                onClick = { selectedTaskHref = task.instanceId },
+                                onClick = { selectedTaskSelection = task.selection() },
                                 onLongClick = { menuExpanded = true },
                             ),
                             colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
@@ -463,7 +451,7 @@ fun NativeGroupwareTasksScreen(
                                             text = { Text("View details") },
                                             onClick = {
                                                 menuExpanded = false
-                                                selectedTaskHref = task.instanceId
+                                                selectedTaskSelection = task.selection()
                                             },
                                         )
                                         DropdownMenuItem(
@@ -471,7 +459,7 @@ fun NativeGroupwareTasksScreen(
                                             enabled = !interactionBlocked && taskWritable,
                                             onClick = {
                                                 menuExpanded = false
-                                                selectedTaskHref = task.instanceId
+                                                selectedTaskSelection = task.selection()
                                                 editing = true
                                             },
                                         )
@@ -480,7 +468,7 @@ fun NativeGroupwareTasksScreen(
                                             enabled = !interactionBlocked && taskWritable && taskDeleteSafe,
                                             onClick = {
                                                 menuExpanded = false
-                                                selectedTaskHref = task.instanceId
+                                                selectedTaskSelection = task.selection()
                                                 deleting = task
                                             },
                                         )
@@ -496,40 +484,16 @@ fun NativeGroupwareTasksScreen(
             }
         }
     }
-
     selectedTask?.takeIf { !editing }?.let { task ->
-        AlertDialog(
-            onDismissRequest = { if (!interactionBlocked) selectedTaskHref = null },
-            title = { Text(task.title) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    Text(if (task.completed) "Completed" else "Open")
-                    task.due?.let { Text("Due ${it.displayTaskDueDate()}") }
-                    task.description?.let { Text(it) }
-                    if (!selectedTaskWritable) {
-                        Text("This task list is read-only.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (!selectedTaskDeleteSafe) {
-                        Text(
-                            "This is one component of a recurring task. Edit the selected component; deleting the shared calendar object is withheld.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable,
-                    onClick = { editing = true },
-                ) { Text("Edit") }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable && selectedTaskDeleteSafe,
-                    onClick = { deleting = task },
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-            },
+        TaskDetailsDialog(
+            task = task,
+            writable = selectedTaskWritable,
+            deleteSafe = selectedTaskDeleteSafe,
+            interactionBlocked = interactionBlocked,
+            error = mutationError,
+            onDismiss = { selectedTaskSelection = null },
+            onEdit = { editing = true },
+            onDelete = { deleting = task },
         )
     }
 
@@ -546,7 +510,7 @@ fun NativeGroupwareTasksScreen(
             onDismiss = {
                 creating = false
                 editing = false
-                if (selectedTask == null) selectedTaskHref = null
+                if (selectedTask == null) selectedTaskSelection = null
             },
             onSave = save@{ draft, calendar, editStartEtag ->
                 mutationError = null
@@ -602,26 +566,28 @@ fun NativeGroupwareTasksScreen(
                     expectedDue = expectedGroupwareTaskDueAfterDateEdit(selectedTask, normalizedDue),
                 )
                 scope.launch {
-                    if (!retainRecovery(postcondition)) return@launch
-                    try {
-                        val response = services.executeGroupwareDav(session, request)
-                        if (response.status !in 200..299) {
-                            if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
-                                mutationError = "Saving the task failed (HTTP ${response.status})."
-                            } else {
-                                mutationError = "The task result is unknown. Refresh to verify it."
-                                loadAttempt += 1
+                    operations.mutate mutation@{
+                        if (!retainRecovery(postcondition)) return@mutation
+                        try {
+                            val response = services.executeGroupwareDav(session, request)
+                            if (response.status !in 200..299) {
+                                if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
+                                    mutationError = "Saving the task failed (HTTP ${response.status})."
+                                } else {
+                                    mutationError = "The task result is unknown. Refresh to verify it."
+                                    loadAttempt += 1
+                                }
+                                return@mutation
                             }
-                            return@launch
+                            creating = false
+                            editing = false
+                            loadAttempt += 1
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (_: Exception) {
+                            mutationError = "The task result is unknown. Refresh to verify it."
+                            loadAttempt += 1
                         }
-                        creating = false
-                        editing = false
-                        loadAttempt += 1
-                    } catch (failure: CancellationException) {
-                        throw failure
-                    } catch (_: Exception) {
-                        mutationError = "The task result is unknown. Refresh to verify it."
-                        loadAttempt += 1
                     }
                 }
             },
@@ -654,28 +620,30 @@ fun NativeGroupwareTasksScreen(
                             ).toGroupwareDavRequest()
                         } ?: return@delete
                         scope.launch {
-                            if (!retainRecovery(TaskMutationPostcondition.Delete(task.href, task.etag))) return@launch
-                            try {
-                                val response = services.executeGroupwareDav(session, request)
-                                if (response.status !in 200..299 &&
-                                    !groupwareDeleteResponseProvesAbsence(response.status)
-                                ) {
-                                    if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
-                                        mutationError = "Deleting the task failed (HTTP ${response.status})."
-                                    } else {
-                                        mutationError = "The task result is unknown. Refresh to verify it."
-                                        loadAttempt += 1
+                            operations.mutate mutation@{
+                                if (!retainRecovery(TaskMutationPostcondition.Delete(task.href, task.etag))) return@mutation
+                                try {
+                                    val response = services.executeGroupwareDav(session, request)
+                                    if (response.status !in 200..299 &&
+                                        !groupwareDeleteResponseProvesAbsence(response.status)
+                                    ) {
+                                        if (groupwareMutationResponseProvesRejection(response.status) && clearRecovery()) {
+                                            mutationError = "Deleting the task failed (HTTP ${response.status})."
+                                        } else {
+                                            mutationError = "The task result is unknown. Refresh to verify it."
+                                            loadAttempt += 1
+                                        }
+                                        return@mutation
                                     }
-                                    return@launch
+                                    deleting = null
+                                    selectedTaskSelection = null
+                                    loadAttempt += 1
+                                } catch (failure: CancellationException) {
+                                    throw failure
+                                } catch (_: Exception) {
+                                    mutationError = "The task result is unknown. Refresh to verify it."
+                                    loadAttempt += 1
                                 }
-                                deleting = null
-                                selectedTaskHref = null
-                                loadAttempt += 1
-                            } catch (failure: CancellationException) {
-                                throw failure
-                            } catch (_: Exception) {
-                                mutationError = "The task result is unknown. Refresh to verify it."
-                                loadAttempt += 1
                             }
                         }
                     },
@@ -699,14 +667,18 @@ fun NativeGroupwareTasksScreen(
             },
             confirmButton = {
                 Button(
+                    enabled = !operations.busy,
                     onClick = {
                         scope.launch {
-                            if (clearRecovery()) {
-                                unreadableRecoveryDiscardRequested = false
-                                creating = false
-                                editing = false
-                                deleting = null
-                                loadAttempt += 1
+                            operations.recover {
+                                if (!unreadableRecovery) return@recover
+                                if (clearRecovery()) {
+                                    unreadableRecoveryDiscardRequested = false
+                                    creating = false
+                                    editing = false
+                                    deleting = null
+                                    loadAttempt += 1
+                                }
                             }
                         }
                     },
@@ -734,7 +706,7 @@ private fun TasksError(message: String, retry: () -> Unit) {
     }
 }
 
-private fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
+internal fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
     "${substring(6, 8)}-${substring(4, 6)}-${take(4)}"
 } else {
     this

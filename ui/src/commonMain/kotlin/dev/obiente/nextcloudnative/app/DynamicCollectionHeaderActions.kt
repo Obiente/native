@@ -18,12 +18,21 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl
+import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeInlineEditorNavigation
+
+internal fun dynamicHeaderOverflowActions(
+    schema: NativeAppSchema,
+    actions: List<Pair<DynamicNavigationFormAction, ViewSpec>>,
+): List<Pair<DynamicNavigationFormAction, ViewSpec>> =
+    actions.filterNot { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
 
 @Composable
 internal fun DynamicCollectionHeaderActions(
     schema: NativeAppSchema,
     appName: String,
-    primaryAction: Pair<DynamicNavigationFormAction, ViewSpec>?,
+    createControl: NativeCollectionCreateControl?,
     overflowActions: List<Pair<DynamicNavigationFormAction, ViewSpec>>,
     secondaryDestinations: List<Pair<DynamicNavigationDestination, ViewSpec>>,
     menuExpanded: Boolean,
@@ -31,12 +40,14 @@ internal fun DynamicCollectionHeaderActions(
     onActionSelected: (DynamicNavigationFormAction, ViewSpec) -> Unit,
     onDestinationSelected: (DynamicNavigationDestination, ViewSpec) -> Unit,
 ) {
+    val inlineEditorNavigation = LocalNativeInlineEditorNavigation.current
     Row(verticalAlignment = Alignment.CenterVertically) {
-        primaryAction?.let { (action, view) ->
-            val label = schema.action(action.actionId)?.let { spec ->
-                dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-            } ?: view.dynamicActionLabel()
-            IconButton(onClick = { onActionSelected(action, view) }) {
+        createControl?.action?.let { action ->
+            val label = dynamicHeaderActionLabel(action, action.label)
+            IconButton(onClick = {
+                val open = { createControl.open(action.id) }
+                if (inlineEditorNavigation != null) inlineEditorNavigation.navigate(open) else open()
+            }) {
                 Icon(NextcloudIcons.Add, contentDescription = label)
             }
         }
@@ -67,19 +78,15 @@ internal fun DynamicCollectionHeaderActions(
                             candidate.label.dynamicUiLabel(appName)
                                 .equals(baseLabel, ignoreCase = true)
                         } > 1
+                        val label = dynamicSecondaryDestinationLabel(
+                            destinationLabel = baseLabel,
+                            resourceLabel = schema.resource(view.resourceId)?.name ?: view.resourceId,
+                            duplicate = duplicate,
+                        )
                         DropdownMenuItem(
-                            text = {
-                                Text(
-                                    dynamicSecondaryDestinationLabel(
-                                        destinationLabel = baseLabel,
-                                        resourceLabel = schema.resource(view.resourceId)?.name
-                                            ?: view.resourceId,
-                                        duplicate = duplicate,
-                                    ),
-                                )
-                            },
+                            text = { Text(label) },
                             modifier = Modifier.semantics {
-                                contentDescription = "Open $baseLabel"
+                                contentDescription = "Open $label"
                             },
                             onClick = { onDestinationSelected(destination, view) },
                         )
