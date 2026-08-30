@@ -34,6 +34,7 @@ class OfficeWorkspaceRestorationTest {
                 listOf(390 to 844, 1280 to 800).forEach { (width, height) ->
                     var freshFile = document("Proposal.pdf", "v1", "RW")
                     var holdRefresh: CompletableDeferred<Unit>? = null
+                    var holdCapabilities: CompletableDeferred<Unit>? = null
                     val requestedPaths = mutableListOf<String>()
                     val operations = OfficeWorkspaceOperations(
                         cachedFiles = { path -> if (path == "Projects/Plan")
@@ -50,7 +51,7 @@ class OfficeWorkspaceRestorationTest {
                             }
                             NextcloudFileListing(files, NextcloudFileListingSource.Network)
                         },
-                        capabilities = { NextcloudDocumentEditingCapabilities.Unavailable },
+                        capabilities = { holdCapabilities?.await(); NextcloudDocumentEditingCapabilities.Unavailable },
                     )
                     fun createScene(registry: SaveableStateRegistry, accountScope: String = scope) = ImageComposeScene(
                         width, height, Density(1f), coroutineContext = coroutineContext,
@@ -81,6 +82,7 @@ class OfficeWorkspaceRestorationTest {
 
                     freshFile = document("Renamed.pdf", "v2", "R")
                     holdRefresh = CompletableDeferred()
+                    holdCapabilities = CompletableDeferred()
                     requestedPaths.clear()
                     val restored = createScene(SaveableStateRegistry(saved) { true })
                     try {
@@ -90,8 +92,10 @@ class OfficeWorkspaceRestorationTest {
                         holdRefresh.complete(Unit)
                         settle(restored)
                         assertTrue(restored.hasText("Preview: Renamed.pdf / v2 / R"))
+                        assertFalse(holdCapabilities.isCompleted)
                     } finally { restored.close() }
 
+                    holdCapabilities = null
                     requestedPaths.clear()
                     val folderRestored = createScene(SaveableStateRegistry(folderSaved) { true })
                     try {

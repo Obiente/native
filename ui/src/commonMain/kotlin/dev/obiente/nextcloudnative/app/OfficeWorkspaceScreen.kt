@@ -73,14 +73,10 @@ internal fun OfficeWorkspaceContent(
     }
     PlatformBackHandler(enabled = true, onBack = ::back)
     LaunchedEffect(workspace, accountReady, location.folderPath, attempt) {
-        if (accountReady) {
-            val requestedLocation = location
-            workspace.load(requestedLocation.folderPath)
-            if (location == requestedLocation) selected = requestedLocation.resolveSelection(workspace.state.value)
-        }
+        if (accountReady) workspace.load(location.folderPath)
     }
     Column(modifier = modifier.fillMaxSize()) {
-        val file = selected
+        val file = selected ?: location.resolveSelection(state)
         Row(
             modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
             verticalAlignment = Alignment.CenterVertically,
@@ -102,7 +98,7 @@ internal fun OfficeWorkspaceContent(
             )
             file != null -> preview(file, Modifier.weight(1f))
             else -> {
-                if (location.selectedFileId != null && !state.loading && state.path == location.folderPath) {
+                if (location.selectedFileId != null && !state.loading && !state.discoveringEditors && state.path == location.folderPath) {
                     Text("The selected document could not be restored. Refresh or choose another document.",
                         modifier = Modifier.padding(NextcloudSpacing.Medium))
                 }
@@ -146,7 +142,10 @@ internal fun OfficeWorkspaceBrowser(
         TextButton(onClick = onRetry, enabled = !state.loading) { Text("Refresh") }
         LazyColumn(modifier = Modifier.weight(1f)) {
             if (files.isEmpty() && !state.loading) {
-                item { Text("No Office documents in this folder. Open another folder or refresh.") }
+                item {
+                    Text(if (state.discoveringEditors) "Checking the server's document editors..."
+                        else "No Office documents in this folder. Open another folder or refresh.")
+                }
             }
             items(files, key = NextcloudFile::path) { file ->
                 Row(
