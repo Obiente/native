@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
+import dev.obiente.nextcloudnative.app.design.NextcloudCardOverflow
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -119,7 +122,6 @@ import dev.obiente.nextcloudnative.app.design.NextcloudCollectionWorkspaceScaffo
 import dev.obiente.nextcloudnative.app.design.NextcloudDestination
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudNativeTheme
-import dev.obiente.nextcloudnative.app.design.NextcloudNavigationRail
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopIdentity
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopSidebarApp
 import dev.obiente.nextcloudnative.app.design.NextcloudDesktopMasterDetail
@@ -128,14 +130,12 @@ import dev.obiente.nextcloudnative.app.design.NextcloudDesktopShell
 import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.accountAvatarContentDescription
-import dev.obiente.nextcloudnative.app.design.NextcloudNavigationStyle
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
 import dev.obiente.nextcloudnative.app.design.NextcloudTypography
 import dev.obiente.nextcloudnative.app.design.isNextcloudDarkTheme
-import dev.obiente.nextcloudnative.app.design.resolveNextcloudRootShellLayout
 import dev.obiente.nextcloudnative.app.design.resolveNextcloudCollectionNavigationMode
 import dev.obiente.nextcloudnative.app.design.shouldUseNextcloudRootShell
 import dev.obiente.nextcloudnative.nativeui.model.DynamicAppDescriptor
@@ -161,6 +161,8 @@ import dev.obiente.nextcloudnative.nativeui.model.resolveDynamicRecordReadParame
 import dev.obiente.nextcloudnative.nativeui.model.sameDynamicResourceAs
 import dev.obiente.nextcloudnative.nativeui.runtime.GenericNativeAppScreen
 import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeFinanceCurrency
+import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeInlineEditorNavigation
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeInlineEditorNavigation
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutionResult
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionExecutor
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeActionRequest
@@ -635,6 +637,13 @@ fun NextcloudNativeMarketingCapture(
                 ),
             ) {
                 when (scenario) {
+                    MarketingCaptureScenario.SharedControlsDesktop,
+                    MarketingCaptureScenario.SharedControlsMobile,
+                    -> MarketingSharedControlsScenario(scenario)
+                    MarketingCaptureScenario.ShellCompactDesktop,
+                    MarketingCaptureScenario.ShellAppSwitcherMobile,
+                    MarketingCaptureScenario.ShellTablet,
+                    -> MarketingShellCaptureScenario(scenario, assets)
                     MarketingCaptureScenario.HomepageOverviewDesktopDark,
                     MarketingCaptureScenario.HomepageOverviewDesktopLight,
                     MarketingCaptureScenario.HomepageOverviewMobileDark,
@@ -714,6 +723,9 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.TablesViewsMobile,
                     MarketingCaptureScenario.TablesSharesMobile,
                     -> MarketingAdaptiveAppScenario(scenario)
+                    MarketingCaptureScenario.InlineRecordEditDesktop,
+                    MarketingCaptureScenario.InlineRecordEditMobile,
+                    -> MarketingInlineRecordEditShell(scenario, fixture, assets)
                     MarketingCaptureScenario.AppsWorkspaceDesktopDark,
                     MarketingCaptureScenario.AppsWorkspaceDesktopLight,
                     -> MarketingAppsWorkspaceScenario(fixture, assets)
@@ -722,6 +734,8 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.CalendarWorkspaceMobileDark,
                     MarketingCaptureScenario.CalendarWorkspaceMobileLight,
                     MarketingCaptureScenario.CalendarMonthMobile,
+                    MarketingCaptureScenario.CalendarWeekMobile,
+                    MarketingCaptureScenario.CalendarWeekDesktop,
                     MarketingCaptureScenario.CalendarEventEditorMobile,
                     MarketingCaptureScenario.CalendarEventEditorDesktop,
                     -> MarketingCalendarWorkspaceScenario(scenario, assets)
@@ -825,7 +839,7 @@ fun NextcloudNativeMarketingCapture(
                     MarketingCaptureScenario.DeckBoardMobile,
                     MarketingCaptureScenario.HomepagePlanningDesktopDark,
                     MarketingCaptureScenario.HomepagePlanningDesktopLight,
-                    -> MarketingDeckBoardScenario()
+                    -> MarketingDeckBoardScenario(scenario)
                     MarketingCaptureScenario.GuideAndroidGettingStartedHome,
                     MarketingCaptureScenario.GuideAndroidGettingStartedFiles,
                     MarketingCaptureScenario.GuideAndroidGettingStartedCalendar,
@@ -888,6 +902,8 @@ private fun MarketingDesktopConversationsScenario(
         selected = NextcloudDestination.Apps,
         onSelected = {},
         identity = marketingDesktopIdentity(fixture, assets.avatar),
+        activeAppId = "spreed",
+        desktopWorkspaceKind = NextcloudDesktopWorkspaceKind.AppWorkspace,
     ) {
         NextcloudDesktopMasterDetail(
             masterWidthDp = 340,
@@ -1257,6 +1273,7 @@ private fun AuthenticatedApp(
     var certificateRecoveryAttempt by remember(session) { mutableStateOf(0) }
     val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
+    val inlineEditorNavigation = remember(session) { NativeInlineEditorNavigation() }
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
         session.loginName,
@@ -1341,6 +1358,13 @@ private fun AuthenticatedApp(
     }
 
     fun applyNavigationRequest(request: NextcloudNativeNavigationRequest) {
+        if (inlineEditorNavigation.intercept(
+                proceed = { applyNavigationRequest(request) },
+                cancel = {
+                    onNavigationRequestHandled(request.sequence)
+                    pendingEditorNavigationRequests.removeAll { it.identity == NextcloudPendingNavigationRequest.Native(request).identity }
+                },
+            )) return
         if (groupwareMutationInProgress) {
             queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
             return
@@ -1383,10 +1407,12 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(appUpdateReviewRequest, groupwareMutationInProgress) {
         if (appUpdateReviewRequest > 0 && !groupwareMutationInProgress) {
-            leaveAppWorkspace()
-            screen = Screen.Root
-            destination = NextcloudDestination.Settings
-            onAppUpdateReviewHandled(appUpdateReviewRequest)
+            inlineEditorNavigation.navigate {
+                leaveAppWorkspace()
+                screen = Screen.Root
+                destination = NextcloudDestination.Settings
+                onAppUpdateReviewHandled(appUpdateReviewRequest)
+            }
         }
     }
 
@@ -1507,6 +1533,7 @@ private fun AuthenticatedApp(
         from: NextcloudDestination,
         restoreRememberedState: Boolean = true,
     ) {
+        if (inlineEditorNavigation.intercept({ openApp(app, from, restoreRememberedState) })) return
         if (groupwareMutationInProgress) return
         returnDestination = from
         services.saveLastOpenedAppId(app.id)
@@ -1551,6 +1578,7 @@ private fun AuthenticatedApp(
     }
 
     fun openSearch() {
+        if (inlineEditorNavigation.intercept(::openSearch)) return
         if (groupwareMutationInProgress) return
         returnDestination = destination
         leaveAppWorkspace()
@@ -1789,6 +1817,10 @@ private fun AuthenticatedApp(
         onFinished: () -> Unit = {},
         onCancelled: () -> Unit = {},
     ) {
+        if (inlineEditorNavigation.intercept(
+                proceed = { launchNextcloudLinkNavigation(rawLink, source, incomingRequestSequence, onFinished, onCancelled) },
+                cancel = onCancelled,
+            )) return
         val originScreen = screen
         val originDestination = destination
         val generation = linkNavigationGeneration + 1L
@@ -1802,7 +1834,7 @@ private fun AuthenticatedApp(
                     linkNavigationGeneration == generation &&
                         screen == originScreen &&
                         destination == originDestination &&
-                        !groupwareMutationInProgress
+                        !groupwareMutationInProgress && !inlineEditorNavigation.active
                 }
                 when (result) {
                     NextcloudLinkNavigationResult.Completed -> onFinished()
@@ -1900,6 +1932,7 @@ private fun AuthenticatedApp(
     }
 
     fun navigateBack() {
+        if (inlineEditorNavigation.intercept(::navigateBack)) return
         if (groupwareMutationInProgress) return
         when (val current = screen) {
             Screen.Root -> destination = NextcloudDestination.Home
@@ -2046,10 +2079,12 @@ private fun AuthenticatedApp(
 
     val desktopIdentity = serverInfo?.let { info ->
         NextcloudDesktopIdentity(
+            accountScopeKey = remember(session) { previewCacheDigest(session) },
             displayName = info.displayName,
             cloudName = info.themeName ?: "Nextcloud",
             connectionLabel = "Connected",
             serverVersion = info.version,
+            availableApps = info.apps.map { NextcloudDesktopSidebarApp(it.id, it.name) },
             shortcuts = pinnedAppIds.mapNotNull { pinnedId ->
                 info.apps.firstOrNull { app -> canonicalAppWorkspaceId(app.id) == pinnedId }?.let { app ->
                     NextcloudDesktopSidebarApp(id = app.id, label = app.name)
@@ -2509,6 +2544,7 @@ private fun AuthenticatedApp(
         )
         }
     }
+    CompositionLocalProvider(LocalNativeInlineEditorNavigation provides inlineEditorNavigation) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2522,10 +2558,12 @@ private fun AuthenticatedApp(
                 reports = supportUpdates,
                 enabled = !groupwareMutationInProgress,
                 onReview = {
-                    if (!groupwareMutationInProgress) {
-                        leaveAppWorkspace()
-                        screen = Screen.Root
-                        destination = NextcloudDestination.Settings
+                    inlineEditorNavigation.navigate {
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            screen = Screen.Root
+                            destination = NextcloudDestination.Settings
+                        }
                     }
                 },
             )
@@ -2537,10 +2575,12 @@ private fun AuthenticatedApp(
                 release = update.release,
                 enabled = !groupwareMutationInProgress,
                 onReview = {
-                    if (!groupwareMutationInProgress) {
-                        leaveAppWorkspace()
-                        screen = Screen.Root
-                        destination = NextcloudDestination.Settings
+                    inlineEditorNavigation.navigate {
+                        if (!groupwareMutationInProgress) {
+                            leaveAppWorkspace()
+                            screen = Screen.Root
+                            destination = NextcloudDestination.Settings
+                        }
                     }
                 },
             )
@@ -2556,11 +2596,13 @@ private fun AuthenticatedApp(
                         NextcloudDesktopWorkspaceKind.AppWorkspace
                     },
                     navigationEnabled = !groupwareMutationInProgress,
-                    onSelected = {
-                        if (!groupwareMutationInProgress) {
-                            leaveAppWorkspace()
-                            destination = it
-                            screen = Screen.Root
+                    onSelected = { selected ->
+                        inlineEditorNavigation.navigate {
+                            if (!groupwareMutationInProgress) {
+                                leaveAppWorkspace()
+                                destination = selected
+                                screen = Screen.Root
+                            }
                         }
                     },
                     identity = desktopIdentity,
@@ -2596,73 +2638,10 @@ private fun AuthenticatedApp(
         }
     }
 }
-
-@Composable
-private fun SupportUpdateAvailableBanner(
-    reports: List<SupportDiagnosticsSubmissionState.SubmittedReport>,
-    enabled: Boolean,
-    onReview: () -> Unit,
-) {
-    val messageCount = reports.sumOf(SupportDiagnosticsSubmissionState.SubmittedReport::unreadMaintainerMessages)
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Obiente Support updated your report", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    when {
-                        messageCount == 1 -> "You have one new private support message."
-                        messageCount > 1 -> "You have $messageCount new private support messages."
-                        reports.size == 1 -> "The status of your private support report changed."
-                        else -> "The status of ${reports.size} private support reports changed."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onReview, enabled = enabled) { Text("View support") }
-        }
-    }
 }
 
 @Composable
-private fun AppUpdateAvailableBanner(
-    release: AppUpdateRelease,
-    enabled: Boolean = true,
-    onReview: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Nextcloud Native ${release.versionName} is available", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    if (release is AndroidDirectRelease) {
-                        "Review the certificate-verified APK before installing."
-                    } else {
-                        "Review the downloaded package before opening the system installer."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onReview, enabled = enabled) { Text("Review update") }
-        }
-    }
-}
-
-@Composable
-private fun RootShell(
+internal fun RootShell(
     presentation: NextcloudPresentation,
     selected: NextcloudDestination,
     desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
@@ -2686,44 +2665,15 @@ private fun RootShell(
                 content = content,
             )
         } else {
-            val layout = resolveNextcloudRootShellLayout(
-                presentation = presentation,
-                availableWidthDp = maxWidth.value.toInt(),
-                destination = selected,
+            dev.obiente.nextcloudnative.app.design.NextcloudAdaptiveShell(
+                selected = selected,
+                onSelected = onSelected,
+                identity = identity,
+                activeAppId = activeAppId,
+                onOpenApp = onOpenApp,
+                navigationEnabled = navigationEnabled,
+                content = content,
             )
-            when (layout.navigationStyle) {
-                NextcloudNavigationStyle.BottomBar -> {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
-                        NextcloudBottomNavigation(
-                            selected = selected,
-                            onSelected = onSelected,
-                            enabled = navigationEnabled,
-                        )
-                    }
-                }
-
-                NextcloudNavigationStyle.CompactRail,
-                NextcloudNavigationStyle.ExpandedSidebar,
-                -> {
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        NextcloudNavigationRail(
-                            selected = selected,
-                            onSelected = onSelected,
-                            enabled = navigationEnabled,
-                        )
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            contentAlignment = Alignment.TopCenter,
-                        ) {
-                            val maxContentWidth = requireNotNull(layout.contentMaximumWidthDp).dp
-                            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth().widthIn(max = maxContentWidth)) {
-                                content()
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -3081,6 +3031,7 @@ private fun DynamicDiscoveredAppScreen(
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val inlineEditorNavigation = LocalNativeInlineEditorNavigation.current
     val descriptor = discovery.descriptor
     val schema = remember(descriptor, discovery.versionStatus) {
         descriptor.toNativeAppSchema()
@@ -4878,6 +4829,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun selectDynamicRecord(record: NativeRecord) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicRecord(record) }) == true) return
         rememberCurrentLocation()
         val selectedParentResourceId = record.effectiveNativeResourceId(selectedView.resourceId)
         val inheritedParameters = inheritDynamicParentParameters(
@@ -5040,6 +4992,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun navigateWithinDynamicApp() {
+        if (inlineEditorNavigation?.intercept(::navigateWithinDynamicApp) == true) return
         val activeContextToken = selectedRecord?.dynamicContextNavigationToken(
             selectedRecordResourceId.orEmpty(),
         )
@@ -5108,6 +5061,7 @@ private fun DynamicDiscoveredAppScreen(
         action: dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction,
         view: ViewSpec,
     ) {
+        if (inlineEditorNavigation?.intercept({ selectDynamicAction(action, view) }) == true) return
         actionMenuExpanded = false
         val actionSpec = schema.action(action.actionId)
         val editableFieldCount = actionSpec?.let { spec ->
@@ -5161,6 +5115,7 @@ private fun DynamicDiscoveredAppScreen(
         destination: DynamicNavigationDestination,
         view: ViewSpec,
     ) {
+        if (inlineEditorNavigation?.intercept({ selectCollectionDestination(destination, view) }) == true) return
         actionMenuExpanded = false
         contextualMenuOpen = false
         val selection = planDynamicCollectionDestinationSelection(
@@ -5180,6 +5135,7 @@ private fun DynamicDiscoveredAppScreen(
     }
 
     fun selectChoresDestination(viewId: String) {
+        if (inlineEditorNavigation?.intercept({ selectChoresDestination(viewId) }) == true) return
         val (destination, view) = choresNavigationDestinations
             .firstOrNull { (_, candidate) -> candidate.id == viewId }
             ?: return
@@ -5598,16 +5554,19 @@ private fun DynamicDiscoveredAppScreen(
                     NativeMusicAdaptiveNavigationLayout(
                         intent = musicWorkspaceIntent,
                         onDestinationSelected = { destination ->
-                            val selection = selectNativeMusicRoot(destination)
-                            navigationHistory = emptyList()
-                            selectedRecord = selection.selectedRecord
-                            selectedRecordResourceId = selection.selectedRecordResourceId
-                            selectedPathParameterValues = selection.pathParameterValues
-                            selectedViewId = selection.viewId
-                            contextualMenuOpen = false
-                            paginationState = null
-                            loadingMore = false
-                            loadMoreError = null
+                            val navigate = {
+                                val selection = selectNativeMusicRoot(destination)
+                                navigationHistory = emptyList()
+                                selectedRecord = selection.selectedRecord
+                                selectedRecordResourceId = selection.selectedRecordResourceId
+                                selectedPathParameterValues = selection.pathParameterValues
+                                selectedViewId = selection.viewId
+                                contextualMenuOpen = false
+                                paginationState = null
+                                loadingMore = false
+                                loadMoreError = null
+                            }
+                            if (inlineEditorNavigation == null) navigate() else inlineEditorNavigation.navigate(navigate)
                         },
                         modifier = Modifier.fillMaxSize(),
                         content = dynamicScreenContent,
@@ -5637,7 +5596,9 @@ private fun DynamicDiscoveredAppScreen(
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            TextButton(onClick = { loadAttempt += 1 }) { Text("Retry") }
+                            TextButton(onClick = {
+                                inlineEditorNavigation?.refresh { loadAttempt += 1 } ?: run { loadAttempt += 1 }
+                            }) { Text("Retry") }
                         }
                     }
                 }
@@ -5829,23 +5790,24 @@ internal fun DynamicAppChromeHeader(
     onContractInfo: () -> Unit,
     trailingContent: @Composable () -> Unit = {},
 ) {
+    var moreExpanded by remember { mutableStateOf(false) }
     ScreenHeader(
         title = title,
         subtitle = subtitle,
         onBack = onBack,
         compact = compact,
-        trailingContent = trailingContent,
-    )
-    if (!compact) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onContractInfo) {
-                Text("Contract info")
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                trailingContent()
+                NextcloudCardOverflow(
+                    itemLabel = title,
+                    actions = listOf(NextcloudCardAction(label = "App compatibility details", onClick = onContractInfo)),
+                    expanded = moreExpanded,
+                    onExpandedChange = { moreExpanded = it },
+                )
             }
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -6066,13 +6028,17 @@ internal fun NativeAudioMiniPlayer(
                 }
             }
             engineState.error?.let { error ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     error,
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (engineState.status == NativeAudioEngineStatus.Error) TextButton(onClick = onTogglePlayback) { Text("Retry playback") }
+                }
             }
         }
     }
@@ -8733,36 +8699,8 @@ private const val PHOTO_TIMELINE_PREFETCH_GRID_ITEMS = 18
 private const val PHOTO_FOLDER_INITIAL_BACKUP_STATUS_ITEMS = 24
 
 @Composable
-internal fun PhotoTimelineFailureNotice(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-    actionLabel: String = "Retry",
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        modifier = modifier,
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = NextcloudSpacing.Medium,
-                vertical = NextcloudSpacing.Small,
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = message,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) {
-                Text(actionLabel)
-            }
-        }
-    }
+internal fun PhotoTimelineFailureNotice(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier, actionLabel: String = "Retry") {
+    RetainedContentNotice(message, onRetry, modifier, actionLabel)
 }
 
 @Composable
@@ -8817,35 +8755,8 @@ private fun PhotoTimelineViewModeControl(
 }
 
 @Composable
-private fun PhotoFolderStaleNotice(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        modifier = modifier,
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = NextcloudSpacing.Medium,
-                vertical = NextcloudSpacing.Small,
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = "Could not refresh photo folders. Showing saved folder content. $message",
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) {
-                Text("Retry")
-            }
-        }
-    }
+private fun PhotoFolderStaleNotice(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    RetainedContentNotice("Could not refresh photo folders. Showing saved folder content. $message", onRetry, modifier)
 }
 
 @Composable
@@ -11955,7 +11866,7 @@ private enum class MarkdownFileViewMode {
     Edit,
 }
 
-private object TalkWorkspaceMemoryCache {
+internal object TalkWorkspaceMemoryCache {
     private val rooms = linkedMapOf<String, List<TalkRoom>>()
     private val messages = linkedMapOf<String, List<TalkMessage>>()
 
@@ -12072,179 +11983,6 @@ private fun TalkScreen(
     }
 }
 
-@Composable
-private fun ChatScreen(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    userId: String,
-    room: TalkRoom,
-    onBack: () -> Unit,
-    onOpenAttachment: (NextcloudFile) -> Unit,
-) {
-    var messages by remember(session, room.token) {
-        mutableStateOf(TalkWorkspaceMemoryCache.messages(session, room.token))
-    }
-    var olderCursor by remember(room.token) { mutableStateOf<Long?>(null) }
-    var hasMoreHistory by remember(room.token) { mutableStateOf(false) }
-    var loadingEarlier by remember(room.token) { mutableStateOf(false) }
-    var historyError by remember(room.token) { mutableStateOf<String?>(null) }
-    var draft by rememberSaveable(session.serverUrl, session.loginName, room.token) { mutableStateOf("") }
-    var error by remember(room.token) { mutableStateOf<String?>(null) }
-    var refreshing by remember(room.token) { mutableStateOf(false) }
-    var sending by remember { mutableStateOf(false) }
-    var loadAttempt by remember(room.token) { mutableStateOf(0) }
-    val scope = rememberCoroutineScope()
-    val messageListState = rememberLazyListState()
-    val orderedMessages = remember(messages) { messages?.sortedBy(TalkMessage::id) }
-
-    suspend fun refresh() {
-        val page = services.listTalkMessagePage(session, room.token)
-        messages = page.messages
-        TalkWorkspaceMemoryCache.storeMessages(session, room.token, page.messages)
-        olderCursor = page.olderCursor
-        hasMoreHistory = page.hasMoreHistory
-    }
-    LaunchedEffect(room.token, loadAttempt) {
-        refreshing = messages != null
-        error = null
-        runCatching { refresh() }.onFailure { error = it.message ?: "Could not load messages." }
-        refreshing = false
-    }
-    LaunchedEffect(orderedMessages?.lastOrNull()?.id) {
-        val lastIndex = orderedMessages?.lastIndex ?: return@LaunchedEffect
-        messageListState.scrollToItem(lastIndex)
-    }
-
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        ScreenHeader(room.displayName, "Talk", onBack)
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                error != null && messages == null -> ErrorMessage(requireNotNull(error)) { loadAttempt += 1 }
-                messages == null -> LoadingMessage("Loading messages...")
-                messages?.isEmpty() == true -> EmptyMessage("No messages in this conversation yet.")
-                else -> LazyColumn(
-                    state = messageListState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(NextcloudSpacing.Large),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    if ((hasMoreHistory && olderCursor != null) || historyError != null) {
-                        item(key = "talk-load-earlier") {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                historyError?.let { message ->
-                                    Text(
-                                        message,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                }
-                                if (hasMoreHistory && olderCursor != null) {
-                                    TextButton(
-                                        enabled = !loadingEarlier,
-                                        onClick = {
-                                            val cursor = olderCursor ?: return@TextButton
-                                            loadingEarlier = true
-                                            historyError = null
-                                            scope.launch {
-                                                runCatching {
-                                                    services.listTalkMessagePage(
-                                                        session = session,
-                                                        token = room.token,
-                                                        olderCursor = cursor,
-                                                    )
-                                                }.onSuccess { page ->
-                                                    messages = mergeTalkMessageHistory(
-                                                        messages.orEmpty(),
-                                                        page.messages,
-                                                    )
-                                                    TalkWorkspaceMemoryCache.storeMessages(
-                                                        session,
-                                                        room.token,
-                                                        messages.orEmpty(),
-                                                    )
-                                                    olderCursor = page.olderCursor
-                                                    hasMoreHistory = page.hasMoreHistory
-                                                }.onFailure { failure ->
-                                                    historyError =
-                                                        failure.message ?: "Could not load earlier messages."
-                                                }
-                                                loadingEarlier = false
-                                            }
-                                        },
-                                    ) {
-                                        if (loadingEarlier) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        } else {
-                                            Text("Load earlier messages")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    listItems(requireNotNull(orderedMessages), key = TalkMessage::id) { message ->
-                        TalkMessageCard(
-                            services = services,
-                            session = session,
-                            message = message,
-                            mine = message.actorId == userId,
-                            onOpenAttachment = { attachment ->
-                                onOpenAttachment(attachment.asNextcloudFile())
-                            },
-                        )
-                    }
-                }
-            }
-            if (refreshing) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                )
-            }
-            if (error != null && messages != null) {
-                RetainedRefreshError(
-                    message = requireNotNull(error),
-                    onRetry = { loadAttempt += 1 },
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-                enabled = !sending,
-                shape = RoundedCornerShape(NextcloudRadii.Card),
-            )
-            IconButton(
-                enabled = draft.isNotBlank() && !sending,
-                onClick = {
-                    val message = draft.trim()
-                    sending = true
-                    scope.launch {
-                        runCatching {
-                            services.sendTalkMessage(session, room.token, message)
-                            draft = ""
-                            refresh()
-                        }.onFailure { error = it.message ?: "Could not send message." }
-                        sending = false
-                    }
-                },
-            ) { Icon(NextcloudIcons.Send, contentDescription = "Send message") }
-        }
-    }
-}
 
 @Composable
 private fun ProjectNewsScreen(
@@ -12632,7 +12370,7 @@ internal fun SectionTitle(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun LoadingMessage(message: String) {
+internal fun LoadingMessage(message: String) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -12651,7 +12389,7 @@ internal fun EmptyMessage(message: String) {
 }
 
 @Composable
-private fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
+internal fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
     Column(modifier = Modifier.padding(NextcloudSpacing.XLarge), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
         Text(message, color = MaterialTheme.colorScheme.error)
@@ -12660,29 +12398,8 @@ private fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun RetainedRefreshError(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.padding(
-            horizontal = NextcloudSpacing.Large,
-            vertical = NextcloudSpacing.Small,
-        ),
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NextcloudSpacing.Medium),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(message, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = onRetry) { Text("Retry") }
-        }
-    }
+private fun RetainedRefreshError(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    RetainedContentNotice(message, onRetry, modifier.padding(horizontal = NextcloudSpacing.Large, vertical = NextcloudSpacing.Small))
 }
 
 private fun fileIcon(file: NextcloudFile): ImageVector = when {

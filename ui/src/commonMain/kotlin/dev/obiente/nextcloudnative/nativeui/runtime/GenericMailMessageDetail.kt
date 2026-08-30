@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.nativeui.runtime
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +16,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,7 +50,7 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalRichTextApi::class)
+@OptIn(ExperimentalRichTextApi::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun GenericMailMessageDetail(
     schema: NativeAppSchema,
@@ -164,13 +167,19 @@ internal fun GenericMailMessageDetail(
             }
         }
         if (messageActions.all.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
             ) {
                 messageActions.all.forEach { plan ->
                     OutlinedButton(
                         enabled = runningAction == null,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (plan.kind == NativeMailMessageActionKind.Delete) {
+                                MaterialTheme.colorScheme.error
+                            } else MaterialTheme.colorScheme.primary,
+                        ),
                         onClick = {
                             if (plan.kind == NativeMailMessageActionKind.Delete) {
                                 pendingDestructiveAction = plan
@@ -194,6 +203,13 @@ internal fun GenericMailMessageDetail(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+        }
+        if (messageActions.all.isEmpty()) {
+            Text(
+                "Reading view. Message actions are unavailable here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         if (threadMessages.size > 1) {
             Text(

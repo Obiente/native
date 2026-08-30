@@ -355,7 +355,7 @@ class PhotoFolderBrowsingTest {
     fun `folder scope controls use user facing labels`() {
         assertEquals("Folders only", photoFolderScopeLabel(PhotoFolderBrowseScope.FoldersOnly))
         assertEquals(
-            "Folder and photos",
+            "Photos and subfolders",
             photoFolderScopeLabel(PhotoFolderBrowseScope.DirectMediaAndSubfolders),
         )
         assertEquals("Photos in folder", photoFolderScopeLabel(PhotoFolderBrowseScope.DirectMediaOnly))

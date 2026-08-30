@@ -29,7 +29,6 @@ internal fun GenericResourceIcon(
         ?: when {
         resource.fields.any { it.kind == FieldKind.image } -> NextcloudIcons.Image
         resource.fields.any { it.kind == FieldKind.file } -> NextcloudIcons.File
-        resource.fields.any { it.kind == FieldKind.date || it.kind == FieldKind.dateTime } -> NextcloudIcons.Calendar
         resource.fields.any { it.kind == FieldKind.userReference } -> NextcloudIcons.People
         else -> NextcloudIcons.Apps
     }

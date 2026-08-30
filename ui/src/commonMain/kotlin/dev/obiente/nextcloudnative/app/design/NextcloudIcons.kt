@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Contacts
@@ -101,6 +102,7 @@ import androidx.compose.material.icons.outlined.RestaurantMenu
 import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.SetMeal
 import androidx.compose.material.icons.outlined.Settings
@@ -176,6 +178,8 @@ object NextcloudIcons {
     val CheckCircle: ImageVector = Icons.Outlined.CheckCircle
     val People: ImageVector = Icons.Outlined.PeopleOutline
     val Schedule: ImageVector = Icons.Outlined.CalendarMonth
+    val Clock: ImageVector = Icons.Outlined.Schedule
+    val Close: ImageVector = Icons.Outlined.Close
     val Calendar: ImageVector = Icons.Outlined.CalendarMonth
     val Photo: ImageVector = Icons.Outlined.PhotoLibrary
     val Favorite: ImageVector = Icons.Outlined.Star

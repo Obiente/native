@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Everyday
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-30
 captureScenarios: guide-android-offline-files-browse, guide-android-offline-files-storage, guide-android-offline-files-transfers
 prerequisites: A connected Android account, Files already stored in Nextcloud, Enough free device storage for the originals you select
 ---
 
 # Keep Nextcloud files available offline on Android
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-30.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -38,6 +38,11 @@ The download intent and work queue are durable on Android. WorkManager can resum
 Open **Settings**, choose **Sync & offline**, and review **Virtual files**. Nextcloud Native is exposed automatically under **System Files / Nextcloud Native** while the account is signed in. Opening a remote item through another Android app hydrates a complete cached generation. That ordinary cache may be reclaimed later; an explicit offline pin is a stronger retention class.
 
 Automatic cleanup applies only to eligible disposable content. Pinned items, active work, and retained writeback recovery are protected. If the storage view reports pending or conflicted edits, resolve those before freeing space. Do not clear the application's storage from Android settings as a substitute for managed cleanup; that also removes account and recovery state.
+
+**Cached locally**, **Kept offline**, and **Device free** describe different
+parts of device storage, not your remaining Nextcloud quota. Connection state
+is separate from retained edits that need review. The file-manager connection
+menu contains **Disconnect from file manager** when disconnection is available.
 
 ## 3. Remove an offline copy safely or recover a failure
 

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -18,11 +17,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -30,14 +27,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,9 +39,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -81,7 +75,7 @@ private enum class FileSyncRulePreset(val title: String, val supportingText: Str
     ChooseFolders("Choose folders", "Sync only the folders and files you select."),
 }
 
-private enum class FileSyncInspectorTab(val title: String) {
+internal enum class FileSyncInspectorTab(val title: String) {
     Overview("Overview"),
     Activity("Activity"),
     Rules("Rules"),
@@ -109,6 +103,7 @@ internal fun FileSyncWorkspace(
     var selectedPairId by rememberSaveable(initialSelectedPairId) { mutableStateOf(initialSelectedPairId) }
     var filter by rememberSaveable { mutableStateOf(FileSyncListFilter.All) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var filtersVisible by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(pairs.map(FileSyncPairSummary::id)) {
         if (selectedPairId !in pairs.map(FileSyncPairSummary::id)) {
             selectedPairId = null
@@ -121,6 +116,29 @@ internal fun FileSyncWorkspace(
 
     BoxWithConstraints(modifier = modifier) {
         val desktop = maxWidth >= 940.dp
+        val phonePair = visiblePairs.firstOrNull { it.id == selectedPairId }
+        if (!desktop && phonePair != null) {
+            PlatformBackHandler(enabled = true, onBack = { selectedPairId = null })
+            Column(modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
+                TextButton(onClick = { selectedPairId = null }) {
+                    Icon(NextcloudIcons.Back, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("All syncs")
+                }
+                FileSyncPairInspector(
+                    pair = phonePair,
+                    busy = phonePair.id in busyPairIds,
+                    actionsEnabled = phonePair.id !in busyPairIds,
+                    onRun = { onRun(phonePair) },
+                    onRemove = { onRemove(phonePair) },
+                    onResolve = onResolve,
+                    onResolveBatch = onResolveBatch,
+                    modifier = if (fillAvailableHeight) Modifier.weight(1f).fillMaxWidth()
+                        else Modifier.fillMaxWidth().heightIn(min = 560.dp, max = 760.dp),
+                )
+            }
+            return@BoxWithConstraints
+        }
         Column(
             modifier = if (fillAvailableHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
@@ -145,13 +163,28 @@ internal fun FileSyncWorkspace(
                     fillAvailableHeight = fillAvailableHeight,
                 )
             } else if (pairs.isNotEmpty()) {
-                FileSyncFilters(
-                    selected = filter,
-                    pairs = pairs,
-                    searchQuery = searchQuery,
-                    onSelected = { filter = it },
-                    onSearchQueryChanged = { searchQuery = it },
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    val issuePair = pairs.firstOrNull { it.conflictCount > 0 || it.failedCount > 0 }
+                    if (issuePair != null) {
+                        TextButton(onClick = {
+                            filter = FileSyncListFilter.Attention
+                            searchQuery = ""
+                            selectedPairId = issuePair.id
+                        }) { Text("Review issues") }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { filtersVisible = !filtersVisible }) {
+                        Icon(NextcloudIcons.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (filtersVisible) "Hide filters" else "Search and filter")
+                    }
+                }
+                if (filtersVisible || filter != FileSyncListFilter.All || searchQuery.isNotBlank()) {
+                    FileSyncFilters(
+                        selected = filter, pairs = pairs, searchQuery = searchQuery,
+                        onSelected = { filter = it }, onSearchQueryChanged = { searchQuery = it },
+                    )
+                }
                 if (desktop) {
                     val inspectedPair = selectedPair
                     Row(
@@ -167,9 +200,7 @@ internal fun FileSyncWorkspace(
                             pairs = visiblePairs,
                             selectedPairId = inspectedPair?.id,
                             busyPairIds = busyPairIds,
-                            actionsEnabled = true,
                             onSelect = { selectedPairId = it.id },
-                            onRun = onRun,
                             modifier = if (fillAvailableHeight) {
                                 Modifier.weight(1.9f).fillMaxHeight()
                             } else {
@@ -195,19 +226,7 @@ internal fun FileSyncWorkspace(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
                         visiblePairs.forEach { pair ->
-                            FileSyncMobilePairCard(
-                                pair = pair,
-                                expanded = pair.id == selectedPairId,
-                                busy = pair.id in busyPairIds,
-                                actionsEnabled = pair.id !in busyPairIds,
-                                onSelect = {
-                                    selectedPairId = if (selectedPairId == pair.id) null else pair.id
-                                },
-                                onRun = { onRun(pair) },
-                                onRemove = { onRemove(pair) },
-                                onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
-                                onResolveBatch = { conflicts, choice -> onResolveBatch(pair, conflicts, choice) },
-                            )
+                            FileSyncMobilePairCard(pair = pair, onSelect = { selectedPairId = pair.id })
                         }
                     }
                 }
@@ -220,6 +239,7 @@ internal fun inspectedFileSyncPair(
     visiblePairs: List<FileSyncPairSummary>,
     selectedPairId: String?,
 ): FileSyncPairSummary? = visiblePairs.firstOrNull { pair -> pair.id == selectedPairId }
+    ?: visiblePairs.firstOrNull { it.conflictCount > 0 || it.failedCount > 0 }
     ?: visiblePairs.firstOrNull()
 
 @Composable
@@ -240,14 +260,7 @@ private fun FileSyncWorkspaceHeader(
                 Text("Folder sync", style = MaterialTheme.typography.headlineSmall)
             }
             Text(
-                when {
-                    loading -> "Checking sync health..."
-                    pairs.any { it.failedCount > 0 || it.conflicts.isNotEmpty() } ->
-                        "${pairs.count { it.failedCount > 0 || it.conflicts.isNotEmpty() }} syncs need attention"
-                    pairs.any { it.runningCount > 0 } -> "Syncing changes safely"
-                    pairs.isNotEmpty() -> "All folder mappings are ready"
-                    else -> "Keep chosen folders in sync with Nextcloud"
-                },
+                if (loading) "Checking for changes..." else fileSyncWorkspaceSummary(pairs),
                 style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -325,134 +338,6 @@ private fun FileSyncFilters(
     }
 }
 
-@Composable
-private fun FileSyncMapTable(
-    pairs: List<FileSyncPairSummary>,
-    selectedPairId: String?,
-    busyPairIds: Set<String>,
-    actionsEnabled: Boolean,
-    onSelect: (FileSyncPairSummary) -> Unit,
-    onRun: (FileSyncPairSummary) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                FileSyncTableHeader("Sync pair", Modifier.weight(1.2f))
-                FileSyncTableHeader("Local location", Modifier.weight(1.1f))
-                FileSyncTableHeader("", Modifier.width(32.dp))
-                FileSyncTableHeader("Nextcloud location", Modifier.weight(1.05f))
-                FileSyncTableHeader("Status", Modifier.width(82.dp))
-                FileSyncTableHeader("Queued", Modifier.width(62.dp))
-                FileSyncTableHeader("Last sync", Modifier.width(62.dp))
-                Spacer(Modifier.width(44.dp))
-            }
-            HorizontalDivider()
-            if (pairs.isEmpty()) {
-                Text(
-                    "No syncs match this filter.",
-                    modifier = Modifier.padding(NextcloudSpacing.Large),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            pairs.forEachIndexed { index, pair ->
-                Surface(
-                    modifier = Modifier.fillMaxWidth().clickable { onSelect(pair) },
-                    color = if (selectedPairId == pair.id) {
-                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.38f)
-                    } else {
-                        NextcloudTheme.colors.appTile
-                    },
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1.2f)) {
-                            Text(
-                                pair.localDisplayName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                pair.configuration.direction.syncDirectionTitle(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Text(
-                            pair.localRootPath ?: "This device",
-                            modifier = Modifier.weight(1.1f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Box(Modifier.width(32.dp), contentAlignment = Alignment.Center) {
-                            Icon(
-                                pair.configuration.direction.fileSyncDirectionIcon(),
-                                contentDescription = pair.configuration.direction.syncDirectionTitle(),
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Text(
-                            "/${pair.remoteRootPath}",
-                            modifier = Modifier.weight(1.05f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Box(modifier = Modifier.width(82.dp), contentAlignment = Alignment.CenterStart) {
-                            FileSyncHealthIndicator(pair)
-                        }
-                        Text(
-                            pair.queuedCompactLabel(),
-                            modifier = Modifier.width(62.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
-                        )
-                        Text(
-                            pair.lastSyncCompactLabel(),
-                            modifier = Modifier.width(62.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                        )
-                        if (pair.id in busyPairIds) {
-                            Box(Modifier.width(44.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            }
-                        } else {
-                            IconButton(
-                                enabled = actionsEnabled,
-                                onClick = { onRun(pair) },
-                                modifier = Modifier.width(44.dp),
-                            ) {
-                                Icon(
-                                    if (pair.runningCount > 0) NextcloudIcons.Refresh else NextcloudIcons.Play,
-                                    contentDescription = "Sync ${pair.localDisplayName} now",
-                                )
-                            }
-                        }
-                    }
-                }
-                if (index != pairs.lastIndex) HorizontalDivider()
-            }
-        }
-    }
-}
-
 internal fun filterFileSyncPairs(
     pairs: List<FileSyncPairSummary>,
     filter: FileSyncListFilter,
@@ -477,526 +362,23 @@ internal fun filterFileSyncPairs(
     }
 }
 
-private fun FileSyncPairSummary.isFileSyncPaused(): Boolean =
+internal fun FileSyncPairSummary.isFileSyncPaused(): Boolean =
     runState == FileSyncPairRunState.Paused
 
-private fun FileSyncPairSummary.isFileSyncOffline(): Boolean =
+internal fun FileSyncPairSummary.isFileSyncOffline(): Boolean =
     networkState == FileSyncNetworkState.WaitingForNetwork
 
-private fun FileSyncDirection.fileSyncDirectionIcon() = when (this) {
+internal fun FileSyncDirection.fileSyncDirectionIcon() = when (this) {
     FileSyncDirection.Bidirectional -> NextcloudIcons.Refresh
     FileSyncDirection.UploadOnly -> NextcloudIcons.Cloud
     FileSyncDirection.DownloadOnly -> NextcloudIcons.FolderOpen
 }
 
-private fun FileSyncPairSummary.queuedCompactLabel(): String = when {
-    runningCount > 0 && readyCount > 0 -> "$runningCount active\n$readyCount ready"
+internal fun FileSyncPairSummary.queuedCompactLabel(): String = when {
+    runningCount > 0 && readyCount > 0 -> "$runningCount active\n$readyCount queued"
     runningCount > 0 -> "$runningCount active"
-    readyCount > 0 -> "$readyCount ready"
+    readyCount > 0 -> "$readyCount queued"
     else -> "-"
-}
-
-private fun FileSyncPairSummary.lastSyncCompactLabel(): String =
-    if (lastScanEpochMillis == null) "Not yet" else "Recently"
-
-@Composable
-private fun FileSyncTableHeader(label: String, modifier: Modifier) {
-    Text(
-        label,
-        modifier = modifier,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
-private fun FileSyncMobilePairCard(
-    pair: FileSyncPairSummary,
-    expanded: Boolean,
-    busy: Boolean,
-    actionsEnabled: Boolean,
-    onSelect: () -> Unit,
-    onRun: () -> Unit,
-    onRemove: () -> Unit,
-    onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
-    onResolveBatch: (List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        border = BorderStroke(
-            1.dp,
-            if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-        ),
-    ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect)
-                    .padding(NextcloudSpacing.Medium),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(NextcloudIcons.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(pair.localDisplayName, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "This device ${pair.configuration.direction.syncDirectionGlyph()} /${pair.remoteRootPath}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                FileSyncHealthBadge(pair)
-                Icon(
-                    NextcloudIcons.ExpandMore,
-                    contentDescription = if (expanded) "Collapse sync details" else "Expand sync details",
-                )
-            }
-            if (pair.runningCount > 0) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(3.dp))
-            }
-            if (expanded) {
-                HorizontalDivider()
-                FileSyncPairDetails(
-                    pair = pair,
-                    busy = busy,
-                    actionsEnabled = actionsEnabled,
-                    onRun = onRun,
-                    onRemove = onRemove,
-                    onResolve = onResolve,
-                    onResolveBatch = onResolveBatch,
-                    compact = true,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileSyncPairInspector(
-    pair: FileSyncPairSummary?,
-    busy: Boolean,
-    actionsEnabled: Boolean,
-    onRun: () -> Unit,
-    onRemove: () -> Unit,
-    onResolve: (FileSyncPairSummary, FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
-    onResolveBatch: (FileSyncPairSummary, List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var selectedTabName by rememberSaveable(pair?.id) {
-        mutableStateOf(FileSyncInspectorTab.Overview.name)
-    }
-    val selectedTab = FileSyncInspectorTab.entries.firstOrNull { it.name == selectedTabName }
-        ?: FileSyncInspectorTab.Overview
-    Surface(
-        modifier = modifier,
-        color = NextcloudTheme.colors.appTile,
-        shape = RoundedCornerShape(NextcloudRadii.Card),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        if (pair == null) {
-            Text(
-                "Select a sync to see its mapping, rules, and recovery actions.",
-                modifier = Modifier.padding(NextcloudSpacing.Large),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(pair.localDisplayName, style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            "Sync details",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    FileSyncHealthBadge(pair)
-                }
-                HorizontalDivider()
-                PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
-                    FileSyncInspectorTab.entries.forEach { tab ->
-                        Tab(
-                            selected = selectedTab == tab,
-                            onClick = { selectedTabName = tab.name },
-                            text = { Text(tab.title, maxLines = 1) },
-                        )
-                    }
-                }
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                ) {
-                    when (selectedTab) {
-                        FileSyncInspectorTab.Overview -> FileSyncPairDetails(
-                            pair = pair,
-                            busy = busy,
-                            actionsEnabled = actionsEnabled,
-                            onRun = onRun,
-                            onRemove = onRemove,
-                            onResolve = { conflict, choice -> onResolve(pair, conflict, choice) },
-                            onResolveBatch = { conflicts, choice -> onResolveBatch(pair, conflicts, choice) },
-                            compact = false,
-                        )
-                        FileSyncInspectorTab.Activity -> FileSyncInspectorActivity(pair)
-                        FileSyncInspectorTab.Rules -> FileSyncInspectorRules(pair)
-                        FileSyncInspectorTab.Settings -> FileSyncInspectorSettings(pair)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileSyncInspectorActivity(pair: FileSyncPairSummary) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        FileSyncDetailBlock("Transfer activity") {
-            FileSyncHealthLine("Running now", pair.runningCount.toString(), problem = false)
-            FileSyncHealthLine("Waiting", pair.readyCount.toString(), problem = false)
-            FileSyncHealthLine("Completed", pair.completedCount.toString(), problem = false)
-            FileSyncHealthLine("Failed", pair.failedCount.toString(), problem = pair.failedCount > 0)
-        }
-        FileSyncDetailBlock("Last sync") {
-            Text(
-                pair.lastSyncCompactLabel(),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                pair.scheduleDescription ?: "Runs when you choose Sync now.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FileSyncInspectorRules(pair: FileSyncPairSummary) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        FileSyncDetailBlock("Scope") {
-            Text(pair.selectionSummary(), style = MaterialTheme.typography.bodyMedium)
-        }
-        FileSyncDetailBlock("Ignore patterns") {
-            Text(pair.ignoreSummary(), style = MaterialTheme.typography.bodyMedium)
-        }
-        FileSyncDetailBlock("Transfer priority") {
-            Text(pair.prioritySummary(), style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-}
-
-@Composable
-private fun FileSyncInspectorSettings(pair: FileSyncPairSummary) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        FileSyncDetailBlock("Device") {
-            FileSyncHealthLine("Name", pair.configuration.deviceLabel, problem = false)
-            FileSyncHealthLine(
-                "Direction",
-                pair.configuration.direction.syncDirectionTitle(),
-                problem = false,
-            )
-        }
-        FileSyncDetailBlock("Safety") {
-            FileSyncHealthLine(
-                "Conflicts",
-                pair.configuration.conflictPolicy.syncConflictTitle(),
-                problem = false,
-            )
-            FileSyncHealthLine(
-                "Deletions",
-                pair.configuration.deletionPolicy.syncDeletionTitle(),
-                problem = false,
-            )
-        }
-        FileSyncDetailBlock("Conditions") {
-            FileSyncHealthLine(
-                "Network",
-                pair.configuration.networkPolicy.syncNetworkTitle(),
-                problem = false,
-            )
-            FileSyncHealthLine(
-                "Power",
-                pair.configuration.powerPolicy.syncPowerTitle(),
-                problem = false,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FileSyncPairDetails(
-    pair: FileSyncPairSummary,
-    busy: Boolean,
-    actionsEnabled: Boolean,
-    onRun: () -> Unit,
-    onRemove: () -> Unit,
-    onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
-    onResolveBatch: (List<FileSyncConflictSummary>, FileSyncDecisionChoice) -> Unit,
-    compact: Boolean,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-        verticalArrangement = Arrangement.spacedBy(if (compact) NextcloudSpacing.Medium else NextcloudSpacing.Small),
-    ) {
-        if (compact) {
-            FileSyncConflictBlock(pair, actionsEnabled, onResolve, onResolveBatch)
-            FileSyncPrimaryActions(
-                compact = true,
-                busy = busy,
-                actionsEnabled = actionsEnabled,
-                onRun = onRun,
-                onRemove = onRemove,
-            )
-        } else {
-            FileSyncPrimaryActions(
-                compact = false,
-                busy = busy,
-                actionsEnabled = actionsEnabled,
-                onRun = onRun,
-                onRemove = onRemove,
-            )
-            FileSyncConflictBlock(pair, actionsEnabled, onResolve, onResolveBatch)
-        }
-        FileSyncDetailBlock("Mapping") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FileSyncLocationCard(
-                    title = "This device",
-                    path = pair.localRootPath ?: pair.localDisplayName,
-                    icon = NextcloudIcons.FolderOpen,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(pair.configuration.direction.syncDirectionGlyph(), fontWeight = FontWeight.Bold)
-                FileSyncLocationCard(
-                    title = "Nextcloud",
-                    path = "/${pair.remoteRootPath}",
-                    icon = NextcloudIcons.Cloud,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Text(
-                pair.configuration.direction.syncDirectionDescription(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        FileSyncDetailBlock("Health") {
-            FileSyncHealthLine("Queued", pair.queuedLabel(), problem = false)
-            FileSyncHealthLine("Completed", pair.completedCount.toString(), problem = false)
-            FileSyncHealthLine(
-                "Needs attention",
-                "${pair.conflictCount} ${if (pair.conflictCount == 1) "conflict" else "conflicts"}, " +
-                    "${pair.failedCount} failed",
-                problem = pair.conflicts.isNotEmpty() || pair.failedCount > 0,
-            )
-            if (pair.skippedCount > 0) {
-                FileSyncHealthLine(
-                    "Paused",
-                    "${pair.skippedCount} ${if (pair.skippedCount == 1) "item" else "items"}",
-                    problem = true,
-                )
-                pair.skippedReasons.forEach { reason ->
-                    Text(
-                        reason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            pair.scheduleDescription?.let { FileSyncHealthLine("Schedule", it, problem = false) }
-        }
-        FileSyncDetailBlock("Rules") {
-            Text(pair.selectionSummary(), style = MaterialTheme.typography.bodySmall)
-            Text(pair.ignoreSummary(), style = MaterialTheme.typography.bodySmall)
-            Text(pair.prioritySummary(), style = MaterialTheme.typography.bodySmall)
-            Text(
-                "${pair.configuration.networkPolicy.syncNetworkTitle()} - " +
-                    pair.configuration.powerPolicy.syncPowerTitle(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FileSyncPrimaryActions(
-    compact: Boolean,
-    busy: Boolean,
-    actionsEnabled: Boolean,
-    onRun: () -> Unit,
-    onRemove: () -> Unit,
-) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            OutlinedButton(
-                enabled = actionsEnabled,
-                onClick = onRemove,
-                modifier = Modifier.weight(1f),
-            ) { Text(if (compact) "Remove" else "Remove sync") }
-            Button(
-                enabled = actionsEnabled,
-                onClick = onRun,
-                modifier = Modifier.weight(1f),
-            ) {
-                if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Text("Sync now")
-            }
-        }
-}
-
-@Composable
-private fun FileSyncLocationCard(
-    title: String,
-    path: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Small),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
-                Text(title, style = MaterialTheme.typography.labelSmall)
-            }
-            Text(path, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-internal fun FileSyncDetailBlock(
-    title: String,
-    attention: Boolean = false,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = if (attention) {
-            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f)
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        },
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Small),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (attention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-            )
-            content()
-        }
-    }
-}
-
-@Composable
-private fun FileSyncHealthLine(label: String, value: String, problem: Boolean) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            value,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (problem) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-            fontWeight = if (problem) FontWeight.SemiBold else FontWeight.Normal,
-        )
-    }
-}
-
-@Composable
-private fun FileSyncHealthIndicator(pair: FileSyncPairSummary) {
-    val attention = pair.failedCount > 0 || pair.conflicts.isNotEmpty()
-    val paused = pair.isFileSyncPaused()
-    val offline = pair.isFileSyncOffline()
-    val label = when {
-        attention -> "Attention"
-        pair.runningCount > 0 -> "Syncing"
-        paused -> "Paused"
-        offline -> "Offline"
-        else -> "Up to date"
-    }
-    val color = when {
-        attention -> MaterialTheme.colorScheme.error
-        pair.runningCount > 0 -> MaterialTheme.colorScheme.primary
-        paused -> MaterialTheme.colorScheme.tertiary
-        offline -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> MaterialTheme.colorScheme.secondary
-    }
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Surface(modifier = Modifier.size(8.dp), shape = CircleShape, color = color) {}
-        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-    }
-}
-
-@Composable
-private fun FileSyncHealthBadge(pair: FileSyncPairSummary, modifier: Modifier = Modifier) {
-    val attention = pair.failedCount > 0 || pair.conflicts.isNotEmpty()
-    val paused = pair.isFileSyncPaused()
-    val label = when {
-        attention -> "Attention"
-        pair.runningCount > 0 -> "Syncing"
-        pair.readyCount > 0 -> "Ready"
-        paused -> "Paused"
-        pair.skippedCount > 0 -> "Skipped"
-        else -> "Up to date"
-    }
-    Surface(
-        modifier = modifier,
-        color = when {
-            attention -> MaterialTheme.colorScheme.errorContainer
-            pair.runningCount > 0 -> MaterialTheme.colorScheme.primaryContainer
-            paused -> MaterialTheme.colorScheme.tertiaryContainer
-            pair.skippedCount > 0 -> MaterialTheme.colorScheme.surfaceContainerHighest
-            else -> MaterialTheme.colorScheme.secondaryContainer
-        },
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = when {
-                attention -> MaterialTheme.colorScheme.onErrorContainer
-                pair.runningCount > 0 -> MaterialTheme.colorScheme.onPrimaryContainer
-                paused -> MaterialTheme.colorScheme.onTertiaryContainer
-                pair.skippedCount > 0 -> MaterialTheme.colorScheme.onSurface
-                else -> MaterialTheme.colorScheme.onSecondaryContainer
-            },
-            maxLines = 1,
-        )
-    }
 }
 
 @Composable
@@ -1055,7 +437,7 @@ private fun FileSyncDesktopStatusBar(pair: FileSyncPairSummary?) {
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FileSyncDesktopStatusItem("Sync engine", if (pair?.runningCount.orZero() > 0) "Running" else "Ready")
+            FileSyncDesktopStatusItem("Selected sync", pair?.observedSyncState()?.label ?: "None")
             FileSyncDesktopStatusItem(
                 "Network",
                 when (pair?.networkState) {
@@ -1064,11 +446,10 @@ private fun FileSyncDesktopStatusBar(pair: FileSyncPairSummary?) {
                     FileSyncNetworkState.Unknown, null -> "Unknown"
                 },
             )
-            FileSyncDesktopStatusItem("Nextcloud", "Connected")
             Spacer(Modifier.weight(1f))
             pair?.let {
                 Text(
-                    "${it.completedCount} files indexed",
+                    "${it.completedCount} completed operations",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1083,15 +464,12 @@ private fun FileSyncDesktopStatusItem(label: String, value: String) {
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Surface(modifier = Modifier.size(8.dp), shape = CircleShape, color = NextcloudTheme.colors.success) {}
         Column {
             Text(label, style = MaterialTheme.typography.labelSmall)
             Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
-
-private fun Int?.orZero(): Int = this ?: 0
 
 @Composable
 internal fun GuidedAddFolderSyncDialog(
@@ -1133,7 +511,7 @@ internal fun GuidedAddFolderSyncDialog(
                     modifier = if (compact) {
                         Modifier.fillMaxSize()
                     } else {
-                        Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(min = 620.dp, max = 760.dp)
+                        Modifier.widthIn(max = 920.dp).fillMaxWidth().heightIn(min = 620.dp, max = 760.dp)
                     },
                 )
             }
@@ -1349,7 +727,7 @@ private fun FileSyncStepContent(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+        modifier = modifier.widthIn(max = 720.dp).fillMaxWidth().verticalScroll(rememberScrollState())
             .padding(NextcloudSpacing.Large),
         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
     ) {
@@ -1517,6 +895,8 @@ private fun FileSyncReviewStep(
     FileSyncReviewRow("This device", localRoot.displayName)
     FileSyncReviewRow("Nextcloud", if (remotePath.isBlank()) "Files root" else "/$remotePath")
     FileSyncReviewRow("Direction", configuration.direction.syncDirectionTitle())
+    FileSyncReviewRow("Conflicts", configuration.conflictPolicy.syncConflictTitle())
+    FileSyncReviewRow("Deletions", configuration.deletionPolicy.syncDeletionTitle())
     FileSyncScopeSummary(configuration, syntheticScopeSummary)
     TextButton(onClick = { advancedVisible = !advancedVisible }) {
         Icon(NextcloudIcons.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1864,9 +1244,9 @@ private fun <T> FileSyncSettingChoices(
 
 @Composable
 private fun FileSyncReviewRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(label, modifier = Modifier.width(104.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1928,43 +1308,43 @@ private fun FileSyncRulePreset.applyTo(configuration: FileSyncConfiguration): Fi
     FileSyncRulePreset.ChooseFolders -> configuration
 }
 
-private fun FileSyncDirection.syncDirectionTitle(): String = when (this) {
+internal fun FileSyncDirection.syncDirectionTitle(): String = when (this) {
     FileSyncDirection.Bidirectional -> "Two-way"
     FileSyncDirection.UploadOnly -> "Device to Nextcloud"
     FileSyncDirection.DownloadOnly -> "Nextcloud to device"
 }
 
-private fun FileSyncDirection.syncDirectionDescription(): String = when (this) {
+internal fun FileSyncDirection.syncDirectionDescription(): String = when (this) {
     FileSyncDirection.Bidirectional -> "Changes on either side are copied to the other side."
     FileSyncDirection.UploadOnly -> "Changes from this device upload; Nextcloud never writes back."
     FileSyncDirection.DownloadOnly -> "Changes from Nextcloud download; local changes never upload."
 }
 
-private fun FileSyncDirection.syncDirectionGlyph(): String = when (this) {
+internal fun FileSyncDirection.syncDirectionGlyph(): String = when (this) {
     FileSyncDirection.Bidirectional -> "<->"
     FileSyncDirection.UploadOnly -> "->"
     FileSyncDirection.DownloadOnly -> "<-"
 }
 
-private fun FileSyncPairSummary.queuedLabel(): String = when {
+internal fun FileSyncPairSummary.queuedLabel(): String = when {
     runningCount > 0 -> "$runningCount active"
-    readyCount > 0 -> "$readyCount ready"
+    readyCount > 0 -> "$readyCount queued"
     else -> "None"
 }
 
-private fun FileSyncPairSummary.selectionSummary(): String = if (configuration.selectedPaths.isEmpty()) {
+internal fun FileSyncPairSummary.selectionSummary(): String = if (configuration.selectedPaths.isEmpty()) {
     "Everything in this folder"
 } else {
     "${configuration.selectedPaths.size} selected paths"
 }
 
-private fun FileSyncPairSummary.ignoreSummary(): String = if (configuration.ignoredPatterns.isEmpty()) {
+internal fun FileSyncPairSummary.ignoreSummary(): String = if (configuration.ignoredPatterns.isEmpty()) {
     "No ignored patterns"
 } else {
     "Ignore ${configuration.ignoredPatterns.size} patterns"
 }
 
-private fun FileSyncPairSummary.prioritySummary(): String = if (configuration.priorityRules.isEmpty()) {
+internal fun FileSyncPairSummary.prioritySummary(): String = if (configuration.priorityRules.isEmpty()) {
     "Normal transfer priority"
 } else {
     configuration.priorityRules.joinToString(
@@ -1981,25 +1361,25 @@ private fun String.fileSyncFriendlyPattern(): String = when (lowercase()) {
     else -> this
 }
 
-private fun FileSyncConflictPolicy.syncConflictTitle(): String = when (this) {
+internal fun FileSyncConflictPolicy.syncConflictTitle(): String = when (this) {
     FileSyncConflictPolicy.Ask -> "Ask before changing either copy"
     FileSyncConflictPolicy.KeepBoth -> "Keep both copies"
     FileSyncConflictPolicy.PreferLocal -> "Prefer this device"
     FileSyncConflictPolicy.PreferRemote -> "Prefer Nextcloud"
 }
 
-private fun FileSyncDeletionPolicy.syncDeletionTitle(): String = when (this) {
+internal fun FileSyncDeletionPolicy.syncDeletionTitle(): String = when (this) {
     FileSyncDeletionPolicy.Ask -> "Ask before deleting the other copy"
     FileSyncDeletionPolicy.Propagate -> "Delete the other copy"
     FileSyncDeletionPolicy.RestoreMissing -> "Restore the missing copy"
 }
 
-private fun FileSyncNetworkPolicy.syncNetworkTitle(): String = when (this) {
+internal fun FileSyncNetworkPolicy.syncNetworkTitle(): String = when (this) {
     FileSyncNetworkPolicy.AnyConnection -> "Wi-Fi or mobile data"
     FileSyncNetworkPolicy.Unmetered -> "Unmetered network only"
 }
 
-private fun FileSyncPowerPolicy.syncPowerTitle(): String = when (this) {
+internal fun FileSyncPowerPolicy.syncPowerTitle(): String = when (this) {
     FileSyncPowerPolicy.AnyPower -> "Any battery level"
     FileSyncPowerPolicy.BatteryNotLow -> "Pause when battery is low"
     FileSyncPowerPolicy.Charging -> "Only while charging"

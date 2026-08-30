@@ -8,6 +8,38 @@ import kotlin.test.assertTrue
 
 class ActivityWorkspaceTest {
     @Test
+    fun highlightedEventsAppearOnceWithoutHidingUnhighlightedIssues() {
+        val shown = activity(1, "files", "sync", "Upload failed")
+        val anotherIssue = activity(2, "files", "sync", "Another upload failed")
+        val normal = activity(3, "files", "created", "Created notes")
+        val groups = listOf(
+            ActivityFeedDayGroup("today", "Today", listOf(shown)),
+            ActivityFeedDayGroup("yesterday", "Yesterday", listOf(anotherIssue, normal)),
+        )
+        val history = activityHistoryGroups(groups, listOf(shown))
+        assertEquals(listOf("yesterday"), history.map { it.dateKey })
+        assertEquals(listOf(2L, 3L), history.single().activities.map { it.id })
+        assertEquals("2 events", activityHistoryCountLabel(history.single().activities))
+        assertEquals(groups, activityHistoryGroups(groups, emptyList()))
+    }
+
+    @Test
+    fun historyCountsDistinguishVisibleEntriesFromBundledEventsWithoutCountingHighlights() {
+        val attention = activity(1, "files", "sync", "Upload failed")
+        val human = activity(2, "files", "created", "Created notes")
+        val background = (3L..6L).map { id -> activity(id, "recognize", "classified", "Classified photo $id") }
+        val original = listOf(attention, human) + background
+        val history = activityHistoryGroups(
+            listOf(ActivityFeedDayGroup("today", "Today", original)), listOf(attention),
+        ).single()
+
+        assertEquals("2 entries / 5 events", activityHistoryCountLabel(history.activities))
+        assertEquals("1 entry / 4 events", activityHistoryCountLabel(background))
+        assertEquals("1 event", activityHistoryCountLabel(listOf(human)))
+        assertEquals(6, original.size, "History presentation must not mutate the source attention/feed totals")
+    }
+
+    @Test
     fun repeatedBackgroundEventsCollapseWithoutHidingHumanActivity() {
         val activities = listOf(
             activity(1, "files", "file_created", "Mara created Roadmap.md"),

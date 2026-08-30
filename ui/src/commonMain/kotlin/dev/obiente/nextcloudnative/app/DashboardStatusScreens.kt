@@ -676,11 +676,6 @@ private fun DashboardHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (onCustomize != null) {
-            IconButton(onClick = onCustomize) {
-                Icon(NextcloudIcons.Edit, contentDescription = "Customize home")
-            }
-        }
         if (onSearch != null) {
             IconButton(onClick = onSearch) {
                 Icon(NextcloudIcons.Search, contentDescription = "Search Nextcloud")
@@ -689,11 +684,7 @@ private fun DashboardHeader(
         IconButton(onClick = onRefresh) {
             Icon(NextcloudIcons.Refresh, contentDescription = dashboardRefreshDescription(title))
         }
-        if (onSettings != null) {
-            IconButton(onClick = onSettings) {
-                Icon(NextcloudIcons.Settings, contentDescription = "Settings")
-            }
-        }
+        HomeWorkspaceActions(onCustomize, onSettings)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
@@ -741,16 +732,15 @@ private fun CurrentStatusStrip(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                start = NextcloudSpacing.XLarge,
-                top = NextcloudSpacing.Large,
-                end = NextcloudSpacing.XLarge,
+                horizontal = NextcloudSpacing.Medium,
+                vertical = NextcloudSpacing.XSmall,
             )
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         color = NextcloudTheme.colors.appTile,
         shape = RoundedCornerShape(NextcloudRadii.Card),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Large),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(NextcloudSpacing.Small),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
@@ -764,14 +754,10 @@ private fun CurrentStatusStrip(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    "Status · ${status.presence.displayLabel()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (status.message != null) Text(status.presence.displayLabel(), style = MaterialTheme.typography.labelSmall)
             }
             if (onClick != null) {
-                Icon(NextcloudIcons.Edit, contentDescription = "Edit status")
+                Text("Edit status", style = MaterialTheme.typography.labelMedium)
             }
         }
     }

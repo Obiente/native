@@ -116,6 +116,7 @@ internal fun MarketingMusicWorkspaceScenario(
             selected = NextcloudDestination.Apps,
             onSelected = {},
             identity = marketingDesktopIdentity(avatar = assets.avatar),
+            activeAppId = "music",
             content = content,
         )
     } else {

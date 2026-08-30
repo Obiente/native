@@ -8,14 +8,14 @@ device: Mobile
 platforms: Android
 durationMinutes: 9
 difficulty: Everyday
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-30
 captureScenarios: guide-android-photo-backup-folders, guide-android-photo-backup-queue, guide-android-photo-backup-library
 prerequisites: Android photo and video permission, Enough Nextcloud storage for selected media, An independent backup for irreplaceable originals
 ---
 
 # Back up Android photos and videos to Nextcloud
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-30.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -38,6 +38,11 @@ Choose **Camera**, **Screenshots**, or another detected folder and inspect the p
 Review the network and power policy before creating the mapping. Android schedules eligible folder work through WorkManager. Unmetered-only, battery-not-low, or charging constraints can defer an upload, and Android decides the exact execution time. Large videos may remain pending after smaller images complete.
 
 Open **Media transfers** from Settings to inspect pending, active, failed, and completed records. A source that changes after a verified upload becomes **changed after backup** rather than silently retaining an obsolete success. Fix connection, quota, or permission problems before retrying a failed record. Clearing completed transfer history removes local history entries only; it does not remove local or Nextcloud media.
+
+The status filters wrap on narrow screens. **Refresh history** refreshes the
+list; it does not retry an individual failed upload. Open a record's menu for
+its available recovery actions. Completed records show the receipt's verified
+time, while pending and active records remain explicitly unfinished.
 
 ## 3. Verify exact backup receipts and preserve originals
 

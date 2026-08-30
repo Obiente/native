@@ -194,9 +194,10 @@ function textOnly(source) {
 }
 
 function headingsFrom(source) {
-  return [...source.matchAll(/^#{2,4}\s+(.+)$/gm)].map((match) => ({
-    title: match[1].replace(/[`*_]/g, "").trim(),
-    anchor: slugify(match[1]),
+  return [...source.matchAll(/^(#{2,4})[\t ]+(.+)$/gm)].map((match) => ({
+    title: match[2].replace(/[`*_]/g, "").trim(),
+    anchor: slugify(match[2]),
+    level: match[1].length,
   }));
 }
 

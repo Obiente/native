@@ -562,140 +562,6 @@ internal fun DynamicAppDescriptor.preferredNativeMailComposeAction(
         .singleOrNull()
 }
 
-@Composable
-internal fun NativeMailWorkspace(
-    plan: NativeMailWorkspacePlan,
-    onSelectRecord: ((NativeRecord) -> Unit)?,
-    collectionStateKey: String,
-    modifier: Modifier = Modifier,
-    detailContent: (@Composable () -> Unit)? = null,
-    contentState: NativeMailWorkspaceContentState = NativeMailWorkspaceContentState.Ready,
-    onLoadMore: (() -> Unit)? = null,
-    loadingMore: Boolean = false,
-    loadMoreError: String? = null,
-    searchQuery: String = "",
-    onSearchQueryChanged: ((String) -> Unit)? = null,
-) {
-    key(collectionStateKey) {
-        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-            when {
-            maxWidth >= 980.dp -> Row(modifier = Modifier.fillMaxSize()) {
-                NativeMailRail(
-                    plan = plan,
-                    onSelectRecord = onSelectRecord,
-                    modifier = Modifier.width(252.dp).fillMaxHeight(),
-                )
-                MailPaneDivider()
-                NativeMailSearchableMessageList(
-                    items = plan.visibleMessages,
-                    selectedMessage = plan.selectedMessage,
-                    onSelectRecord = onSelectRecord,
-                    contentState = contentState,
-                    onLoadMore = onLoadMore,
-                    loadingMore = loadingMore,
-                    loadMoreError = loadMoreError,
-                    searchQuery = searchQuery,
-                    onSearchQueryChanged = onSearchQueryChanged,
-                    emptyContent = {
-                        NativeMailSelectionPlaceholder(plan)
-                    },
-                    modifier = Modifier.weight(0.44f).fillMaxHeight(),
-                )
-                MailPaneDivider()
-                Box(modifier = Modifier.weight(0.56f).fillMaxHeight()) {
-                    if (detailContent != null) {
-                        detailContent()
-                    } else if (
-                        plan.selectedMessage != null &&
-                        contentState != NativeMailWorkspaceContentState.Ready
-                    ) {
-                        NativeMailWorkspaceStatus(contentState)
-                    } else {
-                        NativeMailDetailPlaceholder()
-                    }
-                }
-            }
-
-            maxWidth >= 680.dp -> Row(modifier = Modifier.fillMaxSize()) {
-                NativeMailRail(
-                    plan = plan,
-                    onSelectRecord = onSelectRecord,
-                    modifier = Modifier.width(232.dp).fillMaxHeight(),
-                )
-                MailPaneDivider()
-                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    if (detailContent != null) {
-                        detailContent()
-                    } else if (
-                        plan.selectedMessage != null &&
-                        contentState != NativeMailWorkspaceContentState.Ready
-                    ) {
-                        NativeMailWorkspaceStatus(contentState)
-                    } else {
-                        NativeMailSearchableMessageList(
-                            items = plan.visibleMessages,
-                            selectedMessage = plan.selectedMessage,
-                            onSelectRecord = onSelectRecord,
-                            contentState = contentState,
-                            onLoadMore = onLoadMore,
-                            loadingMore = loadingMore,
-                            loadMoreError = loadMoreError,
-                            searchQuery = searchQuery,
-                            onSearchQueryChanged = onSearchQueryChanged,
-                            emptyContent = {
-                                NativeMailSelectionPlaceholder(plan)
-                            },
-                        )
-                    }
-                }
-            }
-
-            detailContent != null -> detailContent()
-
-            contentState != NativeMailWorkspaceContentState.Ready ->
-                NativeMailWorkspaceStatus(contentState)
-
-            else -> {
-                val compactItems = when {
-                    plan.currentItems.isNotEmpty() -> plan.currentItems
-                    plan.visibleMessages.isNotEmpty() -> plan.visibleMessages
-                    plan.folders.isNotEmpty() -> plan.folders
-                    else -> plan.accounts
-                }
-                if (
-                    nativeMailCompactSearchAvailable(
-                        items = compactItems,
-                        searchHandlerAvailable = onSearchQueryChanged != null,
-                        query = searchQuery,
-                    )
-                ) {
-                    NativeMailSearchableMessageList(
-                        items = compactItems,
-                        selectedMessage = plan.selectedMessage,
-                        onSelectRecord = onSelectRecord,
-                        contentState = contentState,
-                        onLoadMore = onLoadMore,
-                        loadingMore = loadingMore,
-                        loadMoreError = loadMoreError,
-                        searchQuery = searchQuery,
-                        onSearchQueryChanged = onSearchQueryChanged,
-                    )
-                } else {
-                    NativeMailMessageList(
-                        items = compactItems,
-                        selectedMessage = plan.selectedMessage,
-                        onSelectRecord = onSelectRecord,
-                        contentState = contentState,
-                        onLoadMore = onLoadMore,
-                        loadingMore = loadingMore,
-                        loadMoreError = loadMoreError,
-                    )
-                }
-            }
-            }
-        }
-    }
-}
 
 internal fun nativeMailCompactSearchAvailable(
     items: List<NativeMailWorkspaceItem>,
@@ -731,7 +597,7 @@ internal fun nativeMailVisibleMessages(
 }
 
 @Composable
-private fun NativeMailSearchableMessageList(
+internal fun NativeMailSearchableMessageList(
     items: List<NativeMailWorkspaceItem>,
     selectedMessage: NativeMailWorkspaceItem?,
     onSelectRecord: ((NativeRecord) -> Unit)?,
@@ -839,7 +705,7 @@ private fun NativeMailSearchEmpty(
 }
 
 @Composable
-private fun NativeMailRail(
+internal fun NativeMailRail(
     plan: NativeMailWorkspacePlan,
     onSelectRecord: ((NativeRecord) -> Unit)?,
     modifier: Modifier = Modifier,
@@ -990,7 +856,7 @@ private fun NativeMailRailRow(
 }
 
 @Composable
-private fun NativeMailMessageList(
+internal fun NativeMailMessageList(
     items: List<NativeMailWorkspaceItem>,
     selectedMessage: NativeMailWorkspaceItem?,
     onSelectRecord: ((NativeRecord) -> Unit)?,
@@ -1223,7 +1089,7 @@ private fun NativeMailPagingStatus(
 }
 
 @Composable
-private fun NativeMailSelectionPlaceholder(plan: NativeMailWorkspacePlan) {
+internal fun NativeMailSelectionPlaceholder(plan: NativeMailWorkspacePlan) {
     val title: String
     val message: String
     when {
@@ -1268,7 +1134,7 @@ private fun NativeMailSelectionPlaceholder(plan: NativeMailWorkspacePlan) {
 }
 
 @Composable
-private fun NativeMailWorkspaceStatus(
+internal fun NativeMailWorkspaceStatus(
     state: NativeMailWorkspaceContentState,
     modifier: Modifier = Modifier,
 ) {
@@ -1373,7 +1239,7 @@ private fun NativeMailWorkspaceStatus(
 }
 
 @Composable
-private fun NativeMailDetailPlaceholder() {
+internal fun NativeMailDetailPlaceholder() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1395,7 +1261,7 @@ private fun NativeMailDetailPlaceholder() {
 }
 
 @Composable
-private fun MailPaneDivider() {
+internal fun MailPaneDivider() {
     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
@@ -1543,7 +1409,7 @@ private fun List<NativeMailWorkspaceItem>.visibleMailSiblings(
     return siblings
 }
 
-private fun NativeRecord.mailWorkspaceAccountIds(kind: NativeMailboxItemKind): Set<String> = buildSet {
+internal fun NativeRecord.mailWorkspaceAccountIds(kind: NativeMailboxItemKind): Set<String> = buildSet {
     mailWorkspaceRelationValue("accountid", "mailaccountid")?.let(::add)
     if (kind == NativeMailboxItemKind.Account) {
         add(id)

@@ -17,7 +17,8 @@ class HomeWorkspaceLayoutTest {
         val tablet = defaultHomeWorkspaceLayout(scope(HomeFormFactor.Tablet))
         val desktop = defaultHomeWorkspaceLayout(scope(HomeFormFactor.Desktop))
 
-        assertEquals(HomeSectionIds.RecentFiles, phone.sections[1].id)
+        assertEquals(HomeSectionIds.Upcoming, phone.sections[1].id)
+        assertEquals(HomeSectionIds.Activity, phone.sections[2].id)
         assertEquals(HomeSectionIds.Upcoming, tablet.sections[1].id)
         assertEquals(HomeSectionIds.Activity, desktop.sections[1].id)
         assertFalse(phone.sections.single { it.id == HomeSectionIds.Storage }.visible)

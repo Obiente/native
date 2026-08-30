@@ -1,5 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ArrowUpward
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -290,7 +293,7 @@ private fun PhotoFolderToolbar(
                         )
                     },
                 ) {
-                    Icon(NextcloudIcons.Back, contentDescription = "Open parent folder")
+                    Icon(Icons.Outlined.ArrowUpward, contentDescription = "Open parent folder")
                 }
             }
             Column(Modifier.weight(1f)) {
@@ -713,7 +716,7 @@ private fun PhotoFolderMediaListItem(
 
 internal fun photoFolderScopeLabel(scope: PhotoFolderBrowseScope): String = when (scope) {
     PhotoFolderBrowseScope.FoldersOnly -> "Folders only"
-    PhotoFolderBrowseScope.DirectMediaAndSubfolders -> "Folder and photos"
+    PhotoFolderBrowseScope.DirectMediaAndSubfolders -> "Photos and subfolders"
     PhotoFolderBrowseScope.DirectMediaOnly -> "Photos in folder"
     PhotoFolderBrowseScope.RecursiveMedia -> "All nested photos"
 }

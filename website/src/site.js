@@ -1,6 +1,8 @@
 import { createApp, createSSRApp } from "vue";
 import App from "./App.vue";
 import "./styles.css";
+import "./native-home.css";
+import "./site-refinement.css";
 
 export function createClientApp(props) {
   return createApp(App, props);

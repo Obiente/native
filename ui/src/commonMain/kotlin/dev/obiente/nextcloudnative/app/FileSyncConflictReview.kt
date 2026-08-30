@@ -1,20 +1,27 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -48,11 +55,17 @@ internal fun FileSyncConflictBlock(
     val conflicts = pair.conflicts
     if (conflicts.isEmpty()) return
     val commonChoices = availableFileSyncBatchChoices(pair, conflicts)
+    var batchVisible by remember(pair.id, conflicts) { mutableStateOf(false) }
     FileSyncDetailBlock(
-        "${pair.conflictCount} ${if (pair.conflictCount == 1) "conflict" else "conflicts"} need review",
+        "${pair.conflictCount} ${if (pair.conflictCount == 1) "conflict needs" else "conflicts need"} review",
         attention = true,
     ) {
         if (conflicts.size > 1 && commonChoices.isNotEmpty()) {
+            TextButton(onClick = { batchVisible = !batchVisible }) {
+                Text(if (batchVisible) "Review individually" else "Apply a choice to ${conflicts.size} shown conflicts")
+            }
+        }
+        if (batchVisible && conflicts.size > 1 && commonChoices.isNotEmpty()) {
             Text(
                 "Apply one choice to the ${conflicts.size} conflicts shown below.",
                 style = MaterialTheme.typography.bodySmall,
@@ -99,35 +112,8 @@ internal fun FileSyncConflictBlock(
             )
             FileSyncConflictSideRow("This device", conflict.local)
             FileSyncConflictSideRow("Nextcloud", conflict.remote)
-            Text(
-                "The selected source can use its latest version only while the other side stays unchanged.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                availableFileSyncItemChoices(pair, conflict).chunked(2).forEach { choices ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    ) {
-                        choices.forEach { choice ->
-                            OutlinedButton(
-                                enabled = actionsEnabled,
-                                onClick = { onResolve(conflict, choice) },
-                                modifier = Modifier.weight(1f),
-                                colors = if (choice.isDestructiveSyncDecision()) {
-                                    ButtonDefaults.outlinedButtonColors(
-                                        contentColor = MaterialTheme.colorScheme.error,
-                                    )
-                                } else {
-                                    ButtonDefaults.outlinedButtonColors()
-                                },
-                            ) { Text(choice.readableDecision(), maxLines = 1) }
-                        }
-                        if (choices.size == 1) Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
+            FileSyncConflictDecisionOptions(pair, conflict, actionsEnabled, onResolve)
+
         }
         if (pair.conflictCount > conflicts.size) {
             Text(
@@ -137,6 +123,50 @@ internal fun FileSyncConflictBlock(
             )
         }
     }
+}
+
+@Composable
+private fun FileSyncConflictDecisionOptions(
+    pair: FileSyncPairSummary,
+    conflict: FileSyncConflictSummary,
+    enabled: Boolean,
+    onResolve: (FileSyncConflictSummary, FileSyncDecisionChoice) -> Unit,
+) {
+    val choices = availableFileSyncItemChoices(pair, conflict)
+    var selected by remember(pair.id, conflict) { mutableStateOf<FileSyncDecisionChoice?>(null) }
+    Text("Compare the copies, then choose what to keep. You will confirm before anything changes.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    choices.forEach { choice ->
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
+                selected = selected == choice,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = { selected = choice },
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected == choice, onClick = null, enabled = enabled)
+            Spacer(Modifier.width(NextcloudSpacing.Small))
+            Text(choice.readableDecision(), color = if (choice.isDestructiveSyncDecision())
+                MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        }
+    }
+    selected?.takeIf { it in choices }?.let { choice ->
+        Text(choice.decisionGuidance(), style = MaterialTheme.typography.bodySmall)
+        Button(enabled = enabled, onClick = { onResolve(conflict, choice) }, modifier = Modifier.fillMaxWidth()) {
+            Text("Review this choice")
+        }
+    }
+}
+
+internal fun FileSyncDecisionChoice.decisionGuidance(): String = when (this) {
+    FileSyncDecisionChoice.UseLocal -> "Replace the Nextcloud copy with the latest device copy. Check the details before replacing."
+    FileSyncDecisionChoice.UseRemote -> "Replace the device copy with the latest Nextcloud copy. Check the details before replacing."
+    FileSyncDecisionChoice.KeepBoth -> "Keep both as named conflict copies. The Nextcloud version stays at the original path."
+    FileSyncDecisionChoice.PropagateDeletion -> "Permanently delete the surviving copy from the other location."
+    FileSyncDecisionChoice.RestoreMissing -> "Copy the surviving version back to the location where it is missing."
+    FileSyncDecisionChoice.Skip -> "Leave this exact conflict unchanged. It returns for review if either side changes."
 }
 
 internal fun availableFileSyncBatchChoices(

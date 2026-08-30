@@ -443,6 +443,10 @@ internal fun ViewSpec.genericSurface(
 ): GenericNativeSurface {
     val declared = genericSurface()
     if (resource == null || records.isEmpty()) return declared
+    if (declared in setOf(GenericNativeSurface.List, GenericNativeSurface.Insights) &&
+        (nativeCategoryCollectionPresentations(resource, records) != null ||
+            nativeFinancialAccountCollectionPresentations(resource, records) != null)
+    ) return GenericNativeSurface.List
     // Endpoint names can conservatively compile to dashboards before response data exists. Once
     // the rows prove they are transactions, prefer the ledger and keep its summary collapsible.
     if (
@@ -533,34 +537,6 @@ internal fun NativeAppSchema.settingsFormPrefillView(form: ViewSpec): ViewSpec? 
         .firstOrNull()
 }
 
-internal fun nativeTableFields(
-    resource: ResourceSpec,
-    records: List<NativeRecord>,
-    maximumColumns: Int = 8,
-): List<FieldSpec> {
-    if (maximumColumns <= 0) return emptyList()
-    val populated = resource.fields.filter { field ->
-        field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) &&
-            !field.isNativeVisualPresentationField() &&
-            records.any { record -> !record.presentationValue(field.id).isNullOrBlank() }
-    }
-    val preferredIds = listOf("name", "title", "displayName", "subject", "description")
-    val primary = preferredIds.firstNotNullOfOrNull { id ->
-        populated.firstOrNull { field -> field.id.equals(id, ignoreCase = true) }
-    } ?: populated.firstOrNull { !it.isTechnicalTableField() }
-        ?: populated.firstOrNull { it.id.equals("id", ignoreCase = true) }
-    return buildList {
-        primary?.let(::add)
-        populated.filterNot { it.id == primary?.id }.forEach(::add)
-    }.take(maximumColumns)
-}
-
-private fun FieldSpec.isTechnicalTableField(): Boolean {
-    val normalized = id.lowercase().filter(Char::isLetterOrDigit)
-    return normalized == "id" || normalized.endsWith("id") || normalized in setOf(
-        "etag", "href", "token", "permissions", "permission", "createdby", "lasteditby",
-    )
-}
 
 data class NativeFormattedField(
     val label: String,
@@ -1034,7 +1010,7 @@ internal fun FieldSpec.isSafeNativeDetailField(resource: ResourceSpec): Boolean 
         ACCOUNT_INTERNAL_DETAIL_PREFIXES.none(fieldIdentity::startsWith)
 }
 
-private fun FieldSpec.isNativeVisualPresentationField(): Boolean =
+internal fun FieldSpec.isNativeVisualPresentationField(): Boolean =
     id.lowercase().filter(Char::isLetterOrDigit) in setOf("icon", "symbol", "color", "colour")
 
 private val ACCOUNT_INTERNAL_DETAIL_FIELDS = setOf(

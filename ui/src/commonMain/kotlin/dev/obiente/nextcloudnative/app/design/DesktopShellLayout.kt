@@ -51,6 +51,7 @@ fun resolveNextcloudRootShellLayout(
     availableWidthDp: Int,
     destination: NextcloudDestination,
     desktopWorkspaceKind: NextcloudDesktopWorkspaceKind = NextcloudDesktopWorkspaceKind.Root,
+    desktopSidebarExpanded: Boolean? = null,
 ): NextcloudRootShellLayout = when (presentation) {
     NextcloudPresentation.Adaptive -> {
         if (availableWidthDp < NextcloudWorkspaceBreakpoints.AdaptiveRailDp) {
@@ -77,7 +78,8 @@ fun resolveNextcloudRootShellLayout(
     }
 
     NextcloudPresentation.Desktop -> {
-        val expanded = availableWidthDp >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp
+        val expanded = availableWidthDp >= NextcloudWorkspaceBreakpoints.DesktopSidebarDp &&
+            desktopSidebarExpanded != false
         NextcloudRootShellLayout(
             navigationStyle = if (expanded) {
                 NextcloudNavigationStyle.ExpandedSidebar

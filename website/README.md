@@ -41,6 +41,18 @@ The content generator reads the canonical Markdown files from the repository
 root before starting Vite. Changes to those files require restarting the local
 server or running `npm run content`.
 
+For native UI review, run the website from the same worktree as the app changes:
+
+```bash
+npm run dev -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+Open `http://localhost:4173/visual-qa/`. Website source changes update through
+Vite. Native Kotlin changes need a new capture run using the workflow below;
+when `public/screenshots/capture-manifest.json` changes, the dev server
+regenerates the catalog metadata and reloads the page. This displays real
+Compose captures, not an interactive browser build of the native app.
+
 The roadmap page also reads the public GitHub project views and milestones at
 build time. It never needs or embeds a GitHub token. If GitHub is unavailable
 or rate-limited, generation falls back to the repository-owned workstream

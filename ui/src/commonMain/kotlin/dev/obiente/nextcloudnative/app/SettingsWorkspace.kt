@@ -26,12 +26,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,12 +109,10 @@ internal data class SettingsWorkspaceSummary(
 internal enum class SettingsWorkspaceMode {
     Compact,
     TwoPane,
-    ThreePane,
 }
 
 internal data class SettingsWorkspaceLayout(
     val categoryWidthDp: Int,
-    val showSummaryPane: Boolean,
     val mode: SettingsWorkspaceMode,
 )
 
@@ -115,12 +120,10 @@ internal fun resolveSettingsWorkspaceLayout(availableWidthDp: Int): SettingsWork
     require(availableWidthDp >= 0) { "availableWidthDp must not be negative" }
     val mode = when {
         availableWidthDp < 600 -> SettingsWorkspaceMode.Compact
-        availableWidthDp < 1_020 -> SettingsWorkspaceMode.TwoPane
-        else -> SettingsWorkspaceMode.ThreePane
+        else -> SettingsWorkspaceMode.TwoPane
     }
     return SettingsWorkspaceLayout(
         categoryWidthDp = if (availableWidthDp < 820) 206 else 246,
-        showSummaryPane = mode == SettingsWorkspaceMode.ThreePane,
         mode = mode,
     )
 }
@@ -141,6 +144,15 @@ internal fun DesktopSettingsWorkspace(
         androidx.compose.runtime.saveable.rememberSaveableStateHolder(),
     content: @Composable ColumnScope.(SettingsWorkspaceSection) -> Unit,
 ) {
+    var accountDetailsOpen by remember { mutableStateOf(false) }
+    if (accountDetailsOpen) {
+        AlertDialog(
+            onDismissRequest = { accountDetailsOpen = false },
+            title = { Text("Account details") },
+            text = { SettingsSummaryPane(summary, Modifier.fillMaxWidth().heightIn(max = 480.dp)) },
+            confirmButton = { TextButton(onClick = { accountDetailsOpen = false }) { Text("Close") } },
+        )
+    }
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.Large),
@@ -154,16 +166,8 @@ internal fun DesktopSettingsWorkspace(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(NextcloudRadii.Medium),
-            ) {
-                Text(
-                    summary.connectionLabel,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = NextcloudTheme.colors.success,
-                )
+            IconButton(onClick = { accountDetailsOpen = true }) {
+                Icon(NextcloudIcons.Info, contentDescription = "Account details")
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -222,10 +226,6 @@ internal fun DesktopSettingsWorkspace(
                         content(selected)
                         Spacer(Modifier.height(NextcloudSpacing.Large))
                     }
-                }
-                if (layout.showSummaryPane) {
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    SettingsSummaryPane(summary = summary, modifier = Modifier.width(286.dp).fillMaxHeight())
                 }
             }
         }
@@ -373,10 +373,10 @@ private fun SettingsSummaryPane(summary: SettingsWorkspaceSummary, modifier: Mod
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsSummaryFact("Status", summary.connectionLabel, success = true)
+                SettingsSummaryFact("Status", summary.connectionLabel)
                 SettingsSummaryFact("Server", summary.serverVersion?.let { "Nextcloud $it" } ?: "Nextcloud")
                 SettingsSummaryFact("Apps", "${summary.installedApps} installed")
-                SettingsSummaryFact("Files", summary.syncLabel, success = true)
+                SettingsSummaryFact("Files", summary.syncLabel)
                 summary.storageLabel?.let { SettingsSummaryFact("Storage", it) }
             }
         }

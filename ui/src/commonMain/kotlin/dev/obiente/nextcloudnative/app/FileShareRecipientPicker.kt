@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import kotlinx.coroutines.CancellationException
@@ -61,15 +66,16 @@ internal fun FileShareRecipientPicker(
     onResultsObserved: (List<FileShareRecipient>) -> Unit = {},
 ) {
     require(target.requiresRecipient)
-    var state by remember(target, file.path) {
+    var state by remember(session, target, file.path) {
         mutableStateOf(FileShareRecipientPickerUiState(selectedRecipient = selectedRecipient))
     }
+    var retryAttempt by remember(session, target, file.path) { mutableStateOf(0) }
 
-    LaunchedEffect(state.query, target, file.path, session, selectedRecipient) {
+    LaunchedEffect(state.query, target, file.path, session, selectedRecipient, retryAttempt) {
         val normalized = state.query.trim()
         if (selectedRecipient.isNotBlank()) {
             state = state.copy(
-                results = emptyList(),
+                results = state.results.filter { it.id == selectedRecipient && it.target == target },
                 loading = false,
                 selectedRecipient = selectedRecipient,
                 error = null,
@@ -106,6 +112,7 @@ internal fun FileShareRecipientPicker(
         target = target,
         state = state.copy(selectedRecipient = selectedRecipient),
         enabled = enabled,
+        onRetry = { retryAttempt += 1 },
         onQueryChanged = { query ->
             state = state.copy(
                 query = query,
@@ -118,7 +125,7 @@ internal fun FileShareRecipientPicker(
         onSelected = { recipient ->
             state = state.copy(
                 query = recipient.displayName,
-                results = emptyList(),
+                results = listOf(recipient),
                 selectedRecipient = recipient.id,
                 error = null,
             )
@@ -134,6 +141,7 @@ internal fun FileShareRecipientPickerContent(
     enabled: Boolean,
     onQueryChanged: (String) -> Unit,
     onSelected: (FileShareRecipient) -> Unit,
+    onRetry: (() -> Unit)? = null,
 ) {
     require(target.requiresRecipient)
     val presentation = target.presentation()
@@ -146,7 +154,7 @@ internal fun FileShareRecipientPickerContent(
             placeholder = { Text("Enter at least two characters") },
             trailingIcon = {
                 if (state.loading) {
-                    CircularProgressIndicator(strokeWidth = 2.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                 }
             },
             supportingText = {
@@ -159,17 +167,19 @@ internal fun FileShareRecipientPickerContent(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 48.dp)
                     .background(
                         MaterialTheme.colorScheme.surfaceContainerHigh,
                         RoundedCornerShape(NextcloudRadii.Medium),
                     )
-                    .clickable(enabled = enabled) {
+                    .selectable(selected = state.selectedRecipient == recipient.id, enabled = enabled, role = Role.RadioButton) {
                         onSelected(recipient)
                     }
                     .padding(horizontal = NextcloudSpacing.Medium, vertical = NextcloudSpacing.Small),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                RadioButton(selected = state.selectedRecipient == recipient.id, onClick = null, enabled = enabled)
                 Column(Modifier.weight(1f)) {
                     Text(
                         recipient.displayName,
@@ -194,12 +204,18 @@ internal fun FileShareRecipientPickerContent(
                 )
             }
         }
-        state.error?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
+        state.error?.let { error ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    error,
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                onRetry?.let { retry ->
+                    TextButton(onClick = retry, enabled = enabled && !state.loading) { Text("Retry search") }
+                }
+            }
         }
     }
 }

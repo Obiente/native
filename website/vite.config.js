@@ -71,5 +71,11 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    proxy: {
+      "/d/": {
+        target: "https://nc-native.obiente.dev",
+        changeOrigin: true,
+      },
+    },
   },
 });

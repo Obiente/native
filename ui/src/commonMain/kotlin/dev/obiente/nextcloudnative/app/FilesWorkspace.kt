@@ -18,11 +18,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -31,7 +29,6 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,7 +41,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.LocalNextcloudWorkspaceCapabilities
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
@@ -109,9 +106,15 @@ internal fun NativeFilesWorkspace(
     onRefresh: () -> Unit,
     onAction: (NextcloudFile, FileMenuAction) -> Unit,
 ) {
+    var navigationCollapsed by remember { mutableStateOf(false) }
+    var inspectorClosed by remember { mutableStateOf(false) }
+    val desktopPresentation = LocalNextcloudWorkspaceCapabilities.current.isDesktop
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val desktop = maxWidth >= 980.dp
-        val showInspector = desktop && maxWidth >= 1_080.dp
+        val panes = resolveFilesWorkspacePanes(
+            maxWidth.value.toInt(), desktopPresentation, navigationCollapsed,
+            inspectorClosed, selectedFile != null,
+        )
+        val desktop = panes.desktop
         Column(modifier = Modifier.fillMaxSize()) {
             FilesCommandBar(
                 path = path,
@@ -127,19 +130,32 @@ internal fun NativeFilesWorkspace(
                 onRefresh = onRefresh,
                 onOpenPath = onOpenPath,
                 desktop = desktop,
+                paneActions = {
+                    FilesPaneControls(
+                        panes = panes,
+                        hasSelection = selectedFile != null,
+                        onToggleNavigation = {
+                            navigationCollapsed = panes.showNavigation
+                            if (!panes.showNavigation) inspectorClosed = true
+                        },
+                        onToggleInspector = { inspectorClosed = panes.showInspector },
+                    )
+                },
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             if (desktop) {
                 Row(modifier = Modifier.fillMaxSize()) {
-                    FilesNavigationPane(
-                        files = navigationFiles,
-                        currentPath = path,
-                        selectedFilter = filter,
-                        offlineAvailability = offlineAvailability,
-                        onFilterChanged = onFilterChanged,
-                        onOpenPath = onOpenPath,
-                    )
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (panes.showNavigation) {
+                        FilesNavigationPane(
+                            files = navigationFiles,
+                            currentPath = path,
+                            selectedFilter = filter,
+                            offlineAvailability = offlineAvailability,
+                            onFilterChanged = onFilterChanged,
+                            onOpenPath = onOpenPath,
+                        )
+                        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
                     FilesBrowserPane(
                         modifier = Modifier.weight(1f),
                         files = files,
@@ -171,7 +187,7 @@ internal fun NativeFilesWorkspace(
                         onAction = onAction,
                         desktop = true,
                     )
-                    AnimatedVisibility(visible = showInspector) {
+                    AnimatedVisibility(visible = panes.showInspector) {
                         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         FilesInspector(
                             file = selectedFile,
@@ -226,182 +242,6 @@ internal fun NativeFilesWorkspace(
     }
 }
 
-@Composable
-private fun FilesCommandBar(
-    path: String,
-    query: String,
-    onQueryChanged: (String) -> Unit,
-    searchScope: FileSearchScope,
-    onSearchScopeChanged: (FileSearchScope) -> Unit,
-    refreshing: Boolean,
-    searchLoading: Boolean,
-    layout: FileLayout,
-    onLayoutChanged: (FileLayout) -> Unit,
-    onCreate: () -> Unit,
-    onRefresh: () -> Unit,
-    onOpenPath: (String) -> Unit,
-    desktop: Boolean,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(
-            horizontal = if (desktop) NextcloudSpacing.Large else NextcloudSpacing.Medium,
-            vertical = NextcloudSpacing.Small,
-        ),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-        ) {
-            Column(modifier = if (desktop) Modifier.widthIn(min = 210.dp) else Modifier.weight(1f)) {
-                Text("Files", style = MaterialTheme.typography.titleLarge)
-                if (desktop) {
-                    Text(
-                        "Browse, organize, share, and keep work available offline",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-            }
-            if (desktop) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChanged,
-                    modifier = Modifier.weight(1f).heightIn(max = 52.dp),
-                    placeholder = {
-                        Text(if (searchScope == FileSearchScope.AllFiles) "Search all files" else "Search this folder")
-                    },
-                    leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(NextcloudRadii.Medium),
-                )
-                SearchScopeControl(searchScope, onSearchScopeChanged)
-            }
-            Button(onClick = onCreate) {
-                Icon(NextcloudIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (desktop) "New" else "Add")
-            }
-            IconButton(onClick = onRefresh, enabled = !refreshing) {
-                if (refreshing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Icon(NextcloudIcons.Refresh, contentDescription = "Refresh files")
-            }
-            if (desktop) LayoutControl(layout, onLayoutChanged)
-        }
-        if (!desktop) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(if (searchScope == FileSearchScope.AllFiles) "Search all files" else "Search this folder")
-                },
-                leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (searchLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(NextcloudRadii.Medium),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SearchScopeControl(searchScope, onSearchScopeChanged)
-                LayoutControl(layout, onLayoutChanged)
-            }
-        }
-        if (searchScope == FileSearchScope.CurrentFolder) {
-            FilesBreadcrumbs(path, onOpenPath)
-        } else if (query.isNotBlank()) {
-            Text(
-                "Searching across your entire Nextcloud",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SearchScopeControl(
-    scope: FileSearchScope,
-    onChanged: (FileSearchScope) -> Unit,
-) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        FilterChip(
-            selected = scope == FileSearchScope.CurrentFolder,
-            onClick = { onChanged(FileSearchScope.CurrentFolder) },
-            label = { Text("Folder") },
-        )
-        FilterChip(
-            selected = scope == FileSearchScope.AllFiles,
-            onClick = { onChanged(FileSearchScope.AllFiles) },
-            label = { Text("Everywhere") },
-        )
-    }
-}
-
-@Composable
-private fun LayoutControl(layout: FileLayout, onChanged: (FileLayout) -> Unit) {
-    Row {
-        FileLayout.entries.forEach { candidate ->
-            val icon = when (candidate) {
-                FileLayout.List -> NextcloudIcons.ListView
-                FileLayout.Grid -> NextcloudIcons.Apps
-                FileLayout.Compact -> NextcloudIcons.Menu
-            }
-            IconButton(onClick = { onChanged(candidate) }) {
-                Surface(
-                    color = if (layout == candidate) MaterialTheme.colorScheme.secondaryContainer else androidx.compose.ui.graphics.Color.Transparent,
-                    shape = RoundedCornerShape(NextcloudRadii.Small),
-                ) {
-                    Icon(
-                        icon,
-                        contentDescription = "${candidate.name} view",
-                        modifier = Modifier.padding(7.dp).size(18.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FilesBreadcrumbs(path: String, onOpenPath: (String) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        fileBreadcrumbs(path).forEachIndexed { index, breadcrumb ->
-            if (index > 0) {
-                Icon(
-                    NextcloudIcons.ChevronRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            TextButton(onClick = { onOpenPath(breadcrumb.path) }, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                Text(
-                    breadcrumb.label,
-                    color = if (index == fileBreadcrumbs(path).lastIndex) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun FilesNavigationPane(
@@ -412,10 +252,11 @@ private fun FilesNavigationPane(
     onFilterChanged: (FileWorkspaceFilter) -> Unit,
     onOpenPath: (String) -> Unit,
 ) {
-    val favoriteFolders = files.filter { it.isDirectory && it.favorite }.take(5)
     val pinnedFolders = files.filter {
         it.isDirectory && offlineAvailability[it.path] == FileOfflineAvailability.Available
     }.take(5)
+    val pinnedPaths = pinnedFolders.mapTo(mutableSetOf(), NextcloudFile::path)
+    val favoriteFolders = files.filter { it.isDirectory && it.favorite && it.path !in pinnedPaths }.take(5)
     Column(
         modifier = Modifier.width(218.dp).fillMaxHeight().padding(NextcloudSpacing.Medium),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -453,7 +294,7 @@ private fun FilesNavigationPane(
         if (pinnedFolders.isNotEmpty()) {
             Spacer(Modifier.height(NextcloudSpacing.Medium))
             Text(
-                "PINNED FOLDERS",
+                "OFFLINE FOLDERS",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = NextcloudSpacing.Small),

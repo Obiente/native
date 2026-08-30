@@ -54,7 +54,38 @@ New components must represent interaction patterns shared by more than one app
 whenever possible. App-specific behaviour belongs in a verified adapter, not in
 the generic component library.
 
+## Adaptive collection presentation
+
+Table browsing uses one query for compact record summaries and desktop columns.
+Both layouts search the same projected field values and retain collection paging.
+Filters and sorting apply to loaded records; these controls do not invent a server
+search operation. Records appear first. Inferred charts belong to the separate
+Insights view rather than being repeated above a table.
+
+Compact records keep a bounded set of typed quantities, amounts, status and dates.
+Desktop tables omit technical identity and ordering columns from the default
+presentation without removing those values from action binding. Permission
+summaries use explicit known boolean fields and never infer a role or grant.
+Boards share lane navigation and action state, with widths adapted to the window.
+Compact Mail exposes the same loaded account and mailbox destinations as its
+desktop rail; message actions remain limited to verified available contracts.
+
+Editing an existing record uses the current workspace and the shared record
+form. Creation and command forms may still use dialogs. Presentation does not
+change field validation, exact target bindings, confirmation requirements or
+mutation recovery. The inline editor registers an account-scoped navigation
+guard for the shell, section changes, Back and incoming links. Leaving a dirty
+draft requires confirmation; an in-flight save or unresolved result blocks
+navigation until its result has been checked.
+
 ## Bounded form restoration
+
+Dynamic enum fields use the shared native choice field, preserving exact wire
+values, required/error labels and icon/color previews. Compact Chores navigation
+and exclusive Budget category filters use the shared segmented control. These
+components own presentation and input behavior only; existing navigation guards,
+bindings, mutation recovery and permission checks remain with their callers.
+See [shared native choice controls](docs/shared-ui-controls.md) for reuse rules.
 
 Repeatable-object drafts share a 16 Ki-character saved-state budget across all
 fields, including JSON escaping and identifiers. Both workspace and record
