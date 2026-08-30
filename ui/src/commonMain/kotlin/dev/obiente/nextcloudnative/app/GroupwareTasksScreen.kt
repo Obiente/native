@@ -484,40 +484,16 @@ fun NativeGroupwareTasksScreen(
             }
         }
     }
-
     selectedTask?.takeIf { !editing }?.let { task ->
-        AlertDialog(
-            onDismissRequest = { if (!interactionBlocked) selectedTaskSelection = null },
-            title = { Text(task.title) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                    Text(if (task.completed) "Completed" else "Open")
-                    task.due?.let { Text("Due ${it.displayTaskDueDate()}") }
-                    task.description?.let { Text(it) }
-                    if (!selectedTaskWritable) {
-                        Text("This task list is read-only.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (!selectedTaskDeleteSafe) {
-                        Text(
-                            "This is one component of a recurring task. Edit the selected component; deleting the shared calendar object is withheld.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    mutationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable,
-                    onClick = { editing = true },
-                ) { Text("Edit") }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !interactionBlocked && selectedTaskWritable && selectedTaskDeleteSafe,
-                    onClick = { deleting = task },
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-            },
+        TaskDetailsDialog(
+            task = task,
+            writable = selectedTaskWritable,
+            deleteSafe = selectedTaskDeleteSafe,
+            interactionBlocked = interactionBlocked,
+            error = mutationError,
+            onDismiss = { selectedTaskSelection = null },
+            onEdit = { editing = true },
+            onDelete = { deleting = task },
         )
     }
 
@@ -730,7 +706,7 @@ private fun TasksError(message: String, retry: () -> Unit) {
     }
 }
 
-private fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
+internal fun String.displayTaskDueDate(): String = if (length >= 8 && take(8).all(Char::isDigit)) {
     "${substring(6, 8)}-${substring(4, 6)}-${take(4)}"
 } else {
     this

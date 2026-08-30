@@ -69,7 +69,10 @@ unknown app learned from a successful JSON list response.
   or App Store-linked contracts. Concrete foreign origins and fixed-host
   templates such as `https://{tenant}.vendor.test` are never rebased onto the
   connected Nextcloud server. Relative and concrete same-origin servers remain
-  valid. Acquisition rejects concrete package-server authorities because it
+  valid. Host templates must retain the concrete scheme and effective port;
+  only an explicitly templated port may adopt the account port. An omitted port
+  means the scheme's default, not any account port. Acquisition rejects concrete
+  package-server authorities because it
   cannot establish their ownership by the connected account.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are unsupported
@@ -87,6 +90,9 @@ unknown app learned from a successful JSON list response.
 - Command-like GETs are excluded from root and contextual navigation, including
   linked child tabs and automatic child selection. Verified provenance does not
   make reset, delete, toggle, or similar commands safe navigation reads.
+  This includes command segments before trailing identifiers and operation IDs
+  that begin with command verbs. Read-producing status, preview, export, and
+  download routes remain eligible.
 - Object `allOf` flattening accepts only preserved shape keywords and known
   descriptive annotations. Conditional, unknown, and malformed member constraints
   withhold the write action and form. This includes OpenAPI 3.1 `if`/`then`/`else`,

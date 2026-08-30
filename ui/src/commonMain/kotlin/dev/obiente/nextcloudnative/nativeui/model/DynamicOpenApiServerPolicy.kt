@@ -84,7 +84,8 @@ private fun normalizeOpenApiServer(value: String, origin: String): NormalizedOpe
 
     val separator = value.indexOf("://")
     require(separator > 0) { "OpenAPI server URL is unsupported: $value" }
-    require(value.substring(0, separator).lowercase() in setOf("http", "https")) {
+    val scheme = value.substring(0, separator).lowercase()
+    require(scheme in setOf("http", "https")) {
         "OpenAPI server scheme is unsupported: $value"
     }
     val authorityStart = separator + 3
@@ -103,21 +104,48 @@ private fun normalizeOpenApiServer(value: String, origin: String): NormalizedOpe
     require(sameOrigin || authority.isOpenApiHostTemplate()) {
         "Concrete cross-origin OpenAPI server rebasing is unsupported: $value"
     }
+    if (!sameOrigin) {
+        val accountOrigin = origin.lowercase().trimEnd('/')
+        require(accountOrigin.isSafeHttpOrigin() && scheme == accountOrigin.substringBefore("://")) {
+            "A templated OpenAPI server cannot change its declared scheme: $value"
+        }
+        val declaredPort = authority.substringAfter(':', "")
+        val accountAuthority = accountOrigin.substringAfter("://")
+        val accountPort = if (accountAuthority.startsWith('[')) {
+            require(']' in accountAuthority) { "Invalid account origin" }
+            accountAuthority.substringAfter(']')
+        } else accountAuthority.dropWhile { it != ':' }
+        val effectiveAccountPort = when {
+            accountPort.isEmpty() -> defaultHttpPort(scheme)
+            accountPort.startsWith(':') -> accountPort.drop(1).validHttpPort()
+            else -> null
+        }
+        require(effectiveAccountPort != null && (declaredPort.isOpenApiVariable() ||
+            (if (declaredPort.isEmpty()) defaultHttpPort(scheme) else declaredPort.validHttpPort()) == effectiveAccountPort)) {
+            "A templated OpenAPI server cannot change its declared port: $value"
+        }
+    }
     return NormalizedOpenApiServer(path.trimEnd('/'), !sameOrigin, value)
 }
 
+private fun String.isOpenApiVariable(): Boolean {
+    val scan = scanBracedTemplate()
+    val token = scan.tokens.singleOrNull() ?: return false
+    return !scan.malformed && token.startIndex == 0 && token.endIndexExclusive == length &&
+        token.name.matches(Regex("[A-Za-z_][A-Za-z0-9_.-]*"))
+}
+
 private fun String.isOpenApiHostTemplate(): Boolean {
-    fun String.isVariable(): Boolean {
-        val scan = scanBracedTemplate()
-        val token = scan.tokens.singleOrNull() ?: return false
-        return !scan.malformed && token.startIndex == 0 && token.endIndexExclusive == length &&
-            token.name.matches(Regex("[A-Za-z_][A-Za-z0-9_.-]*"))
-    }
-    if (!substringBefore(':').isVariable()) return false
+    if (!substringBefore(':').isOpenApiVariable()) return false
     if (':' !in this) return true
     val port = substringAfter(':')
-    return port.isVariable() || port.length in 1..5 && port.all { it in '0'..'9' }
+    return port.isOpenApiVariable() || port.validHttpPort() != null
 }
+
+private fun defaultHttpPort(scheme: String): Int = if (scheme == "https") 443 else 80
+
+private fun String.validHttpPort(): Int? = takeIf { length in 1..5 && all { it in '0'..'9' } }
+    ?.toIntOrNull()?.takeIf { it in 1..65535 }
 
 private fun String.normalizedHttpOrigin(): String = lowercase().trimEnd('/').let {
     when {

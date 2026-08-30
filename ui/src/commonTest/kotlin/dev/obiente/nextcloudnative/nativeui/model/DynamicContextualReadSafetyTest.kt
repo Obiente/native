@@ -14,8 +14,8 @@ class DynamicContextualReadSafetyTest {
         listOf(LayoutKind.list, LayoutKind.detail).forEach { kind ->
             listOf(false, true).forEach { linked ->
                 listOf("reset", "delete", "toggle", "rebuild", "clearcache", "clearCache", "scan").forEach { verb ->
-                    // Compound camel-case commands are recognized in path segments, while IDs
-                    // use the terminal concept to keep read actions such as reset-status safe.
+                    // The namespaced child-clearCache ID ends in cache, so this fixture
+                    // covers that compound command through its path. Prefixes are tested below.
                     val commandLocations = if (verb == "clearCache") listOf(false) else listOf(false, true)
                     commandLocations.forEach { commandInId ->
                         val descriptor = descriptor(kind, linked, verb, commandInId)
@@ -39,12 +39,49 @@ class DynamicContextualReadSafetyTest {
         }
     }
 
-    private fun descriptor(kind: LayoutKind, linked: Boolean, verb: String, commandInId: Boolean = false): DynamicAppDescriptor {
+    @Test
+    fun commandBeforeIdentifiersAndOperationIdPrefixesCannotBecomeAutomaticReads() {
+        listOf(LayoutKind.list, LayoutKind.detail).forEach { kind ->
+            listOf(false, true).forEach { linked ->
+                listOf("reset", "delete", "toggle", "rebuild", "clearCache", "scan").forEach { verb ->
+                    listOf(
+                        "/apps/example/items/$verb/{itemId}" to "child-status",
+                        "/apps/example/items/$verb/{itemId}/{otherId}" to "child-status",
+                        "/apps/example/items/{itemId}" to "${verb}Item",
+                    ).forEach { (path, id) ->
+                        val descriptor = descriptor(kind, linked, "status", path = path, id = id)
+                        val action = descriptor.actions.single()
+                        assertTrue(action.looksLikeStateChangingGet(), "$path/$id")
+                        assertTrue(!action.hasPositiveRootReadEvidence())
+                        assertTrue(descriptor.planDynamicNavigation(context).contextualChildDestinations.isEmpty())
+                        assertNull(descriptor.preferredSemanticContextualChild(context))
+                        assertTrue(descriptor.explainDynamicChildNavigation(context).isEmpty())
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun commandStatusReadsAndReadVerbsBeforeIdentifiersRemainEligible() {
+        listOf("status", "preview", "export", "download").forEach { verb ->
+            val descriptor = descriptor(LayoutKind.detail, true, verb,
+                path = "/apps/example/items/$verb/{itemId}", id = "getResetStatus")
+            assertTrue(!descriptor.actions.single().looksLikeStateChangingGet())
+            assertEquals(1, descriptor.planDynamicNavigation(context).contextualChildDestinations.size)
+        }
+    }
+
+    private fun descriptor(
+        kind: LayoutKind, linked: Boolean, verb: String, commandInId: Boolean = false,
+        path: String = "/apps/example/items/{itemId}/${if (commandInId) "status" else verb}",
+        id: String = "child-$verb",
+    ): DynamicAppDescriptor {
         val child = DynamicAction(
-            id = "child-$verb", label = "Entries", resourceId = "entries",
+            id = id, label = "Entries", resourceId = "entries",
             intent = if (kind == LayoutKind.list) ActionIntent.list else ActionIntent.read,
             risk = ActionRisk.readOnly, requiresConfirmation = false, confidence = Confidence.verified,
-            binding = DynamicHttpBinding(HttpMethod.GET, "/apps/example/items/{itemId}/${if (commandInId) "status" else verb}",
+            binding = DynamicHttpBinding(HttpMethod.GET, path,
                 pathParameters = listOf(HttpParameter("itemId", true, buildJsonObject {}, ParameterSource.resourceField))),
             provenance = listOf(Provenance(ProvenanceKind.verifiedAppPackage, "package", "Verified contract")),
         )

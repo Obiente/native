@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative.nativeui.model
 
+import dev.obiente.nextcloudnative.template.scanBracedTemplate
+
 /**
  * A few third-party route catalogs describe command-like endpoints with GET even though invoking
  * them changes server state. HTTP method alone must not turn those routes into automatic app
@@ -7,9 +9,17 @@ package dev.obiente.nextcloudnative.nativeui.model
  * download, preview, and other read-producing operations remain eligible.
  */
 internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
-    val terminalPathSegment = binding.path.substringBefore('?').trimEnd('/').substringAfterLast('/')
-    return terminalPathSegment.semanticConceptTokens().any(STATE_CHANGING_GET_CONCEPTS::contains) ||
-        id.semanticConceptTokens().lastOrNull() in STATE_CHANGING_GET_CONCEPTS
+    val terminalStaticSegment = binding.path.substringBefore('?').trimEnd('/').split('/')
+        .dropLastWhile { segment ->
+            val scan = segment.scanBracedTemplate()
+            !scan.malformed && scan.tokens.singleOrNull()?.let { token ->
+                token.startIndex == 0 && token.endIndexExclusive == segment.length
+            } == true
+        }.lastOrNull().orEmpty()
+    val idConcepts = id.semanticConceptTokens()
+    return terminalStaticSegment.semanticConceptTokens().any(STATE_CHANGING_GET_CONCEPTS::contains) ||
+        idConcepts.firstOrNull() in STATE_CHANGING_GET_CONCEPTS ||
+        idConcepts.lastOrNull() in STATE_CHANGING_GET_CONCEPTS
 }
 
 internal fun DynamicAction.isContextualReadAction(): Boolean =

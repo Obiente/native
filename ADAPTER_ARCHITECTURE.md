@@ -242,6 +242,14 @@ confirm that its selected task was deleted; other calendars remain available.
 Task-description normalization changes line endings only; leading,
 trailing, and whitespace-only content survives edits and recovery verification.
 
+Loaded DAV object hrefs are opaque: updates and deletes preserve the discovered
+href, including extensionless names, and require the loaded ETag. New objects
+retain the generated `.ics` or `.vcf` suffix. The mutation builder still rejects
+collection hrefs, unsafe paths, and mismatched content before a request.
+Task details keep the full title, description, status, and errors in a bounded
+scrolling body, with Edit and Delete outside it. Compact landscape and enlarged
+text must not hide these actions or bypass read-only and recurrence guards.
+
 ## Primary protocol references
 
 - [iCalendar recurrence identity](https://www.rfc-editor.org/rfc/rfc5545.html#section-3.8.4.4)
