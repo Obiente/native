@@ -4,4 +4,4 @@ pull: 425
 platforms: android, desktop
 user-facing: yes
 
-Improve native collection creation, Contacts and Dashboard loading, and Office integration with Android web editing, server-advertised editor choices, and an explicit system-app file opener.
+Improve native collection creation, Contacts and Dashboard loading, and Office with native document selection, document-only Android editing, separate preview/edit actions, and server-advertised file types.

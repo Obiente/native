@@ -123,9 +123,6 @@ fun planOfficeEditSession(
     if ('W' !in permissions) return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.ReadOnly)
 
     val descriptor = describeDocument(file)
-    if (!descriptor.officeEditable) {
-        return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.UnsupportedDocument)
-    }
     if (!capabilities.supportsFileId) {
         return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.FileIdHandoffUnavailable)
     }

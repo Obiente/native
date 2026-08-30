@@ -7,6 +7,36 @@ import kotlin.test.assertTrue
 
 class OfficeDocumentWorkflowTest {
     @Test
+    fun advertisedPdfAndOtherTypesHaveSeparatePreviewAndEditActions() {
+        listOf("application/pdf", "application/x-design", "text/plain").forEach { mime ->
+            val file = officeFile(path = "Documents/example", mimeType = mime)
+            val capabilities = officeCapabilities().copy(
+                editors = officeCapabilities().editors.mapValues { (_, editor) ->
+                    editor.copy(mimeTypes = setOf(mime))
+                },
+            )
+            assertEquals(1, planOfficeEditorChoices(file, capabilities).size)
+            val actions = planFilesScreenActions(
+                file, FileActionSupport(documentEditing = capabilities, platformViewer = true),
+            ).actions
+            assertTrue(actions.single { it.action == FileMenuAction.Preview }.enabled)
+            assertTrue(actions.single { it.action == FileMenuAction.EditWith }.enabled)
+        }
+    }
+
+    @Test
+    fun pdfCanDiscoverEditorsWithoutEnablingAnUnverifiedWrite() {
+        val pdf = officeFile(path = "Documents/example.pdf", mimeType = "application/pdf")
+        val action = planFilesScreenActions(
+            pdf, FileActionSupport(discoverDocumentEditing = true),
+        ).actions.single { it.action == FileMenuAction.EditWith }
+        assertTrue(action.enabled)
+        assertEquals("Choose Office editor...", action.label)
+        assertTrue(planOfficeEditorChoices(pdf, officeCapabilities()).isEmpty())
+        assertTrue(planOfficeEditorChoices(pdf.copy(permissions = "R"), officeCapabilities()).isEmpty())
+    }
+
+    @Test
     fun plansSecureVersionedWritableOfficeDocumentWithoutCreatingAToken() {
         val plan = planOfficeEditSession(
             file = officeFile(),

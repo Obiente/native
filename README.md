@@ -180,7 +180,8 @@ applications with:
 - native semantic flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks,
   Tables, Deck, Cospend, Budget, and administration inventory
   at different levels of completeness;
-- capability-driven Office editor choices, embedded Office web pages on Android,
+- a native Office document browser and capability-driven editor choices,
+  document-only embedded Office sessions on Android,
   and a system-browser handoff on desktop. This is web integration, not a native
   Office engine or a claim of verified compatibility with every suite;
 - signed-contract acquisition from exact Nextcloud App Store releases plus a

@@ -187,7 +187,6 @@ fun NextcloudDocumentPreview(
                 PlatformEmbeddedNextcloudWebApp(
                     session = session,
                     initialUrl = activeEditor.sameOriginUrl,
-                    authenticateWithSession = false,
                     onExit = { editStatus = DocumentEditUiState.Idle },
                     onRetrySession = { startOfficeEdit(activeEditor.request) },
                     modifier = Modifier.fillMaxSize(),
@@ -211,53 +210,37 @@ fun NextcloudDocumentPreview(
             }
             return@Surface
         }
-        when (val current = state) {
-            DocumentPreviewUiState.Loading -> Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-
-            is DocumentPreviewUiState.Ready -> Column(modifier = Modifier.fillMaxSize()) {
-                DocumentWorkflowBar(
-                    file = file,
-                    officePlan = officePlan,
-                    officeChoices = officeChoices,
-                    editStatus = editStatus,
-                    onEdit = ::startOfficeEdit,
-                    externalOpenAvailable = externalOpenAvailable,
-                    externalOpenStatus = externalOpenStatus,
-                    onOpenExternal = ::openInAnotherApp,
-                )
-                Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                    DocumentPreviewBody(
+        Column(modifier = Modifier.fillMaxSize()) {
+            DocumentWorkflowBar(
+                file = file,
+                officePlan = officePlan,
+                officeChoices = officeChoices,
+                editStatus = editStatus,
+                onEdit = ::startOfficeEdit,
+                externalOpenAvailable = externalOpenAvailable,
+                externalOpenStatus = externalOpenStatus,
+                onOpenExternal = ::openInAnotherApp,
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                when (val current = state) {
+                    DocumentPreviewUiState.Loading -> Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                    is DocumentPreviewUiState.Ready -> DocumentPreviewBody(
                         preview = current.preview,
                         filename = file.name,
                     )
+                    DocumentPreviewUiState.Error -> DocumentPreviewMessage(
+                        title = "Couldn't load this preview",
+                        detail = "The server did not return a usable document preview.",
+                        action = "Retry preview",
+                        onAction = { attempt += 1 },
+                    )
                 }
             }
-
-            DocumentPreviewUiState.Error -> DocumentPreviewMessage(
-                title = "Couldn't load this preview",
-                detail = when (val openState = externalOpenStatus) {
-                    is DocumentExternalOpenUiState.Failed ->
-                        "The server did not return a usable document preview. ${openState.message}"
-                    else -> "The server did not return a usable document preview."
-                },
-                action = "Retry",
-                onAction = { attempt += 1 },
-                secondaryAction = if (externalOpenAvailable) {
-                    if (externalOpenStatus == DocumentExternalOpenUiState.Preparing) {
-                        "Preparing file..."
-                    } else {
-                        "Open in another app"
-                    }
-                } else {
-                    null
-                },
-                onSecondaryAction = if (externalOpenAvailable) ::openInAnotherApp else null,
-            )
         }
     }
 }
@@ -286,7 +269,7 @@ private fun DocumentWorkflowBar(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (descriptor.officeEditable) {
+        if (descriptor.officeEditable || officeChoices.isNotEmpty()) {
             if (officeChoices.isNotEmpty()) {
                 officeChoices.forEach { choice ->
                     Button(
@@ -531,8 +514,6 @@ private fun DocumentPreviewMessage(
     detail: String,
     action: String? = null,
     onAction: (() -> Unit)? = null,
-    secondaryAction: String? = null,
-    onSecondaryAction: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -549,11 +530,6 @@ private fun DocumentPreviewMessage(
         if (action != null && onAction != null) {
             Button(onClick = onAction, modifier = Modifier.padding(top = 20.dp)) {
                 Text(action)
-            }
-        }
-        if (secondaryAction != null && onSecondaryAction != null) {
-            Button(onClick = onSecondaryAction, modifier = Modifier.padding(top = 12.dp)) {
-                Text(secondaryAction)
             }
         }
     }

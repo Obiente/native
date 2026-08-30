@@ -497,7 +497,7 @@ The public boundary is native reading and safe editing where the client can prov
 3. **Office web editing:** parse the core `files.directEditing` editor registry, show every secure editor advertised for the file's exact MIME type, and request a one-time session only after the user chooses one. Android embeds the validated same-origin session in an isolated web surface; desktop uses the system browser. Secret URLs are never persisted or logged.
 4. **Native Office feasibility:** evaluate a supported Collabora/LibreOfficeKit mobile/desktop SDK separately on every target. Require WOPI lifecycle, permissions, collaboration, autosave, reconnect, IME, clipboard, accessibility, and fidelity evidence before product commitment.
 
-Reimplementing OOXML/ODF is out of scope. The Android web editor is labeled as an Office web integration, not native Office. It is limited to verified Office navigation and explicit Direct Editing sessions; arbitrary apps do not receive a WebView fallback.
+Reimplementing OOXML/ODF is out of scope. Office app entries open a native document browser. The Android web editor is labeled as an Office web integration, not native Office, and is limited to explicit document-specific Direct Editing sessions. Neither Office dashboards nor arbitrary apps receive a WebView fallback.
 
 ### Acceptance criteria
 
@@ -505,7 +505,8 @@ Reimplementing OOXML/ODF is out of scope. The Android web editor is labeled as a
 - PDF temp files are encrypted/protected according to the platform threat model and removed after retention policy.
 - Text/Markdown conflicts preserve all three generations.
 - Direct Editing appears only for an advertised secure editor/MIME pair and returns through a deliberate embedded Android or external desktop flow.
-- Android isolates Office cookies by account, blocks cross-origin top-level navigation, never answers HTTP authentication challenges, and never sends the app password to a one-time Direct Editing URL.
+- Android clears Office cookies and web storage between sessions, confines top-level navigation to the selected document, rejects popups, never answers HTTP authentication challenges, and never sends the app password to a one-time Direct Editing URL.
+- Preview remains separate from Edit. Every server-advertised secure editor/MIME pair is eligible, including PDFs and formats outside the built-in Office family list; permissions and fresh file identity still gate edits.
 - Each advertised compatible editor is named in the chooser; no provider is silently preferred because of a hard-coded app ID.
 - Native Office is not labeled supported until the platform feasibility gate passes format-fidelity and collaborative-save tests.
 

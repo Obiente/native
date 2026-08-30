@@ -2891,12 +2891,11 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onBack: () -> Unit,
 ) {
-    if (isVerifiedOfficeWebAppId(app.id)) {
-        VerifiedOfficeWebScreen(
+    if (isOfficeWorkspaceAppId(app.id)) {
+        OfficeWorkspaceScreen(
             services = services,
             session = session,
-            appId = app.id,
-            advertisedHref = app.href,
+            userId = currentUserId,
             onExit = onBack,
             modifier = Modifier.fillMaxSize(),
         )

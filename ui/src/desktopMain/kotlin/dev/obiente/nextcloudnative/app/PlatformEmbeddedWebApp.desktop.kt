@@ -17,9 +17,8 @@ import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 internal actual fun PlatformEmbeddedNextcloudWebApp(
     session: NextcloudSession,
     initialUrl: String,
-    authenticateWithSession: Boolean,
     onExit: () -> Unit,
-    onRetrySession: (() -> Unit)?,
+    onRetrySession: () -> Unit,
     modifier: Modifier,
 ) {
     Column(

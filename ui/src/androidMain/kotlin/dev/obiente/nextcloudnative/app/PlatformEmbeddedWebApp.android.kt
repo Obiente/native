@@ -4,7 +4,8 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
-import android.util.Base64
+import android.os.Message
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
@@ -14,6 +15,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebStorage
+import java.io.ByteArrayInputStream
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +38,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,32 +53,26 @@ import androidx.compose.ui.viewinterop.AndroidView
 internal actual fun PlatformEmbeddedNextcloudWebApp(
     session: NextcloudSession,
     initialUrl: String,
-    authenticateWithSession: Boolean,
     onExit: () -> Unit,
-    onRetrySession: (() -> Unit)?,
+    onRetrySession: () -> Unit,
     modifier: Modifier,
 ) {
     val initialOrigin = remember(initialUrl) { requireNotNull(embeddedWebOrigin(initialUrl)) }
-    val authorization = remember(session.loginName, session.appPassword, authenticateWithSession) {
-        if (authenticateWithSession) {
-            val credentials = "${session.loginName}:${session.appPassword}".encodeToByteArray()
-            "Basic ${Base64.encodeToString(credentials, Base64.NO_WRAP)}"
-        } else {
-            null
-        }
+    val navigation = remember(session.serverUrl, initialUrl) {
+        OfficeEditorNavigation(session.serverUrl, initialUrl)
     }
-    val webSessionKey = remember(session.serverUrl, session.loginName, authorization, initialUrl) {
+    val exitEditor by rememberUpdatedState(onExit)
+    val webSessionKey = remember(session.serverUrl, session.loginName, initialUrl) {
         listOf(
             session.serverUrl,
             session.loginName,
-            authorization?.let { publicContentSha256(it.encodeToByteArray()) }.orEmpty(),
             initialUrl,
         ).joinToString("\u0000")
     }
     var progress by remember(webSessionKey) { mutableIntStateOf(0) }
     var webView by remember(webSessionKey) { mutableStateOf<WebView?>(null) }
-    var canGoBack by remember(webSessionKey) { mutableStateOf(false) }
     var failure by remember(webSessionKey) { mutableStateOf<String?>(null) }
+    var navigationNotice by remember(webSessionKey) { mutableStateOf(false) }
     var fileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val fileChooserLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -88,32 +86,33 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
     fun loadInitialPage(target: WebView) {
         failure = null
         progress = 0
+        target.clearCache(true)
+        WebStorage.getInstance().deleteAllData()
         CookieManager.getInstance().removeAllCookies {
             CookieManager.getInstance().flush()
             target.post {
                 if (webView === target) {
-                    val headers = authorization?.let { mapOf("Authorization" to it) }.orEmpty()
-                    target.loadUrl(initialUrl, headers)
+                    target.loadUrl(initialUrl)
                 }
             }
         }
     }
 
-    BackHandler {
-        val activeWebView = webView
-        if (failure == null && activeWebView?.canGoBack() == true) activeWebView.goBack() else onExit()
-    }
+    BackHandler { exitEditor() }
 
     DisposableEffect(webSessionKey) {
         onDispose {
             webView?.apply {
                 stopLoading()
+                clearCache(true)
+                clearHistory()
                 webChromeClient = null
                 webViewClient = WebViewClient()
                 removeAllViews()
                 destroy()
             }
             webView = null
+            WebStorage.getInstance().deleteAllData()
             CookieManager.getInstance().apply {
                 removeAllCookies(null)
                 flush()
@@ -134,8 +133,9 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
-                        settings.javaScriptCanOpenWindowsAutomatically = true
-                        settings.setSupportMultipleWindows(false)
+                        settings.javaScriptCanOpenWindowsAutomatically = false
+                        settings.setSupportMultipleWindows(true)
+                        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
                         settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         settings.userAgentString += " NextcloudNativeEmbedded/1"
                         CookieManager.getInstance().apply {
@@ -143,6 +143,18 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                             setAcceptThirdPartyCookies(embeddedWebView, true)
                         }
                         webChromeClient = object : WebChromeClient() {
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: Message?,
+                            ): Boolean {
+                                navigationNotice = true
+                                return false
+                            }
+
+                            override fun onCloseWindow(window: WebView?) { exitEditor() }
+
                             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                 progress = newProgress.coerceIn(0, 100)
                             }
@@ -169,25 +181,55 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                         }
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                if (!navigation.allowsMainFrame(url)) {
+                                    view?.stopLoading()
+                                    view?.visibility = View.INVISIBLE
+                                    failure = "This link leaves the document editor. Return to the native document browser."
+                                    return
+                                }
                                 progress = 0
                                 failure = null
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 progress = 100
-                                canGoBack = view?.canGoBack() == true
                                 CookieManager.getInstance().flush()
+                            }
+
+                            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                                if (!navigation.allowsMainFrame(url)) {
+                                    view?.visibility = View.INVISIBLE
+                                    failure = "This link leaves the document editor. Return to the native document browser."
+                                }
+                            }
+
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?,
+                            ): WebResourceResponse? {
+                                if (request?.isForMainFrame == true &&
+                                    !navigation.allowsMainFrame(request.url.toString())
+                                ) {
+                                    view?.post {
+                                        failure = "This link leaves the document editor. Return to the native document browser."
+                                    }
+                                    return WebResourceResponse(
+                                        "text/plain", "UTF-8", 403, "Blocked", emptyMap(),
+                                        ByteArrayInputStream(ByteArray(0)),
+                                    )
+                                }
+                                return null
                             }
 
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?,
                                 request: WebResourceRequest?,
                             ): Boolean {
-                                val scheme = request?.url?.scheme?.lowercase()
-                                if (scheme !in setOf("http", "https", "about", "blob", "data")) return true
-                                return request?.isForMainFrame == true &&
-                                    scheme in setOf("http", "https") &&
-                                    embeddedWebOrigin(request.url.toString()) != initialOrigin
+                                val allowed = request != null && navigation.allowsNavigation(
+                                    request.url.toString(), request.isForMainFrame, request.hasGesture(),
+                                )
+                                if (!allowed) navigationNotice = true
+                                return !allowed
                             }
 
                             override fun onReceivedHttpAuthRequest(
@@ -248,12 +290,21 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                     }
                 },
                 modifier = Modifier.fillMaxSize().semantics {
-                    contentDescription = "Embedded Office web app"
+                    contentDescription = "Office document editor"
                 },
             )
         }
         if (progress in 0..99 && failure == null) {
             LinearProgressIndicator(progress = { progress / 100f })
+        }
+        if (navigationNotice && failure == null) {
+            Column(
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .background(MaterialTheme.colorScheme.surface).padding(16.dp),
+            ) {
+                Text("This link is outside the editor. Use Back to choose another file.")
+                TextButton(onClick = { navigationNotice = false }) { Text("Keep editing") }
+            }
         }
         failure?.let { message ->
             Column(
@@ -272,13 +323,7 @@ internal actual fun PlatformEmbeddedNextcloudWebApp(
                     textAlign = TextAlign.Center,
                 )
                 Button(
-                    onClick = {
-                        if (onRetrySession != null) {
-                            onRetrySession()
-                        } else {
-                            webView?.let(::loadInitialPage)
-                        }
-                    },
+                    onClick = onRetrySession,
                     modifier = Modifier.padding(top = 24.dp),
                 ) {
                     Text("Retry")

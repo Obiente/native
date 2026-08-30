@@ -118,7 +118,7 @@ fun planFileActions(
         if (!file.isDirectory && officeEditPlan != null) {
             val reason = (officeEditPlan as? OfficeEditSessionPlan.Blocked)?.reason?.userMessage()
             add(action(FileMenuAction.EditWith, "Edit in Office", FileActionPlacement.Overflow, reason))
-        } else if (!file.isDirectory && descriptor.officeEditable && support.discoverDocumentEditing) {
+        } else if (!file.isDirectory && support.discoverDocumentEditing) {
             add(
                 PlannedFileAction(
                     FileMenuAction.EditWith,

@@ -1,37 +1,35 @@
-# ADR 0001: Android Office web integration
+# ADR 0001: document-only Android Office integration
 
 Status: accepted
 
 ## Context
 
-Nextcloud servers can expose different document suites. Nextcloud Office normally advertises the `richdocuments` editor, while another instance can advertise ONLYOFFICE or another implementation through the core Direct Editing capability. Treating one app ID as universal hides valid editors and breaks instances that chose a different suite.
+Nextcloud instances can expose different document suites and MIME support. Loading an Office dashboard URL also exposes the surrounding Nextcloud web navigation. That conflicts with the native client: file selection and navigation belong in NC Native.
 
-Native rendering remains the preferred implementation for formats whose read and write semantics the client owns. OOXML and ODF collaborative editing require a full Office engine and WOPI lifecycle, which the app does not implement. A first-page server preview is not a usable substitute for opening a PDF or editing a document.
+OOXML/ODF collaborative editing requires an Office engine and WOPI lifecycle that the client does not implement. A server thumbnail is a preview, not a complete viewer or editor.
 
 ## Decision
 
-The client reads the core Direct Editing editor registry and offers every editor that is marked secure and advertises the file's exact MIME type. It does not infer a suite from a product name or hard-code `richdocuments` as the editor.
+Office app entries open a native document browser. The browser reads DAV folders and core Direct Editing capabilities; opening it does not create an editing token or open an app dashboard. Cached listings remain visible but must be confirmed online before selecting a document.
 
-On Android, verified Office dashboards and explicit Direct Editing sessions can open in an embedded web surface. Desktop keeps the system-browser handoff. This is presented as a web Office integration, not native Office.
+Preview and Edit are separate actions. Editing is gated by a secure advertised editor for the exact MIME type, file identity, version, and write permission. Eligibility is not restricted to a hard-coded Office format list: PDFs and other advertised formats can have editing choices too. A failed thumbnail must not hide those choices.
 
-The Android surface has two authentication modes:
+Android embeds only the validated one-time Direct Editing URL after explicit selection. It never sends account credentials into the WebView. Desktop keeps the system-browser editing handoff.
 
-- A same-origin Office dashboard receives the active account authorization header only on its initial request.
-- A one-time Direct Editing URL receives no app-password authorization header. The short-lived URL carries the server-issued editing session.
+The document response is supplied by the server's Direct Editing integration. For example, [Nextcloud Office renders its document template with the base layout](https://github.com/nextcloud/richdocuments/blob/main/lib/Controller/DocumentTrait.php), without the normal dashboard. NC Native does not scrape or cosmetically hide Nextcloud navigation.
 
-Both modes recreate the web surface when the account or URL changes, clear cookies before and after the session, reject cross-origin top-level navigation, disable file and content access, reject mixed content, cancel HTTP authentication challenges, and never persist or log Direct Editing URLs. A certificate exception is accepted only when it matches the exact certificate that the user already approved for that server; hostname, validity, and other TLS failures remain blocked.
+The top-level URL is fixed to the selected session. Navigation to another document, a dashboard, settings, login, another origin, or an external app is rejected. Popups and clicked subframe navigation are rejected. Non-interactive provider iframe bootstrap is allowed under the server page's CSP and WebView mixed-content policy.
 
-Retrying an Office dashboard reloads its initial page. Retrying a Direct Editing failure requests a new session after the user taps Retry, because [Nextcloud marks the initial editing token as consumed](https://github.com/nextcloud/server/blob/stable34/lib/private/DirectEditing/Manager.php#L167-L186). Reloading that token would fail even after the connection recovered.
+Android checks both navigation and main-frame resource requests, with page-start and page-commit guards for paths not covered by navigation interception. [Android documents that navigation interception alone does not cover POST requests](https://developer.android.com/reference/android/webkit/WebViewClient#shouldOverrideUrlLoading(android.webkit.WebView,%20android.webkit.WebResourceRequest)). A blocked link leaves the editor in place where possible; otherwise the user can return to native file selection or request a fresh session.
 
-Files with a supported native implementation stay native. Files without a complete native viewer, including multipage PDFs until that viewer lands, also expose an explicit Android system-app chooser.
+Back returns to the native preview or document browser, not WebView history. Cookies, cache, and web storage are cleared between sessions. File/content URL access, HTTP auth challenges, and mixed content remain disabled. A TLS exception must match the exact certificate already approved for that server; hostname, validity, and other certificate errors remain blocked.
 
-## Compatibility impact
+Retry requests a new editing session because [Nextcloud consumes the initial token](https://github.com/nextcloud/server/blob/stable34/lib/private/DirectEditing/Manager.php#L167-L186). It must not reload a consumed token.
 
-- Editor selection accepts Nextcloud Office/Collabora, ONLYOFFICE, and other suites only when they advertise secure Direct Editing metadata for the file's MIME type through the server's core capability. Registry support does not prove live editing or save compatibility for a suite.
-- Older servers without usable editor metadata remain read-only and explain why editing is unavailable.
-- Office app navigation is web-backed only for a small verified app-ID allowlist and a same-origin advertised route. Other dynamic apps continue through native discovery and never fall back automatically to web content.
-- Existing desktop behavior stays external and does not acquire an embedded browser dependency.
+## Compatibility and limits
 
-## Consequences
-
-The Android app gains an embedded Office editing path without claiming a native engine. The integration requires origin, certificate, session-isolation, capability-selection, retry, and real-server save tests before claiming verified compatibility. If a supported native Office SDK later meets the roadmap's fidelity and collaboration gate, it can replace the web surface behind the same capability-driven editor choice.
+- Registry support and deterministic tests do not prove live editor/save compatibility for every suite.
+- Providers that redirect the top-level document to a different location, including federated editor redirects, are blocked until a document-scoped handoff contract is implemented.
+- Read-only files keep their native preview; they do not acquire write permission from editor availability.
+- Native-capable functionality stays native. A separate general Web version entry with links back into native screens is outside this Office change.
+- Real-server save, lifecycle, IME, accessibility, and provider compatibility still require platform testing.
