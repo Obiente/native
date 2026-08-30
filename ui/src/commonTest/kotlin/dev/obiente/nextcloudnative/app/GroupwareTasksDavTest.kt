@@ -272,6 +272,44 @@ class GroupwareTasksDavTest {
     }
 
     @Test
+    fun `task parser rejects unsafe and oversized UIDs before exposing editing`() {
+        val invalid = listOf("a\u0000b", "a\u0001b", "a\tb", "a\u007fb", "\u0000a", "a\u0000", "x".repeat(1_025))
+        val base = createGroupwareTaskContent("safe", "Task", null, false)
+        invalid.forEach { uid ->
+            val content = base.replace("UID:safe", "UID:$uid")
+            assertTrue(parseGroupwareTasksFromContent(
+                "/remote.php/dav/calendars/person/tasks/", "/remote.php/dav/calendars/person/tasks/task.ics", "\"one\"", content,
+            ).isEmpty())
+            assertFailsWith<IllegalArgumentException> { createGroupwareTaskContent(uid, "Task", null, false) }
+        }
+        listOf("valid-id", "x".repeat(1_024), "t\u00e2che").forEach { uid ->
+            val task = parseGroupwareTask("/remote.php/dav/calendars/person/tasks/", "/remote.php/dav/calendars/person/tasks/task.ics", "\"one\"",
+                createGroupwareTaskContent(uid, "Task", null, false))
+            assertEquals(uid, task?.uid)
+        }
+    }
+
+    @Test
+    fun `unrelated task edits preserve description whitespace including blank descriptions`() {
+        val calendar = "/remote.php/dav/calendars/person/tasks/"
+        val href = "${calendar}one.ics"
+        listOf("\n    indented Markdown\n\n", " \t ", "\n\n", "leading\r\ntrailing\r").forEach { description ->
+            val normalized = description.normalizeGroupwareTextLineEndings()
+            val draft = TaskDraft("Task", "", description, true).normalized()
+            assertEquals(normalized, draft.description)
+            val task = requireNotNull(parseGroupwareTask(calendar, href, "\"one\"",
+                createGroupwareTaskContent("one", "Task", null, false, description = normalized)))
+            assertEquals(normalized, task.description)
+            val content = updateGroupwareTaskContent(task, "Renamed", null, true, draft.description)
+            assertEquals(normalized, parseGroupwareTask(calendar, href, "\"two\"", content)?.description)
+            val postcondition = TaskMutationPostcondition.Upsert(
+                href, calendar, "one", previousEtag = "\"one\"", draft = draft.copy(title = "Renamed"),
+            )
+            assertTrue(postcondition.isSatisfiedBy(NextcloudApiResponse(200, content.encodeToByteArray(), null, "\"two\"")))
+        }
+    }
+
+    @Test
     fun `hidden malformed siblings prevent whole-object task deletion`() {
         val calendarHref = "/remote.php/dav/calendars/person/tasks/"
         val href = "${calendarHref}mixed.ics"

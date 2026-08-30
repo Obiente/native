@@ -15,7 +15,7 @@ internal data class TaskDraft(
     fun normalized(): TaskDraft = copy(
         title = title.trim().normalizeGroupwareTextLineEndings(),
         dueDate = dueDate.trim(),
-        description = description.trim().normalizeGroupwareTextLineEndings(),
+        description = description.normalizeGroupwareTextLineEndings(),
     )
 
     fun compactDueDateOrNull(): String? = dueDate.trim().takeIf(String::isNotBlank)?.let { value ->

@@ -104,7 +104,6 @@ import dev.obiente.nextcloudnative.nativeui.model.FieldKind
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputRow
-import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -2098,13 +2097,6 @@ private fun nativeRecordFormDraftSaver(declaredFieldIds: Set<String>) = Saver<Ma
     },
 )
 
-internal fun nativeRepeatableObjectDraftSaver(
-    specs: Map<String, RepeatableObjectInputSpec>,
-) = Saver<Map<String, List<RepeatableObjectInputRow>>, List<String>>(
-    save = { draft -> encodeNativeRepeatableObjectDraft(draft, specs) },
-    restore = { saved -> decodeNativeRepeatableObjectDraft(saved, specs) },
-)
-
 private const val MAX_SAVED_FORM_FIELDS = 64
 private const val MAX_SAVED_FORM_ID_LENGTH = 256
 private const val MAX_SAVED_FORM_VALUE_LENGTH = 64 * 1024
@@ -2172,17 +2164,17 @@ private fun GenericRecordActionFormDialog(
         requireNotNull(initialNativeRepeatableObjectDraft(pending.fields, emptyMap()))
     }
     val structuredDraftSaver = remember(structuredSpecs) {
-        nativeRepeatableObjectDraftSaver(structuredSpecs)
+        nativeRepeatableObjectDraftStateSaver(structuredSpecs)
     }
-    var repeatableObjectValues by rememberSaveable(
+    val structuredDraft = rememberSaveable(
         "${pending.restoreKey}:structured",
-        stateSaver = structuredDraftSaver,
+        structuredSpecs,
+        saver = structuredDraftSaver,
     ) {
-        mutableStateOf(initialStructuredDraft ?: emptyStructuredDraft)
+        NativeRepeatableObjectDraftState(initialStructuredDraft, structuredSpecs)
     }
-    var structuredDraftSafe by rememberSaveable(pending.restoreKey) {
-        mutableStateOf(initialStructuredDraft != null)
-    }
+    val repeatableObjectValues = structuredDraft.values
+    val structuredDraftSafe = structuredDraft.editable
     var error by remember(pending) {
         mutableStateOf(
             if (initialStructuredDraft == null) {
@@ -2298,10 +2290,10 @@ private fun GenericRecordActionFormDialog(
                                     field = field,
                                     spec = repeatableSpec,
                                     rows = repeatableObjectValues[field.id].orEmpty(),
+                                    error = structuredDraft.error,
                                     enabled = !submitting && formRetryAllowed && structuredDraftSafe,
                                     onRowsChange = { rows ->
-                                        repeatableObjectValues = repeatableObjectValues +
-                                            (field.id to rows)
+                                        structuredDraft.update(field.id, rows)
                                         error = null
                                     },
                                 )
@@ -2382,8 +2374,7 @@ private fun GenericRecordActionFormDialog(
                         OutlinedButton(
                             enabled = !submitting && formRetryAllowed,
                             onClick = {
-                                repeatableObjectValues = emptyStructuredDraft
-                                structuredDraftSafe = true
+                                structuredDraft.replace(emptyStructuredDraft)
                                 error = null
                             },
                             modifier = Modifier.semantics {

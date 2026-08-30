@@ -11,9 +11,15 @@ automation can exercise the web dashboards without weakening TLS validation or
 installing the private demo CA into a desktop profile. Android and physical
 devices use only the HTTPS origin. The Nextcloud container trusts only this
 instance's generated CA so its built-in CODE proxy can use the same HTTPS origin
-that the embedded browser sees. The representative app manifest covers
-native DAV and API workspaces, plus Nextcloud Office as an embedded-web
-boundary. The optional catalog command can stage every App Store package
+that the document editor sees. The representative app manifest covers
+native DAV and API workspaces, plus Nextcloud Office document editing. Android
+embeds only the selected document's Direct Editing session and checks the
+certificate already approved inside the app. Desktop opens that session in the
+system browser, which must independently trust the demo CA. Office file
+selection stays native on both platforms; neither flow opens an app dashboard.
+The manifest's `embedded` label denotes this Android Office-only integration,
+not a generic web fallback or a desktop embedded runtime.
+The optional catalog command can stage every App Store package
 compatible with the running server. Staged catalog apps remain disabled so
 authentication, administration, and workflow apps cannot silently change the
 whole test instance.

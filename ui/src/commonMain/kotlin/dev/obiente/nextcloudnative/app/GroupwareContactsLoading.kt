@@ -157,7 +157,7 @@ private suspend fun loadGroupwareContactBatch(
             ),
         )
     }
-    if (response.status in 500..599 || response.status in setOf(405, 501)) {
+    if (response.status in setOf(405, 501)) {
         return loadGroupwareContactsIndividually(addressBookHref, objects, execute)
     }
     error("Contact loading failed (HTTP ${response.status}).")

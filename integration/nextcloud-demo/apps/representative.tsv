@@ -14,5 +14,5 @@ pantry               native   required     Houses checklists and products
 mail                 native   required     Accounts mailboxes messages and composer
 memories             native   optional     Photo timeline albums and editing handoff
 recognize            native   optional     Face and media recognition APIs
-richdocuments        embedded required     Nextcloud Office integration
-richdocumentscode    embedded optional     Built-in Collabora CODE server
+richdocuments        embedded required     Document-only Android editor; desktop browser handoff
+richdocumentscode    embedded optional     Collabora CODE engine for the selected document

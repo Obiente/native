@@ -94,7 +94,8 @@ internal fun updateNativeRepeatableObjectValue(
     field: RepeatableObjectInputFieldSpec,
     value: String,
 ): List<RepeatableObjectInputRow> {
-    if (rowIndex !in rows.indices || value.length > MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH) {
+    // The draft state rejects oversized candidates with an error instead of silently dropping input.
+    if (rowIndex !in rows.indices) {
         return rows
     }
     val updatedValues = rows[rowIndex].values.toMutableMap().apply {
@@ -292,4 +293,5 @@ private fun RepeatableObjectInputSpec.decodeNativeRepeatableObjectRows(
 private const val MAX_NATIVE_REPEATABLE_OBJECT_SCALAR_LENGTH = 4_096
 private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELDS = 64
 private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_FIELD_ID_LENGTH = 256
-private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH = 256 * 1_024
+// The whole form shares this budget, including JSON escaping and field identifiers.
+private const val MAX_NATIVE_REPEATABLE_OBJECT_DRAFT_LENGTH = 16 * 1_024

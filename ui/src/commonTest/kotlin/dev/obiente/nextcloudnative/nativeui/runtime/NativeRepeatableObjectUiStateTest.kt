@@ -288,7 +288,7 @@ class NativeRepeatableObjectUiStateTest {
     }
 
     @Test
-    fun `structured draft saver preserves valid drafts larger than the scalar saver limit`() {
+    fun `structured draft saver rejects oversized forms instead of filling the activity bundle`() {
         val largeSpec = RepeatableObjectInputSpec(
             minimumItems = 0,
             maximumItems = 32,
@@ -310,7 +310,7 @@ class NativeRepeatableObjectUiStateTest {
 
         val saved = encodeNativeRepeatableObjectDraft(values, specs)
 
-        assertEquals(values, saved?.let { decodeNativeRepeatableObjectDraft(it, specs) })
+        assertNull(saved)
     }
 
     @Test

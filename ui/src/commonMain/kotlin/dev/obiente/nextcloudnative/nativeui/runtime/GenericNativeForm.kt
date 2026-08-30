@@ -188,23 +188,22 @@ internal fun GenericNativeForm(
             initialNativeRepeatableObjectDraft(fields, initialDraft.values)
         }
     }
-    val emptyStructuredDraft = remember(fields, structuredSpecs) {
-        requireNotNull(initialNativeRepeatableObjectDraft(fields, emptyMap()))
-    }
     val structuredDraftSaver = remember(structuredSpecs) {
-        nativeRepeatableObjectDraftSaver(structuredSpecs)
+        nativeRepeatableObjectDraftStateSaver(structuredSpecs)
     }
-    var repeatableObjectValues by rememberSaveable(
+    val structuredDraft = rememberSaveable(
         formSchema.app.id,
         view.id,
         formResource.id,
         initialRecord?.id,
         initialDraft.values,
-        stateSaver = structuredDraftSaver,
+        structuredSpecs,
+        saver = structuredDraftSaver,
     ) {
-        mutableStateOf(initialStructuredDraft ?: emptyStructuredDraft)
+        NativeRepeatableObjectDraftState(initialStructuredDraft, structuredSpecs)
     }
-    val structuredDraftSafe = initialStructuredDraft != null
+    val repeatableObjectValues = structuredDraft.values
+    val structuredDraftSafe = structuredDraft.editable
     val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty() || !structuredDraftSafe
     val settingsWrite = action.isSettingsWrite(resource)
     val hasChanges = draft.hasChangesFrom(initialDraft) ||
@@ -272,6 +271,7 @@ internal fun GenericNativeForm(
                     }
                 }
             }
+            structuredDraft.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (fields.isNotEmpty()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -295,7 +295,7 @@ internal fun GenericNativeForm(
                                     enabled = !submissionBlocked && structuredDraftSafe,
                                     onRowsChange = { rows ->
                                         coordinator.clearStatus()
-                                        repeatableObjectValues = repeatableObjectValues + (field.id to rows)
+                                        structuredDraft.update(field.id, rows)
                                     },
                                 )
                                 return@forEach
@@ -486,7 +486,7 @@ internal fun GenericNativeForm(
                                 onClick = {
                                     coordinator.clearStatus()
                                     draft = initialDraft
-                                    initialStructuredDraft?.let { repeatableObjectValues = it }
+                                    initialStructuredDraft?.let(structuredDraft::replace)
                                 },
                             ) {
                                 Text("Reset changes")

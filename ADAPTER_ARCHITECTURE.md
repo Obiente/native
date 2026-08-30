@@ -205,6 +205,17 @@ Before merging an adapter or repository change, confirm:
 - Tests cover success, empty, partial, offline, denied, malformed, cancelled,
   conflict, and retry-exhausted paths that apply.
 
+## Groupware compatibility failures
+
+Contacts and Tasks fall back from multiget REPORT to individual object reads
+only for HTTP 405 or 501. Other server failures and throttling stop the affected
+collection refresh instead of multiplying requests across its objects. A failed
+collection remains a visible failure, not a successful empty result.
+
+Task parsing withholds blank, control-containing, or over-1,024-character UIDs
+from editing. Task-description normalization changes line endings only; leading,
+trailing, and whitespace-only content survives edits and recovery verification.
+
 ## Primary protocol references
 
 - [Nextcloud WebDAV](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/WebDAV/basic.html)

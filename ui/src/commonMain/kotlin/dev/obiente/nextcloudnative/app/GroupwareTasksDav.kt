@@ -66,7 +66,7 @@ internal fun parseGroupwareTasksFromContent(
         }
         return null
     }
-    val uid = property("UID")?.value?.trim()?.takeIf(String::isNotBlank)
+    val uid = property("UID")?.value?.takeIf(::isSafeGroupwareTaskUid)?.trim()
         ?: return@mapNotNull null
     val recurrenceId = property("RECURRENCE-ID")?.value?.trim()?.takeIf(String::isNotBlank)
     val due = property("DUE")
@@ -85,11 +85,14 @@ internal fun parseGroupwareTasksFromContent(
             due?.value?.let { value -> value.length == 8 && value.all(Char::isDigit) } == true,
         completed = status.equals("COMPLETED", ignoreCase = true) || percentComplete == 100,
         completedAt = property("COMPLETED")?.value?.trim()?.takeIf(String::isNotBlank),
-        description = property("DESCRIPTION")?.value?.decodeCalendarText()?.takeIf(String::isNotBlank),
+        description = property("DESCRIPTION")?.value?.decodeCalendarText()?.takeIf(String::isNotEmpty),
         priority = property("PRIORITY")?.value?.trim()?.toIntOrNull()?.takeIf { it in 0..9 },
         rawCalendar = content,
     )
 }
+
+internal fun isSafeGroupwareTaskUid(value: String): Boolean =
+    value.isNotBlank() && value.length <= 1_024 && value.none(Char::isISOControl)
 
 fun createGroupwareTaskContent(
     uid: String,
@@ -99,7 +102,7 @@ fun createGroupwareTaskContent(
     description: String? = null,
     dtstamp: String = currentGroupwareTaskCompletionTimestamp(),
 ): String {
-    require(uid.isNotBlank() && uid.none(Char::isISOControl)) { "The task id is invalid." }
+    require(isSafeGroupwareTaskUid(uid)) { "The task id is invalid." }
     require(title.isNotBlank()) { "A task title is required." }
     val due = dueDate?.takeIf(String::isNotBlank)?.also(::requireValidGroupwareTaskDueDate)
     return buildList {
@@ -113,7 +116,7 @@ fun createGroupwareTaskContent(
         due?.let { add("DUE;VALUE=DATE:$it") }
         add("STATUS:${if (completed) "COMPLETED" else "NEEDS-ACTION"}")
         add("PERCENT-COMPLETE:${if (completed) 100 else 0}")
-        description?.takeIf(String::isNotBlank)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
+        description?.takeIf(String::isNotEmpty)?.let { add("DESCRIPTION:${it.escapeCalendarText()}") }
         add("END:VTODO")
         add("END:VCALENDAR")
     }.joinToString("\r\n", postfix = "\r\n")
@@ -141,7 +144,7 @@ fun updateGroupwareTaskContent(
     val completionChanged = completed != task.completed
     val replacements = linkedMapOf<String, String?>(
         "SUMMARY" to "SUMMARY:${title.escapeCalendarText()}",
-        "DESCRIPTION" to description?.takeIf(String::isNotBlank)?.let {
+        "DESCRIPTION" to description?.takeIf(String::isNotEmpty)?.let {
             "DESCRIPTION:${it.escapeCalendarText()}"
         },
     )

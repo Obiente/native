@@ -37,7 +37,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RemoteFolderPicker.kt|1
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCollectionNavigator.kt|918
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt|2708
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt|1289
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt|7583
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt|7574
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt|1341
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActions.kt|1240
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeDatasetSemantics.kt|1217

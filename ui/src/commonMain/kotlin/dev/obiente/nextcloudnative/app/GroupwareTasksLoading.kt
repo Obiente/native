@@ -192,7 +192,7 @@ private suspend fun loadGroupwareTaskBatch(
     if (response.status in 200..299) {
         return parseGroupwareCalendarMultiGetResponse(calendarHref, objectHrefs, response)
     }
-    if (response.status in 500..599 || response.status in setOf(405, 501)) {
+    if (response.status in setOf(405, 501)) {
         return loadGroupwareTaskObjectsIndividually(calendarHref, objectReferences, execute)
     }
     error("Task loading failed (HTTP ${response.status}).")

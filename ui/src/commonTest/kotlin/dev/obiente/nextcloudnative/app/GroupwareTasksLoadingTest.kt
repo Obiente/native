@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class GroupwareTasksLoadingTest {
@@ -46,6 +47,42 @@ class GroupwareTasksLoadingTest {
 
         assertEquals(listOf("Task one"), result.tasks.map(GroupwareTask::title))
         assertEquals(listOf("Unavailable"), result.failedCalendarNames)
+    }
+
+    @Test
+    fun `transient multiget errors stop before individual reads or later batches`() = runBlocking {
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val hrefs = (1..30).map { "$calendarHref$it.ics" }
+        listOf(429, 500, 502, 503, 504).forEach { status ->
+            val methods = mutableListOf<String>()
+            val failure = assertFailsWith<IllegalStateException> {
+                loadGroupwareTasksInBatches(calendarHref) { request ->
+                    methods += request.method
+                    if (request.method == "PROPFIND") listingResponse(calendarHref, hrefs)
+                    else NextcloudApiResponse(status, byteArrayOf(), null, null)
+                }
+            }
+            assertTrue(failure.message.orEmpty().contains(status.toString()))
+            assertEquals(listOf("PROPFIND", "REPORT"), methods)
+        }
+    }
+
+    @Test
+    fun `not implemented REPORT allows individual task reads`() = runBlocking {
+        val calendarHref = "/remote.php/dav/calendars/person/tasks/"
+        val methods = mutableListOf<String>()
+        val tasks = loadGroupwareTasksInBatches(calendarHref) { request ->
+            methods += request.method
+            when (request.method) {
+                "PROPFIND" -> listingResponse(calendarHref, listOf("${calendarHref}one.ics"))
+                "REPORT" -> NextcloudApiResponse(501, byteArrayOf(), null, null)
+                "GET" -> NextcloudApiResponse(200,
+                    createGroupwareTaskContent("one", "Task", null, false).encodeToByteArray(), null, null)
+                else -> error("Unexpected method")
+            }
+        }
+        assertEquals(listOf("PROPFIND", "REPORT", "GET"), methods)
+        assertEquals("one", tasks.single().uid)
     }
 
     @Test
