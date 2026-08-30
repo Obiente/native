@@ -3,34 +3,35 @@ package dev.obiente.nextcloudnative.contracts
 import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class AppOwnedOpenApiContractTest {
     @Test
-    fun `root contract may declare app relative api paths`() {
-        assertTrue(
-            isAppOwnedOpenApiDocument(
-                appId = "inventorycheck",
-                specPath = "openapi.json",
-                document = document(paths = listOf("/api/balances", "/api/config")),
-            ),
-        )
+    fun `filenames and root api paths do not prove an app routing base`() {
+        listOf("openapi.json", "openapi.yaml", "openapi.yml", "openapi-full.json", "openapi-public.json")
+            .forEach { path ->
+                listOf("", "\"servers\":[],", "\"servers\":[{\"url\":\"/\"}],").forEach { servers ->
+                    val source = """{"openapi":"3.1.1",$servers"paths":{
+                        "/api/items":{"post":{"operationId":"create"},"delete":{"operationId":"delete"}}
+                    }}""".trimIndent()
+                    assertFalse(isAppOwnedOpenApiDocument("example", path, source))
+                    assertNull(selectOpenApiCandidate(listOf(OpenApiCandidate(path, source, "1")), "example"))
+                }
+            }
     }
 
     @Test
-    fun `empty servers list receives the proven app base`() {
-        val candidate = OpenApiCandidate(
-            path = "openapi.json",
-            document = """{"openapi":"3.0.3","servers":[],"paths":{"/api/items":{}}}""",
-            apiVersion = "1.0.0",
-        ).withProvenAppServerBase("inventorycheck")
-
-        assertTrue(
-            JSONObject(candidate.document)
-                .getJSONArray("servers")
-                .getJSONObject(0)
-                .getString("url") == "/apps/inventorycheck",
-        )
+    fun `selects declared app routing without rewriting the source document`() {
+        val ambiguous = OpenApiCandidate("openapi.json", document(listOf("/api/items")), "1")
+        listOf("/apps/example", "/index.php/apps/example", "/ocs/v2.php/apps/example").forEach { prefix ->
+            listOf(document(listOf("/api/items"), prefix), document(listOf("$prefix/api/items")))
+                .forEach { source ->
+                    val declared = OpenApiCandidate("doc/openapi.yml", source, "1")
+                    assertSame(declared, selectOpenApiCandidate(listOf(ambiguous, declared), "example"))
+                }
+        }
     }
 
     @Test

@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative.app
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -66,6 +67,28 @@ class GroupwareTasksLoadingTest {
             assertTrue(failure.message.orEmpty().contains(status.toString()))
             assertEquals(listOf("PROPFIND", "REPORT"), methods)
         }
+    }
+
+    @Test
+    fun `duplicate task components fail their calendar without confirming selection removal`() = runBlocking {
+        val healthy = GroupwareCalendar("/remote.php/dav/calendars/person/healthy/", "Healthy")
+        val corrupt = GroupwareCalendar("/remote.php/dav/calendars/person/corrupt/", "Corrupt")
+        val calendars = listOf(healthy, corrupt)
+        val result = loadGroupwareTaskCalendars(calendars) { request ->
+            val calendar = calendars.single { it.href == request.relativePath }
+            val href = "${calendar.href}one.ics"
+            if (request.method == "PROPFIND") listingResponse(calendar.href, listOf(href)) else {
+                val response = multiGetResponse(listOf(href))
+                if (calendar == healthy) response else response.copy(body = response.body.decodeToString().replace(
+                    "END:VCALENDAR", "BEGIN:VTODO\r\nUID:one\r\nSUMMARY:Duplicate\r\nEND:VTODO\r\nEND:VCALENDAR",
+                ).encodeToByteArray())
+            }
+        }
+        assertEquals(listOf("Corrupt"), result.failedCalendarNames)
+        assertEquals(setOf(healthy.href), result.completedCalendarHrefs)
+        assertEquals(listOf("${healthy.href}one.ics"), result.tasks.map(GroupwareTask::href))
+        val selection = result.tasks.single().copy(calendarHref = corrupt.href, href = "${corrupt.href}one.ics").selection()
+        assertFalse(TasksLoadState.Ready(calendars, result.tasks, result.completedCalendarHrefs).confirmsSelectionRemoved(selection))
     }
 
     @Test

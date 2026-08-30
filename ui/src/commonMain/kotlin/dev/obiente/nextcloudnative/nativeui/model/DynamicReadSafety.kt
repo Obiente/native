@@ -12,6 +12,10 @@ internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
         id.semanticConceptTokens().lastOrNull() in STATE_CHANGING_GET_CONCEPTS
 }
 
+internal fun DynamicAction.isContextualReadAction(): Boolean =
+    binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&
+        risk == ActionRisk.readOnly && !looksLikeStateChangingGet()
+
 /**
  * Parameterless detail GETs become automatic network work when an app opens. Require affirmative
  * read evidence instead of assuming that an unfamiliar GET is harmless. Collection intent is an

@@ -1,6 +1,5 @@
 package dev.obiente.nextcloudnative.contracts
 
-import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class OpenApiCandidate(
@@ -54,9 +53,7 @@ internal fun isAppOwnedOpenApiDocument(
         return true
     }
     val paths = root.optJSONObject("paths")?.keys()?.asSequence()?.toList().orEmpty()
-    if (paths.any { path -> path.referencesOwnedApp() }) return true
-    return (servers == null || servers.length() == 0) &&
-        normalizedSpecPath in OPEN_API_FILE_PREFERENCE && paths.areAppRelativeApiPaths()
+    return paths.any { path -> path.referencesOwnedApp() }
 }
 
 private fun JSONObject.hasPortableOpenApiServers(): Boolean {
@@ -98,21 +95,6 @@ private fun portableOpenApiServerPath(value: String): String? {
 
 private val PORTABLE_OPEN_API_HOST =
     Regex("\\{[A-Za-z_][A-Za-z0-9_.-]*}(?::(?:[0-9]{1,5}|\\{[A-Za-z_][A-Za-z0-9_.-]*}))?")
-
-internal fun OpenApiCandidate.withProvenAppServerBase(appId: String): OpenApiCandidate {
-    val root = runCatching { JSONObject(document) }.getOrNull() ?: return this
-    if (root.optJSONArray("servers")?.length()?.let { it > 0 } == true) return this
-    val paths = root.optJSONObject("paths")?.keys()?.asSequence()?.toList().orEmpty()
-    if (path.lowercase().trimStart('/') !in OPEN_API_FILE_PREFERENCE || !paths.areAppRelativeApiPaths()) {
-        return this
-    }
-    root.put("servers", JSONArray().put(JSONObject().put("url", "/apps/$appId")))
-    return copy(document = root.toString())
-}
-
-private fun List<String>.areAppRelativeApiPaths(): Boolean = isNotEmpty() && all { path ->
-    path.equals("/api", ignoreCase = true) || path.startsWith("/api/", ignoreCase = true)
-}
 
 private fun openApiPreference(path: String): Int {
     val normalized = path.lowercase()

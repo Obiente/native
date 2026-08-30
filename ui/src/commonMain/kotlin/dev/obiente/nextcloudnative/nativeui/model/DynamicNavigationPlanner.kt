@@ -807,10 +807,7 @@ private fun DynamicLayout.isContextualNavigationLayout(): Boolean =
     isCollectionNavigationLayout() || kind == LayoutKind.detail
 
 private fun DynamicAction.isCollectionReadAction(): Boolean =
-    binding.method == HttpMethod.GET && intent == ActionIntent.list && risk == ActionRisk.readOnly
-
-private fun DynamicAction.isContextualReadAction(): Boolean =
-    binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) && risk == ActionRisk.readOnly
+    isContextualReadAction() && intent == ActionIntent.list
 
 private fun DynamicAction.isRootReadAction(): Boolean =
     binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&

@@ -312,7 +312,6 @@ class SignedAppStoreContractAcquirer(
                 }
             } ?: listOfNotNull(acquireCodeloadCandidate(source, release, sourceRoot))
             selectOpenApiCandidate(contracts, release.appId)
-                ?.withProvenAppServerBase(release.appId)
                 ?.let { selected ->
                 val bundled = bundleGitHubSchemaReferences(sourceRoot, selected)
                 return VerifiedOpenApiContract(
@@ -914,8 +913,7 @@ private fun extractOpenApiContract(
         }
         .take(MAX_OPEN_API_CANDIDATES)
     val selected = selectOpenApiCandidate(candidates, release.appId)?.let { candidate ->
-        val normalized = candidate.withProvenAppServerBase(release.appId)
-        VerifiedPackageContract(release.appId, release.version, normalized.path, normalized.document)
+        VerifiedPackageContract(release.appId, release.version, candidate.path, candidate.document)
     }
     val verifiedReadRoutes = synthesizeReadOnlyRouteContract(release.appId, release.version, files)
     if (selected != null) {

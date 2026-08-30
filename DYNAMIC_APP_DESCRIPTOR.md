@@ -78,6 +78,17 @@ unknown app learned from a successful JSON list response.
   overrides, and local schema references resolve. A server-derived version must
   satisfy the effective parameter's declared enum/default. Unknown schema
   constraints prevent server-derived defaults instead of being silently ignored.
+- Acquisition requires a declared app-owned server base or app-owned operation
+  paths. A root spec filename and `/api/...` paths do not prove an app prefix.
+  Missing or empty `servers` lists are never rewritten to `/apps/{appId}`;
+  [OpenAPI defaults the server base to `/`](https://spec.openapis.org/oas/v3.1.1.html#openapi-object).
+- Command-like GETs are excluded from root and contextual navigation, including
+  linked child tabs and automatic child selection. Verified provenance does not
+  make reset, delete, toggle, or similar commands safe navigation reads.
+- Object `allOf` flattening accepts only preserved shape keywords and known
+  descriptive annotations. Conditional, unknown, and malformed member constraints
+  withhold the write action and form. This includes OpenAPI 3.1 `if`/`then`/`else`,
+  `const`, and dependent schemas; see the [OpenAPI schema rules](https://spec.openapis.org/oas/v3.1.1.html#schema-object).
 - External schema references in trusted Kotlin imports are sanitized before compilation;
   untrusted remote references remain unsupported.
 - OpenAPI security alternatives are currently flattened into conservative

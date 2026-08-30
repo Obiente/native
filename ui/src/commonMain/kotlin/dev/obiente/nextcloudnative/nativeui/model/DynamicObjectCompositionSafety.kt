@@ -1,21 +1,15 @@
 package dev.obiente.nextcloudnative.nativeui.model
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
-private val UNSUPPORTED_FLATTENED_OBJECT_CONSTRAINTS = setOf(
-    "anyOf",
-    "dependencies",
-    "dependentRequired",
-    "dependentSchemas",
-    "maxProperties",
-    "minProperties",
-    "not",
-    "oneOf",
-    "patternProperties",
-    "propertyNames",
-    "unevaluatedProperties",
+// Only shape keywords preserved by flattening and inert descriptive annotations are accepted.
+// A blacklist would silently drop new validation vocabularies, including 3.1 conditionals.
+private val PRESERVED_FLATTENED_OBJECT_KEYS = setOf(
+    "allOf", "type", "properties", "required", "additionalProperties",
+    "title", "description", "default", "example", "examples", "deprecated", "externalDocs", "\$comment",
 )
 
 internal fun JsonObject.isSafeToFlattenObjectShape(
@@ -23,7 +17,14 @@ internal fun JsonObject.isSafeToFlattenObjectShape(
     requiredProperties: List<String>,
     allowImplicitlyOpen: Boolean,
 ): Boolean {
-    if (keys.any(UNSUPPORTED_FLATTENED_OBJECT_CONSTRAINTS::contains)) return false
+    if (keys.any { it !in PRESERVED_FLATTENED_OBJECT_KEYS }) return false
+    if ("type" in this && get("type") != JsonPrimitive("object")) return false
+    if ("properties" in this && properties == null) return false
+    if ("required" in this) {
+        val required = get("required") as? JsonArray ?: return false
+        if (required.any { it !is JsonPrimitive || !it.isString }) return false
+    }
+    if ("allOf" in this && (get("allOf") as? JsonArray)?.isNotEmpty() != true) return false
     val additionalProperties = get("additionalProperties")
     if (additionalProperties != null) {
         return (additionalProperties as? JsonPrimitive)?.booleanOrNull == false

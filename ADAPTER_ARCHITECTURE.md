@@ -229,6 +229,10 @@ form, at most 16 characters, before entering task selection or saved state.
 Malformed exceptions are withheld rather than treated as masters; their raw
 components remain intact when another task is edited. Stable task keys include
 the DAV object, a length-delimited UID, and a master/exception discriminator.
+Duplicate component identities reject the affected calendar response rather than
+selecting one component or supplying duplicate list keys. Edits also require one
+unique matching component in the retained source. A failed calendar does not
+confirm that its selected task was deleted; other calendars remain available.
 Task-description normalization changes line endings only; leading,
 trailing, and whitespace-only content survives edits and recovery verification.
 

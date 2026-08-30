@@ -31,7 +31,7 @@ fun parseGroupwareTasks(calendarHref: String, response: NextcloudApiResponse): L
         parseGroupwareTasksFromContent(
             calendarHref, href, block.xmlText("getetag")?.decodeXmlEntities()?.trim(), calendar,
         )
-    }
+    }.requireUniqueTaskIdentities()
 }
 
 fun parseGroupwareTask(
@@ -69,6 +69,12 @@ internal fun parseGroupwareTasksFromContent(
         priority = property("PRIORITY")?.value?.trim()?.toIntOrNull()?.takeIf { it in 0..9 },
         rawCalendar = content,
     )
+}.requireUniqueTaskIdentities()
+
+private fun List<GroupwareTask>.requireUniqueTaskIdentities(): List<GroupwareTask> = also { tasks ->
+    require(tasks.map(GroupwareTask::instanceId).toSet().size == tasks.size) {
+        "The calendar response contains duplicate task identities."
+    }
 }
 
 internal fun isSafeGroupwareTaskUid(value: String): Boolean =
@@ -140,11 +146,11 @@ fun updateGroupwareTaskContent(
     val due = dueDate?.takeIf(String::isNotBlank)?.also(::requireValidGroupwareTaskDueDate)
     val original = task.rawCalendar.unfoldCalendarLines().toMutableList()
     val selectedIdentity = GroupwareTaskComponentIdentity(task.uid, task.recurrenceId)
-    val taskRange = original.calendarComponentRanges("VTODO").firstOrNull { range ->
+    val taskRange = original.calendarComponentRanges("VTODO").singleOrNull { range ->
         val component = original.subList(range.first + 1, range.last)
         component.groupwareTaskIdentity() == selectedIdentity
     }
-    requireNotNull(taskRange) { "The selected task component could not be found." }
+    requireNotNull(taskRange) { "The selected task component is missing or ambiguous." }
     val taskStart = taskRange.first
     var taskEnd = taskRange.last
     val completionChanged = completed != task.completed

@@ -2,7 +2,7 @@ androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidFileSyncEngine.kt|
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidNextcloudServices.kt|4269
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/AndroidProjectContentClient.kt|985
 androidApp/src/main/kotlin/dev/obiente/nextcloudnative/NextcloudDocumentsProvider.kt|1282
-contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt|1235
+contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirer.kt|1224
 contractAcquisition/src/main/kotlin/dev/obiente/nextcloudnative/contracts/StaticRouteContract.kt|1883
 contractAcquisition/src/test/kotlin/dev/obiente/nextcloudnative/contracts/SignedAppStoreContractAcquirerTest.kt|1798
 ui/src/androidMain/kotlin/dev/obiente/nextcloudnative/app/AndroidCompatibilityVideoPlaybackService.kt|808
@@ -36,7 +36,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePaging.kt|
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RemoteFolderPicker.kt|1092
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCollectionNavigator.kt|918
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt|2638
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt|1289
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt|1271
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt|7574
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt|1341
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActions.kt|1240
