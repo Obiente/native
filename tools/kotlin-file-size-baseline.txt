@@ -35,7 +35,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderBrowsing.kt|
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePaging.kt|860
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RemoteFolderPicker.kt|1092
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCollectionNavigator.kt|918
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt|2708
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt|2641
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt|1289
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt|7574
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt|1341
@@ -46,7 +46,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeReco
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeSemanticPresentations.kt|1401
 ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntimeTest.kt|3181
 ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePagingTest.kt|2052
-ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompilerTest.kt|2387
+ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompilerTest.kt|2384
 ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlannerTest.kt|1807
 ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererStateTest.kt|3115
 ui/src/commonTest/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActionsTest.kt|1277

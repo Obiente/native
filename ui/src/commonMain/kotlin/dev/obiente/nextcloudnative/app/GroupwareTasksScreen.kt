@@ -52,16 +52,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
-private sealed interface TasksLoadState {
-    data object Loading : TasksLoadState
-    data class Ready(
-        val calendars: List<GroupwareCalendar>,
-        val tasks: List<GroupwareTask>,
-        val partialFailureMessage: String? = null,
-    ) : TasksLoadState
-    data class Error(val message: String) : TasksLoadState
-}
-
 private enum class TaskFilter { Open, All, Completed }
 
 @Composable
@@ -83,7 +73,9 @@ fun NativeGroupwareTasksScreen(
     var loadAttempt by remember { mutableStateOf(0) }
     var refreshing by remember { mutableStateOf(false) }
     var refreshError by remember { mutableStateOf<String?>(null) }
-    var selectedTaskHref by rememberSaveable(accountScope) { mutableStateOf<String?>(null) }
+    var selectedTaskSelection by rememberSaveable(accountScope, stateSaver = GroupwareTaskSelectionSaver) {
+        mutableStateOf<GroupwareTaskSelection?>(null)
+    }
     var creating by rememberSaveable(accountScope) { mutableStateOf(false) }
     var editing by rememberSaveable(accountScope) { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<GroupwareTask?>(null) }
@@ -248,6 +240,7 @@ fun NativeGroupwareTasksScreen(
             TasksLoadState.Ready(
                 calendars = calendars,
                 tasks = tasks,
+                completedCalendarHrefs = loaded.completedCalendarHrefs,
                 partialFailureMessage = partialFailureMessage,
             )
         }.onSuccess { loaded ->
@@ -257,7 +250,7 @@ fun NativeGroupwareTasksScreen(
                 when (recoveryVerification) {
                     TaskRecoveryVerification.Applied -> {
                         if (!clearRecovery()) return@onSuccess
-                        selectedTaskHref = null
+                        selectedTaskSelection = null
                         creating = false
                         editing = false
                         deleting = null
@@ -291,15 +284,10 @@ fun NativeGroupwareTasksScreen(
     }
 
     val ready = state as? TasksLoadState.Ready
-    val selectedTask = ready?.tasks?.firstOrNull { it.instanceId == selectedTaskHref }
-    LaunchedEffect(ready, selectedTaskHref, selectedTask?.instanceId) {
-        if (
-            ready != null &&
-            ready.partialFailureMessage == null &&
-            selectedTaskHref != null &&
-            selectedTask == null
-        ) {
-            selectedTaskHref = null
+    val selectedTask = ready?.tasks?.firstOrNull { it.instanceId == selectedTaskSelection?.instanceId }
+    LaunchedEffect(ready, selectedTaskSelection) {
+        if (selectedTaskSelection?.let { ready?.confirmsSelectionRemoved(it) } == true) {
+            selectedTaskSelection = null
             editing = false
             deleting = null
         }
@@ -430,7 +418,7 @@ fun NativeGroupwareTasksScreen(
                             modifier = Modifier.fillMaxWidth().combinedClickable(
                                 onClickLabel = "Open ${task.title}",
                                 onLongClickLabel = "Show actions for ${task.title}",
-                                onClick = { selectedTaskHref = task.instanceId },
+                                onClick = { selectedTaskSelection = task.selection() },
                                 onLongClick = { menuExpanded = true },
                             ),
                             colors = CardDefaults.cardColors(containerColor = NextcloudTheme.colors.appTile),
@@ -463,7 +451,7 @@ fun NativeGroupwareTasksScreen(
                                             text = { Text("View details") },
                                             onClick = {
                                                 menuExpanded = false
-                                                selectedTaskHref = task.instanceId
+                                                selectedTaskSelection = task.selection()
                                             },
                                         )
                                         DropdownMenuItem(
@@ -471,7 +459,7 @@ fun NativeGroupwareTasksScreen(
                                             enabled = !interactionBlocked && taskWritable,
                                             onClick = {
                                                 menuExpanded = false
-                                                selectedTaskHref = task.instanceId
+                                                selectedTaskSelection = task.selection()
                                                 editing = true
                                             },
                                         )
@@ -480,7 +468,7 @@ fun NativeGroupwareTasksScreen(
                                             enabled = !interactionBlocked && taskWritable && taskDeleteSafe,
                                             onClick = {
                                                 menuExpanded = false
-                                                selectedTaskHref = task.instanceId
+                                                selectedTaskSelection = task.selection()
                                                 deleting = task
                                             },
                                         )
@@ -499,7 +487,7 @@ fun NativeGroupwareTasksScreen(
 
     selectedTask?.takeIf { !editing }?.let { task ->
         AlertDialog(
-            onDismissRequest = { if (!interactionBlocked) selectedTaskHref = null },
+            onDismissRequest = { if (!interactionBlocked) selectedTaskSelection = null },
             title = { Text(task.title) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
@@ -546,7 +534,7 @@ fun NativeGroupwareTasksScreen(
             onDismiss = {
                 creating = false
                 editing = false
-                if (selectedTask == null) selectedTaskHref = null
+                if (selectedTask == null) selectedTaskSelection = null
             },
             onSave = save@{ draft, calendar, editStartEtag ->
                 mutationError = null
@@ -669,7 +657,7 @@ fun NativeGroupwareTasksScreen(
                                     return@launch
                                 }
                                 deleting = null
-                                selectedTaskHref = null
+                                selectedTaskSelection = null
                                 loadAttempt += 1
                             } catch (failure: CancellationException) {
                                 throw failure

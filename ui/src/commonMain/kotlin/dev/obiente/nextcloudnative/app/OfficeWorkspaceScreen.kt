@@ -130,7 +130,7 @@ internal fun OfficeWorkspaceBrowser(
             items(files, key = NextcloudFile::path) { file ->
                 Row(
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(enabled = file.isDirectory || state.networkConfirmed) {
+                        .clickable(enabled = file.isDirectory || state.listingNetworkConfirmed) {
                             if (file.isDirectory) onOpenFolder(file.path) else onOpenFile(file)
                         }
                         .padding(vertical = NextcloudSpacing.Medium),

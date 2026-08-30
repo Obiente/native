@@ -38,6 +38,17 @@ class OfficeWorkspaceTest {
     }
 
     @Test
+    fun nativePreviewTypesRemainListedWithoutAnyAdvertisedEditor() {
+        val state = OfficeWorkspaceState(files = listOf(
+            file("Manual.pdf", "application/pdf"), file("Readme.md", "text/markdown"),
+            file("Diagram.drawio", "application/x-drawio"), file("Notes.txt", "text/plain"),
+            file("Other.bin", "application/octet-stream"),
+        ))
+        assertEquals(listOf("Diagram.drawio", "Manual.pdf", "Notes.txt", "Readme.md"),
+            officeWorkspaceFiles(state, "").map(NextcloudFile::path))
+    }
+
+    @Test
     fun cachedAndFailedListingsNeverConfirmEditing() = runBlocking {
         val workspace = OfficeWorkspace(OfficeWorkspaceOperations(
             cachedFiles = { listing(NextcloudFileListingSource.Cache) },
@@ -45,7 +56,7 @@ class OfficeWorkspaceTest {
             capabilities = { capabilities(emptySet()) },
         ))
         workspace.load("")
-        assertFalse(workspace.state.value.networkConfirmed)
+        assertFalse(workspace.state.value.listingNetworkConfirmed)
         assertFalse(workspace.state.value.loading)
         assertEquals(1, workspace.state.value.files.size)
         assertTrue(workspace.state.value.error != null)
@@ -62,8 +73,36 @@ class OfficeWorkspaceTest {
         workspace.load("")
         online = true
         workspace.load("")
-        assertTrue(workspace.state.value.networkConfirmed)
+        assertTrue(workspace.state.value.listingNetworkConfirmed)
         assertEquals(null, workspace.state.value.error)
+    }
+
+    @Test
+    fun editorDiscoveryFailureDoesNotDisableNetworkDocumentPreviews() = runBlocking {
+        val workspace = OfficeWorkspace(OfficeWorkspaceOperations(
+            cachedFiles = { null },
+            files = { listing(NextcloudFileListingSource.Network) },
+            capabilities = { error("Direct Editing is unavailable") },
+        ))
+        workspace.load("")
+        assertTrue(workspace.state.value.listingNetworkConfirmed)
+        assertEquals(listOf("a.docx"), officeWorkspaceFiles(workspace.state.value, "").map(NextcloudFile::path))
+        assertEquals(NextcloudDocumentEditingCapabilities.Unavailable, workspace.state.value.capabilities)
+        assertTrue(workspace.state.value.error.orEmpty().contains("document editors"))
+    }
+
+    @Test
+    fun unsupportedEditorsStillAllowNetworkPreviewsButCachedFallbackDoesNot() = runBlocking {
+        var source = NextcloudFileListingSource.Network
+        val workspace = OfficeWorkspace(OfficeWorkspaceOperations(
+            cachedFiles = { null }, files = { listing(source) },
+            capabilities = { NextcloudDocumentEditingCapabilities.Unavailable },
+        ))
+        workspace.load("")
+        assertTrue(workspace.state.value.listingNetworkConfirmed)
+        source = NextcloudFileListingSource.Cache
+        workspace.load("")
+        assertFalse(workspace.state.value.listingNetworkConfirmed)
     }
 
     @Test

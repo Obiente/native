@@ -67,19 +67,15 @@ internal fun DynamicCollectionHeaderActions(
                             candidate.label.dynamicUiLabel(appName)
                                 .equals(baseLabel, ignoreCase = true)
                         } > 1
+                        val label = dynamicSecondaryDestinationLabel(
+                            destinationLabel = baseLabel,
+                            resourceLabel = schema.resource(view.resourceId)?.name ?: view.resourceId,
+                            duplicate = duplicate,
+                        )
                         DropdownMenuItem(
-                            text = {
-                                Text(
-                                    dynamicSecondaryDestinationLabel(
-                                        destinationLabel = baseLabel,
-                                        resourceLabel = schema.resource(view.resourceId)?.name
-                                            ?: view.resourceId,
-                                        duplicate = duplicate,
-                                    ),
-                                )
-                            },
+                            text = { Text(label) },
                             modifier = Modifier.semantics {
-                                contentDescription = "Open $baseLabel"
+                                contentDescription = "Open $label"
                             },
                             onClick = { onDestinationSelected(destination, view) },
                         )

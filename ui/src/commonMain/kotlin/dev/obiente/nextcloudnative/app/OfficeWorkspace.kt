@@ -18,7 +18,7 @@ internal data class OfficeWorkspaceState(
     val files: List<NextcloudFile> = emptyList(),
     val capabilities: NextcloudDocumentEditingCapabilities = NextcloudDocumentEditingCapabilities.Unavailable,
     val loading: Boolean = true,
-    val networkConfirmed: Boolean = false,
+    val listingNetworkConfirmed: Boolean = false,
     val error: String? = null,
 )
 
@@ -48,8 +48,7 @@ internal class OfficeWorkspace(private val operations: OfficeWorkspaceOperations
             files = listing.getOrNull()?.files ?: mutableState.value.files,
             capabilities = capabilities.getOrNull() ?: mutableState.value.capabilities,
             loading = false,
-            networkConfirmed = capabilities.isSuccess &&
-                listing.getOrNull()?.source == NextcloudFileListingSource.Network,
+            listingNetworkConfirmed = listing.getOrNull()?.source == NextcloudFileListingSource.Network,
             error = when {
                 listing.isFailure -> "Could not refresh this folder. Connect to Nextcloud and retry."
                 capabilities.isFailure -> "Could not discover the server's document editors. Retry to refresh."
@@ -68,7 +67,7 @@ internal fun officeWorkspaceFiles(state: OfficeWorkspaceState, query: String): L
                 remoteFolderParentPath(file.path) == state.path
         }
         .filter { file ->
-            file.isDirectory || describeDocument(file).officeEditable ||
+            file.isDirectory || describeDocument(file).method != DocumentPreviewMethod.Unsupported ||
                 state.capabilities.editors.values.any { editor ->
                     editor.secure && editor.id.isSafeDocumentCapabilityId() &&
                         describeDocument(file).mimeType.let { mime ->

@@ -47,6 +47,7 @@ class GroupwareTasksLoadingTest {
 
         assertEquals(listOf("Task one"), result.tasks.map(GroupwareTask::title))
         assertEquals(listOf("Unavailable"), result.failedCalendarNames)
+        assertEquals(setOf(healthy.href), result.completedCalendarHrefs)
     }
 
     @Test
@@ -138,6 +139,37 @@ class GroupwareTasksLoadingTest {
         assertEquals(listOf("Healthy task"), result.tasks.map(GroupwareTask::title))
         assertTrue(result.failedCalendarNames.isEmpty())
         assertEquals(2, result.concurrentlyDeletedObjectCount)
+        assertEquals(setOf(calendar.href), result.completedCalendarHrefs)
+    }
+
+    @Test
+    fun `empty successful calendar is complete even if another calendar with the same name fails`() = runBlocking {
+        val healthy = GroupwareCalendar("/remote.php/dav/calendars/person/healthy/", "Tasks")
+        val failed = GroupwareCalendar("/remote.php/dav/calendars/person/failed/", "Tasks")
+        val result = loadGroupwareTaskCalendars(listOf(healthy, failed)) { request ->
+            if (request.relativePath == healthy.href) listingResponse(healthy.href, emptyList())
+            else NextcloudApiResponse(503, byteArrayOf(), null, null)
+        }
+        assertEquals(setOf(healthy.href), result.completedCalendarHrefs)
+        assertEquals(listOf("Tasks"), result.failedCalendarNames)
+    }
+
+    @Test
+    fun `budget omissions prevent completion only for the affected calendar`() = runBlocking {
+        val large = GroupwareCalendar("/remote.php/dav/calendars/person/large/", "Large")
+        val empty = GroupwareCalendar("/remote.php/dav/calendars/person/empty/", "Empty")
+        val href = "${large.href}one.ics"
+        val result = loadGroupwareTaskCalendars(
+            listOf(large, empty), retentionBudget = GroupwareTaskRetentionBudget(1L),
+        ) { request ->
+            when {
+                request.relativePath == empty.href -> listingResponse(empty.href, emptyList())
+                request.method == "PROPFIND" -> listingResponse(large.href, listOf(href))
+                else -> multiGetResponse(listOf(href))
+            }
+        }
+        assertEquals(setOf(empty.href), result.completedCalendarHrefs)
+        assertEquals(1, result.omittedObjectCount)
     }
 
     @Test

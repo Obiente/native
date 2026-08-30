@@ -12,6 +12,8 @@ OOXML/ODF collaborative editing requires an Office engine and WOPI lifecycle tha
 
 Office app entries open a native document browser. The browser reads DAV folders and core Direct Editing capabilities; opening it does not create an editing token or open an app dashboard. Cached listings remain visible but must be confirmed online before selecting a document.
 
+File-listing confirmation is independent of editor discovery. A failed or unsupported Direct Editing capability request does not disable native previews for a successfully loaded folder. Document types with native preview support remain listed without an advertised editor. Editor eligibility remains a separate check in the document workflow.
+
 Preview and Edit are separate actions. Editing is gated by a secure advertised editor for the exact MIME type, file identity, version, and write permission. Eligibility is not restricted to a hard-coded Office format list: PDFs and other advertised formats can have editing choices too. A failed thumbnail must not hide those choices.
 
 Android embeds only the validated one-time Direct Editing URL after explicit selection. It never sends account credentials into the WebView. Desktop keeps the system-browser editing handoff.

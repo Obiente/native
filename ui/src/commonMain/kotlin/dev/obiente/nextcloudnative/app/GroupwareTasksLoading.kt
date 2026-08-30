@@ -5,6 +5,7 @@ internal data class GroupwareTaskCalendarLoadResult(
     val failedCalendarNames: List<String>,
     val concurrentlyDeletedObjectCount: Int = 0,
     val omittedObjectCount: Int = 0,
+    val completedCalendarHrefs: Set<String> = emptySet(),
 )
 
 private data class GroupwareTaskObjectReference(
@@ -14,27 +15,34 @@ private data class GroupwareTaskObjectReference(
 
 internal suspend fun loadGroupwareTaskCalendars(
     calendars: List<GroupwareCalendar>,
+    retentionBudget: GroupwareTaskRetentionBudget = GroupwareTaskRetentionBudget(),
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): GroupwareTaskCalendarLoadResult {
     val tasks = mutableListOf<GroupwareTask>()
     val failures = mutableListOf<String>()
     var concurrentlyDeletedObjectCount = 0
     var omittedObjectCount = 0
-    val retentionBudget = GroupwareTaskRetentionBudget()
+    val completedCalendarHrefs = mutableSetOf<String>()
     calendars.forEach { calendar ->
+        var omitted = false
         runCatchingPreservingCancellation {
             loadGroupwareTasksInBatches(
                 calendarHref = calendar.href,
                 onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
-                onRetentionOmission = { count -> omittedObjectCount += count },
+                onRetentionOmission = { count -> omittedObjectCount += count; omitted = true },
                 retentionBudget = retentionBudget,
                 execute = execute,
             )
-        }.onSuccess(tasks::addAll).onFailure {
+        }.onSuccess { loaded ->
+            tasks += loaded
+            if (!omitted) completedCalendarHrefs += calendar.href
+        }.onFailure {
             failures += calendar.displayName
         }
     }
-    return GroupwareTaskCalendarLoadResult(tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount)
+    return GroupwareTaskCalendarLoadResult(
+        tasks, failures, concurrentlyDeletedObjectCount, omittedObjectCount, completedCalendarHrefs,
+    )
 }
 
 internal fun groupwareDavCalendarObjectListingRequest(calendarHref: String): GroupwareDavRequest =

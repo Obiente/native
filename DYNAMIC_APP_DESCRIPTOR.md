@@ -64,8 +64,18 @@ unknown app learned from a successful JSON list response.
 
 ## Reviewed limits
 
-- OpenAPI 2/Swagger, remote `$ref` values, templated server URLs and ambiguous
-  multiple server bases are rejected.
+- The Kotlin importer rejects OpenAPI 2/Swagger and ambiguous multiple server
+  bases. It permits whole-host server templates only for trusted package
+  or App Store-linked contracts. Concrete foreign origins and fixed-host
+  templates such as `https://{tenant}.vendor.test` are never rebased onto the
+  connected Nextcloud server. Relative and concrete same-origin servers remain
+  valid. Acquisition rejects concrete package-server authorities because it
+  cannot establish their ownership by the connected account.
+- Path and operation server overrides must pass the same origin checks and
+  resolve to the root server path base. Different override bases are unsupported
+  rather than ignored. See the [OpenAPI server and override rules](https://spec.openapis.org/oas/v3.0.3.html#server-object).
+- External schema references in trusted Kotlin imports are sanitized before compilation;
+  untrusted remote references remain unsupported.
 - OpenAPI security alternatives are currently flattened into conservative
   authentication requirements; optional/alternative scheme selection is not
   modeled yet.

@@ -212,6 +212,11 @@ only for HTTP 405 or 501. Other server failures and throttling stop the affected
 collection refresh instead of multiplying requests across its objects. A failed
 collection remains a visible failure, not a successful empty result.
 
+Tasks track completed refreshes by calendar href, not display name or aggregate
+warning text. A missing selection is cleared after its own calendar completes,
+even if another calendar fails. Failed or budget-truncated calendars do not
+prove deletion; selection retains its calendar identity across restoration.
+
 Task parsing withholds blank, control-containing, or over-1,024-character UIDs
 from editing. Recurrence identity values must have a valid date or date-time
 form, at most 16 characters, before entering task selection or saved state.

@@ -670,7 +670,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun cookbookReleaseServersWithEquivalentPathBasesCompileAgainstAuthenticatedOrigin() {
+    fun cookbookReleaseServersWithConcreteForeignOriginAreRejected() {
         val document = """
             {
               "openapi": "3.0.1",
@@ -728,11 +728,10 @@ class DynamicAppDescriptorCompilerTest {
             ),
         )
 
-        val descriptor = DynamicAppDescriptorCompiler().compile(cookbookInput)
-
-        assertEquals("/apps/cookbook/api/v1/recipes", descriptor.actions.single().binding.path)
-        assertEquals(LayoutKind.list, descriptor.layouts.single().kind)
-        assertTrue(descriptor.validationErrors().isEmpty())
+        val failure = assertFailsWith<IllegalArgumentException> {
+            DynamicAppDescriptorCompiler().compile(cookbookInput)
+        }
+        assertTrue(failure.message.orEmpty().contains("Concrete cross-origin OpenAPI server rebasing"))
     }
 
     @Test
@@ -1207,8 +1206,8 @@ class DynamicAppDescriptorCompilerTest {
         val conflicting = OPEN_API.replace(
             "\"servers\": [{ \"url\": \"/ocs/v2.php/apps/tables/api/2\" }]",
             """"servers": [
-                { "url": "https://one.example/ocs/v2.php/apps/tables/api/2" },
-                { "url": "https://two.example/ocs/v2.php/apps/tables/api/3" }
+                { "url": "https://{hostOne}/ocs/v2.php/apps/tables/api/2" },
+                { "url": "https://{hostTwo}/ocs/v2.php/apps/tables/api/3" }
             ]""",
         )
         val failure = assertFailsWith<IllegalArgumentException> {
