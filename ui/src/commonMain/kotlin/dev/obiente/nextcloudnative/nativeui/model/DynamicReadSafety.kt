@@ -1,0 +1,94 @@
+package dev.obiente.nextcloudnative.nativeui.model
+
+import dev.obiente.nextcloudnative.template.scanBracedTemplate
+
+/**
+ * A few third-party route catalogs describe command-like endpoints with GET even though invoking
+ * them changes server state. HTTP method alone must not turn those routes into automatic app
+ * destinations. This check is deliberately limited to unambiguous command verbs; export,
+ * download, preview, and other read-producing operations remain eligible.
+ */
+internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
+    val terminalStaticSegment = binding.path.substringBefore('?').trimEnd('/').split('/')
+        .dropLastWhile { segment ->
+            val scan = segment.scanBracedTemplate()
+            !scan.malformed && scan.tokens.singleOrNull()?.let { token ->
+                token.startIndex == 0 && token.endIndexExclusive == segment.length
+            } == true
+        }.lastOrNull().orEmpty()
+    val idConcepts = id.semanticConceptTokenList()
+    return terminalStaticSegment.semanticConceptTokens().any(STATE_CHANGING_GET_CONCEPTS::contains) ||
+        idConcepts.firstOrNull() in STATE_CHANGING_GET_CONCEPTS ||
+        idConcepts.lastOrNull() in STATE_CHANGING_GET_CONCEPTS ||
+        (idConcepts.any(STATE_CHANGING_GET_CONCEPTS::contains) &&
+            idConcepts.lastOrNull() !in READ_PRODUCING_GET_SUFFIX_CONCEPTS)
+}
+
+internal fun DynamicAction.isContextualReadAction(): Boolean =
+    binding.method == HttpMethod.GET && intent in setOf(ActionIntent.list, ActionIntent.read) &&
+        risk == ActionRisk.readOnly && !looksLikeStateChangingGet()
+
+/**
+ * Parameterless detail GETs become automatic network work when an app opens. Require affirmative
+ * read evidence instead of assuming that an unfamiliar GET is harmless. Collection intent is an
+ * explicit read-producing contract; detail routes need verified provenance or an
+ * explicit read-producing concept such as status, settings, or overview.
+ */
+internal fun DynamicAction.hasPositiveRootReadEvidence(): Boolean {
+    if (looksLikeStateChangingGet()) return false
+    if (intent == ActionIntent.list) return true
+    if (provenance.any { it.kind == ProvenanceKind.successfulReadObservation }) return true
+    val concepts = sequenceOf(resourceId, binding.path, id, label)
+        .flatMap { it.semanticConceptTokens().asSequence() }
+        .toSet()
+    return concepts.any(POSITIVE_ROOT_READ_CONCEPTS::contains)
+}
+
+private val STATE_CHANGING_GET_CONCEPTS = setOf(
+    "clear",
+    "clearcache",
+    "delete",
+    "deleteall",
+    "destroy",
+    "disable",
+    "enable",
+    "execute",
+    "flush",
+    "rebuild",
+    "regenerate",
+    "reindex",
+    "remove",
+    "reset",
+    "restart",
+    "run",
+    "scan",
+    "start",
+    "toggle",
+    "trigger",
+)
+
+private val READ_PRODUCING_GET_SUFFIX_CONCEPTS = setOf("status", "history", "preview", "export", "download")
+    .flatMap { it.semanticConceptTokens() }.toSet()
+
+private val POSITIVE_ROOT_READ_CONCEPTS = setOf(
+    "capabilities",
+    "configuration",
+    "dashboard",
+    "detail",
+    "details",
+    "get",
+    "health",
+    "info",
+    "overview",
+    "preferences",
+    "profile",
+    "read",
+    "settings",
+    "show",
+    "statistics",
+    "stats",
+    "status",
+    "summary",
+    "version",
+    "view",
+)

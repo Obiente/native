@@ -230,99 +230,6 @@ fun groupwareDavDetailRequest(objectHref: String): GroupwareDavRequest = Groupwa
     maximumResponseBytes = DAV_OBJECT_RESPONSE_BYTES,
 )
 
-enum class GroupwareDavMutation {
-    Create,
-    Update,
-    Delete,
-}
-
-/**
- * A client-error response normally proves that the server refused the mutation. Timeouts and
- * non-standard client-closed responses remain ambiguous because an intermediary can emit them
- * after forwarding the request. Redirects and server errors are ambiguous for the same reason.
- */
-internal fun groupwareMutationResponseProvesRejection(status: Int): Boolean =
-    status in 400..499 && status != 408 && status != 499
-
-internal fun groupwareDeleteResponseProvesAbsence(status: Int): Boolean = status == 404 || status == 410
-
-data class GroupwareDavMutationSpec(
-    val kind: GroupwareDavKind,
-    val mutation: GroupwareDavMutation,
-    val objectHref: String,
-    val etag: String? = null,
-    val content: String? = null,
-)
-
-/**
- * Builds conflict-safe DAV writes without executing them. Updates and deletes require an ETag;
- * creates use If-None-Match so an opaque server resource can never be overwritten accidentally.
- */
-fun GroupwareDavMutationSpec.toGroupwareDavRequest(): GroupwareDavRequest {
-    val href = objectHref.requireSafeDavHref()
-    val expectedSuffix = if (kind == GroupwareDavKind.Contact) ".vcf" else ".ics"
-    require(href.substringBefore('?').endsWith(expectedSuffix, ignoreCase = true)) {
-        "The DAV object extension does not match its content kind."
-    }
-    val safeEtag = etag?.takeIf {
-        it.isNotBlank() && it.length <= MAX_DAV_ETAG_LENGTH && it.none(Char::isISOControl)
-    }
-    val headers = when (mutation) {
-        GroupwareDavMutation.Create -> {
-            require(etag == null) { "A new DAV object cannot carry an existing ETag." }
-            mapOf("If-None-Match" to "*")
-        }
-        GroupwareDavMutation.Update, GroupwareDavMutation.Delete -> {
-            require(safeEtag != null) { "An ETag is required for conflict-safe DAV changes." }
-            mapOf("If-Match" to safeEtag)
-        }
-    }
-    val body = when (mutation) {
-        GroupwareDavMutation.Delete -> {
-            require(content == null) { "A DAV delete request cannot include object content." }
-            null
-        }
-        GroupwareDavMutation.Create, GroupwareDavMutation.Update -> {
-            val value = requireNotNull(content) { "DAV object content is required." }
-            require(value.encodeToByteArray().size <= MAX_DAV_OBJECT_BYTES && '\u0000' !in value) {
-                "The DAV object content is invalid or too large."
-            }
-            val requiredMarkers = when (kind) {
-                GroupwareDavKind.Contact -> listOf("BEGIN:VCARD", "END:VCARD")
-                GroupwareDavKind.Event -> listOf("BEGIN:VCALENDAR", "BEGIN:VEVENT", "END:VEVENT", "END:VCALENDAR")
-                GroupwareDavKind.Task -> listOf("BEGIN:VCALENDAR", "BEGIN:VTODO", "END:VTODO", "END:VCALENDAR")
-            }
-            require(requiredMarkers.all { marker -> marker in value.uppercase() }) {
-                "The DAV object content does not match its declared kind."
-            }
-            value.encodeToByteArray()
-        }
-    }
-    return GroupwareDavRequest(
-        method = when (mutation) {
-            GroupwareDavMutation.Create, GroupwareDavMutation.Update -> "PUT"
-            GroupwareDavMutation.Delete -> "DELETE"
-        },
-        relativePath = href,
-        contentType = body?.let {
-            if (kind == GroupwareDavKind.Contact) "text/vcard; charset=utf-8" else "text/calendar; charset=utf-8"
-        },
-        body = body,
-        headers = headers,
-        maximumResponseBytes = DAV_MUTATION_RESPONSE_BYTES,
-    )
-}
-
-internal inline fun <T> prepareGroupwareDavMutation(
-    onInvalid: () -> Unit,
-    prepare: () -> T,
-): T? = try {
-    prepare()
-} catch (_: IllegalArgumentException) {
-    onInvalid()
-    null
-}
-
 private fun addressBookQueryBody(maxResults: Int): String = """
     <?xml version="1.0" encoding="UTF-8"?>
     <card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
@@ -365,17 +272,26 @@ fun groupwareAddressBookHomeHref(userId: String): String {
     return "/remote.php/dav/addressbooks/users/${userId.encodeDavPathSegment()}/"
 }
 
-fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> {
+fun parseGroupwareCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
+    parseGroupwareCalendarsForComponent(response, "VEVENT")
+
+fun parseGroupwareTaskCalendars(response: NextcloudApiResponse): List<GroupwareCalendar> =
+    parseGroupwareCalendarsForComponent(response, "VTODO")
+
+private fun parseGroupwareCalendarsForComponent(
+    response: NextcloudApiResponse,
+    componentName: String,
+): List<GroupwareCalendar> {
     require(response.status in 200..299) { "Calendar discovery failed (HTTP ${response.status})." }
     val xml = response.body.decodeToString()
     return xml.xmlElements("response").mapNotNull { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.takeIf { it.endsWith('/') }
             ?: return@mapNotNull null
         if (!block.containsXmlElement("calendar")) return@mapNotNull null
-        val supportsEvents = block.xmlOpeningTags("comp").any { component ->
-            component.xmlAttribute("name")?.equals("VEVENT", ignoreCase = true) == true
+        val supportsComponent = block.xmlOpeningTags("comp").any { component ->
+            component.xmlAttribute("name")?.equals(componentName, ignoreCase = true) == true
         }
-        if (!supportsEvents) return@mapNotNull null
+        if (!supportsComponent) return@mapNotNull null
         val privileges = block.xmlElements("privilege").flatMap { it.xmlElementNames() }
         GroupwareCalendar(
             href = href.requireSafeDavHref(),
@@ -898,20 +814,7 @@ private fun calendarDaysInMonth(year: Int, month: Int): Int = when (month) {
     else -> 31
 }
 
-private fun List<String>.calendarEventComponents(): List<List<String>> {
-    val result = mutableListOf<List<String>>()
-    var start = -1
-    forEachIndexed { index, line ->
-        when {
-            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index + 1
-            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
-                result += subList(start, index)
-                start = -1
-            }
-        }
-    }
-    return result
-}
+private fun List<String>.calendarEventComponents(): List<List<String>> = calendarComponentLines("VEVENT")
 
 private const val MAX_CALENDAR_OCCURRENCES = 50_000
 private val CALENDAR_WEEK_DAYS = setOf("MO", "TU", "WE", "TH", "FR", "SA", "SU")
@@ -964,7 +867,7 @@ fun updateGroupwareCalendarEventContent(
 ): String {
     recurrenceRule?.let { requireValidCalendarRecurrenceRule(it) }
     val original = event.rawCalendar.unfoldCalendarLines().toMutableList()
-    val eventRange = original.calendarEventComponentRanges().firstOrNull { range ->
+    val eventRange = original.calendarComponentRanges("VEVENT").firstOrNull { range ->
         val component = original.subList(range.first + 1, range.last)
         val uid = component.calendarPropertyValue("UID")
             ?: event.href.substringAfterLast('/').substringBeforeLast('.')
@@ -982,9 +885,7 @@ fun updateGroupwareCalendarEventContent(
         "RRULE" to recurrenceRule?.trim()?.takeIf(String::isNotBlank)?.let { "RRULE:$it" },
     )
     replacements.forEach { (name, replacement) ->
-        val index = (eventStart + 1 until eventEnd).firstOrNull { lineIndex ->
-            original[lineIndex].substringBefore(':').substringBefore(';').equals(name, ignoreCase = true)
-        }
+        val index = original.directCalendarPropertyIndex(eventStart, eventEnd, name)
         when {
             index != null && replacement != null -> original[index] = replacement
             index != null -> {
@@ -998,30 +899,6 @@ fun updateGroupwareCalendarEventContent(
         }
     }
     return original.joinToString("\r\n", postfix = "\r\n")
-}
-
-private fun List<String>.calendarEventComponentRanges(): List<IntRange> {
-    val result = mutableListOf<IntRange>()
-    var start = -1
-    forEachIndexed { index, line ->
-        when {
-            line.equals("BEGIN:VEVENT", ignoreCase = true) -> start = index
-            line.equals("END:VEVENT", ignoreCase = true) && start >= 0 -> {
-                result += start..index
-                start = -1
-            }
-        }
-    }
-    return result
-}
-
-private fun List<String>.calendarPropertyValue(name: String): String? = firstNotNullOfOrNull { line ->
-    val separator = line.indexOf(':')
-    if (separator <= 0 || !line.substring(0, separator).substringBefore(';').equals(name, ignoreCase = true)) {
-        null
-    } else {
-        line.substring(separator + 1).trim().takeIf(String::isNotBlank)
-    }
 }
 
 private fun requireValidCalendarRecurrenceRule(value: String) {
@@ -1101,9 +978,9 @@ private val SUPPORTED_CALENDAR_RECURRENCE_FIELDS = setOf(
     "WKST",
 )
 
-private data class CalendarProperty(val declaration: String, val value: String)
+internal data class CalendarProperty(val declaration: String, val value: String)
 
-private fun String.unfoldCalendarLines(): List<String> {
+internal fun String.unfoldCalendarLines(): List<String> {
     val result = mutableListOf<String>()
     replace("\r\n", "\n").replace('\r', '\n').split('\n').forEach { line ->
         if ((line.startsWith(' ') || line.startsWith('\t')) && result.isNotEmpty()) {
@@ -1118,13 +995,13 @@ private fun String.unfoldCalendarLines(): List<String> {
 internal fun String.normalizeGroupwareTextLineEndings(): String =
     replace("\r\n", "\n").replace('\r', '\n')
 
-private fun String.escapeCalendarText(): String = normalizeGroupwareTextLineEndings()
+internal fun String.escapeCalendarText(): String = normalizeGroupwareTextLineEndings()
     .replace("\\", "\\\\")
     .replace("\n", "\\n")
     .replace(",", "\\,")
     .replace(";", "\\;")
 
-private fun String.decodeCalendarText(): String = buildString(length) {
+internal fun String.decodeCalendarText(): String = buildString(length) {
     var index = 0
     while (index < this@decodeCalendarText.length) {
         val character = this@decodeCalendarText[index]
@@ -1374,15 +1251,12 @@ private const val MAX_DAV_SYNC_LIMIT = 1_000
 private const val MAX_DAV_SYNC_PAGES = 100
 private const val MAX_DAV_SYNC_TOKEN_LENGTH = 4_096
 private const val MAX_DAV_HREF_LENGTH = 4_096
-private const val MAX_DAV_ETAG_LENGTH = 1_024
 private const val MAX_CALENDAR_RECURRENCE_RULE_LENGTH = 1_024
-private const val MAX_DAV_OBJECT_BYTES = 4 * 1024 * 1024
 private const val DAV_DISCOVERY_RESPONSE_BYTES = 1L * 1024L * 1024L
 private const val DAV_COLLECTION_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_QUERY_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_SYNC_RESPONSE_BYTES = 4L * 1024L * 1024L
 private const val DAV_OBJECT_RESPONSE_BYTES = 4L * 1024L * 1024L
-private const val DAV_MUTATION_RESPONSE_BYTES = 256L * 1024L
 
 private val PRINCIPAL_DISCOVERY_BODY = """
     <?xml version="1.0" encoding="UTF-8"?>

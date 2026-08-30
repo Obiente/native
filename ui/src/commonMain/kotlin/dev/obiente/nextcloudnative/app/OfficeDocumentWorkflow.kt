@@ -45,8 +45,8 @@ data class NextcloudDocumentEditingCapabilities(
  * Token-free parameters for an explicit Office edit action.
  *
  * The ETag is retained as the version the user reviewed. Nextcloud's direct-editing endpoint does
- * not currently accept an If-Match validator, so callers should refresh the file metadata before
- * allowing this plan to remain actionable for a long time.
+ * not accept an If-Match validator. The edit use case must re-resolve the stable ID and compare
+ * the full request against current DAV metadata immediately before creating a session.
  */
 data class NextcloudDocumentEditSessionRequest(
     /** Parent directory used with [fileId] so a rename cannot silently retarget the handoff. */
@@ -62,7 +62,7 @@ data class NextcloudDocumentEditSessionRequest(
  * Platform implementations validate this as same-origin and on the core direct-editing route.
  * [toString] stays redacted so routine diagnostics cannot accidentally log its token.
  */
-class NextcloudDocumentEditSession internal constructor(
+class NextcloudDocumentEditSession(
     val sameOriginUrl: String,
 ) {
     override fun toString(): String = "NextcloudDocumentEditSession(url=<redacted>)"
@@ -73,6 +73,12 @@ sealed interface OfficeEditSessionPlan {
 
     data class Blocked(val reason: OfficeEditBlockedReason) : OfficeEditSessionPlan
 }
+
+data class OfficeEditorChoice(
+    val editorId: String,
+    val displayName: String,
+    val request: NextcloudDocumentEditSessionRequest,
+)
 
 enum class OfficeEditBlockedReason {
     Directory,
@@ -85,6 +91,7 @@ enum class OfficeEditBlockedReason {
     DirectEditingUnavailable,
     FileIdHandoffUnavailable,
     InsecureEditor,
+    InsecureAccountOrigin,
     UnsupportedMimeType,
     UnsafePath,
 }
@@ -97,7 +104,12 @@ enum class OfficeEditBlockedReason {
 fun planOfficeEditSession(
     file: NextcloudFile,
     capabilities: NextcloudDocumentEditingCapabilities,
+    accountOriginSecure: Boolean = true,
+    editorId: String? = null,
 ): OfficeEditSessionPlan {
+    if (!accountOriginSecure) {
+        return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.InsecureAccountOrigin)
+    }
     if (file.isDirectory) return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.Directory)
     if (!file.originalAccessAllowed) {
         return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.OriginalAccessRestricted)
@@ -111,12 +123,6 @@ fun planOfficeEditSession(
     if ('W' !in permissions) return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.ReadOnly)
 
     val descriptor = describeDocument(file)
-    if (!descriptor.officeEditable) {
-        return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.UnsupportedDocument)
-    }
-    val editor = capabilities.editors[OFFICE_DIRECT_EDITOR_ID]
-        ?: return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.DirectEditingUnavailable)
-    if (!editor.secure) return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.InsecureEditor)
     if (!capabilities.supportsFileId) {
         return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.FileIdHandoffUnavailable)
     }
@@ -124,8 +130,33 @@ fun planOfficeEditSession(
     val mimeType = descriptor.mimeType
         ?.takeUnless { it == "application/octet-stream" }
         ?: return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.UnsupportedMimeType)
-    if (mimeType !in editor.mimeTypes && mimeType !in editor.optionalMimeTypes) {
+    val advertisedEditors = capabilities.editors.values
+        .filter { it.id.isSafeDocumentCapabilityId() }
+    if (advertisedEditors.isEmpty()) {
+        return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.DirectEditingUnavailable)
+    }
+    val mimeEditors = advertisedEditors.filter { editor ->
+        mimeType in editor.mimeTypes || mimeType in editor.optionalMimeTypes
+    }
+    if (mimeEditors.isEmpty()) {
         return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.UnsupportedMimeType)
+    }
+    val editor = if (editorId == null) {
+        mimeEditors
+            .filter(NextcloudDocumentEditorCapability::secure)
+            .sortedWith(
+                compareBy(
+                    NextcloudDocumentEditorCapability::displayName,
+                    NextcloudDocumentEditorCapability::id,
+                ),
+            )
+            .firstOrNull()
+            ?: return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.InsecureEditor)
+    } else {
+        val requestedEditor = mimeEditors.firstOrNull { it.id == editorId }
+            ?: return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.DirectEditingUnavailable)
+        requestedEditor.takeIf(NextcloudDocumentEditorCapability::secure)
+            ?: return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.InsecureEditor)
     }
     if (!file.path.isSafeDocumentRelativePath()) {
         return OfficeEditSessionPlan.Blocked(OfficeEditBlockedReason.UnsafePath)
@@ -141,6 +172,26 @@ fun planOfficeEditSession(
         ),
     )
 }
+
+fun planOfficeEditorChoices(
+    file: NextcloudFile,
+    capabilities: NextcloudDocumentEditingCapabilities,
+    accountOriginSecure: Boolean = true,
+): List<OfficeEditorChoice> = capabilities.editors.values
+    .asSequence()
+    .filter { it.id.isSafeDocumentCapabilityId() && it.secure }
+    .mapNotNull { editor ->
+        val ready = planOfficeEditSession(
+            file = file,
+            capabilities = capabilities,
+            accountOriginSecure = accountOriginSecure,
+            editorId = editor.id,
+        ) as? OfficeEditSessionPlan.Ready ?: return@mapNotNull null
+        OfficeEditorChoice(editor.id, editor.displayName.ifBlank { editor.id }, ready.request)
+    }
+    .distinctBy(OfficeEditorChoice::editorId)
+    .sortedWith(compareBy(OfficeEditorChoice::displayName, OfficeEditorChoice::editorId))
+    .toList()
 
 internal fun String.isSafeDocumentRelativePath(): Boolean =
     isNotBlank() &&
@@ -162,11 +213,14 @@ internal fun OfficeEditBlockedReason.userMessage(): String = when (this) {
     OfficeEditBlockedReason.MissingPermissions -> "Refresh the folder to verify edit permission."
     OfficeEditBlockedReason.ReadOnly -> "This document is read-only."
     OfficeEditBlockedReason.UnsupportedDocument -> "This file type is not an Office document."
-    OfficeEditBlockedReason.DirectEditingUnavailable -> "Nextcloud Office is unavailable for this account."
+    OfficeEditBlockedReason.DirectEditingUnavailable ->
+        "No compatible Office editor is available for this account."
     OfficeEditBlockedReason.FileIdHandoffUnavailable ->
         "This server cannot bind an Office handoff to the document ID."
     OfficeEditBlockedReason.InsecureEditor -> "The advertised Office handoff is not marked secure."
-    OfficeEditBlockedReason.UnsupportedMimeType -> "Nextcloud Office did not advertise this exact file type."
+    OfficeEditBlockedReason.InsecureAccountOrigin -> "Office editing requires an HTTPS account connection."
+    OfficeEditBlockedReason.UnsupportedMimeType ->
+        "The server's Office editors did not advertise this exact file type."
     OfficeEditBlockedReason.UnsafePath -> "The document path is unsafe."
 }
 
@@ -181,21 +235,18 @@ internal data class CachedDocumentEditingCapabilities(
 internal class NextcloudDocumentEditingCapabilitiesCache {
     private val entries = mutableMapOf<String, CachedDocumentEditingCapabilities>()
 
-    fun get(session: NextcloudSession): CachedDocumentEditingCapabilities? = entries[session.cacheKey()]
+    fun get(session: NextcloudSession): CachedDocumentEditingCapabilities? = entries[previewCacheDigest(session)]
 
     fun store(
         session: NextcloudSession,
         capabilities: NextcloudDocumentEditingCapabilities,
         etag: String?,
     ) {
-        entries[session.cacheKey()] = CachedDocumentEditingCapabilities(
+        entries[previewCacheDigest(session)] = CachedDocumentEditingCapabilities(
             capabilities = capabilities,
             etag = etag?.takeIf(String::isNotBlank),
         )
     }
-
-    private fun NextcloudSession.cacheKey(): String =
-        serverUrl.trim().trimEnd('/').lowercase() + '\u0000' + loginName
 }
 
 internal val sharedDocumentEditingCapabilitiesCache = NextcloudDocumentEditingCapabilitiesCache()

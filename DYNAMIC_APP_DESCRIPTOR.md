@@ -64,8 +64,43 @@ unknown app learned from a successful JSON list response.
 
 ## Reviewed limits
 
-- OpenAPI 2/Swagger, remote `$ref` values, templated server URLs and ambiguous
-  multiple server bases are rejected.
+- The Kotlin importer rejects OpenAPI 2/Swagger and ambiguous multiple server
+  bases. It permits whole-host server templates only for trusted package
+  or App Store-linked contracts. Concrete foreign origins and fixed-host
+  templates such as `https://{tenant}.vendor.test` are never rebased onto the
+  connected Nextcloud server. Relative and concrete same-origin servers remain
+  valid. Host templates must retain the concrete scheme and effective port;
+  only an explicitly templated port may adopt the account port. An omitted port
+  means the scheme's default, not any account port. Acquisition rejects concrete
+  package-server authorities because it
+  cannot establish their ownership by the connected account.
+- Path and operation server overrides must pass the same origin checks and
+  resolve to the root server path base. Different override bases are unsupported
+  rather than ignored. An absent override inherits the base; an explicit empty
+  array resets it to `/` and is rejected if that differs from the document base.
+  See the [OpenAPI server and override rules](https://spec.openapis.org/oas/v3.1.1.html#operation-object).
+- API-version defaults are bound only after inherited parameters, operation
+  overrides, and local schema references resolve. A server-derived version must
+  satisfy the effective parameter's declared enum/default. Unknown schema
+  constraints prevent server-derived defaults instead of being silently ignored.
+- Acquisition requires a declared app-owned server base or app-owned operation
+  paths. A root spec filename and `/api/...` paths do not prove an app prefix.
+  Missing or empty `servers` lists are never rewritten to `/apps/{appId}`;
+  [OpenAPI defaults the server base to `/`](https://spec.openapis.org/oas/v3.1.1.html#openapi-object).
+- Command-like GETs are excluded from root and contextual navigation, including
+  linked child tabs and automatic child selection. Verified provenance does not
+  make reset, delete, toggle, or similar commands safe navigation reads.
+  This includes command segments before trailing identifiers and operation IDs
+  with command verbs at any word position. Middle command words are accepted
+  only when the actual terminal word is status, history, preview, export, or download.
+  Repeated words do not change which word is terminal, and read suffixes cannot
+  override command prefixes or command paths.
+- Object `allOf` flattening accepts only preserved shape keywords and known
+  descriptive annotations. Conditional, unknown, and malformed member constraints
+  withhold the write action and form. This includes OpenAPI 3.1 `if`/`then`/`else`,
+  `const`, and dependent schemas; see the [OpenAPI schema rules](https://spec.openapis.org/oas/v3.1.1.html#schema-object).
+- External schema references in trusted Kotlin imports are sanitized before compilation;
+  untrusted remote references remain unsupported.
 - OpenAPI security alternatives are currently flattened into conservative
   authentication requirements; optional/alternative scheme selection is not
   modeled yet.

@@ -724,8 +724,8 @@ internal fun parseDesktopDocumentTemplates(
 internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest): String {
     require(request.path.isSafeDocumentLookupPath()) { "The document path is unsafe." }
     require(request.fileId >= 0L) { "The document ID is invalid." }
-    require(request.editorId in TRUSTED_DIRECT_EDITING_EDITOR_IDS) {
-        "The document editor is not trusted."
+    require(request.editorId.isSafeDocumentCapabilityId()) {
+        "The document editor ID is invalid."
     }
     require(request.expectedEtag.isNotBlank()) { "The document version is missing." }
     return listOf(
@@ -737,11 +737,6 @@ internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest)
             URLEncoder.encode(value, StandardCharsets.UTF_8)
     }
 }
-
-private val TRUSTED_DIRECT_EDITING_EDITOR_IDS = setOf(
-    OFFICE_DIRECT_EDITOR_ID,
-    WHITEBOARD_DIRECT_EDITOR_ID,
-)
 
 internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: String): String {
     require(candidate.isNotBlank() && candidate.none(Char::isISOControl)) {
@@ -762,17 +757,16 @@ internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: Stri
     ) {
         "Nextcloud returned a cross-origin direct-editing handoff."
     }
-    val routePrefix = server.rawPath.trimEnd('/') + "/index.php/apps/files/directEditing/"
+    val basePath = server.rawPath.trimEnd('/')
+    val routePrefix = listOf(
+        "$basePath/apps/files/directEditing/",
+        "$basePath/index.php/apps/files/directEditing/",
+    ).firstOrNull { prefix -> resolved.rawPath.startsWith(prefix) }.orEmpty()
     val rawPath = resolved.rawPath
     val token = rawPath.removePrefix(routePrefix)
     require(
-        rawPath.startsWith(routePrefix) &&
-            token.isNotBlank() &&
-            '/' !in token &&
-            '\\' !in token &&
-            !token.contains("%2e", ignoreCase = true) &&
-            !token.contains("%2f", ignoreCase = true) &&
-            !token.contains("%5c", ignoreCase = true),
+        routePrefix.isNotEmpty() &&
+            isValidOfficeDirectEditingToken(token),
     ) {
         "Nextcloud returned an unexpected direct-editing handoff route."
     }
@@ -5159,8 +5153,9 @@ class DesktopNextcloudServices(
     override suspend fun loadDocumentEditingCapabilities(
         session: NextcloudSession,
         expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
     ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> = withContext(Dispatchers.IO) {
-        val response = request(
+        val conditionalInventory = request(
             method = "GET",
             url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
             session = session,
@@ -5169,9 +5164,22 @@ class DesktopNextcloudServices(
             maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
             client = noRedirectHttpClient,
         )
-        if (response.status == 304) return@withContext NextcloudConditionalRead.NotModified
-        check(response.status in 200..299 && response.location == null) {
-            "Loading document editing capabilities failed (HTTP ${response.status})."
+        val inventory = if (conditionalInventory.status == 304 && cachedCapabilities == null) {
+            request(
+                method = "GET",
+                url = session.serverUrl + DIRECT_EDITING_INFO_RELATIVE_PATH,
+                session = session,
+                ocsRequest = true,
+                maxResponseBytes = MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES,
+                client = noRedirectHttpClient,
+            )
+        } else {
+            conditionalInventory.takeUnless { response -> response.status == 304 }
+        }
+        if (inventory != null) {
+            check(inventory.status in 200..299 && inventory.location == null) {
+                "Loading document editing capabilities failed (HTTP ${inventory.status})."
+            }
         }
         val capabilitiesResponse = request(
             method = "GET",
@@ -5184,13 +5192,11 @@ class DesktopNextcloudServices(
         check(capabilitiesResponse.status in 200..299 && capabilitiesResponse.location == null) {
             "Loading direct-editing support failed (HTTP ${capabilitiesResponse.status})."
         }
-        NextcloudConditionalRead.Modified(
-            value = parseDesktopDocumentEditingCapabilities(
-                response.text,
-                supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text),
-            ),
-            responseEtag = response.etag,
-        )
+        val supportsFileId = parseDesktopDirectEditingSupportsFileId(capabilitiesResponse.text)
+        val combined = inventory?.let { response ->
+            parseDesktopDocumentEditingCapabilities(response.text, supportsFileId)
+        } ?: requireNotNull(cachedCapabilities).copy(supportsFileId = supportsFileId)
+        NextcloudConditionalRead.Modified(combined, inventory?.etag ?: expectedEtag)
     }
 
     override suspend fun beginDocumentEditSession(
@@ -5354,7 +5360,7 @@ class DesktopNextcloudServices(
             session,
             body,
             "application/json; charset=utf-8",
-            headers = expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-Match" to it) }.orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -5392,9 +5398,7 @@ class DesktopNextcloudServices(
             plan.method.name,
             session.serverUrl + plan.relativePath,
             session,
-            headers = expectedEtag?.takeIf(String::isNotBlank)
-                ?.let { etag -> mapOf("If-Match" to etag) }
-                .orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }

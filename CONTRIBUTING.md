@@ -118,6 +118,12 @@ tools/android-emulator.sh stop media-change
 The window opens visibly by default and remains available to scripted ADB
 checks. Add `--headless` only for unattended runs without a desktop session.
 
+For authenticated compatibility and write-path testing, use the disposable
+[real Nextcloud compatibility instance](integration/nextcloud-demo/README.md).
+It creates a synthetic account, bounded fixtures, a private development CA,
+and an explicit per-app Android write scope without copying a personal desktop
+session.
+
 ### Test account safety
 
 Use a synthetic account on an isolated test server with disposable data for

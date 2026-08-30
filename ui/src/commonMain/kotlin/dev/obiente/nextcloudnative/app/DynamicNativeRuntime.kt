@@ -143,7 +143,7 @@ suspend fun discoverDynamicAppDescriptor(
     )
     val observedInstalledVersion = discoverInstalledAppVersion(services, session, contractAppId)
     val installedVersion = observedInstalledVersion ?: installedAppVersionHint?.safeDynamicVersionHint()
-    val versionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
+    val observedVersionStatus = if (serverVersionVerified && observedInstalledVersion != null) {
         DynamicContractVersionStatus.VerifiedCurrent
     } else {
         DynamicContractVersionStatus.LastKnownReadOnly
@@ -167,6 +167,7 @@ suspend fun discoverDynamicAppDescriptor(
             "verified static read routes for $contractAppId on Nextcloud $coreVersion. " +
             "Only app metadata is available.",
     )
+    val versionStatus = acquired.effectiveDynamicContractVersionStatus(observedVersionStatus)
     val document = runCatching {
         dynamicJson.parseToJsonElement(acquired.document) as? JsonObject
     }.getOrNull() ?: return sameOrigin.copy(
@@ -260,6 +261,21 @@ suspend fun discoverDynamicAppDescriptor(
     )
 }
 
+internal fun AcquiredOpenApiContract.effectiveDynamicContractVersionStatus(
+    observedVersionStatus: DynamicContractVersionStatus,
+): DynamicContractVersionStatus = if (
+    observedVersionStatus == DynamicContractVersionStatus.VerifiedCurrent &&
+    sourceKind in setOf(
+        AcquiredOpenApiContractSourceKind.SignedAppPackage,
+        AcquiredOpenApiContractSourceKind.AppStoreLinkedExactGitHubTag,
+    ) &&
+    contractVersion == appVersion
+) {
+    DynamicContractVersionStatus.VerifiedCurrent
+} else {
+    DynamicContractVersionStatus.LastKnownReadOnly
+}
+
 internal fun DynamicDescriptorAcquisition.usesAppStoreContract(): Boolean = when (this) {
     DynamicDescriptorAcquisition.SignedAppStorePackage,
     DynamicDescriptorAcquisition.SignedAppStoreStaticRoutes,
@@ -273,14 +289,6 @@ internal fun DynamicDescriptorAcquisition.usesAppStoreContract(): Boolean = when
     DynamicDescriptorAcquisition.MetadataFallback,
     -> false
 }
-
-private fun String.safeDynamicVersionHint(): String? = trim()
-    .takeIf { version ->
-        version.length in 1..MAX_DYNAMIC_VERSION_HINT_CHARACTERS &&
-            version.all { character ->
-                character.isLetterOrDigit() || character in setOf('.', '-', '_', '+')
-            }
-    }
 
 private fun AcquiredOpenApiContractSourceKind.isSignedPackage(): Boolean =
     this == AcquiredOpenApiContractSourceKind.SignedAppPackage ||
@@ -340,27 +348,6 @@ internal fun NextcloudAppEntry.canonicalAppStoreId(): String {
         }
     } ?: id
 }
-
-private suspend fun discoverInstalledAppVersion(
-    services: NextcloudPlatformServices,
-    session: NextcloudSession,
-    appId: String,
-): String? = runCatchingPreservingCancellation {
-    val response = services.executeNextcloudApi(
-        session,
-        NextcloudApiRequest(
-            method = NextcloudApiMethod.GET,
-            relativePath = "/ocs/v2.php/cloud/apps/$appId",
-            queryParameters = mapOf("format" to "json"),
-            ocsApiRequest = true,
-        ),
-    )
-    if (response.status !in 200..299) return@runCatchingPreservingCancellation null
-    val root = dynamicJson.parseToJsonElement(response.body.decodeToString()) as? JsonObject
-    val ocs = root?.get("ocs") as? JsonObject
-    val data = ocs?.get("data") as? JsonObject
-    (data?.get("version") as? JsonPrimitive)?.contentOrNull
-}.getOrNull()
 
 private fun String.coreVersionOrNull(): String? =
     Regex("([0-9]+)\\.([0-9]+)\\.([0-9]+)").find(this)?.value
@@ -2507,6 +2494,5 @@ private fun String.encodeUrlComponent(): String = buildString {
 private const val DYNAMIC_HEX = "0123456789ABCDEF"
 private const val MAX_DYNAMIC_ERROR_BODY_CHARS = 8_192
 private const val MAX_DYNAMIC_ERROR_MESSAGE_CHARS = 240
-private const val MAX_DYNAMIC_VERSION_HINT_CHARACTERS = 128
 private const val OCS_API_VIEWER_CATALOG_PATH = "/index.php/apps/ocs_api_viewer/apps"
 private const val OCS_API_VIEWER_SPEC_PATH = "/index.php/apps/ocs_api_viewer/apps"

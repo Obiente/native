@@ -488,23 +488,26 @@ Photos/Files DAV is the universal fallback; Memories is an optimized, version-ga
 
 ## 15. M8: documents and Office
 
-The public boundary is native reading and safe editing where the client can prove the format and conflict model, with capability-gated external Office handoff for richer formats.
+The public boundary is native reading and safe editing where the client can prove the format and conflict model, with capability-gated Office web integration for richer formats. Office support is provider-neutral: the client uses the secure editors and exact MIME pairs advertised by the server instead of assuming `richdocuments`, Collabora, or ONLYOFFICE.
 
 ### Phases
 
 1. **Native reading:** literal text/Markdown, native multipage PDF, server raster previews for Office formats, search/selection/accessibility where the format permits.
 2. **Safe native editing:** text/Markdown and explicitly supported image operations with ETags, versions, conflict UI, and preserve-original defaults.
-3. **External Office editing:** parse `files.directEditing` and `richdocuments` capabilities, request a one-time session only after a user tap, and open the system browser/editor handoff. Secret URLs are never persisted/logged.
+3. **Office web editing:** parse the core `files.directEditing` editor registry, show every secure editor advertised for the file's exact MIME type, and request a one-time session only after the user chooses one. Android embeds the validated same-origin session in an isolated web surface; desktop uses the system browser. Secret URLs are never persisted or logged.
 4. **Native Office feasibility:** evaluate a supported Collabora/LibreOfficeKit mobile/desktop SDK separately on every target. Require WOPI lifecycle, permissions, collaboration, autosave, reconnect, IME, clipboard, accessibility, and fidelity evidence before product commitment.
 
-Reimplementing OOXML/ODF is out of scope. Embedding the Direct Editing page in a WebView is not accepted as native Office.
+Reimplementing OOXML/ODF is out of scope. Office app entries open a native document browser. The Android web editor is labeled as an Office web integration, not native Office, and is limited to explicit document-specific Direct Editing sessions. Neither Office dashboards nor arbitrary apps receive a WebView fallback.
 
 ### Acceptance criteria
 
 - Secure-view/no-download policy blocks source download even when preview fails.
 - PDF temp files are encrypted/protected according to the platform threat model and removed after retention policy.
 - Text/Markdown conflicts preserve all three generations.
-- Direct Editing appears only for an advertised editor/MIME pair and returns through a deliberate external flow.
+- Direct Editing appears only for an advertised secure editor/MIME pair and returns through a deliberate embedded Android or external desktop flow.
+- Android clears Office cookies and web storage between sessions, confines top-level navigation to the selected document, rejects popups, never answers HTTP authentication challenges, and never sends the app password to a one-time Direct Editing URL.
+- Preview remains separate from Edit. Every server-advertised secure editor/MIME pair is eligible, including PDFs and formats outside the built-in Office family list; permissions and fresh file identity still gate edits.
+- Each advertised compatible editor is named in the chooser; no provider is silently preferred because of a hard-coded app ID.
 - Native Office is not labeled supported until the platform feasibility gate passes format-fidelity and collaborative-save tests.
 
 ## 16. M9: productivity, groupware, and communication apps
@@ -815,7 +818,7 @@ Architecture decisions that affect persistence, sync semantics, authentication, 
 | Server/app API drift | Broken adapters | Version manifests, capability gates, fixtures, schema invalidation, specialized-to-generic fallback |
 | Arbitrary apps expose private/no API | Cannot provide full native behavior | Honest metadata fallback, official OpenAPI/DAV first, reviewed adapters, no HTML scraping |
 | Talk signaling/WebRTC complexity | Unreliable calls/privacy bugs | Separate compatibility matrix, platform media drivers, soak/chaos/threat tests |
-| Office is a web/WOPI integration | False promise of native editing | Native preview first, external Direct Editing, SDK feasibility gate, no WebView branding trick |
+| Office is a provider-specific web/WOPI integration | Broken servers or a false promise of native editing | Capability-driven editor choices, isolated Android web integration, external desktop handoff, native preview first, and an SDK feasibility gate |
 | Recognize API-key gate | Direct people DAV unavailable | Memories clusters, explicit unavailable state, wait for official external flow |
 | Strict admin password confirmation | App password cannot authorize | Browser handoff first, primary password never stored, direct flow only after auth matrix |
 | Client-side E2EE/mounted storage | Incorrect content/permission behavior | Capability-specific adapter; fail closed/read-only until supported and tested |

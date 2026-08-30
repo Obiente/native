@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:nc-native-e2e-contact
+FN:Demo Contact
+N:Contact;Demo;;;
+EMAIL;TYPE=INTERNET:demo-contact@example.invalid
+TEL;TYPE=CELL:+1-555-0100
+END:VCARD

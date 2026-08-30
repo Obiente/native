@@ -942,7 +942,8 @@ fun editableNativeFields(resource: ResourceSpec, action: ActionSpec): List<Field
                     field.format != DYNAMIC_INTEGER_ARRAY_FORMAT ||
                         action.hasExactDynamicIntegerArrayBodyField(field.id)
                     ) &&
-                (field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) ||
+                (field.repeatableObjectInput != null ||
+                    field.kind !in setOf(FieldKind.objectValue, FieldKind.image, FieldKind.unknown) ||
                     field.format in setOf(
                         SETTINGS_BOOLEAN_MAP_FORMAT,
                         DYNAMIC_INTEGER_ARRAY_FORMAT,
@@ -968,22 +969,6 @@ private fun ActionSpec.dynamicIntegerArrayBodySchema(fieldId: String): JsonEleme
     val properties = (binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject
         ?: return null
     return properties[fieldId]
-}
-
-private fun ActionSpec.hasSupportedDynamicArrayBodyField(field: FieldSpec): Boolean {
-    val properties = (binding.bodySchema as? JsonObject)?.get("properties") as? JsonObject
-        ?: return true
-    val property = properties[field.id] as? JsonObject ?: return true
-    if ((property["type"] as? JsonPrimitive)?.contentOrNull != "array") return true
-    val itemType = ((property["items"] as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
-    val format = (property["format"] as? JsonPrimitive)?.contentOrNull
-    return when (field.format) {
-        DYNAMIC_INTEGER_ARRAY_FORMAT -> property.isExactDynamicIntegerArraySchema()
-        DYNAMIC_STRING_ARRAY_FORMAT,
-        DYNAMIC_STRING_LIST_FORMAT,
-        -> itemType == "string" && format == field.format
-        else -> false
-    }
 }
 
 /**
@@ -1113,11 +1098,19 @@ fun buildNativeSubmitRequest(
     ) {
         return NativeRequestBuildResult.Invalid("The declared action cannot submit this form.")
     }
+    val exactContextBoundBodyValues = action.binding.requiredBodyFieldNames
+        .asSequence()
+        .filter(action.binding.requiredPathParameterNames::contains)
+        .filter(action::hasExactServerManagedBodyFieldEvidence)
+        .mapNotNull { fieldId ->
+            values[fieldId]?.trim()?.takeIf(String::isNotBlank)?.let { value -> fieldId to value }
+        }
+        .toMap()
     if (
         uneditableNativeBodyFieldIds(
             action = action,
             editableFields = editableNativeFields(resource, action),
-            autoBoundValues = emptyMap(),
+            autoBoundValues = exactContextBoundBodyValues,
         ).isNotEmpty()
     ) {
         return NativeRequestBuildResult.Invalid(
@@ -1267,6 +1260,12 @@ class NativeActionCoordinator(
         ) {
             state = NativeActionExecutionState.Idle
         }
+    }
+
+    fun reportValidationFailure(message: String, fieldErrors: Map<String, String>) {
+        val active = state is NativeActionExecutionState.Running ||
+            state is NativeActionExecutionState.AwaitingReconciliation
+        if (!active) state = NativeActionExecutionState.ValidationFailed(message, fieldErrors)
     }
 
     fun reconcileAuthoritativeRefresh(reconciliationGeneration: Int) {

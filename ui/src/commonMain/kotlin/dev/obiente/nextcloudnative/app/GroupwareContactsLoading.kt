@@ -80,6 +80,7 @@ fun groupwareDavAddressBookMultiGetRequest(
 internal suspend fun loadGroupwareContactsInBatches(
     addressBookHref: String,
     retentionBudget: GroupwareContactRetentionBudget = GroupwareContactRetentionBudget(),
+    onConcurrentDeletion: (Int) -> Unit = {},
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
 ): List<GroupwareContact> {
     val objects = parseGroupwareAddressBookObjects(
@@ -91,7 +92,11 @@ internal suspend fun loadGroupwareContactsInBatches(
     }
     return buildList {
         objects.chunked(MAX_DAV_MULTIGET_ITEMS).forEach { batch ->
-            loadGroupwareContactBatch(addressBookHref, batch, execute).forEach { contact ->
+            val loaded = loadGroupwareContactBatch(addressBookHref, batch, execute)
+            if (loaded.concurrentlyDeletedObjectCount > 0) {
+                onConcurrentDeletion(loaded.concurrentlyDeletedObjectCount)
+            }
+            loaded.contacts.forEach { contact ->
                 add(retentionBudget.retain(contact))
             }
         }
@@ -116,60 +121,109 @@ internal suspend fun loadGroupwareContactForEditing(
     ) { "The selected contact is malformed." }
 }
 
+private data class GroupwareContactBatchLoadResult(
+    val contacts: List<GroupwareContact>,
+    val concurrentlyDeletedObjectCount: Int = 0,
+) {
+    operator fun plus(other: GroupwareContactBatchLoadResult): GroupwareContactBatchLoadResult =
+        GroupwareContactBatchLoadResult(
+            contacts = contacts + other.contacts,
+            concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount + other.concurrentlyDeletedObjectCount,
+        )
+}
+
 private suspend fun loadGroupwareContactBatch(
     addressBookHref: String,
     objects: List<GroupwareAddressBookObject>,
     execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
-): List<GroupwareContact> = try {
-    parseGroupwareAddressBookMultiGetResponse(
-        addressBookHref = addressBookHref,
-        requestedHrefs = objects.map(GroupwareAddressBookObject::href),
-        response = execute(
+): GroupwareContactBatchLoadResult {
+    val response = try {
+        execute(
             groupwareDavAddressBookMultiGetRequest(
                 addressBookHref,
                 objects.map(GroupwareAddressBookObject::href),
             ),
-        ),
-    )
-} catch (failure: NextcloudResponseTooLargeException) {
-    if (failure.responseStatus?.let { it in 200..299 } != true) throw failure
-    if (objects.size == 1) {
-        val objectMetadata = objects.single()
-        val response = execute(groupwareDavDetailRequest(objectMetadata.href))
-        require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
-        listOf(
-            requireNotNull(
-                parseGroupwareContact(
-                    addressBookHref = addressBookHref,
-                    href = objectMetadata.href,
-                    etag = response.etag ?: objectMetadata.etag,
-                    content = response.body.decodeToString(),
-                ),
-            ) { "The selected contact is malformed." },
         )
-    } else {
-        val midpoint = objects.size / 2
-        loadGroupwareContactBatch(addressBookHref, objects.take(midpoint), execute) +
-            loadGroupwareContactBatch(addressBookHref, objects.drop(midpoint), execute)
+    } catch (failure: NextcloudResponseTooLargeException) {
+        if (failure.responseStatus?.let { it in 200..299 } != true) throw failure
+        return loadGroupwareContactBatchWithoutOversizedReport(addressBookHref, objects, execute)
     }
+    if (response.status in 200..299) {
+        return parseGroupwareAddressBookMultiGetResponse(
+            addressBookHref = addressBookHref,
+            requestedHrefs = objects.map(GroupwareAddressBookObject::href),
+            response = response,
+        )
+    }
+    if (response.status in setOf(405, 501)) {
+        return loadGroupwareContactsIndividually(addressBookHref, objects, execute)
+    }
+    error("Contact loading failed (HTTP ${response.status}).")
+}
+
+private suspend fun loadGroupwareContactBatchWithoutOversizedReport(
+    addressBookHref: String,
+    objects: List<GroupwareAddressBookObject>,
+    execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
+): GroupwareContactBatchLoadResult {
+    if (objects.size == 1) {
+        return loadGroupwareContactsIndividually(addressBookHref, objects, execute)
+    }
+    val midpoint = objects.size / 2
+    return loadGroupwareContactBatch(addressBookHref, objects.take(midpoint), execute) +
+        loadGroupwareContactBatch(addressBookHref, objects.drop(midpoint), execute)
+}
+
+private suspend fun loadGroupwareContactsIndividually(
+    addressBookHref: String,
+    objects: List<GroupwareAddressBookObject>,
+    execute: suspend (GroupwareDavRequest) -> NextcloudApiResponse,
+): GroupwareContactBatchLoadResult {
+    var concurrentlyDeletedObjectCount = 0
+    val contacts = objects.mapNotNull { objectMetadata ->
+        val response = execute(groupwareDavDetailRequest(objectMetadata.href))
+        if (response.status == 404 || response.status == 410) {
+            concurrentlyDeletedObjectCount += 1
+            return@mapNotNull null
+        }
+        require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
+        requireNotNull(
+            parseGroupwareContact(
+                addressBookHref = addressBookHref,
+                href = objectMetadata.href,
+                etag = response.etag ?: objectMetadata.etag,
+                content = response.body.decodeToString(),
+            ),
+        ) { "The selected contact is malformed." }
+    }
+    return GroupwareContactBatchLoadResult(contacts, concurrentlyDeletedObjectCount)
 }
 
 private fun parseGroupwareAddressBookMultiGetResponse(
     addressBookHref: String,
     requestedHrefs: List<String>,
     response: NextcloudApiResponse,
-): List<GroupwareContact> {
+): GroupwareContactBatchLoadResult {
     require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
     val requested = requestedHrefs.toSet()
     require(requested.size == requestedHrefs.size)
-    val contacts = response.body.decodeToString().xmlElements("response").map { block ->
+    val returned = mutableSetOf<String>()
+    var concurrentlyDeletedObjectCount = 0
+    val contacts = response.body.decodeToString().xmlElements("response").mapNotNull { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
             ?: error("The CardDAV multiget response omitted an object href.")
-        require(href in requested) { "The CardDAV multiget response contained an unrequested object." }
-        block.xmlText("status")?.davStatusCode()?.let { status ->
+        require(href in requested && returned.add(href)) {
+            "The CardDAV multiget response contained an unrequested or duplicate object."
+        }
+        val properties = block.xmlElements("propstat")
+        block.groupwareDavResourceStatus(properties)?.let { status ->
+            if (status == 404 || status == 410) {
+                concurrentlyDeletedObjectCount += 1
+                return@mapNotNull null
+            }
             require(status in 200..299) { "The CardDAV multiget response contained a failed object." }
         }
-        val successfulProperty = block.xmlElements("propstat").singleOrNull { property ->
+        val successfulProperty = properties.singleOrNull { property ->
             property.xmlElements("address-data").isNotEmpty() &&
                 property.xmlText("status")?.davStatusCode() in 200..299
         } ?: error("The CardDAV multiget response did not return a contact successfully.")
@@ -186,10 +240,10 @@ private fun parseGroupwareAddressBookMultiGetResponse(
             ),
         ) { "The CardDAV multiget response contained a malformed contact." }
     }
-    require(contacts.size == requested.size && contacts.map(GroupwareContact::href).toSet() == requested) {
-        "The CardDAV multiget response did not return every requested contact successfully."
+    require(returned == requested) {
+        "The CardDAV multiget response did not account for every requested contact."
     }
-    return contacts
+    return GroupwareContactBatchLoadResult(contacts, concurrentlyDeletedObjectCount)
 }
 
 internal class GroupwareContactRetentionBudget(

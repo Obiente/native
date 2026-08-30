@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.nativeui.model.ResourceRelationshipSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -55,6 +56,15 @@ class NativeChoresWorkspaceTest {
                 inferredView,
             ),
         )
+    }
+
+    @Test
+    fun `team context remains available on team-owned Chores destinations`() {
+        assertTrue(nativeChoresWorkspaceUsesTeamContext(NativeChoresWorkspaceKind.Team))
+        assertTrue(nativeChoresWorkspaceUsesTeamContext(NativeChoresWorkspaceKind.Chores))
+        assertTrue(nativeChoresWorkspaceUsesTeamContext(NativeChoresWorkspaceKind.History))
+        assertFalse(nativeChoresWorkspaceUsesTeamContext(NativeChoresWorkspaceKind.Invitations))
+        assertFalse(nativeChoresWorkspaceUsesTeamContext(null))
     }
 
     @Test

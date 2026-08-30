@@ -320,7 +320,7 @@ fun NativeGroupwareCalendarScreen(
 
     suspend fun reload() {
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
-            runCatching {
+            runCatchingPreservingCancellation {
                 val response = services.executeGroupwareDav(
                     session,
                     groupwareDavDetailRequest(postcondition.href),
@@ -339,7 +339,7 @@ fun NativeGroupwareCalendarScreen(
         } else {
             refreshing = true
         }
-        runCatching {
+        runCatchingPreservingCancellation {
             val home = groupwareCalendarHomeHref(userId)
             val calendarResponse = services.executeGroupwareDav(
                 session,

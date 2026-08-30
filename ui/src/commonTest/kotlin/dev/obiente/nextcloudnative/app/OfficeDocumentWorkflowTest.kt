@@ -7,6 +7,36 @@ import kotlin.test.assertTrue
 
 class OfficeDocumentWorkflowTest {
     @Test
+    fun advertisedPdfAndOtherTypesHaveSeparatePreviewAndEditActions() {
+        listOf("application/pdf", "application/x-design", "text/plain").forEach { mime ->
+            val file = officeFile(path = "Documents/example", mimeType = mime)
+            val capabilities = officeCapabilities().copy(
+                editors = officeCapabilities().editors.mapValues { (_, editor) ->
+                    editor.copy(mimeTypes = setOf(mime))
+                },
+            )
+            assertEquals(1, planOfficeEditorChoices(file, capabilities).size)
+            val actions = planFilesScreenActions(
+                file, FileActionSupport(documentEditing = capabilities, platformViewer = true),
+            ).actions
+            assertTrue(actions.single { it.action == FileMenuAction.Preview }.enabled)
+            assertTrue(actions.single { it.action == FileMenuAction.EditWith }.enabled)
+        }
+    }
+
+    @Test
+    fun pdfCanDiscoverEditorsWithoutEnablingAnUnverifiedWrite() {
+        val pdf = officeFile(path = "Documents/example.pdf", mimeType = "application/pdf")
+        val action = planFilesScreenActions(
+            pdf, FileActionSupport(discoverDocumentEditing = true),
+        ).actions.single { it.action == FileMenuAction.EditWith }
+        assertTrue(action.enabled)
+        assertEquals("Choose Office editor...", action.label)
+        assertTrue(planOfficeEditorChoices(pdf, officeCapabilities()).isEmpty())
+        assertTrue(planOfficeEditorChoices(pdf.copy(permissions = "R"), officeCapabilities()).isEmpty())
+    }
+
+    @Test
     fun plansSecureVersionedWritableOfficeDocumentWithoutCreatingAToken() {
         val plan = planOfficeEditSession(
             file = officeFile(),
@@ -21,6 +51,50 @@ class OfficeDocumentWorkflowTest {
     }
 
     @Test
+    fun `offers every secure editor that advertises the exact mime type`() {
+        val capabilities = officeCapabilities().copy(
+            editors = officeCapabilities().editors + (
+                "onlyoffice" to NextcloudDocumentEditorCapability(
+                    id = "onlyoffice",
+                    displayName = "ONLYOFFICE",
+                    mimeTypes = setOf(DOCX_MIME),
+                    optionalMimeTypes = emptySet(),
+                    secure = true,
+                )
+                ),
+        )
+
+        val choices = planOfficeEditorChoices(officeFile(), capabilities)
+
+        assertEquals(listOf("Nextcloud Office", "ONLYOFFICE"), choices.map(OfficeEditorChoice::displayName))
+        assertEquals(setOf("richdocuments", "onlyoffice"), choices.map(OfficeEditorChoice::editorId).toSet())
+    }
+
+    @Test
+    fun `does not offer insecure or mime incompatible editors`() {
+        val capabilities = officeCapabilities().copy(
+            editors = mapOf(
+                "insecure" to NextcloudDocumentEditorCapability(
+                    id = "insecure",
+                    displayName = "Insecure editor",
+                    mimeTypes = setOf(DOCX_MIME),
+                    optionalMimeTypes = emptySet(),
+                    secure = false,
+                ),
+                "sheets" to NextcloudDocumentEditorCapability(
+                    id = "sheets",
+                    displayName = "Sheets only",
+                    mimeTypes = setOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                    optionalMimeTypes = emptySet(),
+                    secure = true,
+                ),
+            ),
+        )
+
+        assertTrue(planOfficeEditorChoices(officeFile(), capabilities).isEmpty())
+    }
+
+    @Test
     fun blocksEditingUntilDavWritePermissionIsProven() {
         assertEquals(
             OfficeEditBlockedReason.MissingPermissions,
@@ -32,6 +106,20 @@ class OfficeDocumentWorkflowTest {
             OfficeEditBlockedReason.ReadOnly,
             assertIs<OfficeEditSessionPlan.Blocked>(
                 planOfficeEditSession(officeFile(permissions = "RG"), officeCapabilities()),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun blocksTokenCreationWhenThePlatformCannotSecureAPlainHttpHandoff() {
+        assertEquals(
+            OfficeEditBlockedReason.InsecureAccountOrigin,
+            assertIs<OfficeEditSessionPlan.Blocked>(
+                planOfficeEditSession(
+                    officeFile(),
+                    officeCapabilities(),
+                    accountOriginSecure = false,
+                ),
             ).reason,
         )
     }
@@ -78,6 +166,17 @@ class OfficeDocumentWorkflowTest {
 
         assertEquals("\"cap-v1\"", cache.get(first)?.etag)
         assertEquals(null, cache.get(second))
+        assertEquals("\"cap-v1\"", cache.get(first.copy(appPassword = "rotated"))?.etag)
+        assertEquals("\"cap-v1\"", cache.get(first.copy(serverUrl = "https://cloud.example/"))?.etag)
+        assertEquals(null, cache.get(first.copy(serverUrl = "https://other.example")))
+    }
+
+    @Test
+    fun capabilityCacheDoesNotConflateCaseSensitiveServerInstallationPaths() {
+        val cache = NextcloudDocumentEditingCapabilitiesCache()
+        val session = NextcloudSession("https://cloud.example/Cloud", "ada", "secret")
+        cache.store(session, officeCapabilities(), "\"cap-v1\"")
+        assertEquals(null, cache.get(session.copy(serverUrl = "https://cloud.example/cloud")))
     }
 
     private fun officeCapabilities() = NextcloudDocumentEditingCapabilities(

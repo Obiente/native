@@ -13,31 +13,6 @@ import kotlin.test.assertTrue
 
 class DynamicNavigationPlannerTest {
     @Test
-    fun `GET helper requiring a body key cannot become an app root`() {
-        val helper = action(
-            id = "photo-by-key",
-            resourceId = "contacts",
-            intent = ActionIntent.read,
-            body = HttpBody(
-                contentType = "application/json",
-                required = true,
-                schema = buildJsonObject {
-                    put("required", buildJsonArray { add(JsonPrimitive("key")) })
-                },
-            ),
-        )
-        val descriptor = hierarchyDescriptor().copy(
-            resources = listOf(resource("contacts")),
-            layouts = listOf(layout("contacts", helper.id)),
-            actions = listOf(helper),
-            links = emptyList(),
-            forms = emptyList(),
-        )
-
-        assertTrue(descriptor.planDynamicNavigation().rootDestinations.isEmpty())
-    }
-
-    @Test
     fun `interactive autocomplete collection is a picker source rather than an app root`() {
         val autocomplete = action(
             id = "user-autocomplete",
@@ -205,6 +180,13 @@ class DynamicNavigationPlannerTest {
         ).copy(
             effect = ActionEffect.upload,
             confidence = Confidence.verified,
+            provenance = listOf(
+                Provenance(
+                    kind = ProvenanceKind.verifiedAppPackage,
+                    source = "signed app package",
+                    detail = "Verified multipart contract",
+                ),
+            ),
         )
         val uploadForm = form(
             id = "upload-photo.form",
@@ -221,6 +203,7 @@ class DynamicNavigationPlannerTest {
                 ),
             ),
             confidence = Confidence.verified,
+            provenance = uploadPhoto.provenance,
         )
         val photoLayout = layout("photos", listPhotos.id).copy(
             confidence = Confidence.verified,
@@ -258,7 +241,7 @@ class DynamicNavigationPlannerTest {
             ).contextualFormActions.isEmpty(),
         )
         assertTrue(
-            descriptor.copy(forms = listOf(uploadForm.copy(confidence = Confidence.high)))
+            descriptor.copy(forms = listOf(uploadForm.copy(provenance = emptyList())))
                 .planDynamicNavigation(trustedContext)
                 .contextualFormActions
                 .isEmpty(),

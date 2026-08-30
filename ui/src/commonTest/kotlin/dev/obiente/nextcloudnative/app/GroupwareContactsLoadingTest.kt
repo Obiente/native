@@ -121,6 +121,81 @@ class GroupwareContactsLoadingTest {
     }
 
     @Test
+    fun `unsupported multiget falls back to bounded object reads`() = runBlocking {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+        val hrefs = listOf("${addressBookHref}one.vcf", "${addressBookHref}two.vcf")
+        val methods = mutableListOf<String>()
+
+        val contacts = loadGroupwareContactsInBatches(addressBookHref) { request ->
+            methods += request.method
+            when (request.method) {
+                "PROPFIND" -> listingResponse(addressBookHref, hrefs)
+                "REPORT" -> NextcloudApiResponse(
+                    status = 501,
+                    contentType = "application/xml",
+                    etag = null,
+                    body = "<error />".encodeToByteArray(),
+                )
+                "GET" -> NextcloudApiResponse(
+                    status = 200,
+                    contentType = "text/vcard",
+                    etag = null,
+                    body = vCard(request.relativePath.substringAfterLast('/').substringBefore('.')).encodeToByteArray(),
+                )
+                else -> error("Unexpected request method ${request.method}.")
+            }
+        }
+
+        assertEquals(listOf("PROPFIND", "REPORT", "GET", "GET"), methods)
+        assertEquals(listOf("one", "two"), contacts.map(GroupwareContact::uid))
+        assertTrue(contacts.all { it.etag == "\"listing-etag\"" })
+    }
+
+    @Test
+    fun `transient multiget errors stop before individual reads or later batches`() = runBlocking {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/person/contacts/"
+        val hrefs = (1..30).map { "$addressBookHref$it.vcf" }
+        listOf(429, 500, 502, 503, 504).forEach { status ->
+            val methods = mutableListOf<String>()
+            val failure = assertFailsWith<IllegalStateException> {
+                loadGroupwareContactsInBatches(addressBookHref) { request ->
+                    methods += request.method
+                    if (request.method == "PROPFIND") listingResponse(addressBookHref, hrefs)
+                    else NextcloudApiResponse(status, byteArrayOf(), null, null)
+                }
+            }
+            assertTrue(failure.message.orEmpty().contains(status.toString()))
+            assertEquals(listOf("PROPFIND", "REPORT"), methods)
+        }
+    }
+
+    @Test
+    fun `missing individual fallback contact retains healthy contacts and reports deletion`() = runBlocking {
+        val addressBookHref = "/remote.php/dav/addressbooks/users/opaque-user/contacts/"
+        val hrefs = listOf("${addressBookHref}one.vcf", "${addressBookHref}deleted.vcf")
+        var concurrentlyDeletedObjectCount = 0
+
+        val contacts = loadGroupwareContactsInBatches(
+            addressBookHref = addressBookHref,
+            onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
+        ) { request ->
+            when (request.method) {
+                "PROPFIND" -> listingResponse(addressBookHref, hrefs)
+                "REPORT" -> NextcloudApiResponse(405, byteArrayOf(), null, null)
+                "GET" -> if (request.relativePath.endsWith("deleted.vcf")) {
+                    NextcloudApiResponse(404, byteArrayOf(), null, null)
+                } else {
+                    NextcloudApiResponse(200, vCard("one").encodeToByteArray(), "text/vcard", null)
+                }
+                else -> error("Unexpected request method ${request.method}.")
+            }
+        }
+
+        assertEquals(listOf("one"), contacts.map(GroupwareContact::uid))
+        assertEquals(1, concurrentlyDeletedObjectCount)
+    }
+
+    @Test
     fun `retention budget discards raw cards and rejects excess summaries`() {
         val budget = GroupwareContactRetentionBudget(maximumContacts = 2, maximumEstimatedBytes = 16_384L)
         val first = budget.retain(contact("one", rawVCard = "PHOTO:${"A".repeat(8_192)}"))

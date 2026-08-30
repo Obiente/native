@@ -22,4 +22,15 @@ class NotesReadRequestTest {
         assertEquals("\"http-etag\"", resolvedNoteEtag("\"http-etag\"", "document-etag"))
         assertEquals("document-etag", resolvedNoteEtag(null, "document-etag"))
     }
+
+    @Test
+    fun mutationHeadersSerializeBareNotesApiEtagsAsHttpValidators() {
+        assertEquals(mapOf("If-Match" to "\"bare-etag\""), notesMutationHeaders("bare-etag"))
+        assertEquals(mapOf("If-Match" to "\"quoted-etag\""), notesMutationHeaders("\"quoted-etag\""))
+        assertEquals(mapOf("If-Match" to "W/\"weak-etag\""), notesMutationHeaders("W/\"weak-etag\""))
+        assertEquals(mapOf("If-Match" to "*"), notesMutationHeaders("*"))
+        assertTrue(notesMutationHeaders(" ").isEmpty())
+        assertFailsWith<IllegalArgumentException> { notesMutationHeaders("bad\nvalue") }
+        assertFailsWith<IllegalArgumentException> { notesMutationHeaders("W/bare") }
+    }
 }

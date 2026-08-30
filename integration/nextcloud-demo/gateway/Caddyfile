@@ -1,0 +1,4 @@
+:443 {
+	tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key
+	reverse_proxy nextcloud:80
+}

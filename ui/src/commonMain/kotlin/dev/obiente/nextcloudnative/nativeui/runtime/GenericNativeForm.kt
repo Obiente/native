@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,7 @@ import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.app.design.NextcloudTheme
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
 import dev.obiente.nextcloudnative.nativeui.model.ActionSpec
 import dev.obiente.nextcloudnative.nativeui.model.FieldSpec
@@ -174,9 +176,38 @@ internal fun GenericNativeForm(
         editableFields = fields,
         autoBoundValues = autoBoundValues,
     )
-    val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty()
+    val structuredSpecs = remember(fields) {
+        fields.mapNotNull { field ->
+            field.repeatableObjectInput?.let { spec -> field.id to spec }
+        }.toMap()
+    }
+    val initialStructuredDraft = remember(fields, initialDraft.values) {
+        if (action.intent == ActionIntent.create) {
+            initialNativeCreateRepeatableObjectDraft(fields, initialDraft.values)
+        } else {
+            initialNativeRepeatableObjectDraft(fields, initialDraft.values)
+        }
+    }
+    val structuredDraftSaver = remember(structuredSpecs) {
+        nativeRepeatableObjectDraftStateSaver(structuredSpecs)
+    }
+    val structuredDraft = rememberSaveable(
+        formSchema.app.id,
+        view.id,
+        formResource.id,
+        initialRecord?.id,
+        initialDraft.values,
+        structuredSpecs,
+        saver = structuredDraftSaver,
+    ) {
+        NativeRepeatableObjectDraftState(initialStructuredDraft, structuredSpecs)
+    }
+    val repeatableObjectValues = structuredDraft.values
+    val structuredDraftSafe = structuredDraft.editable
+    val hasUneditableBodyFields = uneditableBodyFieldIds.isNotEmpty() || !structuredDraftSafe
     val settingsWrite = action.isSettingsWrite(resource)
-    val hasChanges = draft.hasChangesFrom(initialDraft)
+    val hasChanges = draft.hasChangesFrom(initialDraft) ||
+        structuredDraftSafe && repeatableObjectValues != initialStructuredDraft
     val dense = LocalNextcloudWorkspaceCapabilities.current.usesDenseControls
 
     LaunchedEffect(executionState) {
@@ -240,6 +271,7 @@ internal fun GenericNativeForm(
                     }
                 }
             }
+            structuredDraft.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (fields.isNotEmpty()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -253,6 +285,21 @@ internal fun GenericNativeForm(
                         verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                     ) {
                         fields.forEach { field ->
+                            val repeatableSpec = field.repeatableObjectInput
+                            if (repeatableSpec != null) {
+                                GenericRepeatableObjectField(
+                                    field = field,
+                                    spec = repeatableSpec,
+                                    rows = repeatableObjectValues[field.id].orEmpty(),
+                                    error = validationErrors[field.id],
+                                    enabled = !submissionBlocked && structuredDraftSafe,
+                                    onRowsChange = { rows ->
+                                        coordinator.clearStatus()
+                                        structuredDraft.update(field.id, rows)
+                                    },
+                                )
+                                return@forEach
+                            }
                             val relationOptions =
                                 nativeRelationOptions(field, formResource, schema, datasetContext)
                             if (nativeRelationFieldRequiresChoice(field, formResource, schema, datasetContext)) {
@@ -379,8 +426,23 @@ internal fun GenericNativeForm(
                             (!settingsWrite || hasChanges),
                     onClick = {
                         scope.launch {
+                            val structuredValues = when (
+                                val encoded = encodeNativeRepeatableObjectSubmitValues(
+                                    repeatableObjectValues,
+                                    structuredSpecs,
+                                )
+                            ) {
+                                is NativeRepeatableObjectSubmitEncoding.Ready -> encoded.values
+                                is NativeRepeatableObjectSubmitEncoding.Invalid -> {
+                                    coordinator.reportValidationFailure(
+                                        "Review the structured fields and try again.",
+                                        encoded.fieldErrors,
+                                    )
+                                    return@launch
+                                }
+                            }
                             coordinator.submit(
-                                values = draft.values,
+                                values = (draft.values - structuredSpecs.keys) + structuredValues,
                                 reconciliationGeneration = mutationReconciliationGeneration,
                             )
                         }
@@ -424,6 +486,7 @@ internal fun GenericNativeForm(
                                 onClick = {
                                     coordinator.clearStatus()
                                     draft = initialDraft
+                                    initialStructuredDraft?.let(structuredDraft::replace)
                                 },
                             ) {
                                 Text("Reset changes")

@@ -24,12 +24,15 @@ data class RepeatableObjectInputSpec(
     val minimumItems: Int,
     val maximumItems: Int,
     val fields: List<RepeatableObjectInputFieldSpec>,
+    val observedReadOnlyFieldIds: Set<String> = emptySet(),
 ) {
     init {
         require(minimumItems in 0..maximumItems)
         require(maximumItems in 1..MAX_REPEATABLE_OBJECT_INPUT_ITEMS)
         require(fields.isNotEmpty() && fields.size <= MAX_REPEATABLE_OBJECT_INPUT_FIELDS)
         require(fields.map(RepeatableObjectInputFieldSpec::id).distinct().size == fields.size)
+        require(observedReadOnlyFieldIds.none { id -> fields.any { field -> field.id == id } })
+        require(observedReadOnlyFieldIds.all(String::isSafeRepeatableObjectFieldId))
     }
 
     fun encode(rows: List<RepeatableObjectInputRow>): String =
@@ -81,11 +84,14 @@ data class RepeatableObjectInputSpec(
         val rows = array.mapIndexed { index, element ->
             val item = element as? JsonObject
                 ?: error("Item ${index + 1} must be an object.")
-            val nullFieldIds = item.entries
+            val normalizedItem = JsonObject(item.filterKeys { fieldId ->
+                fieldId !in observedReadOnlyFieldIds
+            })
+            val nullFieldIds = normalizedItem.entries
                 .filter { (_, value) -> value is JsonNull }
                 .mapTo(linkedSetOf()) { (fieldId, _) -> fieldId }
             RepeatableObjectInputRow(
-                values = item.filterValues { value -> value !is JsonNull }.mapValues { (fieldId, value) ->
+                values = normalizedItem.filterValues { value -> value !is JsonNull }.mapValues { (fieldId, value) ->
                     fields.singleOrNull { field -> field.id == fieldId }
                         ?.wireValue(value, index)
                         ?: error("Item ${index + 1} contains an undeclared field.")
@@ -247,15 +253,20 @@ internal fun JsonElement?.repeatableObjectInputSpec(): RepeatableObjectInputSpec
     if (properties.isEmpty() || properties.size > MAX_REPEATABLE_OBJECT_INPUT_FIELDS) return null
     val required = item.structuredRequiredProperties() ?: return null
     if (!required.all(properties::containsKey)) return null
-    val fields = properties.mapNotNull { (id, element) ->
+    val readOnlyFieldIds = properties.mapNotNullTo(linkedSetOf()) { (id, element) ->
+        val property = element as? JsonObject ?: return@mapNotNullTo null
+        id.takeIf { (property["readOnly"] as? JsonPrimitive)?.booleanOrNull == true }
+    }
+    val fields = properties.filterKeys { id -> id !in readOnlyFieldIds }.mapNotNull { (id, element) ->
         element.toRepeatableObjectInputField(id, id in required)
     }
-    if (fields.size != properties.size) return null
+    if (fields.size != properties.size - readOnlyFieldIds.size || fields.isEmpty()) return null
     return runCatching {
         RepeatableObjectInputSpec(
             minimumItems = declaredMinimum,
             maximumItems = maximum,
             fields = fields,
+            observedReadOnlyFieldIds = readOnlyFieldIds,
         )
     }.getOrNull()
 }
@@ -268,6 +279,8 @@ private fun JsonElement.toRepeatableObjectInputField(
     if (!schema.keys.all(REPEATABLE_OBJECT_SCALAR_SCHEMA_KEYS::contains)) return null
     val type = (schema["type"] as? JsonPrimitive)?.contentOrNull ?: return null
     if ("nullable" in schema && (schema["nullable"] as? JsonPrimitive)?.booleanOrNull == null) return null
+    if ("readOnly" in schema && (schema["readOnly"] as? JsonPrimitive)?.booleanOrNull == null) return null
+    if ("writeOnly" in schema && (schema["writeOnly"] as? JsonPrimitive)?.booleanOrNull == null) return null
     if (
         "format" in schema &&
         (schema["format"] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull == null

@@ -54,6 +54,10 @@ import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.GroupwareDavRequest
 import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
+import dev.obiente.nextcloudnative.app.NextcloudConditionalRead
+import dev.obiente.nextcloudnative.app.NextcloudDocumentEditingCapabilities
+import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSession
+import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSessionRequest
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudFileRangeSession
@@ -118,6 +122,7 @@ import dev.obiente.nextcloudnative.app.NextcloudNote
 import dev.obiente.nextcloudnative.app.NextcloudNotePresence
 import dev.obiente.nextcloudnative.app.createNoteRequest
 import dev.obiente.nextcloudnative.app.deleteNoteRequest
+import dev.obiente.nextcloudnative.app.notesMutationHeaders
 import dev.obiente.nextcloudnative.app.NextcloudPlatformServices
 import dev.obiente.nextcloudnative.app.loginPollPendingDiagnostic
 import dev.obiente.nextcloudnative.app.shouldRecordHttpStatusDiagnostic
@@ -267,8 +272,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import okhttp3.Call
 import okhttp3.Callback
-import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -277,40 +280,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
-
-internal fun resolveAndroidNextcloudRedirectLocation(
-    requestUrl: HttpUrl,
-    serverUrl: String,
-    location: String?,
-): String? {
-    val target = location?.let(requestUrl::resolve) ?: return null
-    if (target.fragment != null) return null
-    val account = serverUrl.toHttpUrlOrNull() ?: return null
-    if (
-        target.scheme != account.scheme ||
-        target.host != account.host ||
-        target.port != account.port
-    ) {
-        return null
-    }
-    val accountPath = account.encodedPath.trimEnd('/').takeUnless { it == "/" }.orEmpty()
-    if (
-        accountPath.isNotEmpty() &&
-        target.encodedPath != accountPath &&
-        !target.encodedPath.startsWith("$accountPath/")
-    ) {
-        return null
-    }
-    val relativePath = target.encodedPath.removePrefix(accountPath)
-    if (!relativePath.startsWith('/') || relativePath.startsWith("//")) return null
-    return buildString {
-        append(relativePath)
-        target.encodedQuery?.let { query ->
-            append('?')
-            append(query)
-        }
-    }
-}
 
 private fun ConnectivityManager.activeNetworkIsValidated(): Boolean {
     val network = activeNetwork ?: return false
@@ -452,6 +421,25 @@ internal class AndroidNextcloudServices(
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
+    private val documentEditingTransport = AndroidDocumentEditingTransport { session, specification ->
+        val response = request(
+            method = specification.method,
+            url = session.serverUrl + specification.relativePath,
+            session = session,
+            body = specification.body,
+            contentType = specification.contentType,
+            ocsRequest = true,
+            headers = specification.headers,
+            maxResponseBytes = specification.maxResponseBytes,
+            client = noRedirectHttpClient,
+        )
+        AndroidDocumentEditingHttpResponse(
+            status = response.status,
+            body = response.text,
+            etag = response.etag,
+            location = response.location,
+        )
+    }
     private val contractAcquirer = SignedAppStoreContractAcquirer(
         catalogCache = FileAppStoreCatalogCache(File(appContext.filesDir, "contracts/catalogs")),
         verifiedContractCache = FileVerifiedContractCache(File(appContext.filesDir, "contracts/verified")),
@@ -502,6 +490,7 @@ internal class AndroidNextcloudServices(
     override val supportsVirtualFileStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
     override val supportsBidirectionalFileSync: Boolean = fileSyncRootPicker != null
+    override val supportsEmbeddedNextcloudWebApp: Boolean = true
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
             supportedActions = ExternalFileHandoffAction.entries.toSet(),
@@ -3103,6 +3092,18 @@ internal class AndroidNextcloudServices(
         }
     }
 
+    override suspend fun loadDocumentEditingCapabilities(
+        session: NextcloudSession,
+        expectedEtag: String?,
+        cachedCapabilities: NextcloudDocumentEditingCapabilities?,
+    ): NextcloudConditionalRead<NextcloudDocumentEditingCapabilities> =
+        documentEditingTransport.loadCapabilities(session, expectedEtag, cachedCapabilities)
+
+    override suspend fun beginDocumentEditSession(
+        session: NextcloudSession,
+        request: NextcloudDocumentEditSessionRequest,
+    ): NextcloudDocumentEditSession = documentEditingTransport.beginSession(session, request)
+
     override suspend fun listNotes(session: NextcloudSession): List<NextcloudNote> =
         withContext(Dispatchers.IO) {
             val response = request(
@@ -3169,7 +3170,7 @@ internal class AndroidNextcloudServices(
             session = session,
             body = body,
             contentType = "application/json; charset=utf-8",
-            headers = expectedEtag?.takeIf(String::isNotBlank)?.let { mapOf("If-Match" to it) }.orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 412) { "This note changed on the server. Reload it before saving your changes." }
         check(response.status != 423) { "This note is temporarily locked on the server." }
@@ -3207,9 +3208,7 @@ internal class AndroidNextcloudServices(
             method = plan.method.name,
             url = session.serverUrl + plan.relativePath,
             session = session,
-            headers = expectedEtag?.takeIf(String::isNotBlank)
-                ?.let { etag -> mapOf("If-Match" to etag) }
-                .orEmpty(),
+            headers = notesMutationHeaders(expectedEtag),
         )
         check(response.status != 404) { "The note no longer exists." }
         check(response.status != 412) { "This note changed on the server. Reload it before deleting it." }

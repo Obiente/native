@@ -178,8 +178,12 @@ applications with:
 - Notes with folders, ETag-aware writes, and native Markdown edit/preview;
 - Activity, global search, Dashboard, user status, and app navigation;
 - native semantic flows for Mail, Music, Cookbook, Calendar, Contacts, Tasks,
-  Tables, Deck, Cospend, Budget, Office metadata, and administration inventory
+  Tables, Deck, Cospend, Budget, and administration inventory
   at different levels of completeness;
+- a native Office document browser and capability-driven editor choices,
+  document-only embedded Office sessions on Android,
+  and a system-browser handoff on desktop. This is web integration, not a native
+  Office engine or a claim of verified compatibility with every suite;
 - signed-contract acquisition from exact Nextcloud App Store releases plus a
   guarded exact-source fallback for apps that do not advertise a contract;
 - shape-driven tables, boards, forms, settings, summaries, charts, collection

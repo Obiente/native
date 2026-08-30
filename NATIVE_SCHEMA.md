@@ -54,6 +54,20 @@ New components must represent interaction patterns shared by more than one app
 whenever possible. App-specific behaviour belongs in a verified adapter, not in
 the generic component library.
 
+## Bounded form restoration
+
+Repeatable-object drafts share a 16 Ki-character saved-state budget across all
+fields, including JSON escaping and identifiers. Both workspace and record
+forms reject edits that exceed it, show a size error, and retain the previous
+accepted draft. Existing values outside this budget are not editable until the
+user explicitly resets the structured fields where that action is offered.
+No oversized value is silently truncated or submitted as an empty replacement.
+
+The native task editor enforces its 32 Ki-character draft budget before accepting
+input, including the selected calendar and edit-start ETag. Larger existing tasks
+remain unchanged and cannot be edited in this dialog. Durable large-draft storage
+is not implemented by these saved-state guards.
+
 ## Version invalidation
 
 A stored compiled schema must be keyed against all of the following:

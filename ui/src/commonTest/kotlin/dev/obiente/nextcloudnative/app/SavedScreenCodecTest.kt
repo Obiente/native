@@ -6,6 +6,11 @@ import kotlin.test.assertIs
 
 class SavedScreenCodecTest {
     @Test
+    fun tasksWorkspaceRestoresAsItsNativeRoute() {
+        assertEquals(Screen.Tasks, Screen.Tasks.toSavedScreen().toScreen())
+    }
+
+    @Test
     fun filePathSerializationIsBounded() {
         val saved = Screen.Files("/" + "x".repeat(3_000)).toSavedScreen()
 

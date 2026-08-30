@@ -28,6 +28,11 @@ import kotlin.test.assertTrue
 
 class NativeCreateMutationRecoveryTest {
     @Test
+    fun `signed high confidence package create retains durable recovery`() {
+        assertEquals(Confidence.high, fixture("7", Confidence.high).plan.action.confidence)
+    }
+
+    @Test
     fun `create marker scopes the exact parent and retains its pre-submit baseline`() {
         val fixture = fixture("7")
         val sibling = fixture("8")
@@ -391,7 +396,10 @@ class NativeCreateMutationRecoveryTest {
         val request: NativeActionRequest.Submit,
     )
 
-    private fun fixture(teamId: String): Fixture {
+    private fun fixture(
+        teamId: String,
+        confidence: Confidence = Confidence.verified,
+    ): Fixture {
         val fields = listOf(
             field("id", FieldKind.integer, readOnly = true),
             field("name", FieldKind.string),
@@ -402,7 +410,7 @@ class NativeCreateMutationRecoveryTest {
         val resource = ResourceSpec(
             id = "chores",
             name = "Chores",
-            confidence = Confidence.verified,
+            confidence = confidence,
             fields = fields,
         )
         val evidence = listOf(Evidence(EvidenceSource.verifiedAppPackage, "Signed package route"))
@@ -420,7 +428,7 @@ class NativeCreateMutationRecoveryTest {
             intent = ActionIntent.list,
             risk = ActionRisk.readOnly,
             requiresConfirmation = false,
-            confidence = Confidence.verified,
+            confidence = confidence,
             evidence = evidence,
             effect = ActionEffect.list,
         )
@@ -466,14 +474,14 @@ class NativeCreateMutationRecoveryTest {
             intent = ActionIntent.create,
             risk = ActionRisk.mutating,
             requiresConfirmation = false,
-            confidence = Confidence.verified,
+            confidence = confidence,
             evidence = evidence,
             effect = ActionEffect.create,
         )
         val schema = NativeAppSchema(
             schemaVersion = "1",
             app = AppIdentity("chores", "Chores", "0.1.0"),
-            confidence = Confidence.verified,
+            confidence = confidence,
             resources = listOf(resource),
             actions = listOf(read, create),
         )

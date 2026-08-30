@@ -1,17 +1,21 @@
 package dev.obiente.nextcloudnative.app
 
 import android.content.Context
+import android.net.http.SslCertificate
+import android.os.Build
 import okhttp3.ConnectionPool
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Interceptor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -26,8 +30,8 @@ import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 
 /**
- * Applies Android's normal trust policy first, then one exact certificate explicitly approved for
- * one HTTPS origin. Hostname verification remains OkHttp's responsibility and is never disabled.
+ * Applies Android's normal trust policy first, then one exact leaf certificate explicitly approved
+ * for one HTTPS origin. Hostname verification remains OkHttp's responsibility and is never disabled.
  */
 fun OkHttpClient.Builder.useAndroidNextcloudCertificateTrust(context: Context): OkHttpClient.Builder {
     val registry = AndroidServerCertificateTrustRegistry.get(context.applicationContext)
@@ -88,20 +92,12 @@ object AndroidServerCertificateTrust {
 
     fun inspect(serverUrl: String): ServerCertificateReview {
         val origin = serverUrl.requireHttpsOrigin()
-        val certificate = probe(origin)
-        require(certificate.isSelfSigned()) {
-            "The server presented an untrusted certificate chain, not a self-signed certificate. " +
-                "Install its issuing certificate authority in Android instead."
-        }
-        return certificate.toReview(origin)
+        return probe(origin).toReview(origin)
     }
 
     fun approve(context: Context, review: ServerCertificateReview) {
         val origin = review.serverOrigin.requireHttpsOrigin()
         val currentlyPresented = probe(origin)
-        check(currentlyPresented.isSelfSigned()) {
-            "The server no longer presents the reviewed self-signed certificate."
-        }
         val currentFingerprint = currentlyPresented.sha256Fingerprint()
         check(constantTimeEquals(currentFingerprint, review.sha256Fingerprint)) {
             "The server certificate changed before it could be trusted. Review the new certificate before connecting."
@@ -117,6 +113,21 @@ object AndroidServerCertificateTrust {
             .store
             .get(origin)
             ?.let(::TrustedServerCertificate)
+    }
+
+    fun isWebViewCertificateTrusted(
+        context: Context,
+        serverUrl: String,
+        certificate: SslCertificate,
+    ): Boolean {
+        val origin = serverUrl.toHttpsOriginOrNull() ?: return false
+        val expected = AndroidServerCertificateTrustRegistry.get(context.applicationContext)
+            .store
+            .get(origin)
+            ?: return false
+        val presented = certificate.toX509CertificateOrNull() ?: return false
+        if (runCatching { presented.checkValidity() }.isFailure) return false
+        return constantTimeEquals(expected, presented.sha256Fingerprint())
     }
 
     fun revoke(context: Context, serverUrl: String): Boolean {
@@ -162,6 +173,15 @@ object AndroidServerCertificateTrust {
             return certificate
         }
     }
+}
+
+private fun SslCertificate.toX509CertificateOrNull(): X509Certificate? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return x509Certificate
+    val encoded = SslCertificate.saveState(this).getByteArray("x509-certificate") ?: return null
+    return runCatching {
+        CertificateFactory.getInstance("X.509")
+            .generateCertificate(ByteArrayInputStream(encoded)) as? X509Certificate
+    }.getOrNull()
 }
 
 private class AndroidServerCertificateTrustRegistry private constructor(context: Context) {
@@ -269,7 +289,6 @@ private class ExplicitServerCertificateTrustManager(
         val origin = httpsOrigin(host, port)
         val expected = store.get(origin) ?: throw platformFailure
         leaf.checkValidity()
-        if (!leaf.isSelfSigned()) throw platformFailure
         if (!constantTimeEquals(expected, leaf.sha256Fingerprint())) throw platformFailure
     }
 }
@@ -337,11 +356,6 @@ private fun X509Certificate.sha256Fingerprint(): String =
     MessageDigest.getInstance("SHA-256")
         .digest(encoded)
         .joinToString(":") { byte -> "%02X".format(byte) }
-
-private fun X509Certificate.isSelfSigned(): Boolean {
-    if (subjectX500Principal != issuerX500Principal) return false
-    return runCatching { verify(publicKey) }.isSuccess
-}
 
 private fun X509Certificate.toReview(origin: HttpUrl): ServerCertificateReview = ServerCertificateReview(
     serverOrigin = origin.toString().removeSuffix("/"),

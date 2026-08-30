@@ -216,7 +216,7 @@ fun NativeGroupwareContactsScreen(
     LaunchedEffect(session, userId, loadAttempt, mutationRecoveryLoaded) {
         if (!mutationRecoveryLoaded) return@LaunchedEffect
         val reconciliationConfirmed = mutationPostcondition?.let { postcondition ->
-            runCatching {
+            runCatchingPreservingCancellation {
                 val response = services.executeGroupwareDav(
                     session,
                     groupwareDavDetailRequest(postcondition.href),
@@ -233,7 +233,7 @@ fun NativeGroupwareContactsScreen(
         } else {
             refreshing = true
         }
-        runCatching {
+        runCatchingPreservingCancellation {
             val principal = parseGroupwarePrincipalHref(
                 services.executeGroupwareDav(session, groupwareDavPrincipalDiscoveryRequest()),
             )
@@ -247,15 +247,21 @@ fun NativeGroupwareContactsScreen(
             )
             val addressBooks = parseGroupwareAddressBooks(discovery)
             val retentionBudget = GroupwareContactRetentionBudget()
+            var concurrentlyDeletedObjectCount = 0
             val contacts = addressBooks.flatMap { addressBook ->
-                loadGroupwareContactsInBatches(addressBook.href, retentionBudget) { request ->
-                    services.executeGroupwareDav(session, request)
-                }
+                loadGroupwareContactsInBatches(
+                    addressBookHref = addressBook.href,
+                    retentionBudget = retentionBudget,
+                    onConcurrentDeletion = { count -> concurrentlyDeletedObjectCount += count },
+                ) { request -> services.executeGroupwareDav(session, request) }
             }.sortedBy { it.displayName.lowercase() }
-            ContactsLoadState.Ready(addressBooks, contacts)
+            ContactsLoadState.Ready(addressBooks, contacts) to concurrentlyDeletedObjectCount
         }.onSuccess { loaded ->
-            state = loaded
-            ContactsWorkspaceMemoryCache.store(session, userId, loaded)
+            state = loaded.first
+            ContactsWorkspaceMemoryCache.store(session, userId, loaded.first)
+            if (loaded.second > 0) {
+                refreshError = "${loaded.second} contacts changed during refresh; the remaining contacts are current."
+            }
             if (mutationPostcondition != null) {
                 if (reconciliationConfirmed) {
                     if (!clearMutationRecovery()) return@onSuccess

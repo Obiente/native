@@ -265,6 +265,27 @@ class FileActionPlanningTest {
     }
 
     @Test
+    fun filesCanOfferOfficeDiscoveryBeforeCapabilitiesAreLoaded() {
+        val document = file(
+            name = "report.docx",
+            path = "Documents/report.docx",
+            mimeType = DOCX_MIME,
+            etag = "v5",
+            fileId = 91,
+            hasPreview = true,
+            permissions = "RGDNVW",
+        )
+
+        val action = planFilesScreenActions(
+            document,
+            FileActionSupport(discoverDocumentEditing = true),
+        ).action(FileMenuAction.EditWith)
+
+        assertTrue(action.enabled)
+        assertEquals("Choose Office editor...", action.label)
+    }
+
+    @Test
     fun filesScreenEnablesSafeTransferWorkflowsAndKeepsDownloadsVisible() {
         val plan = planFilesScreenActions(file(name = "report.pdf", mimeType = "application/pdf", etag = "v1"))
 

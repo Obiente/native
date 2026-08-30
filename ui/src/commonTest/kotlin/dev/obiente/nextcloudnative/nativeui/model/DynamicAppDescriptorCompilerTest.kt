@@ -670,7 +670,7 @@ class DynamicAppDescriptorCompilerTest {
     }
 
     @Test
-    fun cookbookReleaseServersWithEquivalentPathBasesCompileAgainstAuthenticatedOrigin() {
+    fun cookbookReleaseServersWithConcreteForeignOriginAreRejected() {
         val document = """
             {
               "openapi": "3.0.1",
@@ -728,11 +728,10 @@ class DynamicAppDescriptorCompilerTest {
             ),
         )
 
-        val descriptor = DynamicAppDescriptorCompiler().compile(cookbookInput)
-
-        assertEquals("/apps/cookbook/api/v1/recipes", descriptor.actions.single().binding.path)
-        assertEquals(LayoutKind.list, descriptor.layouts.single().kind)
-        assertTrue(descriptor.validationErrors().isEmpty())
+        val failure = assertFailsWith<IllegalArgumentException> {
+            DynamicAppDescriptorCompiler().compile(cookbookInput)
+        }
+        assertTrue(failure.message.orEmpty().contains("Concrete cross-origin OpenAPI server rebasing"))
     }
 
     @Test
@@ -1207,8 +1206,8 @@ class DynamicAppDescriptorCompilerTest {
         val conflicting = OPEN_API.replace(
             "\"servers\": [{ \"url\": \"/ocs/v2.php/apps/tables/api/2\" }]",
             """"servers": [
-                { "url": "https://one.example/ocs/v2.php/apps/tables/api/2" },
-                { "url": "https://two.example/ocs/v2.php/apps/tables/api/3" }
+                { "url": "https://{hostOne}/ocs/v2.php/apps/tables/api/2" },
+                { "url": "https://{hostTwo}/ocs/v2.php/apps/tables/api/3" }
             ]""",
         )
         val failure = assertFailsWith<IllegalArgumentException> {
@@ -2176,8 +2175,18 @@ class DynamicAppDescriptorCompilerTest {
                   "post":{"operationId":"widgets-batch-delete","summary":"Delete selected widgets","responses":{"200":{"description":"OK"}}}
                 },
                 "/apps/example/api/widgets/upload":{
-                  "post":{"operationId":"widgets-upload","summary":"Upload widgets","responses":{"200":{"description":"OK"}}}
+                  "post":{
+                    "operationId":"widgets-upload",
+                    "summary":"Upload widgets",
+                    "requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{
+                      "type":"object",
+                      "required":["file"],
+                      "properties":{"file":{"type":"string","format":"binary"}}
+                    }}}},
+                    "responses":{"200":{"description":"OK"}}
+                  }
                 },
+                $DYNAMIC_ACTION_SEMANTIC_EXTENSION_PATHS
                 "/apps/example/api/workspaces/{workspaceId}":{
                   "parameters":[{"name":"workspaceId","in":"path","required":true,"schema":{"type":"integer"}}],
                   "get":{
@@ -2199,52 +2208,40 @@ class DynamicAppDescriptorCompilerTest {
         val descriptor = DynamicAppDescriptorCompiler().compile(exampleInput(document))
         val actions = descriptor.actions.associateBy(DynamicAction::id)
 
-        fun assertAction(
-            id: String,
-            effect: ActionEffect,
-            intent: ActionIntent,
-            risk: ActionRisk,
-            requiresConfirmation: Boolean,
-        ) {
-            val action = assertNotNull(actions[id])
-            assertEquals(effect, action.effect, id)
-            assertEquals(intent, action.intent, id)
-            assertEquals(risk, action.risk, id)
-            assertEquals(requiresConfirmation, action.requiresConfirmation, id)
-        }
-
-        assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
-        assertAction("invite-user-to-team", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
-        assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
-        assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-restore", ActionEffect.restore, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-archive", ActionEffect.archive, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-unarchive", ActionEffect.unarchive, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("widget-copy", ActionEffect.copy, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction(
+        actions.assertAction("widgets-create", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        actions.assertAction("invite-user-to-team", ActionEffect.create, ActionIntent.create, ActionRisk.mutating, false)
+        actions.assertAction("widgets-update", ActionEffect.update, ActionIntent.update, ActionRisk.mutating, false)
+        actions.assertAction("widgets-reorder", ActionEffect.reorder, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-toggle", ActionEffect.toggle, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-restore", ActionEffect.restore, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-archive", ActionEffect.archive, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-unarchive", ActionEffect.unarchive, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widget-copy", ActionEffect.copy, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction(
             "widget-delete-permanently",
             ActionEffect.permanentDelete,
             ActionIntent.delete,
             ActionRisk.destructive,
             true,
         )
-        assertAction(
+        actions.assertAction(
             "widgets-empty-trash",
             ActionEffect.empty,
             ActionIntent.delete,
             ActionRisk.destructive,
             true,
         )
-        assertAction(
+        actions.assertAction(
             "widgets-batch-delete",
             ActionEffect.batch,
             ActionIntent.execute,
             ActionRisk.destructive,
             true,
         )
-        assertAction("widgets-upload", ActionEffect.upload, ActionIntent.execute, ActionRisk.mutating, false)
-        assertAction("workspace-leave", ActionEffect.leave, ActionIntent.execute, ActionRisk.destructive, true)
+        actions.assertAction("widgets-upload", ActionEffect.upload, ActionIntent.execute, ActionRisk.mutating, false)
+        actions.assertAction("widgets-import", ActionEffect.execute, ActionIntent.execute, ActionRisk.mutating, false)
+        assertEquals("categories", actions.getValue("category-rename").resourceId)
+        actions.assertAction("workspace-leave", ActionEffect.leave, ActionIntent.execute, ActionRisk.destructive, true)
         assertEquals("widgets", actions.getValue("widget-show").resourceId)
         assertTrue(
             actions.values

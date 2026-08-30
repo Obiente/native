@@ -187,6 +187,7 @@ import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailInboxLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailSoleAccountLandingRecord
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeMailScreenCacheScopeIsSafe
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceKind
+import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresWorkspaceUsesTeamContext
 import dev.obiente.nextcloudnative.nativeui.runtime.nativeChoresMemberFieldChoices
 import dev.obiente.nextcloudnative.nativeui.runtime.preferredNativeMailComposeAction
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeImageLoader
@@ -231,7 +232,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.TimeSource
-
 
 internal data class DynamicContractResumePlan(
     val serverVersion: String?,
@@ -1052,62 +1052,29 @@ private fun LoginScreen(
     }
 
     certificateReview?.let { review ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!trustingCertificate) certificateReview = null
-            },
-            title = { Text("Unverified server certificate") },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    Text(
-                        "Android cannot verify the identity of ${review.serverDisplayName}. " +
-                            "Only continue if you obtained this fingerprint from your server administrator through a separate trusted channel.",
-                    )
-                    Text("Subject", style = MaterialTheme.typography.labelLarge)
-                    Text(review.subject, style = MaterialTheme.typography.bodySmall)
-                    Text("Issuer", style = MaterialTheme.typography.labelLarge)
-                    Text(review.issuer, style = MaterialTheme.typography.bodySmall)
-                    Text("SHA-256 fingerprint", style = MaterialTheme.typography.labelLarge)
-                    Text(review.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)
-                    Text("Valid from ${review.validFrom} until ${review.validUntil}", style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "Approval is limited to this exact certificate and server address. A changed or expired certificate will require a new review.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !trustingCertificate,
-                    onClick = { certificateReview = null },
-                ) { Text("Cancel") }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !trustingCertificate,
-                    onClick = {
-                        trustingCertificate = true
-                        scope.launch {
-                            runCatching { services.trustServerCertificate(review) }
-                                .onSuccess {
-                                    trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
-                                    certificateReview = null
-                                    trustingCertificate = false
-                                    startLogin(certificateJustApproved = review.sha256Fingerprint)
-                                }
-                                .onFailure { failure ->
-                                    if (failure is CancellationException) throw failure
-                                    error = failure.message ?: "The certificate could not be trusted."
-                                    certificateReview = null
-                                    trustingCertificate = false
-                                }
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = null,
+            confirmLabel = "Trust and connect",
+            onDismiss = { certificateReview = null },
+            onConfirm = {
+                trustingCertificate = true
+                scope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            trustedCertificate = services.trustedServerCertificate(review.serverOrigin)
+                            certificateReview = null
+                            trustingCertificate = false
+                            startLogin(certificateJustApproved = review.sha256Fingerprint)
                         }
-                    },
-                ) { Text(if (trustingCertificate) "Checking..." else "Trust and connect") }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            error = failure.message ?: "The certificate could not be trusted."
+                            certificateReview = null
+                            trustingCertificate = false
+                        }
+                }
             },
         )
     }
@@ -1283,6 +1250,12 @@ private fun AuthenticatedApp(
     val cachedAppDiscoveries = remember(session) { mutableStateMapOf<String, DynamicDescriptorDiscovery>() }
     var discoveryError by remember(session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(session) { mutableStateOf(0) }
+    var certificateReview by remember(session) { mutableStateOf<ServerCertificateReview?>(null) }
+    var certificateReviewFailure by remember(session) { mutableStateOf<String?>(null) }
+    var certificateTrustError by remember(session) { mutableStateOf<String?>(null) }
+    var trustingCertificate by remember(session) { mutableStateOf(false) }
+    var certificateRecoveryAttempt by remember(session) { mutableStateOf(0) }
+    val certificateScope = rememberCoroutineScope()
     var groupwareMutationInProgress by remember(session) { mutableStateOf(false) }
     var linkNavigationFailure by rememberSaveable(
         session.serverUrl,
@@ -1430,7 +1403,8 @@ private fun AuthenticatedApp(
             screen is Screen.TextEditor ||
             screen is Screen.MediaViewer ||
             screen is Screen.Calendar ||
-            screen is Screen.Contacts
+            screen is Screen.Contacts ||
+            screen is Screen.Tasks
         ) {
             queueEditorNavigationRequest(NextcloudPendingNavigationRequest.Native(request))
         } else {
@@ -1440,24 +1414,77 @@ private fun AuthenticatedApp(
 
     LaunchedEffect(session, discoveryAttempt) {
         discoveryError = null
-        runCatching { services.loadServerInfo(session) }
-            .onSuccess { discovered ->
-                serverInfo = discovered
-                val reconciled = reconciledAppWorkspacePinsForDiscovery(
-                    appIds = pinnedAppIds,
-                    installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
-                    appsAuthoritative = discovered.appsAuthoritative,
-                )
-                if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
-                    pinnedAppIds = reconciled
-                    appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
-                        null
-                    } else {
-                        "Unavailable pins were removed for this session, but the change could not be saved on this device."
-                    }
+        val discoveryResult = runCatching { services.loadServerInfo(session) }
+        val discovered = discoveryResult.getOrNull()
+        if (discovered != null) {
+            serverInfo = discovered
+            val reconciled = reconciledAppWorkspacePinsForDiscovery(
+                appIds = pinnedAppIds,
+                installedAppIds = discovered.apps.map(NextcloudAppEntry::id),
+                appsAuthoritative = discovered.appsAuthoritative,
+            )
+            if (reconciled != null && reconciled != pinnedAppIds && appPinsStorageAuthoritative) {
+                pinnedAppIds = reconciled
+                appPinsPersistenceError = if (appPinsRepository.save(appPinsAccountScope, reconciled)) {
+                    null
+                } else {
+                    "Unavailable pins were removed for this session, but the change could not be saved on this device."
                 }
             }
-            .onFailure { discoveryError = it.message ?: "Could not load server details." }
+            return@LaunchedEffect
+        }
+        val failure = requireNotNull(discoveryResult.exceptionOrNull())
+        if (failure is CancellationException) throw failure
+        val reviewResult = runCatching {
+            services.inspectServerCertificateFailure(session.serverUrl, failure)
+        }
+        reviewResult.exceptionOrNull()?.let { inspectionFailure ->
+            if (inspectionFailure is CancellationException) throw inspectionFailure
+        }
+        val review = reviewResult.getOrNull()
+        if (review != null) {
+            certificateReview = review
+            certificateReviewFailure = failure.message ?: "Could not load server details."
+            certificateTrustError = null
+        } else {
+            discoveryError = reviewResult.exceptionOrNull()?.message
+                ?: failure.message
+                ?: "Could not load server details."
+        }
+    }
+
+    certificateReview?.let { review ->
+        ServerCertificateReviewDialog(
+            review = review,
+            checking = trustingCertificate,
+            error = certificateTrustError,
+            confirmLabel = "Trust and retry",
+            onDismiss = {
+                certificateReview = null
+                discoveryError = certificateReviewFailure ?: "Could not load server details."
+                certificateReviewFailure = null
+                certificateTrustError = null
+            },
+            onConfirm = {
+                trustingCertificate = true
+                certificateTrustError = null
+                certificateScope.launch {
+                    runCatching { services.trustServerCertificate(review) }
+                        .onSuccess {
+                            certificateReview = null
+                            certificateReviewFailure = null
+                            trustingCertificate = false
+                            certificateRecoveryAttempt += 1
+                            discoveryAttempt += 1
+                        }
+                        .onFailure { failure ->
+                            if (failure is CancellationException) throw failure
+                            certificateTrustError = failure.message ?: "The certificate could not be trusted."
+                            trustingCertificate = false
+                        }
+                }
+            },
+        )
     }
 
     LaunchedEffect(session, serverInfo?.apps) {
@@ -1496,6 +1523,7 @@ private fun AuthenticatedApp(
             "user_status" -> Screen.UserStatus
             "calendar" -> Screen.Calendar
             "contacts" -> Screen.Contacts
+            "tasks" -> Screen.Tasks
             "deck" -> Screen.Deck
             "activity" -> {
                 destination = NextcloudDestination.Activity
@@ -1892,6 +1920,7 @@ private fun AuthenticatedApp(
             Screen.UserStatus,
             Screen.Calendar,
             Screen.Contacts,
+            Screen.Tasks,
             Screen.Deck,
             is Screen.AppInfo,
             -> {
@@ -2041,6 +2070,7 @@ private fun AuthenticatedApp(
                 RootDestinationContent.HomeWorkspace -> NativeDashboardScreen(
                     services = services,
                     session = session,
+                    recoveryAttempt = certificateRecoveryAttempt,
                     installedApps = serverInfo?.apps.orEmpty(),
                     pinnedAppIds = pinnedAppIds,
                     onOpenApp = { openApp(it, NextcloudDestination.Home) },
@@ -2182,6 +2212,7 @@ private fun AuthenticatedApp(
                     FileMenuAction.EditText -> if (file.isEditableText()) {
                         screen = Screen.TextEditor(file, current.path)
                     }
+                    FileMenuAction.EditWith -> screen = Screen.DocumentPreview(file, current.path)
                     else -> Unit
                 }
             },
@@ -2214,6 +2245,7 @@ private fun AuthenticatedApp(
         Screen.Dashboard -> NativeDashboardScreen(
             services = services,
             session = session,
+            recoveryAttempt = certificateRecoveryAttempt,
             installedApps = serverInfo?.apps.orEmpty(),
             pinnedAppIds = pinnedAppIds,
             onOpenApp = { app -> openApp(app, returnDestination) },
@@ -2254,6 +2286,11 @@ private fun AuthenticatedApp(
             navigationCommitInProgress = linkNavigationJob != null,
             onMutationInProgressChanged = { groupwareMutationInProgress = it },
         )
+        Screen.Tasks -> NativeGroupwareTasksScreen(
+            services, session, serverInfo?.userId ?: session.loginName, ::navigateBack,
+            pendingEditorNavigationRequest, ::applyPendingNavigationRequest,
+            ::cancelPendingNavigationRequest, linkNavigationJob != null,
+        ) { groupwareMutationInProgress = it }
         Screen.Deck -> NativeDeckScreen(
             services = services,
             session = session,
@@ -2854,6 +2891,16 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onBack: () -> Unit,
 ) {
+    if (isOfficeWorkspaceAppId(app.id)) {
+        OfficeWorkspaceScreen(
+            services = services,
+            session = session,
+            userId = currentUserId,
+            onExit = onBack,
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
@@ -4256,7 +4303,7 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         if (
             retainedChoresTeamContext == null ||
-            nativeChoresWorkspaceKind(schema, selectedView) != NativeChoresWorkspaceKind.Team
+            !nativeChoresWorkspaceUsesTeamContext(nativeChoresWorkspaceKind(schema, selectedView))
         ) {
             emptyMap()
         } else {
@@ -4275,6 +4322,20 @@ private fun DynamicDiscoveredAppScreen(
     }
     val navigationPlan = remember(descriptor, recordContext) {
         descriptor.planDynamicNavigation(recordContext)
+    }
+    val formActionContext = remember(
+        recordContext,
+        retainedChoresTeamContext,
+        selectedView.id,
+    ) {
+        retainedChoresFormActionContext(
+            workspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+            retainedTeamContext = retainedChoresTeamContext,
+            currentRecordContext = recordContext,
+        )
+    }
+    val formActionNavigationPlan = remember(descriptor, formActionContext) {
+        descriptor.planDynamicNavigation(formActionContext)
     }
     val mailCollectionSummaryDestinations = remember(
         recordContext,
@@ -4540,21 +4601,32 @@ private fun DynamicDiscoveredAppScreen(
     }
     val actionViews = remember(
         descriptor,
-        navigationPlan,
+        formActionNavigationPlan,
+        formActionContext,
         schema,
         selectedRecord,
         selectedView.resourceId,
         selectedCollectionState,
     ) {
         val planned = buildList {
-            addAll(if (selectedRecord == null) {
-                navigationPlan.rootFormActions.filter { action ->
-                    action.resourceId == selectedView.resourceId &&
-                        selectedCollectionState == null
+            addAll(if (formActionContext == null) {
+                formActionNavigationPlan.rootFormActions.filter { action ->
+                    val spec = schema.action(action.actionId)
+                        ?: return@filter false
+                    val formView = schema.views.singleOrNull { candidate ->
+                        candidate.id == action.formId
+                    } ?: return@filter false
+                    dynamicRootFormTargetsActiveSurface(
+                        action = spec,
+                        formView = formView,
+                        activeView = selectedView,
+                        activeReadAction = schema.action(selectedView.sourceActionId),
+                        selectedCollectionState = selectedCollectionState,
+                    )
                 }
             } else {
-                val currentResourceId = selectedRecordResourceId.orEmpty()
-                navigationPlan.contextualFormActions.filter { action ->
+                val currentResourceId = formActionContext.resourceId
+                formActionNavigationPlan.contextualFormActions.filter { action ->
                     val spec = schema.action(action.actionId)
                         ?: return@filter false
                     val formView = schema.views.singleOrNull { candidate ->
@@ -4611,14 +4683,10 @@ private fun DynamicDiscoveredAppScreen(
             "$label|$route"
         }
     }
-    val primaryCreateAction = remember(actionViews, schema) {
-        actionViews
-            .filter { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
-            .minByOrNull { (action, _) -> dynamicQuickActionPriority(schema.action(action.actionId)) }
+    val collectionCreateControl = remember(session, schema, selectedView.id, selectedRecord, selectedPathParameterValues) {
+        dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl()
     }
-    val overflowActionViews = remember(actionViews, primaryCreateAction) {
-        actionViews.filterNot { candidate -> candidate == primaryCreateAction }
-    }
+    val overflowActionViews = dynamicHeaderOverflowActions(schema, actionViews)
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
@@ -5038,6 +5106,7 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         actionMenuExpanded = false
         val actionSpec = schema.action(action.actionId)
+        if (actionSpec?.intent == ActionIntent.create) return
         val editableFieldCount = actionSpec?.let { spec ->
             schema.resource(spec.resourceId)?.let { resource ->
                 editableNativeFields(resource, spec).size
@@ -5272,7 +5341,8 @@ private fun DynamicDiscoveredAppScreen(
                 ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
-        val hasHeaderActions = overflowActionViews.isNotEmpty() ||
+        val hasHeaderActions = collectionCreateControl.action != null ||
+            overflowActionViews.isNotEmpty() ||
             secondaryNavigationDestinations.isNotEmpty()
 
         NextcloudCollectionWorkspaceScaffold(
@@ -5306,64 +5376,17 @@ private fun DynamicDiscoveredAppScreen(
             },
             headerActions = {
                 if (!showContextDestinationMenu && hasHeaderActions) {
-                    Box {
-                        IconButton(onClick = { actionMenuExpanded = true }) {
-                            Icon(NextcloudIcons.More, contentDescription = "More options")
-                        }
-                        DropdownMenu(
-                            expanded = actionMenuExpanded,
-                            onDismissRequest = { actionMenuExpanded = false },
-                        ) {
-                            overflowActionViews.forEach { (action, view) ->
-                                val actionSpec = schema.action(action.actionId)
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            actionSpec?.let { spec ->
-                                                dynamicHeaderActionLabel(
-                                                    spec,
-                                                    view.dynamicActionLabel(),
-                                                )
-                                            } ?: view.dynamicActionLabel(),
-                                        )
-                                    },
-                                    onClick = { selectDynamicAction(action, view) },
-                                )
-                            }
-                            if (
-                                overflowActionViews.isNotEmpty() &&
-                                secondaryNavigationDestinations.isNotEmpty()
-                            ) {
-                                HorizontalDivider()
-                            }
-                            secondaryNavigationDestinations.forEach { (destination, view) ->
-                                val baseLabel = destination.label.dynamicUiLabel(descriptor.app.name)
-                                val duplicate = secondaryNavigationDestinations.count {
-                                        (candidate, _) ->
-                                    candidate.label.dynamicUiLabel(descriptor.app.name)
-                                        .equals(baseLabel, ignoreCase = true)
-                                } > 1
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            dynamicSecondaryDestinationLabel(
-                                                destinationLabel = baseLabel,
-                                                resourceLabel = schema.resource(view.resourceId)?.name
-                                                    ?: view.resourceId,
-                                                duplicate = duplicate,
-                                            ),
-                                        )
-                                    },
-                                    modifier = Modifier.semantics {
-                                        contentDescription = "Open $baseLabel"
-                                    },
-                                    onClick = {
-                                        selectCollectionDestination(destination, view)
-                                    },
-                                )
-                            }
-                        }
-                    }
+                    DynamicCollectionHeaderActions(
+                        schema = schema,
+                        appName = descriptor.app.name,
+                        createControl = collectionCreateControl,
+                        overflowActions = overflowActionViews,
+                        secondaryDestinations = secondaryNavigationDestinations,
+                        menuExpanded = actionMenuExpanded,
+                        onMenuExpandedChange = { actionMenuExpanded = it },
+                        onActionSelected = ::selectDynamicAction,
+                        onDestinationSelected = ::selectCollectionDestination,
+                    )
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -5509,6 +5532,7 @@ private fun DynamicDiscoveredAppScreen(
                     datasetContext = rendererDatasetContext,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
                     pendingMutationStore = pendingMutationStore,
+                    collectionCreateControl = collectionCreateControl,
                     collectionBatchRelationLoader = collectionBatchRelationLoader,
                     filePicker = dynamicFilePicker,
                     recordImageLoader = recordImageLoader,
@@ -5532,7 +5556,10 @@ private fun DynamicDiscoveredAppScreen(
                             leaveMutatedSurface = false,
                         )
                     },
-                    showCollectionCreateAction = selectedCollectionState == null,
+                    showCollectionCreateAction = showDynamicCollectionCreateAction(
+                        collectionState = selectedCollectionState,
+                        choresWorkspaceKind = nativeChoresWorkspaceKind(schema, selectedView),
+                    ),
                     onOpenLink = services::openExternalUrl,
                     imageLoader = imageLoader,
                     audioPlayer = audioSourceCapability?.let {
@@ -6217,11 +6244,6 @@ internal data class DynamicAppNavigationState(
 internal fun DynamicAppNavigationState.hasPersistedDynamicLocation(): Boolean =
     selectedViewId != null || selectedRecord != null || history.isNotEmpty()
 
-internal fun retainedChoresNavigationContext(
-    retainedTeamContext: DynamicResourceRecordContext?,
-    currentRecordContext: DynamicResourceRecordContext?,
-): DynamicResourceRecordContext? = retainedTeamContext ?: currentRecordContext
-
 internal fun DynamicAppNavigationState.toSavedDynamicAppNavigationState(): SavedDynamicAppNavigationState {
     val savedParameters = pathParameterValues.toSavedDynamicNavigationParameters().orEmpty()
     val savedRecordId = selectedRecord?.id?.takeIf { value ->
@@ -6498,15 +6520,6 @@ private fun DynamicPaginationSpec.toDynamicPaginationState(
     val continuationPageNumber = nextPageNumber ?: (initialPageNumber + 1)
     val nextValue = nextValue(continuationPageNumber, loadedRecordCount, lastPage) ?: return null
     return DynamicPaginationState(viewId, this, continuationPageNumber, nextValue)
-}
-
-private fun String.dynamicUiLabel(appName: String): String {
-    val cleaned = removePrefix("API ").removePrefix("Api ").removePrefix("api ").trim()
-    return when {
-        cleaned.equals("general", ignoreCase = true) -> appName
-        cleaned.equals("prefs", ignoreCase = true) -> "Preferences"
-        else -> cleaned
-    }
 }
 
 private fun String.dynamicResourceWords(): Set<String> = lowercase()
@@ -7007,11 +7020,6 @@ private fun ViewSpec.dynamicNavigationLabel(appName: String): String {
         .trim()
     return if (cleaned.equals("general", ignoreCase = true)) appName else cleaned
 }
-
-private fun ViewSpec.dynamicActionLabel(): String = title
-    .replace(Regex("^\\[api\\s+v?[0-9.]+]\\s*", RegexOption.IGNORE_CASE), "")
-    .trim()
-    .replaceFirstChar { character -> character.titlecase() }
 
 private fun ViewSpec.dynamicActionMenuKey(): String = dynamicActionLabel()
     .lowercase()
@@ -8717,85 +8725,6 @@ private fun FileGridTile(
             )
         }
     }
-}
-
-@Composable
-internal fun FileActionMenu(
-    file: NextcloudFile,
-    offlineAvailability: FileOfflineAvailability,
-    offlineStorageSupported: Boolean,
-    fileSharing: NextcloudFileSharingCapabilities,
-    externalHandoffCapability: ExternalFileHandoffCapability?,
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onAction: (FileMenuAction) -> Unit,
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        planFilesScreenActions(
-            file = file,
-            support = FileActionSupport(
-                sharing = fileSharing.apiEnabled,
-                externalSharing = ExternalFileHandoffAction.Share in
-                    externalHandoffCapability?.supportedActions.orEmpty(),
-                offlineStorage = offlineStorageSupported,
-                platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
-                maximumInMemoryExternalFileBytes = externalHandoffCapability?.maximumInMemoryFileBytes,
-                seekableExternalFileStreaming =
-                    externalHandoffCapability?.supportsSeekableRemoteStreaming == true,
-            ),
-            offlineState = offlineAvailability.toFileActionOfflineState(),
-        ).actions.forEach { action ->
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text(action.label)
-                        action.disabledReason?.let { reason ->
-                            Text(
-                                reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = fileActionIcon(action.action),
-                        contentDescription = null,
-                        tint = if (action.tone == FileActionTone.Destructive) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                },
-                enabled = action.enabled,
-                onClick = {
-                    onDismiss()
-                    onAction(action.action)
-                },
-            )
-        }
-    }
-}
-
-private fun fileActionIcon(action: FileMenuAction): ImageVector = when (action) {
-    FileMenuAction.Open -> NextcloudIcons.FolderOpen
-    FileMenuAction.Preview -> NextcloudIcons.Image
-    FileMenuAction.OpenWith -> NextcloudIcons.File
-    FileMenuAction.EditText, FileMenuAction.EditWith, FileMenuAction.Rename -> NextcloudIcons.Edit
-    FileMenuAction.AddFavorite -> NextcloudIcons.FavoriteBorder
-    FileMenuAction.RemoveFavorite -> NextcloudIcons.Favorite
-    FileMenuAction.Details -> NextcloudIcons.Info
-    FileMenuAction.VersionHistory -> NextcloudIcons.Refresh
-    FileMenuAction.Download -> NextcloudIcons.Cloud
-    FileMenuAction.Move -> NextcloudIcons.FolderOpen
-    FileMenuAction.Copy -> NextcloudIcons.File
-    FileMenuAction.Share -> NextcloudIcons.People
-    FileMenuAction.SendCopy -> NextcloudIcons.Cloud
-    FileMenuAction.MakeAvailableOffline, FileMenuAction.RemoveOffline -> NextcloudIcons.CheckCircle
-    FileMenuAction.Delete -> NextcloudIcons.Error
 }
 
 private const val PHOTO_TIMELINE_PREFETCH_GRID_ITEMS = 18
@@ -12758,17 +12687,6 @@ private fun fileIcon(file: NextcloudFile): ImageVector = when {
     file.mimeType?.startsWith("image/") == true -> NextcloudIcons.Image
     file.mimeType?.startsWith("video/") == true -> NextcloudIcons.Video
     else -> NextcloudIcons.File
-}
-
-private fun nativeSubtitle(appId: String): String = when (appId) {
-    "files" -> "Browse your server files"
-    "photos", "memories" -> "Photos, videos and RAW previews"
-    "spreed", "talk" -> "Continue your conversations"
-    "activity" -> "See recent changes across your cloud"
-    "notes" -> "Write and organize Markdown notes"
-    "dashboard" -> "See your cloud at a glance"
-    "user_status" -> "Manage your presence and status message"
-    else -> "Open native experience"
 }
 
 private fun nativeFamily(appId: String): String = when (appId.lowercase()) {

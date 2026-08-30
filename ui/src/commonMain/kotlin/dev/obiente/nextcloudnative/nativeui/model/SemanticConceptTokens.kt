@@ -17,8 +17,11 @@ internal val SEMANTIC_TAXONOMY_CONCEPTS: Set<String> = setOf(
 internal fun String.hasAnySemanticConcept(concepts: Set<String>): Boolean =
     semanticConceptTokens().any(concepts::contains)
 
-internal fun String.semanticConceptTokens(): Set<String> {
-    val tokens = linkedSetOf<String>()
+internal fun String.semanticConceptTokens(): Set<String> = semanticConceptTokenList().toSet()
+
+/** Ordered words preserve repeated suffixes when a policy depends on the actual last word. */
+internal fun String.semanticConceptTokenList(): List<String> {
+    val tokens = mutableListOf<String>()
     val current = StringBuilder()
 
     fun flush() {
