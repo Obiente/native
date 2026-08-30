@@ -149,12 +149,10 @@ private suspend fun loadGroupwareContactBatch(
         return loadGroupwareContactBatchWithoutOversizedReport(addressBookHref, objects, execute)
     }
     if (response.status in 200..299) {
-        return GroupwareContactBatchLoadResult(
-            parseGroupwareAddressBookMultiGetResponse(
-                addressBookHref = addressBookHref,
-                requestedHrefs = objects.map(GroupwareAddressBookObject::href),
-                response = response,
-            ),
+        return parseGroupwareAddressBookMultiGetResponse(
+            addressBookHref = addressBookHref,
+            requestedHrefs = objects.map(GroupwareAddressBookObject::href),
+            response = response,
         )
     }
     if (response.status in setOf(405, 501)) {
@@ -205,18 +203,36 @@ private fun parseGroupwareAddressBookMultiGetResponse(
     addressBookHref: String,
     requestedHrefs: List<String>,
     response: NextcloudApiResponse,
-): List<GroupwareContact> {
+): GroupwareContactBatchLoadResult {
     require(response.status in 200..299) { "Contact loading failed (HTTP ${response.status})." }
     val requested = requestedHrefs.toSet()
     require(requested.size == requestedHrefs.size)
-    val contacts = response.body.decodeToString().xmlElements("response").map { block ->
+    val returned = mutableSetOf<String>()
+    var concurrentlyDeletedObjectCount = 0
+    val contacts = response.body.decodeToString().xmlElements("response").mapNotNull { block ->
         val href = block.xmlText("href")?.decodeXmlEntities()?.trim()?.requireSafeDavHref()
             ?: error("The CardDAV multiget response omitted an object href.")
-        require(href in requested) { "The CardDAV multiget response contained an unrequested object." }
-        block.xmlText("status")?.davStatusCode()?.let { status ->
+        require(href in requested && returned.add(href)) {
+            "The CardDAV multiget response contained an unrequested or duplicate object."
+        }
+        val properties = block.xmlElements("propstat")
+        // A property's 404 does not prove that the resource was deleted.
+        val resourceStatuses = properties.fold(block) { remainder, property -> remainder.replace(property, "") }
+            .xmlElements("status")
+        require(resourceStatuses.size <= 1 && (resourceStatuses.isEmpty() || properties.isEmpty())) {
+            "The CardDAV multiget response contained conflicting object statuses."
+        }
+        resourceStatuses.singleOrNull()?.let { statusElement ->
+            val status = requireNotNull(statusElement.xmlText("status")?.davStatusCode()) {
+                "The CardDAV multiget response contained a malformed object status."
+            }
+            if (status == 404 || status == 410) {
+                concurrentlyDeletedObjectCount += 1
+                return@mapNotNull null
+            }
             require(status in 200..299) { "The CardDAV multiget response contained a failed object." }
         }
-        val successfulProperty = block.xmlElements("propstat").singleOrNull { property ->
+        val successfulProperty = properties.singleOrNull { property ->
             property.xmlElements("address-data").isNotEmpty() &&
                 property.xmlText("status")?.davStatusCode() in 200..299
         } ?: error("The CardDAV multiget response did not return a contact successfully.")
@@ -233,10 +249,10 @@ private fun parseGroupwareAddressBookMultiGetResponse(
             ),
         ) { "The CardDAV multiget response contained a malformed contact." }
     }
-    require(contacts.size == requested.size && contacts.map(GroupwareContact::href).toSet() == requested) {
-        "The CardDAV multiget response did not return every requested contact successfully."
+    require(returned == requested) {
+        "The CardDAV multiget response did not account for every requested contact."
     }
-    return contacts
+    return GroupwareContactBatchLoadResult(contacts, concurrentlyDeletedObjectCount)
 }
 
 internal class GroupwareContactRetentionBudget(

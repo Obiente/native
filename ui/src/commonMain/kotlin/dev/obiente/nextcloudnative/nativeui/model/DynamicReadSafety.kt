@@ -16,10 +16,12 @@ internal fun DynamicAction.looksLikeStateChangingGet(): Boolean {
                 token.startIndex == 0 && token.endIndexExclusive == segment.length
             } == true
         }.lastOrNull().orEmpty()
-    val idConcepts = id.semanticConceptTokens()
+    val idConcepts = id.semanticConceptTokenList()
     return terminalStaticSegment.semanticConceptTokens().any(STATE_CHANGING_GET_CONCEPTS::contains) ||
         idConcepts.firstOrNull() in STATE_CHANGING_GET_CONCEPTS ||
-        idConcepts.lastOrNull() in STATE_CHANGING_GET_CONCEPTS
+        idConcepts.lastOrNull() in STATE_CHANGING_GET_CONCEPTS ||
+        (idConcepts.any(STATE_CHANGING_GET_CONCEPTS::contains) &&
+            idConcepts.lastOrNull() !in READ_PRODUCING_GET_SUFFIX_CONCEPTS)
 }
 
 internal fun DynamicAction.isContextualReadAction(): Boolean =
@@ -64,6 +66,9 @@ private val STATE_CHANGING_GET_CONCEPTS = setOf(
     "toggle",
     "trigger",
 )
+
+private val READ_PRODUCING_GET_SUFFIX_CONCEPTS = setOf("status", "history", "preview", "export", "download")
+    .flatMap { it.semanticConceptTokens() }.toSet()
 
 private val POSITIVE_ROOT_READ_CONCEPTS = setOf(
     "capabilities",

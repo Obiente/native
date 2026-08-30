@@ -14,10 +14,7 @@ class DynamicContextualReadSafetyTest {
         listOf(LayoutKind.list, LayoutKind.detail).forEach { kind ->
             listOf(false, true).forEach { linked ->
                 listOf("reset", "delete", "toggle", "rebuild", "clearcache", "clearCache", "scan").forEach { verb ->
-                    // The namespaced child-clearCache ID ends in cache, so this fixture
-                    // covers that compound command through its path. Prefixes are tested below.
-                    val commandLocations = if (verb == "clearCache") listOf(false) else listOf(false, true)
-                    commandLocations.forEach { commandInId ->
+                    listOf(false, true).forEach { commandInId ->
                         val descriptor = descriptor(kind, linked, verb, commandInId)
                         assertTrue(descriptor.planDynamicNavigation(context).contextualChildDestinations.isEmpty(), "$kind/$linked/$verb/$commandInId")
                         assertNull(descriptor.preferredSemanticContextualChild(context))
@@ -69,6 +66,48 @@ class DynamicContextualReadSafetyTest {
                 path = "/apps/example/items/$verb/{itemId}", id = "getResetStatus")
             assertTrue(!descriptor.actions.single().looksLikeStateChangingGet())
             assertEquals(1, descriptor.planDynamicNavigation(context).contextualChildDestinations.size)
+        }
+    }
+
+    @Test
+    fun middleCommandsCannotBecomeRootOrContextualReads() {
+        listOf(LayoutKind.list, LayoutKind.detail).forEach { kind ->
+            listOf(false, true).forEach { linked ->
+                listOf("getResetItem", "getToggleItem", "serviceClearCacheItem", "items_scan_child",
+                    "getResetItemStatusItem", "getItemResetPreviewItem", "getResetStatusReset",
+                    "getResetHistoryReset", "getItemResetHistoryItem").forEach { id ->
+                    val descriptor = descriptor(kind, linked, "items", path = "/apps/example/items/{itemId}", id = id)
+                    val action = descriptor.actions.single()
+                    assertTrue(action.looksLikeStateChangingGet(), id)
+                    assertTrue(!action.hasPositiveRootReadEvidence(), id)
+                    assertTrue(descriptor.planDynamicNavigation(context).contextualChildDestinations.isEmpty(), id)
+                    assertNull(descriptor.preferredSemanticContextualChild(context), id)
+                    assertTrue(descriptor.explainDynamicChildNavigation(context).isEmpty(), id)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun actualReadProducingSuffixesKeepCommandStatusAndOutputReadsNavigable() {
+        listOf("getResetStatus", "api-reset-item-preview", "getStatusResetItemStatus",
+            "getResetItemExport", "getResetItemDownload", "readRunHistory").forEach { id ->
+            val descriptor = descriptor(LayoutKind.detail, true, "items", path = "/apps/example/items/{itemId}", id = id)
+            assertTrue(!descriptor.actions.single().looksLikeStateChangingGet(), id)
+            assertEquals(listOf(id), descriptor.planDynamicNavigation(context).contextualChildDestinations
+                .map(DynamicNavigationDestination::actionId), id)
+        }
+    }
+
+    @Test
+    fun readSuffixesCannotOverrideCommandPrefixesOrCommandPaths() {
+        listOf(
+            "/apps/example/items/{itemId}" to "resetItemStatus",
+            "/apps/example/items/{itemId}" to "getItemStatusReset",
+            "/apps/example/items/reset/{itemId}" to "getResetStatus",
+        ).forEach { (path, id) ->
+            assertTrue(descriptor(LayoutKind.detail, true, "items", path = path, id = id)
+                .actions.single().looksLikeStateChangingGet(), "$path/$id")
         }
     }
 

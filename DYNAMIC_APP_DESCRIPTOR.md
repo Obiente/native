@@ -91,8 +91,10 @@ unknown app learned from a successful JSON list response.
   linked child tabs and automatic child selection. Verified provenance does not
   make reset, delete, toggle, or similar commands safe navigation reads.
   This includes command segments before trailing identifiers and operation IDs
-  that begin with command verbs. Read-producing status, preview, export, and
-  download routes remain eligible.
+  with command verbs at any word position. Middle command words are accepted
+  only when the actual terminal word is status, history, preview, export, or download.
+  Repeated words do not change which word is terminal, and read suffixes cannot
+  override command prefixes or command paths.
 - Object `allOf` flattening accepts only preserved shape keywords and known
   descriptive annotations. Conditional, unknown, and malformed member constraints
   withhold the write action and form. This includes OpenAPI 3.1 `if`/`then`/`else`,

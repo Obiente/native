@@ -218,6 +218,14 @@ only for HTTP 405 or 501. Other server failures and throttling stop the affected
 collection refresh instead of multiplying requests across its objects. A failed
 collection remains a visible failure, not a successful empty result.
 
+CardDAV multiget retains healthy contacts when another requested resource has
+an explicit 404 or 410 status, and reports the deletion count as a partial
+refresh. Every requested href must still be accounted for exactly once; omitted,
+duplicate, foreign, malformed, and other failed responses remain errors. A
+property-level 404 is not a resource deletion. These boundaries follow the
+[CardDAV multiget response example](https://www.rfc-editor.org/rfc/rfc6352.html#section-8.7.1)
+and the [WebDAV resource and property status distinction](https://www.rfc-editor.org/rfc/rfc4918.html#section-13).
+
 Tasks track completed refreshes by calendar href, not display name or aggregate
 warning text. A missing selection is cleared after its own calendar completes,
 even if another calendar fails. Failed or budget-truncated calendars do not
