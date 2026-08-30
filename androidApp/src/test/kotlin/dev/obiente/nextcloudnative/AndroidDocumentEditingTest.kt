@@ -171,6 +171,9 @@ class AndroidDocumentEditingTest {
             "/nextcloud/index.php/apps/files/directEditing/token-123?leak=1",
             "/nextcloud/index.php/apps/files/directEditing/token-123/extra",
             "/nextcloud/index.php/apps/files/directEditing/token%2Fextra",
+            "/nextcloud/index.php/apps/files/directEditing/token.value",
+            "/nextcloud/index.php/apps/files/directEditing/%61",
+            "/nextcloud/index.php/apps/files/directEditing/" + "a".repeat(1025),
             "/nextcloud/apps/richdocuments/index",
         ).forEach { candidate ->
             assertFailsWith<IllegalArgumentException>(candidate) {

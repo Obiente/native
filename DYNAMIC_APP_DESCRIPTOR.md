@@ -74,6 +74,10 @@ unknown app learned from a successful JSON list response.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are unsupported
   rather than ignored. See the [OpenAPI server and override rules](https://spec.openapis.org/oas/v3.0.3.html#server-object).
+- API-version defaults are bound only after inherited parameters, operation
+  overrides, and local schema references resolve. A server-derived version must
+  satisfy the effective parameter's declared enum/default. Unknown schema
+  constraints prevent server-derived defaults instead of being silently ignored.
 - External schema references in trusted Kotlin imports are sanitized before compilation;
   untrusted remote references remain unsupported.
 - OpenAPI security alternatives are currently flattened into conservative

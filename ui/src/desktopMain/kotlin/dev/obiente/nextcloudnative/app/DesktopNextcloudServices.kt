@@ -766,12 +766,7 @@ internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: Stri
     val token = rawPath.removePrefix(routePrefix)
     require(
         routePrefix.isNotEmpty() &&
-            token.isNotBlank() &&
-            '/' !in token &&
-            '\\' !in token &&
-            !token.contains("%2e", ignoreCase = true) &&
-            !token.contains("%2f", ignoreCase = true) &&
-            !token.contains("%5c", ignoreCase = true),
+            isValidOfficeDirectEditingToken(token),
     ) {
         "Nextcloud returned an unexpected direct-editing handoff route."
     }

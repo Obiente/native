@@ -32,6 +32,7 @@ class OfficeEditorNavigationTest {
         listOf(
             "$server/apps/office/", "$server/apps/files/",
             "$document?x=1", "$document#x", "$document/../other",
+            "$document.value", "$document%61", "$document" + "a".repeat(1025),
         ).forEach { url ->
             assertFailsWith<IllegalArgumentException> { OfficeEditorNavigation(server, url) }
         }

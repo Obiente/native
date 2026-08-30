@@ -99,9 +99,9 @@ class DynamicOpenApiServerTrustTest {
     }
 
     @Test
-    fun `approved absolute app path is not duplicated by a server path base`() {
+    fun `approved absolute app path is not duplicated or version bound before parameter validation`() {
         assertEquals(
-            "/apps/maps/api/1.0/devices",
+            "/apps/maps/api/{apiversion}/devices",
             resolveOpenApiPath(
                 base = "/index.php/apps/maps/api/1.0",
                 path = "/apps/maps/api/{apiversion}/devices",

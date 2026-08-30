@@ -45,8 +45,8 @@ data class NextcloudDocumentEditingCapabilities(
  * Token-free parameters for an explicit Office edit action.
  *
  * The ETag is retained as the version the user reviewed. Nextcloud's direct-editing endpoint does
- * not currently accept an If-Match validator, so callers should refresh the file metadata before
- * allowing this plan to remain actionable for a long time.
+ * not accept an If-Match validator. The edit use case must re-resolve the stable ID and compare
+ * the full request against current DAV metadata immediately before creating a session.
  */
 data class NextcloudDocumentEditSessionRequest(
     /** Parent directory used with [fileId] so a rename cannot silently retarget the handoff. */

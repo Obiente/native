@@ -217,6 +217,12 @@ warning text. A missing selection is cleared after its own calendar completes,
 even if another calendar fails. Failed or budget-truncated calendars do not
 prove deletion; selection retains its calendar identity across restoration.
 
+Task requests, durable recovery storage, and recovery reads are serialized.
+Refresh and recovery-discard controls remain disabled until the active request
+finishes. A queued recovery read reloads the durable record after obtaining the
+operation lock, never verifying a captured pre-request state. Cancellation
+releases the operation lock without discarding the durable recovery record.
+
 Task parsing withholds blank, control-containing, or over-1,024-character UIDs
 from editing. Recurrence identity values must have a valid date or date-time
 form, at most 16 characters, before entering task selection or saved state.

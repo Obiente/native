@@ -167,6 +167,7 @@ class DynamicAppDescriptorCompiler {
         )
         val state = KotlinCompilerState(
             input = input,
+            serverBase = serverBase,
             document = document,
             source = source,
             allowSignedDescriptionMultipartInference =
@@ -719,6 +720,7 @@ private val COLLECTION_STATE_ROUTE_WORDS = setOf(
 
 private class KotlinCompilerState(
     private val input: DynamicDiscoveryInput,
+    private val serverBase: String,
     private val document: JsonObject,
     private val source: Provenance,
     private val allowSignedDescriptionMultipartInference: Boolean,
@@ -1736,12 +1738,7 @@ private class KotlinCompilerState(
     ): Pair<String, List<HttpParameter>> {
         var boundPath = path
         val remaining = parameters.filter { parameter ->
-            val schema = parameter.schema as? JsonObject
-            val default = (schema?.get("default") as? JsonPrimitive)?.contentOrNull
-                ?: (schema?.get("enum") as? JsonArray)
-                    ?.singleOrNull()
-                    ?.let { it as? JsonPrimitive }
-                    ?.contentOrNull
+            val default = documentedOpenApiPathDefault(parameter, serverBase)
             val safeDefault = default?.takeIf(String::isSafeDocumentedPathSegment)
                 ?: return@filter true
             boundPath = boundPath.replace("{${parameter.name}}", safeDefault)

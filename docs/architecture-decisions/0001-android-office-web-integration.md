@@ -16,6 +16,10 @@ File-listing confirmation is independent of editor discovery. A failed or unsupp
 
 Preview and Edit are separate actions. Editing is gated by a secure advertised editor for the exact MIME type, file identity, version, and write permission. Eligibility is not restricted to a hard-coded Office format list: PDFs and other advertised formats can have editing choices too. A failed thumbnail must not hide those choices.
 
+Every Edit and editor Retry resolves the stable file ID through DAV immediately before session creation. The current writable file must produce the exact reviewed request, including its ETag and parent path. Changed or unavailable sources cannot create a token; a changed source withholds Edit until the preview is closed and the folder refreshed. This is a preflight check, not an atomic ETag guard: Direct Editing does not accept `If-Match`.
+
+The response validator and embedded navigator share one token policy: 1-1,024 ASCII letters, digits, hyphens, or underscores. Malformed, encoded, and oversized tokens fail at session creation rather than during UI composition.
+
 Android embeds only the validated one-time Direct Editing URL after explicit selection. It never sends account credentials into the WebView. Desktop keeps the system-browser editing handoff.
 
 The document response is supplied by the server's Direct Editing integration. For example, [Nextcloud Office renders its document template with the base layout](https://github.com/nextcloud/richdocuments/blob/main/lib/Controller/DocumentTrait.php), without the normal dashboard. NC Native does not scrape or cosmetically hide Nextcloud navigation.
