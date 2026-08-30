@@ -2212,6 +2212,7 @@ private fun AuthenticatedApp(
                     FileMenuAction.EditText -> if (file.isEditableText()) {
                         screen = Screen.TextEditor(file, current.path)
                     }
+                    FileMenuAction.EditWith -> screen = Screen.DocumentPreview(file, current.path)
                     else -> Unit
                 }
             },
@@ -2890,6 +2891,17 @@ private fun AppInfoScreen(
     onNavigationChanged: (DynamicAppNavigationState) -> Unit,
     onBack: () -> Unit,
 ) {
+    if (isVerifiedOfficeWebAppId(app.id)) {
+        VerifiedOfficeWebScreen(
+            services = services,
+            session = session,
+            appId = app.id,
+            advertisedHref = app.href,
+            onExit = onBack,
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
     var discovery by remember(app.id, session) { mutableStateOf(cachedDiscovery) }
     var discoveryError by remember(app.id, session) { mutableStateOf<String?>(null) }
     var discoveryAttempt by remember(app.id, session) { mutableStateOf(0) }
@@ -8716,85 +8728,6 @@ private fun FileGridTile(
             )
         }
     }
-}
-
-@Composable
-internal fun FileActionMenu(
-    file: NextcloudFile,
-    offlineAvailability: FileOfflineAvailability,
-    offlineStorageSupported: Boolean,
-    fileSharing: NextcloudFileSharingCapabilities,
-    externalHandoffCapability: ExternalFileHandoffCapability?,
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onAction: (FileMenuAction) -> Unit,
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        planFilesScreenActions(
-            file = file,
-            support = FileActionSupport(
-                sharing = fileSharing.apiEnabled,
-                externalSharing = ExternalFileHandoffAction.Share in
-                    externalHandoffCapability?.supportedActions.orEmpty(),
-                offlineStorage = offlineStorageSupported,
-                platformViewer = ExternalFileHandoffAction.OpenWith in externalHandoffCapability?.supportedActions.orEmpty(),
-                maximumInMemoryExternalFileBytes = externalHandoffCapability?.maximumInMemoryFileBytes,
-                seekableExternalFileStreaming =
-                    externalHandoffCapability?.supportsSeekableRemoteStreaming == true,
-            ),
-            offlineState = offlineAvailability.toFileActionOfflineState(),
-        ).actions.forEach { action ->
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text(action.label)
-                        action.disabledReason?.let { reason ->
-                            Text(
-                                reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = fileActionIcon(action.action),
-                        contentDescription = null,
-                        tint = if (action.tone == FileActionTone.Destructive) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                },
-                enabled = action.enabled,
-                onClick = {
-                    onDismiss()
-                    onAction(action.action)
-                },
-            )
-        }
-    }
-}
-
-private fun fileActionIcon(action: FileMenuAction): ImageVector = when (action) {
-    FileMenuAction.Open -> NextcloudIcons.FolderOpen
-    FileMenuAction.Preview -> NextcloudIcons.Image
-    FileMenuAction.OpenWith -> NextcloudIcons.File
-    FileMenuAction.EditText, FileMenuAction.EditWith, FileMenuAction.Rename -> NextcloudIcons.Edit
-    FileMenuAction.AddFavorite -> NextcloudIcons.FavoriteBorder
-    FileMenuAction.RemoveFavorite -> NextcloudIcons.Favorite
-    FileMenuAction.Details -> NextcloudIcons.Info
-    FileMenuAction.VersionHistory -> NextcloudIcons.Refresh
-    FileMenuAction.Download -> NextcloudIcons.Cloud
-    FileMenuAction.Move -> NextcloudIcons.FolderOpen
-    FileMenuAction.Copy -> NextcloudIcons.File
-    FileMenuAction.Share -> NextcloudIcons.People
-    FileMenuAction.SendCopy -> NextcloudIcons.Cloud
-    FileMenuAction.MakeAvailableOffline, FileMenuAction.RemoveOffline -> NextcloudIcons.CheckCircle
-    FileMenuAction.Delete -> NextcloudIcons.Error
 }
 
 private const val PHOTO_TIMELINE_PREFETCH_GRID_ITEMS = 18

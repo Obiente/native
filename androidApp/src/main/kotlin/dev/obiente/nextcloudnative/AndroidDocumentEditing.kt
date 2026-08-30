@@ -26,7 +26,6 @@ internal const val ANDROID_DIRECT_EDITING_OPEN_RELATIVE_PATH =
 
 private const val MAX_DOCUMENT_EDITING_CAPABILITIES_BYTES = 512L * 1024L
 private const val MAX_DOCUMENT_EDIT_SESSION_RESPONSE_BYTES = 64L * 1024L
-private val TRUSTED_ANDROID_DIRECT_EDITING_EDITOR_IDS = setOf("richdocuments", "whiteboard")
 
 internal data class AndroidDocumentEditingHttpRequest(
     val method: String,
@@ -174,8 +173,8 @@ internal fun parseAndroidDirectEditingSupportsFileId(body: String): Boolean =
 internal fun androidDirectEditingOpenForm(request: NextcloudDocumentEditSessionRequest): String {
     require(request.path.isSafeAndroidDocumentLookupPath()) { "The document path is unsafe." }
     require(request.fileId >= 0L) { "The document ID is invalid." }
-    require(request.editorId in TRUSTED_ANDROID_DIRECT_EDITING_EDITOR_IDS) {
-        "The document editor is not trusted."
+    require(request.editorId.isSafeAndroidDocumentCapabilityId()) {
+        "The document editor ID is invalid."
     }
     require(request.expectedEtag.isNotBlank()) { "The document version is missing." }
     return listOf(
@@ -236,6 +235,11 @@ private fun String.isSafeAndroidDocumentLookupPath(): Boolean =
                 none(Char::isISOControl) &&
                 split('/').all { segment -> segment.isNotBlank() && segment != "." && segment != ".." }
             )
+
+private fun String.isSafeAndroidDocumentCapabilityId(): Boolean =
+    isNotBlank() && length <= 128 && all { character ->
+        character.isLetterOrDigit() || character == '-' || character == '_'
+    }
 
 private fun URI.effectiveAndroidDirectEditingPort(): Int = if (port >= 0) port else when {
     scheme.equals("https", ignoreCase = true) -> 443

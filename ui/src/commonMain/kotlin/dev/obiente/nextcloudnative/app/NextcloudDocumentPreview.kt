@@ -39,7 +39,8 @@ import kotlinx.coroutines.launch
  * Read-only document body that callers can place inside their own navigation or dialog chrome.
  *
  * It renders bounded UTF-8 text, bounded Markdown through native Compose components, or a
- * server-generated raster preview. It never instantiates a WebView or receives a WOPI access token.
+ * server-generated raster preview. After an explicit edit action, Android can render the
+ * short-lived, same-origin Direct Editing URL in the isolated Office web surface.
  */
 @Composable
 fun NextcloudDocumentPreview(
@@ -70,6 +71,9 @@ fun NextcloudDocumentPreview(
     }
     var editStatus by remember(file.path, file.etag) {
         mutableStateOf<DocumentEditUiState>(DocumentEditUiState.Idle)
+    }
+    var externalOpenStatus by remember(file.path, file.etag) {
+        mutableStateOf<DocumentExternalOpenUiState>(DocumentExternalOpenUiState.Idle)
     }
     val scope = rememberCoroutineScope()
 
@@ -108,25 +112,103 @@ fun NextcloudDocumentPreview(
             accountOriginSecure = !serverAddressUsesPlainHttp(session.serverUrl),
         )
     }
+    val officeChoices = remember(file, editingCapabilities, session.serverUrl) {
+        planOfficeEditorChoices(
+            file = file,
+            capabilities = editingCapabilities,
+            accountOriginSecure = !serverAddressUsesPlainHttp(session.serverUrl),
+        )
+    }
+    val externalCapability = remember(services) {
+        (services.externalFileHandoffSupport as? ExternalFileHandoffSupport.Available)?.capability
+    }
+    val externalOpenAvailable = remember(file, externalCapability) {
+        externalCapability?.let { capability ->
+            planFileActions(
+                file = file,
+                support = FileActionSupport(
+                    platformViewer = ExternalFileHandoffAction.OpenWith in capability.supportedActions,
+                    maximumInMemoryExternalFileBytes = capability.maximumInMemoryFileBytes,
+                    seekableExternalFileStreaming = capability.supportsSeekableRemoteStreaming,
+                ),
+            ).actions.firstOrNull { it.action == FileMenuAction.OpenWith }?.enabled == true
+        } == true
+    }
+
+    fun startOfficeEdit(request: NextcloudDocumentEditSessionRequest) {
+        if (editStatus == DocumentEditUiState.Starting) return
+        editStatus = DocumentEditUiState.Starting
+        scope.launch {
+            runCatchingPreservingCancellation {
+                services.beginDocumentEditSession(session, request)
+            }.onSuccess { editSession ->
+                editStatus = DocumentEditUiState.Editing(editSession.sameOriginUrl, request)
+            }.onFailure {
+                editStatus = DocumentEditUiState.Failed(
+                    it.message ?: "Could not start the Office editor.",
+                )
+            }
+        }
+    }
+
+    fun openInAnotherApp() {
+        if (!externalOpenAvailable || externalOpenStatus == DocumentExternalOpenUiState.Preparing) return
+        externalOpenStatus = DocumentExternalOpenUiState.Preparing
+        scope.launch {
+            runCatchingPreservingCancellation {
+                services.handoffFileToExternalApp(
+                    session = session,
+                    userId = userId,
+                    file = file,
+                    action = ExternalFileHandoffAction.OpenWith,
+                )
+            }.onSuccess { result ->
+                externalOpenStatus = when (result) {
+                    is ExternalFileHandoffResult.Launched,
+                    is ExternalFileHandoffResult.Cancelled,
+                    -> DocumentExternalOpenUiState.Idle
+                    is ExternalFileHandoffResult.Rejected -> DocumentExternalOpenUiState.Failed(result.message)
+                    is ExternalFileHandoffResult.NoCompatibleApplication ->
+                        DocumentExternalOpenUiState.Failed("No installed app can open this file.")
+                    is ExternalFileHandoffResult.Unsupported -> DocumentExternalOpenUiState.Failed(result.reason)
+                }
+            }.onFailure { failure ->
+                externalOpenStatus = DocumentExternalOpenUiState.Failed(
+                    failure.message ?: "Could not prepare this file for another app.",
+                )
+            }
+        }
+    }
 
     Surface(modifier = modifier.fillMaxSize()) {
         val activeEditor = editStatus as? DocumentEditUiState.Editing
         if (activeEditor != null) {
-            LaunchedEffect(activeEditor.sameOriginUrl) {
-                runCatchingPreservingCancellation {
-                    services.openExternalUrl(activeEditor.sameOriginUrl)
-                }.onSuccess {
-                    editStatus = DocumentEditUiState.Idle
-                }.onFailure { failure ->
-                    editStatus = DocumentEditUiState.Failed(
-                        failure.message ?: "Could not open the Office editor.",
-                    )
+            if (services.supportsEmbeddedNextcloudWebApp) {
+                PlatformEmbeddedNextcloudWebApp(
+                    session = session,
+                    initialUrl = activeEditor.sameOriginUrl,
+                    authenticateWithSession = false,
+                    onExit = { editStatus = DocumentEditUiState.Idle },
+                    onRetrySession = { startOfficeEdit(activeEditor.request) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                LaunchedEffect(activeEditor.sameOriginUrl) {
+                    runCatchingPreservingCancellation {
+                        services.openExternalUrl(activeEditor.sameOriginUrl)
+                    }.onSuccess {
+                        editStatus = DocumentEditUiState.Idle
+                    }.onFailure { failure ->
+                        editStatus = DocumentEditUiState.Failed(
+                            failure.message ?: "Could not open the Office editor.",
+                        )
+                    }
                 }
+                DocumentPreviewMessage(
+                    title = "Opening Office",
+                    detail = "The editor is opening in your browser.",
+                )
             }
-            DocumentPreviewMessage(
-                title = "Opening Office",
-                detail = "The editor is opening in your browser.",
-            )
             return@Surface
         }
         when (val current = state) {
@@ -141,23 +223,12 @@ fun NextcloudDocumentPreview(
                 DocumentWorkflowBar(
                     file = file,
                     officePlan = officePlan,
+                    officeChoices = officeChoices,
                     editStatus = editStatus,
-                    onEdit = { request ->
-                        if (editStatus != DocumentEditUiState.Starting) {
-                            editStatus = DocumentEditUiState.Starting
-                            scope.launch {
-                                runCatchingPreservingCancellation {
-                                    services.beginDocumentEditSession(session, request)
-                                }.onSuccess { editSession ->
-                                    editStatus = DocumentEditUiState.Editing(editSession.sameOriginUrl)
-                                }.onFailure {
-                                    editStatus = DocumentEditUiState.Failed(
-                                        it.message ?: "Could not start the Office editor.",
-                                    )
-                                }
-                            }
-                        }
-                    },
+                    onEdit = ::startOfficeEdit,
+                    externalOpenAvailable = externalOpenAvailable,
+                    externalOpenStatus = externalOpenStatus,
+                    onOpenExternal = ::openInAnotherApp,
                 )
                 Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                     DocumentPreviewBody(
@@ -169,9 +240,23 @@ fun NextcloudDocumentPreview(
 
             DocumentPreviewUiState.Error -> DocumentPreviewMessage(
                 title = "Couldn't load this preview",
-                detail = "The server did not return a usable document preview.",
+                detail = when (val openState = externalOpenStatus) {
+                    is DocumentExternalOpenUiState.Failed ->
+                        "The server did not return a usable document preview. ${openState.message}"
+                    else -> "The server did not return a usable document preview."
+                },
                 action = "Retry",
                 onAction = { attempt += 1 },
+                secondaryAction = if (externalOpenAvailable) {
+                    if (externalOpenStatus == DocumentExternalOpenUiState.Preparing) {
+                        "Preparing file..."
+                    } else {
+                        "Open in another app"
+                    }
+                } else {
+                    null
+                },
+                onSecondaryAction = if (externalOpenAvailable) ::openInAnotherApp else null,
             )
         }
     }
@@ -181,8 +266,12 @@ fun NextcloudDocumentPreview(
 private fun DocumentWorkflowBar(
     file: NextcloudFile,
     officePlan: OfficeEditSessionPlan,
+    officeChoices: List<OfficeEditorChoice>,
     editStatus: DocumentEditUiState,
     onEdit: (NextcloudDocumentEditSessionRequest) -> Unit,
+    externalOpenAvailable: Boolean,
+    externalOpenStatus: DocumentExternalOpenUiState,
+    onOpenExternal: () -> Unit,
 ) {
     val descriptor = describeDocument(file)
     Column(
@@ -198,20 +287,29 @@ private fun DocumentWorkflowBar(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (descriptor.officeEditable) {
-            when (officePlan) {
-                is OfficeEditSessionPlan.Ready -> Button(
-                    enabled = editStatus != DocumentEditUiState.Starting,
-                    onClick = { onEdit(officePlan.request) },
-                ) {
-                    if (editStatus == DocumentEditUiState.Starting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp).padding(end = 2.dp),
-                            strokeWidth = 2.dp,
+            if (officeChoices.isNotEmpty()) {
+                officeChoices.forEach { choice ->
+                    Button(
+                        enabled = editStatus != DocumentEditUiState.Starting,
+                        onClick = { onEdit(choice.request) },
+                    ) {
+                        if (editStatus == DocumentEditUiState.Starting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp).padding(end = 2.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                        Text(
+                            if (editStatus == DocumentEditUiState.Starting) {
+                                "Starting ${choice.displayName}..."
+                            } else {
+                                "Edit in ${choice.displayName}"
+                            },
                         )
                     }
-                    Text(if (editStatus == DocumentEditUiState.Starting) "Starting Office..." else "Edit in Office")
                 }
-                is OfficeEditSessionPlan.Blocked -> Text(
+            } else if (officePlan is OfficeEditSessionPlan.Blocked) {
+                Text(
                     officePlan.reason.userMessage(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -224,6 +322,27 @@ private fun DocumentWorkflowBar(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+        }
+        if (externalOpenAvailable) {
+            Button(
+                enabled = externalOpenStatus != DocumentExternalOpenUiState.Preparing,
+                onClick = onOpenExternal,
+            ) {
+                Text(
+                    if (externalOpenStatus == DocumentExternalOpenUiState.Preparing) {
+                        "Preparing file..."
+                    } else {
+                        "Open in another app"
+                    },
+                )
+            }
+        }
+        if (externalOpenStatus is DocumentExternalOpenUiState.Failed) {
+            Text(
+                externalOpenStatus.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -412,6 +531,8 @@ private fun DocumentPreviewMessage(
     detail: String,
     action: String? = null,
     onAction: (() -> Unit)? = null,
+    secondaryAction: String? = null,
+    onSecondaryAction: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -428,6 +549,11 @@ private fun DocumentPreviewMessage(
         if (action != null && onAction != null) {
             Button(onClick = onAction, modifier = Modifier.padding(top = 20.dp)) {
                 Text(action)
+            }
+        }
+        if (secondaryAction != null && onSecondaryAction != null) {
+            Button(onClick = onSecondaryAction, modifier = Modifier.padding(top = 12.dp)) {
+                Text(secondaryAction)
             }
         }
     }
@@ -455,6 +581,17 @@ private sealed interface DocumentPreviewUiState {
 private sealed interface DocumentEditUiState {
     data object Idle : DocumentEditUiState
     data object Starting : DocumentEditUiState
-    data class Editing(val sameOriginUrl: String) : DocumentEditUiState
+    data class Editing(
+        val sameOriginUrl: String,
+        val request: NextcloudDocumentEditSessionRequest,
+    ) : DocumentEditUiState {
+        override fun toString(): String = "Editing(url=<redacted>)"
+    }
     data class Failed(val message: String) : DocumentEditUiState
+}
+
+private sealed interface DocumentExternalOpenUiState {
+    data object Idle : DocumentExternalOpenUiState
+    data object Preparing : DocumentExternalOpenUiState
+    data class Failed(val message: String) : DocumentExternalOpenUiState
 }

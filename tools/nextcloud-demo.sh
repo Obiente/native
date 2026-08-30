@@ -541,9 +541,23 @@ configure_proxy_protocol() {
     occ config:system:delete overwriteprotocol >/dev/null 2>&1 || true
 }
 
+ensure_current_demo_host_trusted() {
+    local host
+    local trusted_domains
+    local next_index
+    host="$(read_environment_value NC_DEMO_HOST)"
+    trusted_domains="$(occ config:system:get trusted_domains 2>/dev/null || true)"
+    if grep -Fxq "$host" <<<"$trusted_domains"; then
+        return
+    fi
+    next_index="$(awk 'NF { count += 1 } END { print count + 0 }' <<<"$trusted_domains")"
+    occ config:system:set trusted_domains "$next_index" --value="$host" >/dev/null
+}
+
 provision() {
     wait_for_server
     configure_proxy_protocol
+    ensure_current_demo_host_trusted
     ensure_test_account
     install_suite
     provision_bridge

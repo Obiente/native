@@ -4,4 +4,4 @@ pull: 425
 platforms: android, desktop
 user-facing: yes
 
-Improve dynamic app workspaces with native collection creation, broader safe contract compatibility, resilient Contacts and Dashboard loading, and capability-gated Office editing through the system browser.
+Improve native collection creation, Contacts and Dashboard loading, and Office integration with Android web editing, server-advertised editor choices, and an explicit system-app file opener.

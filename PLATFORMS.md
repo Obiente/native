@@ -52,6 +52,13 @@ evidence that device-specific acceptance criteria have passed.
 - Shared Compose components contain behavior and semantics. Platform layouts
   may arrange them differently.
 
+Office is an explicit exception to native rendering. Android can embed verified
+Office dashboards and user-requested Direct Editing sessions; desktop opens the
+system browser. This does not provide an automatic web fallback for other apps.
+See [ADR 0001](docs/architecture-decisions/0001-android-office-web-integration.md)
+for the authentication, provider selection, and retry boundaries. Device-level
+Office acceptance remains separate from compiling or packaging this integration.
+
 ## Mobile product rules
 
 - Correct safe-area insets, system back, touch targets, and permission flows.

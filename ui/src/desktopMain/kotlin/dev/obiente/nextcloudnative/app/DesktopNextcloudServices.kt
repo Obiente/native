@@ -724,8 +724,8 @@ internal fun parseDesktopDocumentTemplates(
 internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest): String {
     require(request.path.isSafeDocumentLookupPath()) { "The document path is unsafe." }
     require(request.fileId >= 0L) { "The document ID is invalid." }
-    require(request.editorId in TRUSTED_DIRECT_EDITING_EDITOR_IDS) {
-        "The document editor is not trusted."
+    require(request.editorId.isSafeDocumentCapabilityId()) {
+        "The document editor ID is invalid."
     }
     require(request.expectedEtag.isNotBlank()) { "The document version is missing." }
     return listOf(
@@ -737,11 +737,6 @@ internal fun directEditingOpenForm(request: NextcloudDocumentEditSessionRequest)
             URLEncoder.encode(value, StandardCharsets.UTF_8)
     }
 }
-
-private val TRUSTED_DIRECT_EDITING_EDITOR_IDS = setOf(
-    OFFICE_DIRECT_EDITOR_ID,
-    WHITEBOARD_DIRECT_EDITOR_ID,
-)
 
 internal fun validatedDirectEditingHandoffUrl(serverUrl: String, candidate: String): String {
     require(candidate.isNotBlank() && candidate.none(Char::isISOControl)) {

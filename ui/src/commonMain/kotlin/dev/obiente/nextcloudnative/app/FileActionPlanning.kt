@@ -37,6 +37,7 @@ data class FileActionSupport(
     val maximumInMemoryExternalFileBytes: Long? = null,
     val seekableExternalFileStreaming: Boolean = false,
     val documentEditing: NextcloudDocumentEditingCapabilities? = null,
+    val discoverDocumentEditing: Boolean = false,
 )
 
 data class PlannedFileAction(
@@ -117,6 +118,14 @@ fun planFileActions(
         if (!file.isDirectory && officeEditPlan != null) {
             val reason = (officeEditPlan as? OfficeEditSessionPlan.Blocked)?.reason?.userMessage()
             add(action(FileMenuAction.EditWith, "Edit in Office", FileActionPlacement.Overflow, reason))
+        } else if (!file.isDirectory && descriptor.officeEditable && support.discoverDocumentEditing) {
+            add(
+                PlannedFileAction(
+                    FileMenuAction.EditWith,
+                    "Choose Office editor...",
+                    FileActionPlacement.Overflow,
+                ),
+            )
         } else if (!file.isDirectory && support.platformEditor) {
             val reason = inMemoryEditReason ?: if (!hasVersion) "Refresh the folder before editing this file." else null
             add(action(FileMenuAction.EditWith, "Edit with...", FileActionPlacement.Overflow, reason))
@@ -414,6 +423,7 @@ private val filesScreenImplementedActions = setOf(
     FileMenuAction.Preview,
     FileMenuAction.OpenWith,
     FileMenuAction.EditText,
+    FileMenuAction.EditWith,
     FileMenuAction.AddFavorite,
     FileMenuAction.RemoveFavorite,
     FileMenuAction.Details,

@@ -58,7 +58,9 @@ services:
     volumes:
       - nextcloud:/var/www/html
       - ../../server-companion/obiente_native_bridge:/opt/obiente_native_bridge:ro,Z
-      - ./.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,Z
+      # The gateway mounts the parent TLS directory too. Use a shared SELinux label so starting
+      # either container cannot revoke the other container's access to the CA bundle.
+      - ./.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,z
       - ./hooks/pre-installation/10-volume-permissions.sh:/docker-entrypoint-hooks.d/pre-installation/10-volume-permissions.sh:ro,Z
 
   gateway:
@@ -71,7 +73,7 @@ services:
       - "${NC_DEMO_BIND_ADDRESS:-0.0.0.0}:${NC_DEMO_HTTPS_PORT:-8443}:443"
     volumes:
       - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro,Z
-      - ./.state/tls:/etc/caddy/tls:ro,Z
+      - ./.state/tls:/etc/caddy/tls:ro,z
 
 volumes:
   database:

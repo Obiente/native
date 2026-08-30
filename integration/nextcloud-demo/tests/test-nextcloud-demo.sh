@@ -34,8 +34,8 @@ duplicate_app_ids="$(
 grep -Fq 'nextcloud:34.0.3-apache' "$demo_root/compose.yml"
 grep -Fq 'condition: service_healthy' "$demo_root/compose.yml"
 grep -Fq '127.0.0.1:${NC_DEMO_HTTP_PORT:-18080}:80' "$demo_root/compose.yml"
-grep -Fq './.state/tls:/etc/caddy/tls:ro,Z' "$demo_root/compose.yml"
-grep -Fq './.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,Z' "$demo_root/compose.yml"
+grep -Fq './.state/tls:/etc/caddy/tls:ro,z' "$demo_root/compose.yml"
+grep -Fq './.state/tls/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro,z' "$demo_root/compose.yml"
 grep -Fq '/opt/obiente_native_bridge:ro,Z' "$demo_root/compose.yml"
 grep -Fq 'hooks/pre-installation/10-volume-permissions.sh' "$demo_root/compose.yml"
 grep -Fq 'ensure_ca_bundle' "$helper"
@@ -48,6 +48,7 @@ if grep -Fq 'require_initialized' <<<"$reset_contract"; then
     exit 1
 fi
 grep -Fq 'readiness_url="$(local_server_url)"' "$helper"
+grep -Fq 'ensure_current_demo_host_trusted' "$helper"
 grep -Fq 'validated_android_server_url' "$helper"
 grep -Fq 'openssl x509 -in "$state_root/tls/server.crt" -noout -checkip' "$helper"
 grep -Fq "'.serverUrl = \$serverUrl'" "$helper"

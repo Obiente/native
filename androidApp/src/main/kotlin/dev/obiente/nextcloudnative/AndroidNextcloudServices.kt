@@ -490,6 +490,7 @@ internal class AndroidNextcloudServices(
     override val supportsVirtualFileStorage: Boolean = true
     override val supportsRecursiveFileOfflineStorage: Boolean = true
     override val supportsBidirectionalFileSync: Boolean = fileSyncRootPicker != null
+    override val supportsEmbeddedNextcloudWebApp: Boolean = true
     override val externalFileHandoffSupport: ExternalFileHandoffSupport = ExternalFileHandoffSupport.Available(
         ExternalFileHandoffCapability(
             supportedActions = ExternalFileHandoffAction.entries.toSet(),

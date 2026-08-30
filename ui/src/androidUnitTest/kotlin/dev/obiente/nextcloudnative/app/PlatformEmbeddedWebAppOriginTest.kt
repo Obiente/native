@@ -20,5 +20,8 @@ class PlatformEmbeddedWebAppOriginTest {
     @Test
     fun nonWebSchemesCannotBecomeEmbeddedOrigins() {
         assertNull(canonicalEmbeddedWebOrigin("file", "cloud.example.test", -1))
+        assertNull(canonicalEmbeddedWebOrigin("file", "cloud.example.test", 443))
+        assertNull(canonicalEmbeddedWebOrigin("https", "", 443))
+        assertNull(canonicalEmbeddedWebOrigin("https", "cloud.example.test", 65536))
     }
 }

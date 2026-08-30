@@ -21,6 +21,50 @@ class OfficeDocumentWorkflowTest {
     }
 
     @Test
+    fun `offers every secure editor that advertises the exact mime type`() {
+        val capabilities = officeCapabilities().copy(
+            editors = officeCapabilities().editors + (
+                "onlyoffice" to NextcloudDocumentEditorCapability(
+                    id = "onlyoffice",
+                    displayName = "ONLYOFFICE",
+                    mimeTypes = setOf(DOCX_MIME),
+                    optionalMimeTypes = emptySet(),
+                    secure = true,
+                )
+                ),
+        )
+
+        val choices = planOfficeEditorChoices(officeFile(), capabilities)
+
+        assertEquals(listOf("Nextcloud Office", "ONLYOFFICE"), choices.map(OfficeEditorChoice::displayName))
+        assertEquals(setOf("richdocuments", "onlyoffice"), choices.map(OfficeEditorChoice::editorId).toSet())
+    }
+
+    @Test
+    fun `does not offer insecure or mime incompatible editors`() {
+        val capabilities = officeCapabilities().copy(
+            editors = mapOf(
+                "insecure" to NextcloudDocumentEditorCapability(
+                    id = "insecure",
+                    displayName = "Insecure editor",
+                    mimeTypes = setOf(DOCX_MIME),
+                    optionalMimeTypes = emptySet(),
+                    secure = false,
+                ),
+                "sheets" to NextcloudDocumentEditorCapability(
+                    id = "sheets",
+                    displayName = "Sheets only",
+                    mimeTypes = setOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                    optionalMimeTypes = emptySet(),
+                    secure = true,
+                ),
+            ),
+        )
+
+        assertTrue(planOfficeEditorChoices(officeFile(), capabilities).isEmpty())
+    }
+
+    @Test
     fun blocksEditingUntilDavWritePermissionIsProven() {
         assertEquals(
             OfficeEditBlockedReason.MissingPermissions,

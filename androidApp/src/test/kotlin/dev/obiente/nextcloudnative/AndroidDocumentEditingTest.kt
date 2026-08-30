@@ -130,16 +130,24 @@ class AndroidDocumentEditingTest {
     }
 
     @Test
-    fun `open form rejects unsafe input and untrusted editors`() {
+    fun `open form rejects unsafe input and invalid editor identities`() {
         assertFailsWith<IllegalArgumentException> {
             androidDirectEditingOpenForm(request(path = "Documents/../Secrets"))
         }
         assertFailsWith<IllegalArgumentException> {
-            androidDirectEditingOpenForm(request(path = "Documents", editorId = "malicious"))
+            androidDirectEditingOpenForm(request(path = "Documents", editorId = "../malicious"))
         }
         assertFailsWith<IllegalArgumentException> {
             androidDirectEditingOpenForm(request(path = "Documents", expectedEtag = ""))
         }
+    }
+
+    @Test
+    fun `open form accepts another server advertised editor identity`() {
+        assertEquals(
+            "path=Documents&editorId=onlyoffice&fileId=42",
+            androidDirectEditingOpenForm(request(path = "Documents", editorId = "onlyoffice")),
+        )
     }
 
     @Test
