@@ -18,12 +18,20 @@ import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationDestination
 import dev.obiente.nextcloudnative.nativeui.model.DynamicNavigationFormAction
 import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
+import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
+import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl
+
+internal fun dynamicHeaderOverflowActions(
+    schema: NativeAppSchema,
+    actions: List<Pair<DynamicNavigationFormAction, ViewSpec>>,
+): List<Pair<DynamicNavigationFormAction, ViewSpec>> =
+    actions.filterNot { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
 
 @Composable
 internal fun DynamicCollectionHeaderActions(
     schema: NativeAppSchema,
     appName: String,
-    primaryAction: Pair<DynamicNavigationFormAction, ViewSpec>?,
+    createControl: NativeCollectionCreateControl?,
     overflowActions: List<Pair<DynamicNavigationFormAction, ViewSpec>>,
     secondaryDestinations: List<Pair<DynamicNavigationDestination, ViewSpec>>,
     menuExpanded: Boolean,
@@ -32,11 +40,9 @@ internal fun DynamicCollectionHeaderActions(
     onDestinationSelected: (DynamicNavigationDestination, ViewSpec) -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        primaryAction?.let { (action, view) ->
-            val label = schema.action(action.actionId)?.let { spec ->
-                dynamicHeaderActionLabel(spec, view.dynamicActionLabel())
-            } ?: view.dynamicActionLabel()
-            IconButton(onClick = { onActionSelected(action, view) }) {
+        createControl?.action?.let { action ->
+            val label = dynamicHeaderActionLabel(action, action.label)
+            IconButton(onClick = { createControl.open(action.id) }) {
                 Icon(NextcloudIcons.Add, contentDescription = label)
             }
         }

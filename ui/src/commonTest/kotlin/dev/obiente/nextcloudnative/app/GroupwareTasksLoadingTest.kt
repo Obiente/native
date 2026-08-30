@@ -136,11 +136,11 @@ class GroupwareTasksLoadingTest {
         val calendar = GroupwareCalendar("/remote.php/dav/calendars/person/tasks/", "Tasks")
         val healthyHref = "${calendar.href}healthy.ics"
         val deletedHref = "${calendar.href}deleted.ics"
-        val omittedHref = "${calendar.href}omitted.ics"
+        val goneHref = "${calendar.href}gone.ics"
 
         val result = loadGroupwareTaskCalendars(listOf(calendar)) { request ->
             if (request.method == "PROPFIND") {
-                listingResponse(calendar.href, listOf(healthyHref, deletedHref, omittedHref))
+                listingResponse(calendar.href, listOf(healthyHref, deletedHref, goneHref))
             } else {
                 val content = createGroupwareTaskContent("healthy", "Healthy task", null, false)
                 NextcloudApiResponse(
@@ -153,6 +153,7 @@ class GroupwareTasksLoadingTest {
                             <d:getetag>&quot;healthy&quot;</d:getetag><c:calendar-data>$content</c:calendar-data>
                           </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
                           <d:response><d:href>$deletedHref</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+                          <d:response><d:href>$goneHref</d:href><d:status>HTTP/1.1 410 Gone</d:status></d:response>
                         </d:multistatus>
                     """.trimIndent().encodeToByteArray(),
                 )
@@ -175,6 +176,54 @@ class GroupwareTasksLoadingTest {
         }
         assertEquals(setOf(healthy.href), result.completedCalendarHrefs)
         assertEquals(listOf("Tasks"), result.failedCalendarNames)
+    }
+
+    @Test
+    fun `property failures and omitted members never confirm task selection removal`() = runBlocking {
+        val calendar = GroupwareCalendar("/remote.php/dav/calendars/person/tasks/", "Tasks")
+        val href = "${calendar.href}one.ics"
+        val healthy = multiGetResponse(listOf(href)).body.decodeToString()
+        val invalid = listOf(404, 410, 403, 500).map { code ->
+            healthy.replace("HTTP/1.1 200 OK", "HTTP/1.1 $code Failed property")
+        } + listOf(
+            healthy.replace(healthy.xmlElements("response").single(), ""),
+            healthy.replace("<d:propstat>", "<d:status>invalid</d:status><d:propstat>"),
+            healthy.replace("<d:propstat>", "<d:status>HTTP/1.1 404 Not Found</d:status><d:propstat>"),
+        )
+        val selected = requireNotNull(parseGroupwareTask(calendar.href, href, "v1",
+            createGroupwareTaskContent("one", "Task one", null, false))).selection()
+        invalid.forEach { body ->
+            val result = loadGroupwareTaskCalendars(listOf(calendar)) { request ->
+                if (request.method == "PROPFIND") listingResponse(calendar.href, listOf(href))
+                else NextcloudApiResponse(207, body.encodeToByteArray(), "application/xml", null)
+            }
+            assertEquals(listOf("Tasks"), result.failedCalendarNames)
+            assertTrue(result.completedCalendarHrefs.isEmpty())
+            assertEquals(0, result.concurrentlyDeletedObjectCount)
+            assertFalse(TasksLoadState.Ready(listOf(calendar), result.tasks, result.completedCalendarHrefs)
+                .confirmsSelectionRemoved(selected))
+        }
+    }
+
+    @Test
+    fun `optional property failures do not hide successfully retrieved tasks`() = runBlocking {
+        val calendar = GroupwareCalendar("/remote.php/dav/calendars/person/tasks/", "Tasks")
+        val href = "${calendar.href}one.ics"
+        val missing = "<d:propstat><d:prop><d:displayname /></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>"
+        listOf(true, false).forEach { before ->
+            val result = loadGroupwareTaskCalendars(listOf(calendar)) { request ->
+                if (request.method == "PROPFIND") listingResponse(calendar.href, listOf(href)) else {
+                    val healthy = multiGetResponse(listOf(href))
+                    healthy.copy(body = healthy.body.decodeToString().let {
+                        if (before) it.replace("<d:propstat>", "$missing<d:propstat>")
+                        else it.replace("</d:propstat>", "</d:propstat>$missing")
+                    }.encodeToByteArray())
+                }
+            }
+            assertEquals(listOf(href), result.tasks.map(GroupwareTask::href))
+            assertEquals(setOf(calendar.href), result.completedCalendarHrefs)
+            assertEquals(0, result.concurrentlyDeletedObjectCount)
+        }
     }
 
     @Test

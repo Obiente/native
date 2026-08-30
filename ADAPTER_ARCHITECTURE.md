@@ -218,18 +218,31 @@ only for HTTP 405 or 501. Other server failures and throttling stop the affected
 collection refresh instead of multiplying requests across its objects. A failed
 collection remains a visible failure, not a successful empty result.
 
-CardDAV multiget retains healthy contacts when another requested resource has
+CardDAV and CalDAV multiget retain healthy records when another requested resource has
 an explicit 404 or 410 status, and reports the deletion count as a partial
 refresh. Every requested href must still be accounted for exactly once; omitted,
 duplicate, foreign, malformed, and other failed responses remain errors. A
 property-level 404 is not a resource deletion. These boundaries follow the
 [CardDAV multiget response example](https://www.rfc-editor.org/rfc/rfc6352.html#section-8.7.1)
+and the [CalDAV multiget contract](https://www.rfc-editor.org/rfc/rfc4791.html#section-7.9),
 and the [WebDAV resource and property status distinction](https://www.rfc-editor.org/rfc/rfc4918.html#section-13).
 
 Tasks track completed refreshes by calendar href, not display name or aggregate
 warning text. A missing selection is cleared after its own calendar completes,
 even if another calendar fails. Failed or budget-truncated calendars do not
 prove deletion; selection retains its calendar identity across restoration.
+
+Whole-object task deletion requires one balanced VCALENDAR containing exactly
+one top-level VTODO and no sibling data components. Supporting VTIMEZONE and
+alarms owned by the task are allowed. VEVENT, VJOURNAL, other tasks, and unknown
+siblings withhold deletion, following the [iCalendar component structure](https://www.rfc-editor.org/rfc/rfc5545.html#section-3.6).
+
+Dynamic collection header creates open the renderer's durable create form,
+never a standalone generic form. Header and inline actions share the same
+complete-baseline and postcondition recovery plan and require a pending mutation
+store. Missing recovery evidence withholds both actions. The header control is
+scoped to the active account and navigation context and cleared on disposal;
+pending writes remain in durable storage, not in that control.
 
 Task requests, durable recovery storage, and recovery reads are serialized.
 Refresh and recovery-discard controls remain disabled until the active request

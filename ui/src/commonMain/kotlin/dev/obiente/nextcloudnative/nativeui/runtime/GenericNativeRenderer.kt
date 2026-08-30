@@ -215,6 +215,7 @@ fun GenericNativeAppScreen(
     datasetContext: NativeDatasetContext = NativeDatasetContext(),
     onInlineActionSucceeded: ((ActionSpec) -> Unit)? = null,
     showCollectionCreateAction: Boolean = false,
+    collectionCreateControl: NativeCollectionCreateControl? = null,
     imageLoader: NativeImageLoader? = null,
     recordImageLoader: NativeRecordImageLoader? = null,
     onLoadMore: (() -> Unit)? = null,
@@ -461,52 +462,27 @@ fun GenericNativeAppScreen(
             }
         }
     }
-    val collectionCreateCandidate = presentedResource
-        ?.takeIf { showCollectionCreateAction }
-        ?.let { resource ->
-        nativeRecordActions(
-            schema = schema,
-            resource = resource,
-            navigationContext = datasetContext.bindingValues,
-        ).create
-    }
-    val collectionCreateRecoveryPlan = collectionCreateCandidate?.let { createPlan ->
-        val activeReadAction = schema.action(view.sourceActionId) ?: return@let null
-        nativeCreateMutationRecoveryPlan(
-            schema = schema,
-            activeReadAction = activeReadAction,
-            resource = presentedResource,
-            createPlan = createPlan,
-            records = presentedRecords,
-            navigationContext = datasetContext.bindingValues,
-            collectionComplete = onLoadMore == null,
-        ) ?: nativeChoresInviteMutationRecoveryPlan(
-            schema = schema,
-            activeReadAction = activeReadAction,
-            resource = presentedResource,
-            createPlan = createPlan,
-            records = presentedRecords,
-            navigationContext = datasetContext.bindingValues,
-            collectionComplete = onLoadMore == null,
-        )
-    }
-    // Non-idempotent creates remain unavailable until the active collection supplies the exact
-    // complete baseline and request shape needed for durable postcondition reconciliation.
-    val collectionCreatePlan = collectionCreateCandidate?.takeIf {
-        collectionCreateRecoveryPlan != null
-    }
+    val collectionCreatePlans = nativeCollectionCreatePlans(
+        schema, view.sourceActionId, presentedResource, presentedRecords, datasetContext,
+        collectionComplete = onLoadMore == null,
+        enabled = showCollectionCreateAction && state is NativeScreenState.Ready && pendingMutationStore != null,
+    )
+    val collectionCreatePlan = collectionCreatePlans?.form
+    val collectionCreateRecoveryPlan = collectionCreatePlans?.recovery
     val openCollectionCreate: (() -> Unit)? = collectionCreatePlan?.let { plan ->
-        val actionResource = presentedResource
+        val actionResourceId = plan.action.resourceId
         create@{
             if (formMutationRecovery?.blocksSubmission == true) return@create
             pendingRecordFormActionToken = RestorableNativeRecordFormAction(
                 actionId = plan.action.id,
-                resourceId = actionResource.id,
+                resourceId = actionResourceId,
                 kind = plan.kind,
                 recordId = null,
             ).encode()
         }
     }
+    BindNativeCollectionCreateControl(collectionCreateControl, collectionCreatePlan?.action,
+        openCollectionCreate.takeUnless { formMutationRecovery?.blocksSubmission == true })
     val collectionActionCapabilities = remember(
         schema,
         view.sourceActionId,

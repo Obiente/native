@@ -216,16 +216,7 @@ private fun parseGroupwareAddressBookMultiGetResponse(
             "The CardDAV multiget response contained an unrequested or duplicate object."
         }
         val properties = block.xmlElements("propstat")
-        // A property's 404 does not prove that the resource was deleted.
-        val resourceStatuses = properties.fold(block) { remainder, property -> remainder.replace(property, "") }
-            .xmlElements("status")
-        require(resourceStatuses.size <= 1 && (resourceStatuses.isEmpty() || properties.isEmpty())) {
-            "The CardDAV multiget response contained conflicting object statuses."
-        }
-        resourceStatuses.singleOrNull()?.let { statusElement ->
-            val status = requireNotNull(statusElement.xmlText("status")?.davStatusCode()) {
-                "The CardDAV multiget response contained a malformed object status."
-            }
+        block.groupwareDavResourceStatus(properties)?.let { status ->
             if (status == 404 || status == 410) {
                 concurrentlyDeletedObjectCount += 1
                 return@mapNotNull null

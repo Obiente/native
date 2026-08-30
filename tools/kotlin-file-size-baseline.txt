@@ -26,7 +26,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckBoardSurface.
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckRelationDialogs.kt|1234
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NativeDeckScreen.kt|1937
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt|1532
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|12721
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|12719
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt|1693
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt|808
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1755
@@ -37,7 +37,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/RemoteFolderPicker.kt|1
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/design/NextcloudCollectionNavigator.kt|918
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicAppDescriptorCompiler.kt|2638
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/model/DynamicNavigationPlanner.kt|1271
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt|7574
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRenderer.kt|7550
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/GenericNativeRendererState.kt|1341
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeCollectionActions.kt|1240
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/nativeui/runtime/NativeDatasetSemantics.kt|1217

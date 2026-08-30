@@ -4683,14 +4683,10 @@ private fun DynamicDiscoveredAppScreen(
             "$label|$route"
         }
     }
-    val primaryCreateAction = remember(actionViews, schema) {
-        actionViews
-            .filter { (action, _) -> schema.action(action.actionId)?.intent == ActionIntent.create }
-            .minByOrNull { (action, _) -> dynamicQuickActionPriority(schema.action(action.actionId)) }
+    val collectionCreateControl = remember(session, schema, selectedView.id, selectedRecord, selectedPathParameterValues) {
+        dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl()
     }
-    val overflowActionViews = remember(actionViews, primaryCreateAction) {
-        actionViews.filterNot { candidate -> candidate == primaryCreateAction }
-    }
+    val overflowActionViews = dynamicHeaderOverflowActions(schema, actionViews)
     var actionMenuExpanded by remember(descriptor) { mutableStateOf(false) }
     var pendingDirectAction by remember(descriptor, discovery.versionStatus) {
         mutableStateOf<PendingDynamicDirectAction?>(null)
@@ -5110,6 +5106,7 @@ private fun DynamicDiscoveredAppScreen(
     ) {
         actionMenuExpanded = false
         val actionSpec = schema.action(action.actionId)
+        if (actionSpec?.intent == ActionIntent.create) return
         val editableFieldCount = actionSpec?.let { spec ->
             schema.resource(spec.resourceId)?.let { resource ->
                 editableNativeFields(resource, spec).size
@@ -5344,7 +5341,7 @@ private fun DynamicDiscoveredAppScreen(
                 ?: selectedView.dynamicRootSubtitle(descriptor.app.name)
                     .takeUnless { subtitle -> subtitle.equals(activeContentTitle, ignoreCase = true) }
         }
-        val hasHeaderActions = primaryCreateAction != null ||
+        val hasHeaderActions = collectionCreateControl.action != null ||
             overflowActionViews.isNotEmpty() ||
             secondaryNavigationDestinations.isNotEmpty()
 
@@ -5382,7 +5379,7 @@ private fun DynamicDiscoveredAppScreen(
                     DynamicCollectionHeaderActions(
                         schema = schema,
                         appName = descriptor.app.name,
-                        primaryAction = primaryCreateAction,
+                        createControl = collectionCreateControl,
                         overflowActions = overflowActionViews,
                         secondaryDestinations = secondaryNavigationDestinations,
                         menuExpanded = actionMenuExpanded,
@@ -5535,6 +5532,7 @@ private fun DynamicDiscoveredAppScreen(
                     datasetContext = rendererDatasetContext,
                     mutationReconciliationGeneration = mutationReconciliationGeneration,
                     pendingMutationStore = pendingMutationStore,
+                    collectionCreateControl = collectionCreateControl,
                     collectionBatchRelationLoader = collectionBatchRelationLoader,
                     filePicker = dynamicFilePicker,
                     recordImageLoader = recordImageLoader,

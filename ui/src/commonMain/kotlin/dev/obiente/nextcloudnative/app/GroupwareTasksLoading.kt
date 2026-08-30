@@ -222,14 +222,15 @@ private fun parseGroupwareCalendarMultiGetResponse(
         require(href in requested && returned.add(href)) {
             "The CalDAV multiget response contained an unrequested or duplicate object."
         }
-        block.xmlText("status")?.taskDavStatusCode()?.let { status ->
+        val properties = block.xmlElements("propstat")
+        block.groupwareDavResourceStatus(properties)?.let { status ->
             if (status == 404 || status == 410) {
                 concurrentlyDeletedObjectCount += 1
                 return@flatMap emptyList()
             }
             require(status in 200..299) { "The CalDAV multiget response contained a failed object." }
         }
-        val successfulProperty = block.xmlElements("propstat").singleOrNull { property ->
+        val successfulProperty = properties.singleOrNull { property ->
             property.xmlElements("calendar-data").isNotEmpty() &&
                 property.xmlText("status")?.taskDavStatusCode() in 200..299
         } ?: error("The CalDAV multiget response did not return an object successfully.")
@@ -239,7 +240,7 @@ private fun parseGroupwareCalendarMultiGetResponse(
             ?: error("The CalDAV multiget response omitted calendar data.")
         parseGroupwareTasksFromContent(calendarHref, href, etag, content)
     }
-    concurrentlyDeletedObjectCount += requested.size - returned.size
+    require(returned == requested) { "The CalDAV multiget response did not account for every requested object." }
     return GroupwareTaskBatchLoadResult(
         tasks = tasks,
         concurrentlyDeletedObjectCount = concurrentlyDeletedObjectCount,

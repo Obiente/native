@@ -203,8 +203,40 @@ internal fun expectedGroupwareTaskDueAfterDateEdit(task: GroupwareTask?, dueDate
     }
 }
 
-internal fun isGroupwareTaskObjectDeleteSafe(task: GroupwareTask): Boolean =
-    task.rawCalendar.unfoldCalendarLines().calendarComponentLines("VTODO").size == 1
+internal fun isGroupwareTaskObjectDeleteSafe(task: GroupwareTask): Boolean {
+    val components = mutableListOf<String>()
+    var calendars = 0
+    var todos = 0
+    task.rawCalendar.unfoldCalendarLines().forEach { line ->
+        val declaration = line.substringBefore(':').uppercase()
+        val component = line.substringAfter(':', "").uppercase()
+        when (declaration) {
+            "BEGIN" -> {
+                if (component.isBlank()) return false
+                when {
+                    components.isEmpty() -> if (component != "VCALENDAR" || ++calendars != 1) return false
+                    components.size == 1 -> when (component) {
+                        "VTODO" -> if (++todos != 1) return false
+                        "VTIMEZONE" -> Unit
+                        else -> return false
+                    }
+                    else -> when (components.last()) {
+                        "VTODO" -> if (component != "VALARM") return false
+                        "VTIMEZONE" -> if (component !in setOf("STANDARD", "DAYLIGHT")) return false
+                        else -> return false
+                    }
+                }
+                components += component
+            }
+            "END" -> {
+                if (components.lastOrNull() != component) return false
+                components.removeAt(components.lastIndex)
+            }
+            else -> if (components.isEmpty()) return false
+        }
+    }
+    return components.isEmpty() && calendars == 1 && todos == 1
+}
 
 private fun String.preserveGroupwareTaskDueTime(task: GroupwareTask, dueDate: String): String? {
     if (task.dueAllDay) return null
