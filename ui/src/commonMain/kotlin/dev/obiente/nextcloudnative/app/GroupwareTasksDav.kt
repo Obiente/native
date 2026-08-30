@@ -18,7 +18,8 @@ data class GroupwareTask(
     val rawCalendar: String,
 ) {
     /** Stable across refreshes when one DAV object contains a recurring master and exceptions. */
-    val instanceId: String get() = "$href#${recurrenceId ?: uid}"
+    val instanceId: String
+        get() = "$href#${uid.length}:$uid#${recurrenceId?.let { "exception:$it" } ?: "master"}"
 }
 
 fun parseGroupwareTasks(calendarHref: String, response: NextcloudApiResponse): List<GroupwareTask> {
@@ -46,29 +47,8 @@ internal fun parseGroupwareTasksFromContent(
     etag: String?,
     content: String,
 ): List<GroupwareTask> = content.unfoldCalendarLines().calendarComponentLines("VTODO").mapNotNull { lines ->
-    fun property(name: String): CalendarProperty? {
-        var nestedDepth = 0
-        lines.forEach { line ->
-            when {
-                line.startsWith("BEGIN:", ignoreCase = true) -> nestedDepth += 1
-                line.startsWith("END:", ignoreCase = true) -> nestedDepth = maxOf(0, nestedDepth - 1)
-                nestedDepth != 0 -> Unit
-                else -> {
-                    val separator = line.indexOf(':')
-                    if (separator <= 0) return@forEach
-                    val declaration = line.substring(0, separator)
-                    if (!declaration.substringBefore(';').equals(name, ignoreCase = true)) {
-                        return@forEach
-                    }
-                    return CalendarProperty(declaration, line.substring(separator + 1))
-                }
-            }
-        }
-        return null
-    }
-    val uid = property("UID")?.value?.takeIf(::isSafeGroupwareTaskUid)?.trim()
-        ?: return@mapNotNull null
-    val recurrenceId = property("RECURRENCE-ID")?.value?.trim()?.takeIf(String::isNotBlank)
+    fun property(name: String): CalendarProperty? = lines.calendarProperty(name)
+    val identity = lines.groupwareTaskIdentity() ?: return@mapNotNull null
     val due = property("DUE")
     val status = property("STATUS")?.value?.trim()
     val percentComplete = property("PERCENT-COMPLETE")?.value?.trim()?.toIntOrNull()
@@ -76,8 +56,8 @@ internal fun parseGroupwareTasksFromContent(
         href = href.requireSafeDavHref(),
         etag = etag,
         calendarHref = calendarHref.requireSafeDavHref(),
-        uid = uid,
-        recurrenceId = recurrenceId,
+        uid = identity.uid,
+        recurrenceId = identity.recurrenceId,
         title = property("SUMMARY")?.value?.decodeCalendarText()?.ifBlank { "Untitled task" }
             ?: "Untitled task",
         due = due?.value?.trim()?.takeIf(String::isNotBlank),
@@ -93,6 +73,32 @@ internal fun parseGroupwareTasksFromContent(
 
 internal fun isSafeGroupwareTaskUid(value: String): Boolean =
     value.isNotBlank() && value.length <= 1_024 && value.none(Char::isISOControl)
+
+private data class GroupwareTaskComponentIdentity(val uid: String, val recurrenceId: String?)
+
+private fun List<String>.groupwareTaskIdentity(): GroupwareTaskComponentIdentity? {
+    val uid = calendarProperty("UID")?.value?.takeIf(::isSafeGroupwareTaskUid)?.trim() ?: return null
+    val recurrenceId = calendarProperty("RECURRENCE-ID")?.let { recurrence ->
+        parseGroupwareTaskRecurrenceId(recurrence.value) ?: return null
+    }
+    return GroupwareTaskComponentIdentity(uid, recurrenceId)
+}
+
+private fun parseGroupwareTaskRecurrenceId(value: String): String? {
+    // RFC 5545 recurrence values are DATE or DATE-TIME, not arbitrary saved-state text.
+    if (value.length != 8 && value.length != 15 && value.length != 16) return null
+    val date = value.take(8)
+    if (!date.all { it in '0'..'9' } || !isValidGroupwareTaskDueDate(date)) return null
+    if (value.length == 8) return value
+    if (!value[8].equals('T', ignoreCase = true)) return null
+    if (value.length == 16 && !value.last().equals('Z', ignoreCase = true)) return null
+    val time = value.substring(9, 15)
+    if (!time.all { it in '0'..'9' }) return null
+    if (time.take(2).toInt() > 23 || time.substring(2, 4).toInt() > 59 || time.takeLast(2).toInt() > 60) {
+        return null
+    }
+    return value
+}
 
 fun createGroupwareTaskContent(
     uid: String,
@@ -133,10 +139,10 @@ fun updateGroupwareTaskContent(
     require(title.isNotBlank()) { "A task title is required." }
     val due = dueDate?.takeIf(String::isNotBlank)?.also(::requireValidGroupwareTaskDueDate)
     val original = task.rawCalendar.unfoldCalendarLines().toMutableList()
+    val selectedIdentity = GroupwareTaskComponentIdentity(task.uid, task.recurrenceId)
     val taskRange = original.calendarComponentRanges("VTODO").firstOrNull { range ->
         val component = original.subList(range.first + 1, range.last)
-        component.calendarPropertyValue("UID") == task.uid &&
-            component.calendarPropertyValue("RECURRENCE-ID") == task.recurrenceId
+        component.groupwareTaskIdentity() == selectedIdentity
     }
     requireNotNull(taskRange) { "The selected task component could not be found." }
     val taskStart = taskRange.first

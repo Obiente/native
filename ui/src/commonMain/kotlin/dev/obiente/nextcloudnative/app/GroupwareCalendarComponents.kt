@@ -15,7 +15,10 @@ internal fun List<String>.calendarComponentRanges(componentName: String): List<I
     return result
 }
 
-internal fun List<String>.calendarPropertyValue(name: String): String? {
+internal fun List<String>.calendarPropertyValue(name: String): String? =
+    calendarProperty(name)?.value?.trim()?.takeIf(String::isNotBlank)
+
+internal fun List<String>.calendarProperty(name: String): CalendarProperty? {
     var nestedDepth = 0
     for (line in this) {
         when {
@@ -27,7 +30,7 @@ internal fun List<String>.calendarPropertyValue(name: String): String? {
                     separator > 0 &&
                     line.substring(0, separator).substringBefore(';').equals(name, ignoreCase = true)
                 ) {
-                    return line.substring(separator + 1).trim().takeIf(String::isNotBlank)
+                    return CalendarProperty(line.substring(0, separator), line.substring(separator + 1))
                 }
             }
         }

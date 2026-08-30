@@ -213,11 +213,17 @@ collection refresh instead of multiplying requests across its objects. A failed
 collection remains a visible failure, not a successful empty result.
 
 Task parsing withholds blank, control-containing, or over-1,024-character UIDs
-from editing. Task-description normalization changes line endings only; leading,
+from editing. Recurrence identity values must have a valid date or date-time
+form, at most 16 characters, before entering task selection or saved state.
+Malformed exceptions are withheld rather than treated as masters; their raw
+components remain intact when another task is edited. Stable task keys include
+the DAV object, a length-delimited UID, and a master/exception discriminator.
+Task-description normalization changes line endings only; leading,
 trailing, and whitespace-only content survives edits and recovery verification.
 
 ## Primary protocol references
 
+- [iCalendar recurrence identity](https://www.rfc-editor.org/rfc/rfc5545.html#section-3.8.4.4)
 - [Nextcloud WebDAV](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/WebDAV/basic.html)
 - [Nextcloud OCS API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/OCS/ocs-api-overview.html)
 - [Nextcloud Activity API](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/activity-api.html)
