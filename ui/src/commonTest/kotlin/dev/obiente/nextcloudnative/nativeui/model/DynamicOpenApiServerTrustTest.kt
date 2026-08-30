@@ -99,6 +99,42 @@ class DynamicOpenApiServerTrustTest {
     }
 
     @Test
+    fun `empty path and operation server overrides cannot inherit a different document base`() {
+        listOf("3.0.3", "3.1.1").forEach { version ->
+            listOf(true, false).forEach { onPath ->
+                val override = "\"servers\":[],"
+                val json = Json.parseToJsonElement("""{
+                    "openapi":"$version","servers":[{"url":"/apps/example/api"}],
+                    "paths":{"/items":{${if (onPath) override else ""}
+                        "post":{${if (onPath) "" else override}"operationId":"createItem",
+                            "responses":{"200":{"description":"OK"}}}}}
+                }""")
+                OpenApiTrust.entries.forEach { trust ->
+                    val failure = assertFailsWith<IllegalArgumentException> {
+                        DynamicAppDescriptorCompiler().compile(DynamicDiscoveryInput(
+                            app = AppIdentity("example", "Example", "1"), endpointPolicy = policy("example"),
+                            advertisedOpenApi = AdvertisedOpenApi("/apps/example/openapi.json", json, trust),
+                        ))
+                    }
+                    assertTrue(failure.message.orEmpty().contains("different path bases"))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `absent overrides inherit while explicit empty overrides retain a matching root base`() {
+        val emptyOverrides = """"paths":{"/apps/example/items":{"servers":[],"post":{"servers":[]}}}"""
+        listOf("", "\"servers\":[],", "\"servers\":[{\"url\":\"/\"}],").forEach { root ->
+            assertEquals("", openApiServerBase(Json.parseToJsonElement("{$root$emptyOverrides}").jsonObject,
+                "https://cloud.example.test", allowTrustedRebase = true))
+        }
+        assertEquals("/apps/example/api", openApiServerBase(Json.parseToJsonElement("""{
+            "servers":[{"url":"/apps/example/api"}],"paths":{"/items":{"post":{}}}
+        }""").jsonObject, "https://cloud.example.test", allowTrustedRebase = true))
+    }
+
+    @Test
     fun `approved absolute app path is not duplicated or version bound before parameter validation`() {
         assertEquals(
             "/apps/maps/api/{apiversion}/devices",

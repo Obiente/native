@@ -166,6 +166,17 @@ class OfficeDocumentWorkflowTest {
 
         assertEquals("\"cap-v1\"", cache.get(first)?.etag)
         assertEquals(null, cache.get(second))
+        assertEquals("\"cap-v1\"", cache.get(first.copy(appPassword = "rotated"))?.etag)
+        assertEquals("\"cap-v1\"", cache.get(first.copy(serverUrl = "https://cloud.example/"))?.etag)
+        assertEquals(null, cache.get(first.copy(serverUrl = "https://other.example")))
+    }
+
+    @Test
+    fun capabilityCacheDoesNotConflateCaseSensitiveServerInstallationPaths() {
+        val cache = NextcloudDocumentEditingCapabilitiesCache()
+        val session = NextcloudSession("https://cloud.example/Cloud", "ada", "secret")
+        cache.store(session, officeCapabilities(), "\"cap-v1\"")
+        assertEquals(null, cache.get(session.copy(serverUrl = "https://cloud.example/cloud")))
     }
 
     private fun officeCapabilities() = NextcloudDocumentEditingCapabilities(

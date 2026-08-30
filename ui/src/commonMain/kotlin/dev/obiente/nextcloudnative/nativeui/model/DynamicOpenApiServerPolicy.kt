@@ -18,7 +18,7 @@ internal fun openApiServerBase(
 ): String {
     val base = declaredOpenApiServerBase(document, origin, allowTrustedRebase)
     fun validateOverride(owner: JsonObject) {
-        if ((owner["servers"] as? JsonArray)?.isEmpty() == true || "servers" !in owner) return
+        if ("servers" !in owner) return
         require(declaredOpenApiServerBase(owner, origin, allowTrustedRebase) == base) {
             "OpenAPI server overrides with different path bases are unsupported"
         }

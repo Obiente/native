@@ -73,7 +73,9 @@ unknown app learned from a successful JSON list response.
   cannot establish their ownership by the connected account.
 - Path and operation server overrides must pass the same origin checks and
   resolve to the root server path base. Different override bases are unsupported
-  rather than ignored. See the [OpenAPI server and override rules](https://spec.openapis.org/oas/v3.0.3.html#server-object).
+  rather than ignored. An absent override inherits the base; an explicit empty
+  array resets it to `/` and is rejected if that differs from the document base.
+  See the [OpenAPI server and override rules](https://spec.openapis.org/oas/v3.1.1.html#operation-object).
 - API-version defaults are bound only after inherited parameters, operation
   overrides, and local schema references resolve. A server-derived version must
   satisfy the effective parameter's declared enum/default. Unknown schema

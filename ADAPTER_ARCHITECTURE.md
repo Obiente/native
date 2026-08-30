@@ -174,6 +174,12 @@ may be queued when their base revision and payload are durable. Deletes,
 administrator actions, Talk messages, and hard-to-reverse recognition changes
 must not be queued by default.
 
+Notes mutation validators preserve valid quoted opaque ETags verbatim, including
+backslashes and HTTP `obs-text` bytes. They do not apply quoted-string unescaping.
+Bare Notes API validators are quoted once; malformed and oversized validators
+are rejected before a request. The character grammar follows
+[HTTP entity-tags](https://httpwg.org/specs/rfc9110.html#field.etag).
+
 ## Test contract
 
 Each boundary has a corresponding test responsibility:

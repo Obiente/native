@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,25 +39,45 @@ internal fun OfficeWorkspaceScreen(
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val workspace = remember(services, session, userId) {
-        OfficeWorkspace(officeWorkspaceOperations(services, session, userId))
+    val operations = remember(services, session, userId) { officeWorkspaceOperations(services, session, userId) }
+    val accountScope = remember(session.serverUrl, session.loginName) { previewCacheDigest(session) }
+    OfficeWorkspaceContent(operations, accountScope, userId.isNotBlank(), onExit, modifier) { file, previewModifier ->
+        NextcloudDocumentPreview(file = file, session = session, userId = userId, services = services, modifier = previewModifier)
     }
+}
+
+@Composable
+internal fun OfficeWorkspaceContent(
+    operations: OfficeWorkspaceOperations,
+    accountScope: String,
+    accountReady: Boolean,
+    onExit: () -> Unit,
+    modifier: Modifier = Modifier,
+    preview: @Composable (NextcloudFile, Modifier) -> Unit,
+) {
+    val locationSaver = remember(accountScope) { officeWorkspaceLocationStateSaver(accountScope) }
+    var location by rememberSaveable(accountScope, saver = locationSaver) { mutableStateOf(OfficeWorkspaceLocation()) }
+    val workspace = remember(operations, accountScope) { OfficeWorkspace(operations) }
     val state by workspace.state.collectAsState()
-    var path by remember(workspace) { mutableStateOf("") }
     var attempt by remember(workspace) { mutableIntStateOf(0) }
     var selected by remember(workspace) { mutableStateOf<NextcloudFile?>(null) }
     fun back() {
-        if (selected != null) {
+        if (selected != null || location.selectedFileId != null) {
             selected = null
+            location = location.copy(selectedFileId = null)
             attempt += 1
         } else {
-            val parent = remoteFolderParentPath(path)
-            if (parent == null) onExit() else path = parent
+            val parent = remoteFolderParentPath(location.folderPath)
+            if (parent == null) onExit() else location = OfficeWorkspaceLocation(parent)
         }
     }
     PlatformBackHandler(enabled = true, onBack = ::back)
-    LaunchedEffect(workspace, path, attempt) {
-        if (userId.isNotBlank()) workspace.load(path)
+    LaunchedEffect(workspace, accountReady, location.folderPath, attempt) {
+        if (accountReady) {
+            val requestedLocation = location
+            workspace.load(requestedLocation.folderPath)
+            if (location == requestedLocation) selected = requestedLocation.resolveSelection(workspace.state.value)
+        }
     }
     Column(modifier = modifier.fillMaxSize()) {
         val file = selected
@@ -75,24 +96,24 @@ internal fun OfficeWorkspaceScreen(
         }
         HorizontalDivider()
         when {
-            userId.isBlank() -> Text(
+            !accountReady -> Text(
                 "The account is still loading. Return to Apps and refresh before opening Office.",
                 modifier = Modifier.padding(NextcloudSpacing.Large),
             )
-            file != null -> NextcloudDocumentPreview(
-                file = file,
-                session = session,
-                userId = userId,
-                services = services,
-                modifier = Modifier.weight(1f),
-            )
-            else -> OfficeWorkspaceBrowser(
-                state = state,
-                onOpenFolder = { path = it },
-                onOpenFile = { selected = it },
-                onRetry = { attempt += 1 },
-                modifier = Modifier.weight(1f),
-            )
+            file != null -> preview(file, Modifier.weight(1f))
+            else -> {
+                if (location.selectedFileId != null && !state.loading && state.path == location.folderPath) {
+                    Text("The selected document could not be restored. Refresh or choose another document.",
+                        modifier = Modifier.padding(NextcloudSpacing.Medium))
+                }
+                OfficeWorkspaceBrowser(
+                    state = state.takeIf { it.path == location.folderPath } ?: OfficeWorkspaceState(path = location.folderPath),
+                    onOpenFolder = { location = OfficeWorkspaceLocation(it) },
+                    onOpenFile = { selected = it; location = location.copy(selectedFileId = it.fileId?.takeIf { id -> id >= 0 }) },
+                    onRetry = { attempt += 1 },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
