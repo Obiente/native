@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -106,7 +107,7 @@ private fun TalkNativeTextBubble(
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(0.84f),
+            modifier = Modifier.widthIn(max = 800.dp).fillMaxWidth(0.84f),
             color = talkBubbleColor(mine),
             shape = RoundedCornerShape(NextcloudRadii.Card),
         ) {
@@ -142,7 +143,7 @@ private fun TalkAttachmentsBubble(
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(0.88f),
+            modifier = Modifier.widthIn(max = 800.dp).fillMaxWidth(0.88f),
             color = talkBubbleColor(mine),
             shape = RoundedCornerShape(NextcloudRadii.Card),
         ) {
@@ -209,7 +210,9 @@ private fun TalkReplyPreview(parent: TalkMessageQuote?) {
 
 @Composable
 private fun TalkMessageFooter(message: TalkMessage) {
+    val timestamp = formatTalkMessageTimeUtc(message.timestamp)
     if (
+        timestamp == null &&
         message.reactions.isEmpty() &&
         message.editedAt == null &&
         !message.silent &&
@@ -244,6 +247,7 @@ private fun TalkMessageFooter(message: TalkMessage) {
             }
         }
         val context = buildList {
+            timestamp?.let(::add)
             if (message.editedAt != null) add("Edited")
             if (message.silent) add("Silent")
             if (message.scheduledAt != null) add("Scheduled")
@@ -411,7 +415,7 @@ private fun TalkNativeEventCard(
     }
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         Surface(
-            modifier = Modifier.fillMaxWidth(0.92f),
+            modifier = Modifier.widthIn(max = 800.dp).fillMaxWidth(0.92f),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
             shape = RoundedCornerShape(NextcloudRadii.Card),
         ) {

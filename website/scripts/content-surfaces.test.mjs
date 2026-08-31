@@ -333,10 +333,10 @@ test("visual QA and mobile navigation are driven by registered captures", async 
     path.join(websiteRoot, "index.html"),
     "utf8",
   );
-  const appSource = await readFile(
-    path.join(websiteRoot, "src", "App.vue"),
-    "utf8",
-  );
+  const appSource = (await Promise.all([
+    readFile(path.join(websiteRoot, "src", "App.vue"), "utf8"),
+    readFile(path.join(websiteRoot, "src", "components", "NativeHome.vue"), "utf8"),
+  ])).join("\n");
   const entryServer = await readFile(
     path.join(websiteRoot, "src", "entry-server.js"),
     "utf8",
@@ -366,9 +366,9 @@ test("visual QA and mobile navigation are driven by registered captures", async 
     (appSource.match(/:aria-pressed=/gu) ?? []).length,
     3,
   );
-  assert.match(appSource, /class="product-hero-mobile"/u);
+  assert.match(appSource, /class="native-hero-mobile"/u);
   assert.match(appSource, /:src="mobileHomeCapture\.websitePath"/u);
-  assert.match(appSource, /class="product-hero-desktop"/u);
+  assert.match(appSource, /class="native-hero-desktop"/u);
   assert.match(appSource, /:src="heroDesktopCapture\.websitePath"/u);
   assert.match(appSource, /capture\.purpose === visualQaPurpose\.value/u);
   assert.match(appSource, /capture\.pullRequest/u);
@@ -409,7 +409,7 @@ test("visual QA and mobile navigation are driven by registered captures", async 
   assert.doesNotMatch(styles, /animation(?:-iteration-count)?:\s*[^;{}]*infinite/u);
   assert.doesNotMatch(
     appSource,
-    /class="product-hero-mobile"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
+    /class="native-hero-mobile"[\s\S]*?src="\/screenshots\/mobile-home\.png"/u,
   );
 });
 
@@ -434,7 +434,7 @@ test("homepage captures route synthetic fixtures through production app surfaces
   assert.match(appSource, /HomepageFilesDesktopDark,[\s\S]*?FilesScreen\(/u);
   assert.match(appSource, /HomepageConversationsDesktopDark,[\s\S]*?ChatScreen\(/u);
   assert.match(appSource, /HomepagePhotosDesktopDark,[\s\S]*?MarketingPhotoFolderScenario\(scenario, assets\)/u);
-  assert.match(appSource, /HomepagePlanningDesktopDark,[\s\S]*?MarketingDeckBoardScenario\(\)/u);
+  assert.match(appSource, /HomepagePlanningDesktopDark,[\s\S]*?MarketingDeckBoardScenario\(scenario\)/u);
   assert.match(appSource, /HomepageAppsDesktopDark,[\s\S]*?MarketingAdaptiveAppScenario\(scenario\)/u);
   assert.doesNotMatch(appSource, /MarketingHomepageFilesScenario|MarketingHomepageConversationsScenario/u);
   assert.ok(

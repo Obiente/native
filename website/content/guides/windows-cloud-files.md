@@ -8,14 +8,14 @@ device: Desktop
 platforms: Windows
 durationMinutes: 9
 difficulty: Advanced
-lastUpdated: 2026-08-20
+lastUpdated: 2026-08-30
 captureScenarios: guide-windows-cloud-files-settings, guide-windows-cloud-files-storage, guide-windows-cloud-files-recovery
 prerequisites: A connected Windows x86-64 alpha installation, A disposable test folder in Nextcloud, Enough local storage to hydrate the files you open
 ---
 
 # Use Nextcloud files in Windows File Explorer
 
-**Last reviewed: 2026-08-20.** The software and published packages may have
+**Last reviewed: 2026-08-30.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -29,6 +29,11 @@ On Windows, Nextcloud Native integrates with the Cloud Files API so remote conte
 Open **Settings**, choose **Sync & storage**, then open **Virtual files**. Activate the system provider if it is not already active. When registration succeeds, the location is reported as **Nextcloud Native in File Explorer**. The root is account-scoped, and signing out disconnects the provider for that account.
 
 If activation fails, keep the failure message and retry only after checking that the app is the current installed version. The app keeps a failed automatic activation visible instead of retrying it on every settings refresh. Use the explicit activation action when you are ready to retry. Do not manually delete a registered sync root or copy provider metadata between accounts. Recovery handles stale registrations, legacy roots, and damaged Cloud Files metadata while preserving the existing local root and its data.
+
+The storage view distinguishes **Not connected**, **Connected**, and
+**Edits need review**. An available integration is not proof that the provider
+is connected or that every local edit has reached Nextcloud. Disconnection is
+in the file-manager connection menu, separate from routine storage cleanup.
 
 ## 2. Open placeholders, keep content local, or free eligible space
 

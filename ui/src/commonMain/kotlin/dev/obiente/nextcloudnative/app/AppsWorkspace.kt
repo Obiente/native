@@ -1,20 +1,16 @@
 package dev.obiente.nextcloudnative.app
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -23,7 +19,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,7 +33,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,7 +41,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -91,15 +85,29 @@ internal fun NativeAppsWorkspace(
             category = selectedCategory,
         )
     }
-    var selectedAppId by rememberSaveable(serverInfo?.apps) {
-        mutableStateOf(lastOpenedAppId?.takeIf { id -> presentation.entries.any { it.app.id == id } })
-    }
+    var selectedAppId by remember(serverInfo?.apps) { mutableStateOf<String?>(null) }
     val selectedEntry = presentation.entries.firstOrNull { it.app.id == selectedAppId }
-        ?: presentation.recentEntries.firstOrNull()
-        ?: presentation.entries.firstOrNull()
     val canPinMore = pinnedAppIds.size < MAX_APP_WORKSPACE_PINS
     val togglePinnedApp: (String) -> Unit = { appId ->
         pinError = onTogglePinnedApp(appId)
+    }
+    selectedEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { selectedAppId = null },
+            title = { Text(entry.app.name) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(entry.description)
+                    Text(entry.category.title, color = MaterialTheme.colorScheme.primary)
+                    Text(if (entry.nativeWorkspace) "Dedicated native workspace" else "Available actions are checked when opened")
+                    if (entry.pinned) Text("Pinned to shortcuts")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedAppId = null; onOpenApp(entry.app) }) { Text("Open app") }
+            },
+            dismissButton = { TextButton(onClick = { selectedAppId = null }) { Text("Close") } },
+        )
     }
 
     if (desktop) {
@@ -109,7 +117,6 @@ internal fun NativeAppsWorkspace(
             query = query,
             category = selectedCategory,
             presentation = presentation,
-            selectedEntry = selectedEntry,
             onQueryChanged = { query = it },
             onCategorySelected = { selectedCategoryName = it.name },
             onSelected = { selectedAppId = it.app.id },
@@ -132,6 +139,7 @@ internal fun NativeAppsWorkspace(
             onSettings = onSettings,
             onSearch = onSearch,
             onOpenApp = onOpenApp,
+            onSelected = { selectedAppId = it.app.id },
             pinError = pinError ?: pinnedAppsError,
             canPinMore = canPinMore,
             onTogglePinnedApp = togglePinnedApp,
@@ -146,7 +154,6 @@ private fun DesktopAppsWorkspace(
     query: String,
     category: AppWorkspaceCategory,
     presentation: AppWorkspacePresentation,
-    selectedEntry: AppWorkspaceEntry?,
     pinError: String?,
     canPinMore: Boolean,
     onQueryChanged: (String) -> Unit,
@@ -226,24 +233,16 @@ private fun DesktopAppsWorkspace(
                             items(presentation.entries, key = { it.app.id }) { entry ->
                                 AppWorkspaceCard(
                                     entry = entry,
-                                    selected = selectedEntry?.app?.id == entry.app.id,
+                                    selected = false,
                                     onSelect = { onSelected(entry) },
                                     onOpen = { onOpenApp(entry.app) },
                                     onTogglePinned = { onTogglePinnedApp(entry.app.id) },
                                     canPin = canPinMore,
-                                    primaryActionLabel = "Select ${entry.app.name}",
+                                    primaryActionLabel = "Open ${entry.app.name}",
                                 )
                             }
                         }
                     }
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    AppWorkspaceInspector(
-                        selectedEntry = selectedEntry,
-                        presentation = presentation,
-                        serverInfo = serverInfo,
-                        onOpen = { selectedEntry?.let { onOpenApp(it.app) } },
-                        modifier = Modifier.widthIn(min = 292.dp, max = 332.dp).fillMaxHeight(),
-                    )
                 }
             }
         }
@@ -263,6 +262,7 @@ private fun CompactAppsWorkspace(
     onSettings: () -> Unit,
     onSearch: () -> Unit,
     onOpenApp: (NextcloudAppEntry) -> Unit,
+    onSelected: (AppWorkspaceEntry) -> Unit,
     onTogglePinnedApp: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -292,7 +292,7 @@ private fun CompactAppsWorkspace(
                         AppWorkspaceCard(
                             entry = entry,
                             selected = false,
-                            onSelect = { onOpenApp(entry.app) },
+                            onSelect = { onSelected(entry) },
                             onOpen = { onOpenApp(entry.app) },
                             onTogglePinned = { onTogglePinnedApp(entry.app.id) },
                             canPin = canPinMore,
@@ -441,7 +441,7 @@ private fun AppWorkspaceCard(
     var actionsExpanded by remember(entry.app.id) { mutableStateOf(false) }
     Card(
         modifier = Modifier.nextcloudCardInteractions(
-            onOpen = onSelect,
+            onOpen = onOpen,
             onShowActions = { actionsExpanded = true },
             openLabel = primaryActionLabel,
             actionsLabel = "Actions for ${entry.app.name}",
@@ -467,7 +467,7 @@ private fun AppWorkspaceCard(
                         entry.app.name,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
@@ -476,12 +476,10 @@ private fun AppWorkspaceCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = onOpen, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text("Open")
-                }
                 NextcloudCardOverflow(
                     itemLabel = entry.app.name,
                     actions = listOf(
+                        NextcloudCardAction(label = "App details", semanticId = "app-details", onClick = onSelect),
                         NextcloudCardAction(
                             label = if (entry.pinned) "Unpin from shortcuts" else "Pin to shortcuts",
                             semanticId = if (entry.pinned) "unpin-app" else "pin-app",
@@ -501,7 +499,6 @@ private fun AppWorkspaceCard(
                 overflow = TextOverflow.Ellipsis,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-                AppStatusPill(if (entry.nativeWorkspace) "Native workspace" else "Adaptive workspace")
                 if (entry.pinned) AppStatusPill("Pinned")
             }
         }
@@ -525,81 +522,6 @@ private fun AppsPinError(message: String) {
     }
 }
 
-@Composable
-private fun AppWorkspaceInspector(
-    selectedEntry: AppWorkspaceEntry?,
-    presentation: AppWorkspacePresentation,
-    serverInfo: NextcloudServerInfo,
-    onOpen: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.padding(NextcloudSpacing.Large),
-        verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
-    ) {
-        Text("Workspace overview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(
-            serverInfo.themeName ?: "Nextcloud",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-            AppMetric("Apps", presentation.totalCount.toString(), Modifier.weight(1f))
-            AppMetric("Native", presentation.nativeWorkspaceCount.toString(), Modifier.weight(1f))
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        selectedEntry?.let { entry ->
-            AppIcon(entry.app.id, modifier = Modifier.size(54.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(entry.app.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text(
-                    entry.category.title,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Text(
-                entry.description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
-                Text("Open ${entry.app.name}")
-            }
-            SettingsLikeFact(
-                "Experience",
-                if (entry.nativeWorkspace) "Dedicated native workspace" else "Adaptive workspace checked when opened",
-            )
-            SettingsLikeFact("Account", serverInfo.displayName)
-            SettingsLikeFact("Server", serverInfo.version?.let { "Nextcloud $it" } ?: "Connected")
-            if (entry.pinned) SettingsLikeFact("Sidebar", "Pinned shortcut")
-            if (entry.recent) SettingsLikeFact("Recent", "Continue where you left off")
-        }
-        Spacer(Modifier.weight(1f))
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = RoundedCornerShape(NextcloudRadii.Card),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier.size(8.dp).clip(CircleShape)
-                            .background(NextcloudTheme.colors.success),
-                    )
-                    Text(" Connected", style = MaterialTheme.typography.labelLarge)
-                }
-                Text(
-                    "Installed apps and workspace contracts are scoped to this account.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun AppIcon(appId: String, modifier: Modifier = Modifier) {
@@ -627,23 +549,6 @@ private fun AppStatusPill(text: String) {
     }
 }
 
-@Composable
-private fun AppMetric(label: String, value: String, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier, color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(10.dp)) {
-        Column(modifier = Modifier.padding(NextcloudSpacing.Medium)) {
-            Text(value, style = MaterialTheme.typography.titleLarge)
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun SettingsLikeFact(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
 
 @Composable
 private fun AppsLoadingState() {

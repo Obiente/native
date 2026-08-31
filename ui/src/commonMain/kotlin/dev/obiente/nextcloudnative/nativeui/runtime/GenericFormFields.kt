@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +42,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
+import dev.obiente.nextcloudnative.app.design.NextcloudChoiceField
+import dev.obiente.nextcloudnative.app.design.NextcloudChoiceOption
+import dev.obiente.nextcloudnative.app.design.nextcloudChoiceOptionsMatchingQuery
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
 import dev.obiente.nextcloudnative.nativeui.model.ActionRisk
@@ -58,9 +60,6 @@ import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputScalarKin
 import dev.obiente.nextcloudnative.nativeui.model.RepeatableObjectInputSpec
 import dev.obiente.nextcloudnative.nativeui.model.ResourceSpec
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
-
-private const val NATIVE_ENUM_SEARCH_THRESHOLD = 8
-private const val NATIVE_ENUM_MAX_QUERY_LENGTH = 120
 
 /**
  * Presents contract fields in a human task order without changing their wire names or request
@@ -645,133 +644,42 @@ private fun GenericEnumField(
     automationFieldId: String,
     onValueChange: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    var query by rememberSaveable(field.id) { mutableStateOf("") }
-    val options = field.enumValues.orEmpty()
-    val visibleOptions = remember(field.enumLabels, options, query) {
-        nativeEnumOptionsMatchingQuery(field, query)
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall)) {
-        Text(requiredFieldLabel(field), style = MaterialTheme.typography.labelLarge)
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = { expanded = true },
-                enabled = enabled && !field.enumValues.isNullOrEmpty(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .semantics {
-                        contentDescription = "Choose $automationFieldId"
-                    },
-            ) {
-                value.takeIf(String::isNotBlank)
-                    ?.takeIf { field.isNativeVisualIconField() }
-                    ?.let(NextcloudIcons::semanticOrFallback)
-                    ?.let { icon ->
-                        Icon(
-                            icon,
-                            contentDescription = null,
-                            modifier = Modifier.padding(end = NextcloudSpacing.Small).size(20.dp),
-                        )
-                    }
-                value.nativeFormColorOrNull(field)?.let { color ->
-                    NativeColorSwatch(
-                        color,
-                        modifier = Modifier.padding(end = NextcloudSpacing.Small),
-                    )
+    NextcloudChoiceField(
+        label = requiredFieldLabel(field),
+        options = nativeEnumChoiceOptions(field),
+        selectedId = value.takeIf(String::isNotBlank),
+        selectedLabelFallback = nativeEnumOptionLabel(field, value),
+        onSelected = onValueChange,
+        enabled = enabled,
+        error = error,
+        fieldKey = automationFieldId,
+        contentDescription = "Choose $automationFieldId",
+        searchLabel = "Search ${field.label.lowercase()}",
+        searchContentDescription = "Search options for $automationFieldId",
+        optionContentDescription = { "Choose $automationFieldId option ${it.label}" },
+        leadingContent = if (field.isNativeVisualIconField() ||
+            field.id.lowercase().filter(Char::isLetterOrDigit) in setOf("color", "colour")) {
+            { option ->
+                if (field.isNativeVisualIconField()) {
+                    Icon(NextcloudIcons.semanticOrFallback(option.id), null, Modifier.size(20.dp))
                 }
-                Text(
-                    value.takeIf(String::isNotBlank)?.let { selected ->
-                        nativeEnumOptionLabel(field, selected)
-                    } ?: "Choose an option",
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Start,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Icon(
-                    NextcloudIcons.ExpandMore,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
+                option.id.nativeFormColorOrNull(field)?.let { NativeColorSwatch(it) }
             }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = {
-                    expanded = false
-                    query = ""
-                },
-            ) {
-                if (options.size > NATIVE_ENUM_SEARCH_THRESHOLD) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it.take(NATIVE_ENUM_MAX_QUERY_LENGTH) },
-                        modifier = Modifier
-                            .padding(
-                                horizontal = NextcloudSpacing.Small,
-                                vertical = NextcloudSpacing.XSmall,
-                            )
-                            .widthIn(min = 280.dp)
-                            .semantics {
-                                contentDescription = "Search options for $automationFieldId"
-                            },
-                        label = { Text("Search ${field.label.lowercase()}") },
-                        singleLine = true,
-                    )
-                }
-                visibleOptions.forEach { option ->
-                    val optionLabel = nativeEnumOptionLabel(field, option)
-                    val optionIcon = option.takeIf { field.isNativeVisualIconField() }
-                        ?.let(NextcloudIcons::semanticOrFallback)
-                    val optionColor = option.nativeFormColorOrNull(field)
-                    DropdownMenuItem(
-                        modifier = Modifier.semantics {
-                            contentDescription = "Choose $automationFieldId option $optionLabel"
-                        },
-                        leadingIcon = if (optionIcon != null || optionColor != null) {
-                            {
-                                optionIcon?.let { icon ->
-                                    Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
-                                }
-                                optionColor?.let { color -> NativeColorSwatch(color) }
-                            }
-                        } else {
-                            null
-                        },
-                        text = { Text(optionLabel) },
-                        onClick = {
-                            expanded = false
-                            query = ""
-                            onValueChange(option)
-                        },
-                    )
-                }
-                if (visibleOptions.isEmpty()) {
-                    DropdownMenuItem(
-                        text = { Text("No matching options") },
-                        onClick = {},
-                        enabled = false,
-                    )
-                }
-            }
-        }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-    }
+        } else null,
+    )
 }
 
+private fun nativeEnumChoiceOptions(field: FieldSpec): List<NextcloudChoiceOption> =
+    field.enumValues.orEmpty().map { option ->
+        NextcloudChoiceOption(option, nativeEnumOptionLabel(field, option),
+            searchTerms = listOf(option.dynamicSettingLabel()))
+    }
 
 internal fun nativeEnumOptionLabel(field: FieldSpec, option: String): String =
     field.enumLabels?.get(option) ?: option.dynamicSettingLabel()
 
 internal fun nativeEnumOptionsMatchingQuery(field: FieldSpec, query: String): List<String> {
-    val options = field.enumValues.orEmpty()
-    val normalizedQuery = query.trim().lowercase()
-    if (normalizedQuery.isBlank()) return options
-    return options.filter { option ->
-        normalizedQuery in option.lowercase() ||
-            normalizedQuery in option.dynamicSettingLabel().lowercase() ||
-            normalizedQuery in field.enumLabels?.get(option).orEmpty().lowercase()
-    }
+    return nextcloudChoiceOptionsMatchingQuery(nativeEnumChoiceOptions(field), query).map(NextcloudChoiceOption::id)
 }
 
 

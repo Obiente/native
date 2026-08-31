@@ -276,9 +276,6 @@ internal fun NativeBudgetDashboard(
         item("metrics") {
             NativeBudgetMetricGrid(model)
         }
-        item("cash-flow") {
-            NativeBudgetCashFlowCard(model, "transactions" in availableSectionIds, onOpenSection)
-        }
         if (model.accounts.isNotEmpty()) {
             item("accounts") {
                 NativeBudgetAccountsCard(model, onOpenSection)
@@ -293,6 +290,9 @@ internal fun NativeBudgetDashboard(
             item("upcoming-bills") {
                 NativeBudgetBillsCard(model, onOpenSection)
             }
+        }
+        item("cash-flow") {
+            NativeBudgetCashFlowCard(model, "transactions" in availableSectionIds, onOpenSection)
         }
         item("planning") {
             NativeBudgetPlanningRow(model, availableSectionIds, onOpenSection)
@@ -399,76 +399,6 @@ private fun NativeBudgetDashboardLoading(modifier: Modifier) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-@Composable
-private fun NativeBudgetMetricGrid(model: NativeBudgetDashboardModel) {
-    val metrics = listOfNotNull(model.netWorth, model.income, model.expenses, model.savings, model.pensionWorth)
-    if (metrics.isEmpty()) return
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val columns = when {
-            maxWidth >= 1_000.dp -> 4
-            maxWidth >= 560.dp -> 3
-            else -> 2
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small)) {
-            metrics.chunked(columns).forEach { rowMetrics ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    rowMetrics.forEach { metric ->
-                        NativeBudgetMetricCard(
-                            metric = metric,
-                            currency = model.currency,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    repeat(columns - rowMetrics.size) { Box(modifier = Modifier.weight(1f)) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NativeBudgetMetricCard(
-    metric: NativeBudgetMetric,
-    currency: String?,
-    modifier: Modifier = Modifier,
-) {
-    val accent = when (metric.tone) {
-        NativeBudgetMetricTone.Neutral -> MaterialTheme.colorScheme.primary
-        NativeBudgetMetricTone.Positive -> Color(0xFF3F8F50)
-        NativeBudgetMetricTone.Negative -> MaterialTheme.colorScheme.error
-    }
-    Card(
-        modifier = modifier.heightIn(min = 104.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        shape = RoundedCornerShape(NextcloudRadii.Medium),
-    ) {
-        Column(
-            modifier = Modifier.padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-        ) {
-            Text(
-                metric.label.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                formatNativeBudgetMoney(metric.value, currency),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = accent,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            metric.supportingText?.let { supporting ->
-                Text(supporting, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
     }
 }
 
@@ -588,7 +518,7 @@ private fun NativeBudgetAccountsCard(
     model: NativeBudgetDashboardModel,
     onOpenSection: (String) -> Unit,
 ) {
-    NativeBudgetSectionCard("Accounts", "Manage", { onOpenSection("accounts") }) {
+    NativeBudgetSectionCard("Accounts", "All accounts", { onOpenSection("accounts") }) {
         model.accounts.forEachIndexed { index, account ->
             if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(

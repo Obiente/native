@@ -8,16 +8,19 @@ device: Desktop
 platforms: Linux, Windows
 durationMinutes: 9
 difficulty: Getting started
-lastUpdated: 2026-08-23
+lastUpdated: 2026-08-30
 captureScenarios: guide-desktop-getting-started-home, guide-desktop-getting-started-apps, guide-desktop-getting-started-settings
 prerequisites: A supported x86-64 Linux or Windows computer, Your Nextcloud server address and sign-in details, The package and release notes for the current alpha
 ---
 
 # Get started with Nextcloud Native on Linux or Windows
 
-**Last reviewed: 2026-08-23.** The software and published packages may have
+**Last reviewed: 2026-08-30.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
+
+Navigation instructions and screenshots reflect the reviewed source implementation;
+published packages may differ.
 
 The supported authenticated desktop targets in the current alpha are Linux and Windows. macOS DMG artifacts only prove early packaging and do not yet provide supported Keychain-backed login, so this guide must not be used to treat macOS as ready. Keep another copy of important files while testing any prerelease.
 
@@ -35,7 +38,7 @@ Open Nextcloud Native, enter the complete `https://` server address, and finish 
 @capture-alt: Nextcloud Native desktop Apps workspace with pinned tools, recent work, categories, search, installed app cards, and the persistent sidebar
 @capture-caption: The desktop app catalog exposes installed Nextcloud apps and support boundaries while the sidebar keeps common and recent workspaces close.
 
-The left sidebar contains Overview, Folder sync, Activity, Apps, Settings, pinned workspaces, and the most recent unpinned app. Open **Apps** to search the server's installed app list. Native support is capability-driven: a familiar app name does not guarantee every web action exists, and adaptive surfaces stay read-only when a verified write contract or target identity is missing.
+The left sidebar contains Home, Folder sync, Activity, Apps, pinned workspaces, and the most recent unpinned app. Settings and account access sit at the bottom. Collapse the sidebar to give the workspace more room; the compact rail keeps labeled app shortcuts. Open **Apps** to search the server's installed app list. Native support is capability-driven: a familiar app name does not guarantee every web action exists, and adaptive surfaces stay read-only when a verified write contract or target identity is missing.
 
 Desktop layouts may use multiple panes, selection, context menus, and denser content. Open an item with its primary action; use the overflow or pointer context menu for secondary actions. Nextcloud Native remembers supported navigation state for each app, so switching from a folder, board, or calendar and back should return to that app rather than reset the whole workspace.
 

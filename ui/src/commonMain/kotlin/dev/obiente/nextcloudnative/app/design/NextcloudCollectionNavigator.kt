@@ -17,13 +17,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Badge
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -32,7 +29,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
@@ -66,7 +62,7 @@ import kotlinx.coroutines.launch
 enum class NextcloudCollectionNavigationMode {
     Hidden,
     Tabs,
-    Drawer,
+    Sheet,
     Rail,
     Sidebar,
 }
@@ -211,7 +207,7 @@ fun resolveNextcloudCollectionNavigationMode(
                 if (destinationCount <= NextcloudCollectionMaximumTabCount) {
                     NextcloudCollectionNavigationMode.Tabs
                 } else {
-                    NextcloudCollectionNavigationMode.Drawer
+                    NextcloudCollectionNavigationMode.Sheet
                 }
             } else {
                 NextcloudCollectionNavigationMode.Rail
@@ -229,12 +225,7 @@ fun resolveNextcloudCollectionNavigationMode(
 fun resolveNextcloudCollectionLeadingControl(
     mode: NextcloudCollectionNavigationMode,
     hasHierarchyBack: Boolean,
-): NextcloudCollectionLeadingControl = when {
-    mode == NextcloudCollectionNavigationMode.Drawer ->
-        NextcloudCollectionLeadingControl.Menu
-
-    else -> NextcloudCollectionLeadingControl.Back
-}
+): NextcloudCollectionLeadingControl = NextcloudCollectionLeadingControl.Back
 
 fun shouldShowNextcloudCollectionTrailingNavigation(
     mode: NextcloudCollectionNavigationMode,
@@ -244,7 +235,7 @@ fun shouldShowNextcloudCollectionTrailingNavigation(
 internal fun resolveNextcloudCollectionDestinationLabelMaxLines(
     mode: NextcloudCollectionNavigationMode,
 ): Int = when (mode) {
-    NextcloudCollectionNavigationMode.Drawer,
+    NextcloudCollectionNavigationMode.Sheet,
     NextcloudCollectionNavigationMode.Sidebar -> 2
 
     NextcloudCollectionNavigationMode.Hidden,
@@ -255,7 +246,7 @@ internal fun resolveNextcloudCollectionDestinationLabelMaxLines(
 /**
  * Owns collection navigation and the single contextual header for a native app workspace.
  *
- * Compact Android uses top tabs for a small app-local destination set and a drawer when the app
+ * Compact layouts use top tabs for a small app-local destination set and a section sheet when the app
  * exposes more choices. Large Android and narrow desktop windows use a rail. Wide desktop windows
  * use a persistent 252 dp sidebar.
  */
@@ -275,6 +266,7 @@ fun NextcloudCollectionWorkspaceScaffold(
     headerActions: @Composable () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
+    var sectionsCollapsed by remember(workspaceLabel) { mutableStateOf(false) }
     when (mode) {
         NextcloudCollectionNavigationMode.Tabs -> NextcloudCollectionTabbedScaffold(
             model = model,
@@ -282,14 +274,13 @@ fun NextcloudCollectionWorkspaceScaffold(
             contentSubtitle = contentSubtitle,
             onBack = onBack,
             onDestinationSelected = onDestinationSelected,
-            destinationIcon = destinationIcon,
             compactHeader = compactHeader,
             headerActions = headerActions,
             modifier = modifier,
             content = content,
         )
 
-        NextcloudCollectionNavigationMode.Drawer -> NextcloudCollectionDrawerScaffold(
+        NextcloudCollectionNavigationMode.Sheet -> NextcloudCollectionSheetScaffold(
             model = model,
             workspaceLabel = workspaceLabel,
             contentTitle = contentTitle,
@@ -336,7 +327,11 @@ fun NextcloudCollectionWorkspaceScaffold(
         }
 
         NextcloudCollectionNavigationMode.Sidebar -> Row(modifier.fillMaxSize()) {
-            NextcloudCollectionNavigationSidebar(
+            if (sectionsCollapsed) NextcloudCollectionNavigationRail(
+                model = model,
+                onDestinationSelected = onDestinationSelected,
+                destinationIcon = destinationIcon,
+            ) else NextcloudCollectionNavigationSidebar(
                 model = model,
                 label = workspaceLabel,
                 onDestinationSelected = onDestinationSelected,
@@ -349,7 +344,15 @@ fun NextcloudCollectionWorkspaceScaffold(
                 leadingControl = resolveNextcloudCollectionLeadingControl(mode, hasHierarchyBack),
                 onOpenNavigation = null,
                 compactHeader = compactHeader,
-                headerActions = headerActions,
+                headerActions = {
+                    IconButton(onClick = { sectionsCollapsed = !sectionsCollapsed }) {
+                        Icon(
+                            NextcloudIcons.Menu,
+                            contentDescription = if (sectionsCollapsed) "Expand sections" else "Collapse sections",
+                        )
+                    }
+                    headerActions()
+                },
                 modifier = Modifier.weight(1f),
                 content = content,
             )
@@ -364,7 +367,6 @@ private fun NextcloudCollectionTabbedScaffold(
     contentSubtitle: String?,
     onBack: () -> Unit,
     onDestinationSelected: (NextcloudCollectionDestination) -> Unit,
-    destinationIcon: (NextcloudCollectionDestination) -> ImageVector?,
     compactHeader: Boolean,
     headerActions: @Composable () -> Unit,
     modifier: Modifier,
@@ -402,15 +404,6 @@ private fun NextcloudCollectionTabbedScaffold(
                             contentDescription = destination.accessibilityDescription()
                         }
                         .testTag(destination.automationTestTag()),
-                    icon = destinationIcon(destination)?.let { imageVector ->
-                        {
-                            Icon(
-                                imageVector = imageVector,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    },
                     text = {
                         Text(
                             text = destination.label,
@@ -429,98 +422,6 @@ private fun NextcloudCollectionTabbedScaffold(
 
 internal fun resolveNextcloudCollectionSelectedIndex(model: NextcloudCollectionNavigationModel): Int =
     model.destinations.indexOfFirst { destination -> destination.id == model.selectedDestinationId }
-
-@Composable
-private fun NextcloudCollectionDrawerScaffold(
-    model: NextcloudCollectionNavigationModel,
-    workspaceLabel: String,
-    contentTitle: String,
-    contentSubtitle: String?,
-    onBack: () -> Unit,
-    hasHierarchyBack: Boolean,
-    onDestinationSelected: (NextcloudCollectionDestination) -> Unit,
-    destinationIcon: (NextcloudCollectionDestination) -> ImageVector?,
-    compactHeader: Boolean,
-    headerActions: @Composable () -> Unit,
-    modifier: Modifier,
-    content: @Composable () -> Unit,
-) {
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val coroutineScope = rememberCoroutineScope()
-    val leadingControl = resolveNextcloudCollectionLeadingControl(
-        mode = NextcloudCollectionNavigationMode.Drawer,
-        hasHierarchyBack = hasHierarchyBack,
-    )
-
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = true,
-        drawerContent = {
-            ModalDrawerSheet(modifier = Modifier.width(NextcloudCollectionDrawerWidthDp.dp)) {
-                Column(
-                    modifier = Modifier.padding(
-                        horizontal = NextcloudSpacing.Large,
-                        vertical = NextcloudSpacing.Medium,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.XSmall),
-                ) {
-                    Text(
-                        text = workspaceLabel,
-                        modifier = Modifier.semantics { heading() },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (!contentTitle.equals(workspaceLabel, ignoreCase = true)) {
-                        Text(
-                            text = contentTitle,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                NextcloudCollectionDestinationList(
-                    model = model,
-                    onDestinationSelected = { destination ->
-                        onDestinationSelected(destination)
-                        coroutineScope.launch { drawerState.close() }
-                    },
-                    destinationIcon = destinationIcon,
-                    labelMaxLines = resolveNextcloudCollectionDestinationLabelMaxLines(
-                        NextcloudCollectionNavigationMode.Drawer,
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(NextcloudSpacing.Small),
-                )
-            }
-        },
-        modifier = modifier,
-    ) {
-        NextcloudCollectionMainPane(
-            title = contentTitle,
-            subtitle = contentSubtitle,
-            onBack = {
-                if (drawerState.isOpen) {
-                    coroutineScope.launch { drawerState.close() }
-                } else {
-                    onBack()
-                }
-            },
-            leadingControl = leadingControl,
-            onOpenNavigation = { coroutineScope.launch { drawerState.open() } },
-            showHierarchyBack = shouldShowNextcloudCollectionTrailingNavigation(
-                mode = NextcloudCollectionNavigationMode.Drawer,
-                hasHierarchyBack = hasHierarchyBack,
-            ),
-            compactHeader = compactHeader,
-            headerActions = headerActions,
-            content = content,
-        )
-    }
-}
 
 @Composable
 private fun NextcloudCollectionMainPane(
@@ -552,73 +453,6 @@ private fun NextcloudCollectionMainPane(
     }
 }
 
-@Composable
-private fun NextcloudCollectionHeader(
-    title: String,
-    subtitle: String?,
-    onBack: () -> Unit,
-    leadingControl: NextcloudCollectionLeadingControl,
-    onOpenNavigation: (() -> Unit)?,
-    showHierarchyBack: Boolean,
-    compact: Boolean,
-    actions: @Composable () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = if (compact) 54.dp else 64.dp)
-            .padding(horizontal = NextcloudSpacing.Small),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        when (leadingControl) {
-            NextcloudCollectionLeadingControl.Back -> IconButton(
-                onClick = onBack,
-                modifier = Modifier.size(NextcloudCollectionMinimumTouchTargetDp.dp),
-            ) {
-                Icon(NextcloudIcons.Back, contentDescription = "Back")
-            }
-
-            NextcloudCollectionLeadingControl.Menu -> IconButton(
-                onClick = requireNotNull(onOpenNavigation),
-                modifier = Modifier.size(NextcloudCollectionMinimumTouchTargetDp.dp),
-            ) {
-                Icon(NextcloudIcons.Menu, contentDescription = "Open sections")
-            }
-        }
-        if (showHierarchyBack) {
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.size(NextcloudCollectionMinimumTouchTargetDp.dp),
-            ) {
-                Icon(NextcloudIcons.Back, contentDescription = "Back")
-            }
-        }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = NextcloudSpacing.Small),
-        ) {
-            Text(
-                text = title,
-                modifier = Modifier.semantics { heading() },
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            subtitle?.let { supportingText ->
-                Text(
-                    text = supportingText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        actions()
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
 
 @Composable
 private fun NextcloudCollectionNavigationRail(
@@ -627,7 +461,7 @@ private fun NextcloudCollectionNavigationRail(
     destinationIcon: (NextcloudCollectionDestination) -> ImageVector?,
 ) {
     val focusRequesters = rememberNextcloudCollectionFocusRequesters(model)
-    var focusedDestinationId by remember(model.destinations) { mutableStateOf<String?>(null) }
+    var focusedDestinationId by remember(model.destinations.map { it.id }) { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -737,7 +571,7 @@ private fun NextcloudCollectionNavigationSidebar(
 }
 
 @Composable
-private fun NextcloudCollectionDestinationList(
+internal fun NextcloudCollectionDestinationList(
     model: NextcloudCollectionNavigationModel,
     onDestinationSelected: (NextcloudCollectionDestination) -> Unit,
     destinationIcon: (NextcloudCollectionDestination) -> ImageVector?,
@@ -745,7 +579,7 @@ private fun NextcloudCollectionDestinationList(
     modifier: Modifier = Modifier,
 ) {
     val focusRequesters = rememberNextcloudCollectionFocusRequesters(model)
-    var focusedDestinationId by remember(model.destinations) { mutableStateOf<String?>(null) }
+    var focusedDestinationId by remember(model.destinations.map { it.id }) { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -758,6 +592,7 @@ private fun NextcloudCollectionDestinationList(
                 focusRequesters = focusRequesters,
                 listState = listState,
                 coroutineScope = coroutineScope,
+                groupedSections = true,
             )
             .selectableGroup(),
         state = listState,
@@ -794,11 +629,14 @@ private fun NextcloudCollectionDestinationList(
                     )
                     NavigationDrawerItem(
                         label = {
-                            Text(
-                                text = destination.label,
-                                maxLines = labelMaxLines,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Column {
+                                Text(destination.label, maxLines = labelMaxLines, overflow = TextOverflow.Ellipsis)
+                                destination.supportingText?.let { supporting ->
+                                    Text(supporting, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
                         },
                         selected = destination.id == model.selectedDestinationId,
                         onClick = { onDestinationSelected(destination) },
@@ -852,7 +690,7 @@ internal class NextcloudCollectionComposedDestinationRegistry<T : Any> {
 @Composable
 private fun rememberNextcloudCollectionFocusRequesters(
     model: NextcloudCollectionNavigationModel,
-): NextcloudCollectionComposedDestinationRegistry<FocusRequester> = remember(model.destinations) {
+): NextcloudCollectionComposedDestinationRegistry<FocusRequester> = remember(model.destinations.map { it.id }) {
     NextcloudCollectionComposedDestinationRegistry()
 }
 
@@ -871,48 +709,53 @@ private fun rememberNextcloudCollectionFocusRequester(
     return focusRequester
 }
 
+@Composable
 private fun Modifier.nextcloudCollectionKeyboardNavigation(
     model: NextcloudCollectionNavigationModel,
     focusedDestinationId: String?,
     focusRequesters: NextcloudCollectionComposedDestinationRegistry<FocusRequester>,
     listState: LazyListState,
     coroutineScope: CoroutineScope,
-): Modifier = onPreviewKeyEvent { event ->
-    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-
-    val move = when (event.key) {
-        Key.DirectionUp -> NextcloudCollectionNavigationMove.Previous
-        Key.DirectionDown -> NextcloudCollectionNavigationMove.Next
-        Key.MoveHome -> NextcloudCollectionNavigationMove.First
-        Key.MoveEnd -> NextcloudCollectionNavigationMove.Last
-        else -> return@onPreviewKeyEvent false
+    groupedSections: Boolean = false,
+): Modifier {
+    val layout = remember(model.destinations, model.selectedDestinationId, groupedSections) {
+        nextcloudCollectionKeyboardLayout(model, groupedSections)
     }
-    resolveNextcloudCollectionKeyboardDestination(
-        model = model,
-        focusedDestinationId = focusedDestinationId,
-        move = move,
-    )?.let { destination ->
-        val targetIndex = model.destinations.indexOfFirst { candidate -> candidate.id == destination.id }
-        if (targetIndex < 0) return@onPreviewKeyEvent false
-        coroutineScope.launch {
-            listState.scrollToItem(targetIndex)
-            repeat(NextcloudCollectionFocusAttachmentFrameLimit) {
-                withFrameNanos { }
-                focusRequesters[destination.id]?.let { focusRequester ->
-                    focusRequester.requestFocus()
-                    return@launch
+    return onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+        val move = when (event.key) {
+            Key.DirectionUp -> NextcloudCollectionNavigationMove.Previous
+            Key.DirectionDown -> NextcloudCollectionNavigationMove.Next
+            Key.MoveHome -> NextcloudCollectionNavigationMove.First
+            Key.MoveEnd -> NextcloudCollectionNavigationMove.Last
+            else -> return@onPreviewKeyEvent false
+        }
+        resolveNextcloudCollectionKeyboardDestination(
+            model = layout.navigationModel,
+            focusedDestinationId = focusedDestinationId,
+            move = move,
+        )?.let { destination ->
+            val targetIndex = layout.lazyItemIndexByDestinationId[destination.id] ?: return@onPreviewKeyEvent false
+            coroutineScope.launch {
+                listState.scrollToItem(targetIndex)
+                repeat(NextcloudCollectionFocusAttachmentFrameLimit) {
+                    withFrameNanos { }
+                    focusRequesters[destination.id]?.let { focusRequester ->
+                        focusRequester.requestFocus()
+                        return@launch
+                    }
                 }
             }
-        }
-        true
-    } ?: false
+            true
+        } ?: false
+    }
 }
 
 private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus
 
 private const val NextcloudCollectionMinimumTouchTargetDp = 48
 private const val NextcloudCollectionMaximumTabCount = 4
-private const val NextcloudCollectionDrawerWidthDp = 320
 private const val NextcloudCollectionRailWidthDp = 88
 private const val NextcloudCollectionSidebarWidthDp = 252
 private const val NextcloudCollectionFocusAttachmentFrameLimit = 2

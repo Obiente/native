@@ -4,6 +4,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -366,14 +367,27 @@ internal fun GenericRecordBoard(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        Box(
+        BoxWithConstraints(
             modifier = Modifier.weight(1f).fillMaxWidth()
                 .onGloballyPositioned { coordinates ->
                     boardBounds = coordinates.boundsInWindow()
                 },
         ) {
+            val laneWidth = nativeBoardLaneWidth(maxWidth.value, lanes.size).dp
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            NativeBoardLaneJump(
+                lanes = lanes,
+                onSelectLane = { index ->
+                    scope.launch {
+                        boardScrollState.animateScrollTo(
+                            with(density) { ((laneWidth + NextcloudSpacing.Medium) * index).roundToPx() },
+                        )
+                    }
+                },
+            )
             Row(
                 modifier = Modifier.fillMaxSize().horizontalScroll(boardScrollState)
+                    .padding(top = 48.dp)
                     .padding(NextcloudSpacing.Large),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
             ) {
@@ -399,7 +413,7 @@ internal fun GenericRecordBoard(
                     }
                     val isDragTarget = dragTargetLaneKey == lane.key
                     Column(
-                        modifier = Modifier.width(284.dp).fillMaxHeight()
+                        modifier = Modifier.width(laneWidth).fillMaxHeight()
                             .onGloballyPositioned { coordinates ->
                                 laneBounds[lane.key] = coordinates.boundsInWindow()
                             }

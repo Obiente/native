@@ -8,24 +8,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -33,7 +33,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -152,6 +151,7 @@ internal fun ActivityDesktopWorkspace(
     onOpenSettings: (ActivitySettingsDestination) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showSummary by remember { mutableStateOf(false) }
     val attention = remember(feed.groups) {
         feed.groups.flatMap(ActivityFeedDayGroup::activities)
             .filter(NextcloudActivity::needsDesktopAttention).take(3)
@@ -163,9 +163,22 @@ internal fun ActivityDesktopWorkspace(
             refreshing = timeline.refreshing,
             onRefresh = onRefresh,
             onOpenSettings = onOpenSettings,
+            showSummary = showSummary,
+            onToggleSummary = { showSummary = !showSummary },
         )
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val showCompanion = maxWidth >= 1_140.dp
+            val showCompanion = showSummary && maxWidth >= 1_140.dp
+            if (showSummary && !showCompanion) {
+                AlertDialog(
+                    onDismissRequest = { showSummary = false },
+                    title = { Text("Activity summary") },
+                    text = {
+                        ActivityCompanionPane(feed, selectedApp, onAppSelected,
+                            Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()))
+                    },
+                    confirmButton = { TextButton(onClick = { showSummary = false }) { Text("Close") } },
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Large),
                 horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
@@ -174,7 +187,7 @@ internal fun ActivityDesktopWorkspace(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
                 ) {
-                    ActivityDesktopToolbar(
+                    ActivityFilterToolbar(
                         query = query,
                         selectedSemantic = selectedSemantic,
                         selectedApp = selectedApp,
@@ -208,6 +221,7 @@ internal fun ActivityDesktopWorkspace(
                         onOpenAction = onOpenAction,
                         loadPreview = loadPreview,
                         previewCacheScope = previewCacheScope,
+                        highlightedActivities = attention,
                     )
                 }
                 if (showCompanion) {
@@ -285,66 +299,23 @@ internal fun ActivityMobileWorkspace(
             ),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
         ) {
-            item("search") {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    leadingIcon = {
-                        Icon(NextcloudIcons.Search, contentDescription = null, modifier = Modifier.size(20.dp))
-                    },
-                    label = { Text("Search loaded activity") },
+            item("toolbar") {
+                ActivityFilterToolbar(
+                    query, selectedSemantic, selectedApp, selectedType, serverFilters,
+                    selectedServerFilterId, feed, onQueryChanged, onSemanticSelected,
+                    onAppSelected, onTypeSelected, onServerFilterSelected, onClearFilters,
                 )
-            }
-            item("filters") {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                    verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                ) {
-                    ActivityServerFilterMenu(
-                        filters = serverFilters,
-                        selectedId = selectedServerFilterId,
-                        onSelected = onServerFilterSelected,
-                    )
-                    ActivitySemanticMenu(selectedSemantic, feed.semanticCounts, onSemanticSelected)
-                    ActivityFacetMenu(
-                        label = selectedApp?.let(::activityReadableSource) ?: "All apps",
-                        allLabel = "All apps",
-                        facets = feed.appFacets,
-                        selected = selectedApp,
-                        onSelected = onAppSelected,
-                    )
-                    ActivityFacetMenu(
-                        label = selectedType?.replace('_', ' ')?.replaceFirstChar(Char::uppercase) ?: "All events",
-                        allLabel = "All events",
-                        facets = feed.typeFacets,
-                        selected = selectedType,
-                        onSelected = onTypeSelected,
-                    )
-                    if (filtersActive) {
-                        TextButton(onClick = onClearFilters) { Text("Clear") }
-                    }
-                }
             }
             if (attention.isNotEmpty()) {
                 item("attention-heading") {
                     Text("Needs attention", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
-                item("attention") {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
-                        contentPadding = PaddingValues(end = NextcloudSpacing.Medium),
-                    ) {
-                        items(attention, key = NextcloudActivity::id) { activity ->
-                            ActivityMobileAttentionCard(
-                                activity = activity,
-                                action = actionFor(activity),
-                                onOpenAction = onOpenAction,
-                            )
-                        }
-                    }
+                items(attention, key = { "attention:${it.id}" }) { activity ->
+                    ActivityMobileAttentionCard(
+                        activity = activity,
+                        action = actionFor(activity),
+                        onOpenAction = onOpenAction,
+                    )
                 }
             }
             timeline.error?.let { message ->
@@ -382,7 +353,7 @@ internal fun ActivityMobileWorkspace(
                     }
                 }
             }
-            feed.groups.forEach { group ->
+            activityHistoryGroups(feed.groups, attention).forEach { group ->
                 item("day:${group.dateKey}") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -391,7 +362,7 @@ internal fun ActivityMobileWorkspace(
                     ) {
                         Text(group.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "${group.activities.size} events",
+                            activityHistoryCountLabel(group.activities),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -479,7 +450,7 @@ private fun ActivityMobileAttentionCard(
         NextcloudTheme.colors.warning
     }
     Surface(
-        modifier = Modifier.width(300.dp),
+        modifier = Modifier.fillMaxWidth(),
         color = accent.copy(alpha = 0.13f),
         shape = RoundedCornerShape(NextcloudRadii.Medium),
         border = BorderStroke(1.dp, accent.copy(alpha = 0.58f)),
@@ -647,13 +618,15 @@ private fun ActivityDesktopHeader(
     refreshing: Boolean,
     onRefresh: () -> Unit,
     onOpenSettings: (ActivitySettingsDestination) -> Unit,
+    showSummary: Boolean,
+    onToggleSummary: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(76.dp).padding(horizontal = NextcloudSpacing.Large),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text("Activity", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "Your recent activity across files, shares, and apps",
@@ -662,6 +635,9 @@ private fun ActivityDesktopHeader(
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onToggleSummary) {
+                Icon(NextcloudIcons.Info, contentDescription = if (showSummary) "Hide activity summary" else "Show activity summary")
+            }
             IconButton(enabled = !refreshing, onClick = onRefresh) {
                 Icon(NextcloudIcons.Refresh, contentDescription = if (refreshing) "Refreshing activity" else "Refresh activity")
             }
@@ -711,154 +687,6 @@ private fun ActivitySettingsMenu(onOpenSettings: (ActivitySettingsDestination) -
                     onOpenSettings(ActivitySettingsDestination.RssFeed)
                 },
             )
-        }
-    }
-}
-
-@Composable
-private fun ActivityDesktopToolbar(
-    query: String,
-    selectedSemantic: NextcloudActivitySemantic?,
-    selectedApp: String?,
-    selectedType: String?,
-    serverFilters: List<NextcloudActivityFilterOption>,
-    selectedServerFilterId: String,
-    feed: ActivityFeedPresentation,
-    onQueryChanged: (String) -> Unit,
-    onSemanticSelected: (NextcloudActivitySemantic?) -> Unit,
-    onAppSelected: (String?) -> Unit,
-    onTypeSelected: (String?) -> Unit,
-    onServerFilterSelected: (String) -> Unit,
-    onClearFilters: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(NextcloudRadii.Small),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                modifier = Modifier.weight(1f).height(52.dp),
-                singleLine = true,
-                leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                label = { Text("Search loaded activity") },
-            )
-            ActivityServerFilterMenu(
-                filters = serverFilters,
-                selectedId = selectedServerFilterId,
-                onSelected = onServerFilterSelected,
-            )
-            ActivitySemanticMenu(selectedSemantic, feed.semanticCounts, onSemanticSelected)
-            ActivityFacetMenu(
-                label = selectedApp?.let(::activityReadableSource) ?: "All apps",
-                allLabel = "All apps",
-                facets = feed.appFacets,
-                selected = selectedApp,
-                onSelected = onAppSelected,
-            )
-            ActivityFacetMenu(
-                label = selectedType?.replace('_', ' ')?.replaceFirstChar(Char::uppercase) ?: "All events",
-                allLabel = "All events",
-                facets = feed.typeFacets,
-                selected = selectedType,
-                onSelected = onTypeSelected,
-            )
-            if (query.isNotBlank() || selectedSemantic != null || selectedApp != null || selectedType != null) {
-                TextButton(onClick = onClearFilters) { Text("Clear") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityServerFilterMenu(
-    filters: List<NextcloudActivityFilterOption>,
-    selectedId: String,
-    onSelected: (String) -> Unit,
-) {
-    val available = filters.ifEmpty {
-        listOf(NextcloudActivityFilterOption("all", "All activities", 0))
-    }
-    val selected = available.firstOrNull { it.id == selectedId } ?: available.first()
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton(onClick = { expanded = true }) {
-            Icon(NextcloudIcons.Filter, contentDescription = null, modifier = Modifier.size(17.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(selected.name, maxLines = 1)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            available.forEach { filter ->
-                DropdownMenuItem(
-                    text = { Text(filter.name) },
-                    onClick = {
-                        expanded = false
-                        onSelected(filter.id)
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivitySemanticMenu(
-    selected: NextcloudActivitySemantic?,
-    counts: Map<NextcloudActivitySemantic, Int>,
-    onSelected: (NextcloudActivitySemantic?) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton(onClick = { expanded = true }) {
-            Icon(NextcloudIcons.Filter, contentDescription = null, modifier = Modifier.size(17.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(selected?.desktopTitle() ?: "Any content")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("Any content") },
-                onClick = { expanded = false; onSelected(null) },
-            )
-            NextcloudActivitySemantic.entries.forEach { semantic ->
-                val count = counts[semantic] ?: 0
-                if (count > 0) {
-                    DropdownMenuItem(
-                        text = { Text("${semantic.desktopTitle()} ($count)") },
-                        onClick = { expanded = false; onSelected(semantic) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityFacetMenu(
-    label: String,
-    allLabel: String,
-    facets: List<ActivityFeedFacet>,
-    selected: String?,
-    onSelected: (String?) -> Unit,
-) {
-    if (facets.size <= 1 && selected == null) return
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton(onClick = { expanded = true }) { Text(label, maxLines = 1) }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(text = { Text(allLabel) }, onClick = { expanded = false; onSelected(null) })
-            facets.take(12).forEach { facet ->
-                DropdownMenuItem(
-                    text = { Text("${facet.label} (${facet.count})") },
-                    onClick = { expanded = false; onSelected(facet.key) },
-                )
-            }
         }
     }
 }
@@ -958,6 +786,7 @@ private fun ActivityDesktopTimeline(
     onOpenAction: (ActivityOpenAction) -> Unit,
     loadPreview: suspend (NextcloudActivityPreview) -> ByteArray?,
     previewCacheScope: String,
+    highlightedActivities: List<NextcloudActivity>,
 ) {
     val listState = rememberLazyListState()
     val lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
@@ -1010,7 +839,7 @@ private fun ActivityDesktopTimeline(
                     }
                 }
             }
-            feed.groups.forEach { group ->
+            activityHistoryGroups(feed.groups, highlightedActivities).forEach { group ->
                 item("day:${group.dateKey}") {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
@@ -1019,7 +848,7 @@ private fun ActivityDesktopTimeline(
                     ) {
                         Text(group.label, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "${group.activities.size} events",
+                            activityHistoryCountLabel(group.activities),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1239,17 +1068,15 @@ private fun ActivityCompanionPane(
                 }
             }
         }
-        ActivityCompanionSection("Saved scopes") {
-            ActivityScopeRow("My activity", feed.matchedCount, selectedApp == null) { onAppSelected(null) }
+        ActivityCompanionSection("By app") {
+            ActivityScopeRow("All apps", feed.matchedCount, selectedApp == null) { onAppSelected(null) }
             feed.appFacets.take(5).forEach { facet ->
                 ActivityScopeRow(facet.label, facet.count, selectedApp == facet.key) { onAppSelected(facet.key) }
             }
         }
-        ActivityCompanionSection("Source health") {
+        ActivityCompanionSection("Loaded activity") {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(modifier = Modifier.size(8.dp), shape = CircleShape, color = NextcloudTheme.colors.success) {}
                 Column {
-                    Text("Activity source connected", style = MaterialTheme.typography.labelLarge)
                     Text(
                         "${feed.matchedCount} events in the current view",
                         style = MaterialTheme.typography.bodySmall,
@@ -1311,14 +1138,14 @@ private fun ActivityScopeRow(label: String, count: Int, selected: Boolean, onCli
     }
 }
 
-private fun NextcloudActivitySemantic.desktopTitle(): String = when (this) {
+internal fun NextcloudActivitySemantic.desktopTitle(): String = when (this) {
     NextcloudActivitySemantic.Message -> "People"
     NextcloudActivitySemantic.Media -> "Media"
     NextcloudActivitySemantic.File -> "Files"
     NextcloudActivitySemantic.General -> "Other"
 }
 
-private fun activityReadableSource(value: String): String = value
+internal fun activityReadableSource(value: String): String = value
     .replace('_', ' ')
     .split(' ')
     .joinToString(" ") { part -> part.replaceFirstChar(Char::uppercase) }

@@ -20,6 +20,7 @@ import dev.obiente.nextcloudnative.nativeui.model.NativeAppSchema
 import dev.obiente.nextcloudnative.nativeui.model.ViewSpec
 import dev.obiente.nextcloudnative.nativeui.model.ActionIntent
 import dev.obiente.nextcloudnative.nativeui.runtime.NativeCollectionCreateControl
+import dev.obiente.nextcloudnative.nativeui.runtime.LocalNativeInlineEditorNavigation
 
 internal fun dynamicHeaderOverflowActions(
     schema: NativeAppSchema,
@@ -39,10 +40,14 @@ internal fun DynamicCollectionHeaderActions(
     onActionSelected: (DynamicNavigationFormAction, ViewSpec) -> Unit,
     onDestinationSelected: (DynamicNavigationDestination, ViewSpec) -> Unit,
 ) {
+    val inlineEditorNavigation = LocalNativeInlineEditorNavigation.current
     Row(verticalAlignment = Alignment.CenterVertically) {
         createControl?.action?.let { action ->
             val label = dynamicHeaderActionLabel(action, action.label)
-            IconButton(onClick = { createControl.open(action.id) }) {
+            IconButton(onClick = {
+                val open = { createControl.open(action.id) }
+                if (inlineEditorNavigation != null) inlineEditorNavigation.navigate(open) else open()
+            }) {
                 Icon(NextcloudIcons.Add, contentDescription = label)
             }
         }

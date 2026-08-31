@@ -559,7 +559,6 @@ internal fun MarketingDynamicUiScenario(
     }
     val desktop = scenario.presentation == NextcloudPresentation.Desktop
     Column(modifier = Modifier.fillMaxSize()) {
-        MarketingDynamicContractHeader(fixture, compact = !desktop)
         if (scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile) {
             MarketingTablesMobileScaffold(
                 fixture = fixture,
@@ -674,12 +673,11 @@ internal fun MarketingDynamicUiScenario(
                 )
             }
         }
-        if (!desktop) {
-            NextcloudBottomNavigation(
-                selected = NextcloudDestination.Apps,
-                onSelected = {},
-            )
-        }
+        if (!desktop) NextcloudBottomNavigation(
+            selected = NextcloudDestination.Apps, onSelected = {},
+            activeApp = dev.obiente.nextcloudnative.app.design.NextcloudDesktopSidebarApp("tables", "Tables"),
+            onSwitchApp = {},
+        )
     }
 }
 

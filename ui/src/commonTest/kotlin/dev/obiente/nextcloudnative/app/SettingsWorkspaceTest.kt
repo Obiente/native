@@ -13,7 +13,6 @@ class SettingsWorkspaceTest {
 
         assertEquals(SettingsWorkspaceMode.Compact, compact.mode)
         assertEquals(206, compact.categoryWidthDp)
-        assertFalse(compact.showSummaryPane)
     }
 
     @Test
@@ -22,7 +21,6 @@ class SettingsWorkspaceTest {
 
         assertEquals(SettingsWorkspaceMode.TwoPane, medium.mode)
         assertEquals(206, medium.categoryWidthDp)
-        assertFalse(medium.showSummaryPane)
     }
 
     @Test
@@ -31,16 +29,14 @@ class SettingsWorkspaceTest {
 
         assertEquals(SettingsWorkspaceMode.TwoPane, medium.mode)
         assertEquals(246, medium.categoryWidthDp)
-        assertFalse(medium.showSummaryPane)
     }
 
     @Test
-    fun `wide settings workspace restores account summary`() {
+    fun `wide settings workspace keeps room for the active task`() {
         val wide = resolveSettingsWorkspaceLayout(1_200)
 
-        assertEquals(SettingsWorkspaceMode.ThreePane, wide.mode)
+        assertEquals(SettingsWorkspaceMode.TwoPane, wide.mode)
         assertEquals(246, wide.categoryWidthDp)
-        assertTrue(wide.showSummaryPane)
     }
 
     @Test

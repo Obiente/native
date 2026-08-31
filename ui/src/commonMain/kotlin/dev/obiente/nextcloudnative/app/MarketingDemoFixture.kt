@@ -60,11 +60,13 @@ internal fun marketingDesktopIdentity(
     fixture: MarketingDemoFixture = nextcloudNativeMarketingFixture,
     avatar: androidx.compose.ui.graphics.ImageBitmap? = null,
 ) = NextcloudDesktopIdentity(
+    accountScopeKey = "marketing-fixture",
     displayName = fixture.displayName,
     cloudName = fixture.cloudName,
     avatar = avatar,
     connectionLabel = "Connected",
     serverVersion = "31.0.8",
+    availableApps = fixture.apps.map { NextcloudDesktopSidebarApp(it.id, it.name) },
     shortcuts = listOf(
         NextcloudDesktopSidebarApp("files", "Files"),
         NextcloudDesktopSidebarApp("photos", "Photos", "12"),

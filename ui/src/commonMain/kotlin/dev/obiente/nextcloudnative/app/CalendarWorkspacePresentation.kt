@@ -20,6 +20,7 @@ internal fun buildCalendarWorkspacePresentation(
     hiddenCalendarHrefs: Set<String>,
     query: String,
     selectedDate: String,
+    visibleMonth: CalendarMonth? = null,
 ): CalendarWorkspacePresentation {
     val normalizedQuery = query.trim().lowercase()
     val knownCalendars = calendars.mapTo(hashSetOf(), GroupwareCalendar::href)
@@ -31,7 +32,15 @@ internal fun buildCalendarWorkspacePresentation(
         }
         .sortedWith(compareBy(GroupwareCalendarEvent::start, GroupwareCalendarEvent::title))
         .toList()
-    val byDate = visible.groupBy { event -> event.start.take(8) }
+    val weekDates = calendarWeekDates(selectedDate)
+    val month = visibleMonth ?: selectedDate.parseCompactCalendarDate()?.let { CalendarMonth(it.year, it.month) }
+    val monthStart = month?.let { "${it.isoPrefix}01" }
+    val monthEnd = month?.let { "${it.isoPrefix}${it.days()}" }
+    // Limit expansion to the displayed month and week, even for events spanning years.
+    val firstDate = listOfNotNull(monthStart, weekDates.firstOrNull()).minOrNull()
+    val lastDate = listOfNotNull(monthEnd, weekDates.lastOrNull()).maxOrNull()
+    val byDate = if (firstDate != null && lastDate != null) calendarEventsByDate(visible, firstDate, lastDate)
+        else emptyMap()
     return CalendarWorkspacePresentation(
         visibleEvents = visible,
         eventsByDate = byDate,
@@ -39,8 +48,33 @@ internal fun buildCalendarWorkspacePresentation(
         eventCountByCalendar = events.filter { it.calendarHref in knownCalendars }
             .groupingBy(GroupwareCalendarEvent::calendarHref)
             .eachCount(),
-        weekDates = calendarWeekDates(selectedDate),
+        weekDates = weekDates,
     )
+}
+
+internal fun calendarEventsByDate(
+    events: List<GroupwareCalendarEvent>,
+    firstDate: String,
+    lastDate: String,
+): Map<String, List<GroupwareCalendarEvent>> = buildMap<String, MutableList<GroupwareCalendarEvent>> {
+    if (firstDate.parseCompactCalendarDate() == null || lastDate.parseCompactCalendarDate() == null || lastDate < firstDate) return@buildMap
+    events.sortedWith(compareBy(GroupwareCalendarEvent::start, GroupwareCalendarEvent::title)).forEach { event ->
+        event.occupiedCalendarDates(firstDate, lastDate).forEach { date ->
+            getOrPut(date) { mutableListOf() }.add(event)
+        }
+    }
+}
+
+internal fun calendarWeekTitle(dates: List<String>): String {
+    val first = dates.firstOrNull()?.parseCompactCalendarDate() ?: return "Week"
+    val last = dates.lastOrNull()?.parseCompactCalendarDate() ?: return "Week"
+    val firstMonth = CalendarMonth(first.year, first.month).title.substringBeforeLast(' ')
+    val lastMonth = CalendarMonth(last.year, last.month).title.substringBeforeLast(' ')
+    return when {
+        first.year != last.year -> "${first.day} $firstMonth ${first.year} - ${last.day} $lastMonth ${last.year}"
+        first.month != last.month -> "${first.day} $firstMonth - ${last.day} $lastMonth ${first.year}"
+        else -> "${first.day}-${last.day} $firstMonth ${first.year}"
+    }
 }
 
 internal fun calendarWeekDates(selectedDate: String): List<String> {

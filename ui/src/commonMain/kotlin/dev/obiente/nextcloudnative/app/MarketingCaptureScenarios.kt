@@ -23,7 +23,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
 import dev.obiente.nextcloudnative.app.design.NextcloudPresentation
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -86,6 +85,31 @@ enum class MarketingCaptureScenario(
     val density: Float,
     val darkTheme: Boolean = true,
 ) {
+    SharedControlsDesktop(
+        "shared-controls-desktop", "shared-controls-desktop.png", NextcloudPresentation.Desktop,
+        "Shared UI", "Choice controls", "Views, filters and form states", MarketingCapturePurpose.StateCoverage,
+        "desktop", "wide", width = 1_280, height = 900, density = 1f,
+    ),
+    SharedControlsMobile(
+        "shared-controls-mobile", "shared-controls-mobile.png", NextcloudPresentation.Adaptive,
+        "Shared UI", "Choice controls", "Compact views, filters and form states", MarketingCapturePurpose.StateCoverage,
+        "android", "phone", width = 1_080, height = 2_400, density = 3f,
+    ),
+    ShellCompactDesktop(
+        "shell-compact-desktop", "shell-compact-desktop.png", NextcloudPresentation.Desktop,
+        "App shell", "Compact sidebar", "Editing an event", MarketingCapturePurpose.StateCoverage,
+        "desktop", "compact", width = 820, height = 800, density = 1f,
+    ),
+    ShellAppSwitcherMobile(
+        "shell-app-switcher-mobile", "shell-app-switcher-mobile.png", NextcloudPresentation.Adaptive,
+        "App shell", "App switcher", "Pinned and installed apps", MarketingCapturePurpose.StateCoverage,
+        "android", "phone", width = 1_080, height = 2_400, density = 3f,
+    ),
+    ShellTablet(
+        "shell-tablet", "shell-tablet.png", NextcloudPresentation.Adaptive,
+        "App shell", "Tablet navigation", "Editing an event", MarketingCapturePurpose.StateCoverage,
+        "android", "tablet", width = 1_680, height = 1_600, density = 2f,
+    ),
     HomepageOverviewDesktopDark(
         "homepage-overview-desktop-dark",
         "homepage-overview-desktop-dark.png",
@@ -417,13 +441,25 @@ enum class MarketingCaptureScenario(
     ),
     CalendarEventEditorMobile(
         "calendar-event-editor-mobile", "calendar-event-editor-mobile.png", NextcloudPresentation.Adaptive,
-        "Calendar", "Mobile event editor", "New event with calendar and recurrence choices",
+        "Calendar", "Mobile event editor", "Existing event with date, time, and recurrence controls",
         MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
         width = 1_080, height = 1_800, density = 2.625f,
     ),
+    CalendarWeekMobile(
+        "calendar-week-mobile", "calendar-week-mobile.png", NextcloudPresentation.Adaptive,
+        "Calendar", "Mobile week", "Selected day and event schedule",
+        MarketingCapturePurpose.Showcase, "mobile", "phone-portrait",
+        width = 1_080, height = 1_800, density = 2.625f,
+    ),
+    CalendarWeekDesktop(
+        "calendar-week-desktop", "calendar-week-desktop.png", NextcloudPresentation.Desktop,
+        "Calendar", "Desktop week", "Scrollable day columns and event inspector",
+        MarketingCapturePurpose.Showcase, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
     CalendarEventEditorDesktop(
         "calendar-event-editor-desktop", "calendar-event-editor-desktop.png", NextcloudPresentation.Desktop,
-        "Calendar", "Desktop event editor", "New event with calendar and recurrence choices",
+        "Calendar", "Desktop event editor", "Existing event with date, time, and recurrence controls",
         MarketingCapturePurpose.Showcase, "desktop", "wide",
         width = 1_440, height = 900, density = 1f,
     ),
@@ -621,6 +657,18 @@ enum class MarketingCaptureScenario(
         "Tables", "Add inventory row", "Synthetic Tables data",
         MarketingCapturePurpose.StateCoverage,
         "desktop", "wide", width = 1_440, height = 900, density = 1f,
+    ),
+    InlineRecordEditDesktop(
+        "inline-record-edit-desktop", "inline-record-edit-desktop.png", NextcloudPresentation.Desktop,
+        "Dynamic workspaces", "Edit record in place", "Existing values with inline save and cancel",
+        MarketingCapturePurpose.StateCoverage, "desktop", "wide",
+        width = 1_440, height = 900, density = 1f,
+    ),
+    InlineRecordEditMobile(
+        "inline-record-edit-mobile", "inline-record-edit-mobile.png", NextcloudPresentation.Adaptive,
+        "Dynamic workspaces", "Edit record in place", "Existing values with inline save and cancel",
+        MarketingCapturePurpose.StateCoverage, "mobile", "phone-portrait",
+        width = 1_080, height = 2_200, density = 2.625f,
     ),
     TablesColumnsDesktop(
         "tables-columns-desktop", "tables-columns-desktop.png", NextcloudPresentation.Desktop,
@@ -970,411 +1018,7 @@ enum class MarketingCaptureScenario(
     GuideDesktopSwitchAppsNested("guide-desktop-switch-apps-nested", "guide-desktop-switch-apps-nested.png", NextcloudPresentation.Desktop, "Guides", "Desktop app switching", "Verified nested workspace", MarketingCapturePurpose.Showcase, "desktop", "wide", width = 1_440, height = 900, density = 1f),
 }
 
-internal fun MarketingCaptureScenario.guideCaptureSourceScenarioOrNull(): MarketingCaptureScenario? =
-    when (this) {
-        MarketingCaptureScenario.GuideAndroidGettingStartedHome -> MarketingCaptureScenario.HomepageOverviewMobileDark
-        MarketingCaptureScenario.GuideAndroidGettingStartedFiles -> MarketingCaptureScenario.HomepageFilesMobileDark
-        MarketingCaptureScenario.GuideAndroidGettingStartedCalendar -> MarketingCaptureScenario.CalendarWorkspaceMobileDark
-        MarketingCaptureScenario.GuideDesktopGettingStartedHome -> MarketingCaptureScenario.HomepageOverviewDesktopDark
-        MarketingCaptureScenario.GuideDesktopGettingStartedApps -> MarketingCaptureScenario.AppsWorkspaceDesktopDark
-        MarketingCaptureScenario.GuideDesktopGettingStartedSettings -> MarketingCaptureScenario.DesktopStartupSettings
-        MarketingCaptureScenario.GuideAndroidOfflineFilesBrowse -> MarketingCaptureScenario.HomepageFilesMobileDark
-        MarketingCaptureScenario.GuideAndroidOfflineFilesStorage -> null
-        MarketingCaptureScenario.GuideAndroidOfflineFilesTransfers -> null
-        MarketingCaptureScenario.GuideAndroidFolderSyncLocations,
-        MarketingCaptureScenario.GuideAndroidFolderSyncRules,
-        -> null
-        MarketingCaptureScenario.GuideAndroidFolderSyncStatus -> MarketingCaptureScenario.FileSyncStatusMobile
-        MarketingCaptureScenario.GuideLinuxFolderSyncWorkspace -> MarketingCaptureScenario.FileSyncStatusDesktop
-        MarketingCaptureScenario.GuideLinuxFolderSyncLocations -> null
-        MarketingCaptureScenario.GuideLinuxFolderSyncRules -> null
-        MarketingCaptureScenario.GuideWindowsCloudFilesSettings -> null
-        MarketingCaptureScenario.GuideWindowsCloudFilesStorage -> MarketingCaptureScenario.WindowsCloudFilesStorageDesktop
-        MarketingCaptureScenario.GuideWindowsCloudFilesRecovery -> MarketingCaptureScenario.WindowsCloudFilesRecoveryDesktop
-        MarketingCaptureScenario.GuideAndroidPhotoBackupFolders -> MarketingCaptureScenario.MediaBackup
-        MarketingCaptureScenario.GuideAndroidPhotoBackupQueue -> MarketingCaptureScenario.TransferMobilePending
-        MarketingCaptureScenario.GuideAndroidPhotoBackupLibrary -> null
-        MarketingCaptureScenario.GuideAndroidCalendarMonth -> MarketingCaptureScenario.CalendarMonthMobile
-        MarketingCaptureScenario.GuideAndroidCalendarAgenda -> MarketingCaptureScenario.CalendarWorkspaceMobileDark
-        MarketingCaptureScenario.GuideAndroidCalendarEdit -> null
-        MarketingCaptureScenario.GuideDesktopCalendarMonth,
-        MarketingCaptureScenario.GuideDesktopCalendarSources,
-        -> MarketingCaptureScenario.CalendarWorkspaceDesktopDark
-        MarketingCaptureScenario.GuideDesktopCalendarEdit -> MarketingCaptureScenario.CalendarEventEditorDesktop
-        MarketingCaptureScenario.GuideDesktopSwitchAppsCatalog -> MarketingCaptureScenario.AppsWorkspaceDesktopDark
-        MarketingCaptureScenario.GuideDesktopSwitchAppsSidebar -> MarketingCaptureScenario.PhotoFolderBrowserDesktop
-        MarketingCaptureScenario.GuideDesktopSwitchAppsNested -> MarketingCaptureScenario.AdaptiveApp
-        else -> null
-    }
 
-data class MarketingCaptureVariant(
-    val scenario: MarketingCaptureScenario,
-    val baseScenario: String,
-    val id: String,
-    val fileName: String,
-    val theme: MarketingCaptureTheme,
-) {
-    val width: Int get() = scenario.width
-    val height: Int get() = scenario.height
-    val density: Float get() = scenario.density
-}
-
-internal data class MarketingCaptureRegistryEntry(
-    val id: String,
-    val baseScenario: String,
-    val fileName: String,
-    val theme: String,
-    val feature: String,
-    val surface: String,
-    val state: String,
-    val purpose: String,
-    val platform: String,
-    val viewport: String,
-    val pullRequest: Int?,
-    val issue: Int?,
-    val width: Int,
-    val height: Int,
-    val density: Float,
-)
-
-private val marketingCaptureSlug = Regex("[a-z0-9-]+")
-private val marketingCapturePngFileName = Regex("[a-z0-9-]+\\.png")
-
-internal fun MarketingCaptureVariant.registryEntry(): MarketingCaptureRegistryEntry =
-    MarketingCaptureRegistryEntry(
-        id = id,
-        baseScenario = baseScenario,
-        fileName = fileName,
-        theme = theme.manifestValue,
-        feature = scenario.feature,
-        surface = scenario.surface,
-        state = scenario.state,
-        purpose = scenario.purpose.manifestValue,
-        platform = scenario.platform,
-        viewport = scenario.viewport,
-        pullRequest = scenario.pullRequest,
-        issue = scenario.issue,
-        width = scenario.width,
-        height = scenario.height,
-        density = scenario.density,
-    )
-
-internal fun validateMarketingCaptureRegistry(
-    entries: List<MarketingCaptureRegistryEntry>,
-) {
-    require(entries.isNotEmpty()) {
-        "The marketing capture registry must not be empty."
-    }
-    require(entries.map(MarketingCaptureRegistryEntry::id).toSet().size == entries.size) {
-        "Marketing capture scenario IDs must be unique."
-    }
-    require(entries.map(MarketingCaptureRegistryEntry::fileName).toSet().size == entries.size) {
-        "Marketing capture file names must be unique."
-    }
-    entries.forEach { entry ->
-        require(entry.id.matches(marketingCaptureSlug)) {
-            "Invalid marketing capture scenario ID: ${entry.id}"
-        }
-        require(entry.baseScenario.matches(marketingCaptureSlug)) {
-            "${entry.id} has an invalid base scenario slug."
-        }
-        require(entry.fileName.matches(marketingCapturePngFileName)) {
-            "Invalid marketing capture PNG file name: ${entry.fileName}"
-        }
-        require(entry.theme in MarketingCaptureTheme.entries.map(MarketingCaptureTheme::manifestValue)) {
-            "${entry.id} has an unsupported capture theme."
-        }
-        require(entry.width > 0 && entry.height > 0) {
-            "${entry.id} must have positive pixel dimensions."
-        }
-        require(entry.density.isFinite() && entry.density > 0f) {
-            "${entry.id} must have a positive finite density."
-        }
-        listOf(
-            "feature" to entry.feature,
-            "surface" to entry.surface,
-            "state" to entry.state,
-        ).forEach { (label, value) ->
-            require(value.isNotEmpty() && value == value.trim()) {
-                "${entry.id} $label must be a non-empty trimmed label."
-            }
-        }
-        require(
-            entry.purpose == MarketingCapturePurpose.Showcase.manifestValue ||
-                entry.purpose == MarketingCapturePurpose.StateCoverage.manifestValue,
-        ) {
-            "${entry.id} has an unsupported capture purpose."
-        }
-        require(entry.platform.matches(marketingCaptureSlug)) {
-            "${entry.id} has an invalid platform slug."
-        }
-        require(entry.viewport.matches(marketingCaptureSlug)) {
-            "${entry.id} has an invalid viewport slug."
-        }
-        require(entry.pullRequest == null || entry.pullRequest > 0) {
-            "${entry.id} must use a positive pull request number."
-        }
-        require(entry.issue == null || entry.issue > 0) {
-            "${entry.id} must use a positive issue number."
-        }
-    }
-    entries.groupBy(MarketingCaptureRegistryEntry::baseScenario).forEach { (baseScenario, pair) ->
-        require(pair.size == MarketingCaptureTheme.entries.size) {
-            "$baseScenario must declare exactly one dark and one light capture."
-        }
-        require(pair.map(MarketingCaptureRegistryEntry::theme).toSet() ==
-            MarketingCaptureTheme.entries.map(MarketingCaptureTheme::manifestValue).toSet()) {
-            "$baseScenario must declare exactly one dark and one light capture."
-        }
-        val reference = pair.first()
-        pair.drop(1).forEach { candidate ->
-            require(
-                candidate.feature == reference.feature &&
-                    candidate.surface == reference.surface &&
-                    candidate.state == reference.state &&
-                    candidate.purpose == reference.purpose &&
-                    candidate.platform == reference.platform &&
-                    candidate.viewport == reference.viewport &&
-                    candidate.pullRequest == reference.pullRequest &&
-                    candidate.issue == reference.issue &&
-                    candidate.width == reference.width &&
-                    candidate.height == reference.height &&
-                    candidate.density == reference.density,
-            ) {
-                "$baseScenario theme variants must share capture metadata and dimensions."
-            }
-        }
-    }
-}
-
-internal val fileShareCaptureScenarios: List<MarketingCaptureScenario> = listOf(
-    MarketingCaptureScenario.FileShareUserMobile,
-    MarketingCaptureScenario.FileShareGroupDesktop,
-    MarketingCaptureScenario.FileShareLoadingMobile,
-    MarketingCaptureScenario.FileShareErrorMobile,
-)
-
-val marketingCaptureScenarios: List<MarketingCaptureScenario> =
-    MarketingCaptureScenario.entries
-
-private fun MarketingCaptureScenario.explicitThemeOrNull(): MarketingCaptureTheme? = when {
-    id.endsWith("-dark") -> MarketingCaptureTheme.Dark
-    id.endsWith("-light") -> MarketingCaptureTheme.Light
-    else -> null
-}
-
-private fun MarketingCaptureScenario.baseScenarioId(): String =
-    id.removeSuffix("-dark").removeSuffix("-light")
-
-val marketingCaptureVariants: List<MarketingCaptureVariant> =
-    marketingCaptureScenarios
-        .groupBy(MarketingCaptureScenario::baseScenarioId)
-        .flatMap { (baseScenario, scenarios) ->
-            when (scenarios.size) {
-                1 -> {
-                    val scenario = scenarios.single()
-                    require(scenario.explicitThemeOrNull() == null) {
-                        "$baseScenario has only one explicit theme variant."
-                    }
-                    listOf(
-                        MarketingCaptureVariant(
-                            scenario = scenario,
-                            baseScenario = baseScenario,
-                            id = scenario.id,
-                            fileName = scenario.fileName,
-                            theme = MarketingCaptureTheme.Dark,
-                        ),
-                        MarketingCaptureVariant(
-                            scenario = scenario,
-                            baseScenario = baseScenario,
-                            id = "${scenario.id}-light",
-                            fileName = "${scenario.fileName.removeSuffix(".png")}-light.png",
-                            theme = MarketingCaptureTheme.Light,
-                        ),
-                    )
-                }
-                MarketingCaptureTheme.entries.size -> scenarios.map { scenario ->
-                    val theme = requireNotNull(scenario.explicitThemeOrNull()) {
-                        "$baseScenario mixes explicit and implicit theme variants."
-                    }
-                    require(scenario.darkTheme == theme.darkTheme) {
-                        "${scenario.id} theme suffix does not match its renderer theme."
-                    }
-                    MarketingCaptureVariant(
-                        scenario = scenario,
-                        baseScenario = baseScenario,
-                        id = scenario.id,
-                        fileName = scenario.fileName,
-                        theme = theme,
-                    )
-                }
-                else -> error("$baseScenario has an unsupported number of capture scenarios.")
-            }
-        }
-
-val rawPreviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
-    MarketingCaptureScenario.RawPreviewLoadingMobile,
-    MarketingCaptureScenario.RawPreviewErrorMobile,
-    MarketingCaptureScenario.RawPreviewMemoriesReadyMobile,
-    MarketingCaptureScenario.RawPreviewHighDetailDesktop,
-)
-
-val photoMediaReviewCaptureScenarios: List<MarketingCaptureScenario> = listOf(
-    MarketingCaptureScenario.LivePhotoMotionFailureMobile,
-    MarketingCaptureScenario.NativeTiffPreviewMobile,
-)
-
-data class MarketingCaptureAssets(
-    val avatar: ImageBitmap,
-    val mediaPreview: ImageBitmap,
-    val services: NextcloudPlatformServices,
-)
-
-@Composable
-internal fun MarketingFileShareScenario(
-    scenario: MarketingCaptureScenario,
-    fixture: MarketingFileShareFixture = nextcloudNativeMarketingFileShareFixture,
-) {
-    val capture = marketingFileShareCaptureState(scenario, fixture)
-    val desktop = scenario.presentation == NextcloudPresentation.Desktop
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(if (desktop) NextcloudSpacing.XLarge else NextcloudSpacing.Medium),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            modifier = Modifier
-                .widthIn(max = if (desktop) 760.dp else 560.dp)
-                .fillMaxWidth(),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 6.dp,
-        ) {
-            Column(
-                modifier = Modifier.padding(NextcloudSpacing.XLarge),
-                verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
-            ) {
-                Text(
-                    text = "Share ${capture.dialog.file.name}",
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                FileShareDialogContent(
-                    state = capture.dialog,
-                    onTargetChanged = { _ -> },
-                    onAllowEditingChanged = { _ -> },
-                    onDetailsChanged = { _ -> },
-                    recipientPicker = { target ->
-                        FileShareRecipientPickerContent(
-                            target = target,
-                            state = capture.recipientPicker,
-                            enabled = !capture.dialog.running,
-                            onQueryChanged = { _ -> },
-                            onSelected = { _ -> },
-                        )
-                    },
-                    existingShare = { share ->
-                        ExistingFileShareSummary(
-                            share = share,
-                            running = false,
-                            canCopy = false,
-                            showManagementActions = true,
-                            onCopy = {},
-                            onPermissions = {},
-                            onRevoke = {},
-                        )
-                    },
-                    maximumHeight = when {
-                        desktop -> 620.dp
-                        scenario == MarketingCaptureScenario.FileShareLoadingMobile -> 420.dp
-                        scenario == MarketingCaptureScenario.FileShareErrorMobile -> 470.dp
-                        else -> 480.dp
-                    },
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(
-                        NextcloudSpacing.Small,
-                        Alignment.End,
-                    ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FileShareDialogDismissAction(
-                        state = capture.dialog,
-                        onDismiss = {},
-                    )
-                    FileShareDialogConfirmAction(
-                        state = capture.dialog,
-                        onCreate = { _ -> },
-                    )
-                }
-            }
-        }
-    }
-}
-
-internal data class MarketingFileShareCaptureState(
-    val dialog: FileShareDialogUiState,
-    val recipientPicker: FileShareRecipientPickerUiState,
-)
-
-internal fun marketingFileShareCaptureState(
-    scenario: MarketingCaptureScenario,
-    fixture: MarketingFileShareFixture = nextcloudNativeMarketingFileShareFixture,
-): MarketingFileShareCaptureState {
-    val target: FileShareTarget
-    val existingShares: List<NextcloudFileShare>
-    val picker: FileShareRecipientPickerUiState
-    val capabilities: NextcloudFileSharingCapabilities
-    when (scenario) {
-        MarketingCaptureScenario.FileShareUserMobile -> {
-            target = FileShareTarget.User
-            existingShares = listOf(fixture.existingGroupShare)
-            capabilities = fixture.capabilities
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                results = fixture.userResults,
-            )
-        }
-        MarketingCaptureScenario.FileShareGroupDesktop -> {
-            target = FileShareTarget.Group
-            existingShares = listOf(fixture.existingUserShare)
-            capabilities = fixture.capabilities
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                results = fixture.groupResults,
-            )
-        }
-        MarketingCaptureScenario.FileShareLoadingMobile -> {
-            target = FileShareTarget.User
-            existingShares = listOf(fixture.existingGroupShare)
-            capabilities = fixture.capabilities.copy(userExpirationSupported = false)
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                loading = true,
-            )
-        }
-        MarketingCaptureScenario.FileShareErrorMobile -> {
-            target = FileShareTarget.User
-            existingShares = listOf(fixture.existingGroupShare)
-            capabilities = fixture.capabilities.copy(userExpirationSupported = false)
-            picker = FileShareRecipientPickerUiState(
-                query = "de",
-                error = "Could not search recipients. Check your connection and try again.",
-            )
-        }
-        else -> error("${scenario.id} is not a file-share capture.")
-    }
-    return MarketingFileShareCaptureState(
-        dialog = FileShareDialogUiState(
-            file = fixture.file,
-            capabilities = capabilities,
-            existingShares = existingShares,
-            target = target,
-        ),
-        recipientPicker = picker,
-    )
-}
 
 @Composable
 internal fun MarketingObsidianSyncScenario() {
@@ -1384,36 +1028,37 @@ internal fun MarketingObsidianSyncScenario() {
             subtitle = "Two-way folder sync",
             onBack = {},
         )
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
-            FolderSyncSection(
-                snapshot = FileSyncCenterSnapshot(
-                    support = FileSyncCenterSupport.Available,
-                    pairs = listOf(
-                        marketingSyncPair(
-                            id = "fixture-obsidian",
-                            name = "Obsidian Vault",
-                            remote = "Notes/Obsidian",
-                            direction = FileSyncDirection.Bidirectional,
-                            pending = 1,
-                            completed = 42,
+            item {
+                FolderSyncSection(
+                    snapshot = FileSyncCenterSnapshot(
+                        support = FileSyncCenterSupport.Available,
+                        pairs = listOf(
+                            marketingSyncPair(
+                                id = "fixture-obsidian",
+                                name = "Obsidian Vault",
+                                remote = "Notes/Obsidian",
+                                direction = FileSyncDirection.Bidirectional,
+                                pending = 1,
+                                completed = 42,
                             schedule = "Background sync · Wi-Fi or mobile data",
+                            ),
                         ),
                     ),
-                ),
-                loading = false,
-                mediaDiscovery = null,
-                mediaDiscoveryLoading = false,
-                busyPairId = null,
-                onAdd = {},
-                onOpenMediaSuggestion = {},
-                onRequestMediaPermission = {},
-                onRun = {},
-                onRemove = {},
-                onResolve = { _, _, _ -> },
-            )
+                    loading = false,
+                    mediaDiscovery = null,
+                    mediaDiscoveryLoading = false,
+                    busyPairId = null,
+                    onAdd = {}, onOpenMediaSuggestion = {},
+                    onRequestMediaPermission = {}, onRun = {},
+                    onRemove = {},
+                    onResolve = { _, _, _ -> },
+                )
+            }
         }
     }
 }
@@ -1571,7 +1216,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 341,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Background checks every two minutes",
                             networkState = FileSyncNetworkState.Available,
                         ),
@@ -1613,7 +1258,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 86,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Background checks every two minutes",
                             networkState = FileSyncNetworkState.Available,
                         ),
@@ -1633,7 +1278,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 219,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Background checks every two minutes",
                             networkState = FileSyncNetworkState.Available,
                         ),
@@ -1652,7 +1297,7 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 802,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Will resume when Nextcloud is reachable",
                             networkState = FileSyncNetworkState.WaitingForNetwork,
                         ),
@@ -1664,7 +1309,6 @@ internal fun MarketingFileSyncStatusDesktopScenario() {
                 onRun = {},
                 onRemove = {},
                 onResolve = { _, _, _ -> },
-                initialSelectedPairId = "fixture-studio",
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(
                     start = NextcloudSpacing.Large,
                     end = NextcloudSpacing.Large,
@@ -1860,7 +1504,7 @@ internal fun MarketingFileSyncSetupDesktopScenario(
             onChooseDestination = {},
             onConfigurationChanged = { configuration = it },
             onAdd = {},
-            modifier = Modifier.fillMaxWidth().widthIn(max = 920.dp).heightIn(max = 760.dp),
+            modifier = Modifier.widthIn(max = 920.dp).fillMaxWidth().heightIn(max = 760.dp),
             initialStep = initialStep,
             initialAdvancedSettingsVisible = initialAdvancedSettingsVisible,
             syntheticScopeSummary = "18,742 files - 123.4 GB - 2,511 RAW",
@@ -1871,7 +1515,7 @@ internal fun MarketingFileSyncSetupDesktopScenario(
 @Composable
 internal fun MarketingFileSyncSelectionScenario(services: NextcloudPlatformServices) {
     Box(
-        modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.XLarge),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
         RemoteFileSyncSelectionDialog(
@@ -1891,14 +1535,19 @@ internal fun MarketingFileSyncSelectionScenario(services: NextcloudPlatformServi
 internal fun MarketingFileSyncStatusMobileScenario() {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
-            title = "Folder sync",
-            subtitle = "Alex's phone",
+            title = FileOfflineWorkspaceSection.FolderSync.title,
+            subtitle = FileOfflineWorkspaceSection.FolderSync.subtitle,
             onBack = {},
+            trailingContent = { androidx.compose.material3.TextButton(onClick = {}) { Text("Refresh") } },
         )
-        Column(
-            modifier = Modifier.fillMaxSize().padding(NextcloudSpacing.Medium),
-            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Medium),
+        FileOfflineWorkspaceTabs(selected = FileOfflineWorkspaceSection.FolderSync, onSelected = {})
+        HorizontalDivider()
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
+            item {
             FileSyncWorkspace(
                 snapshot = FileSyncCenterSnapshot(
                     support = FileSyncCenterSupport.Available,
@@ -1924,7 +1573,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 341,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Background sync enabled",
                         ),
                         FileSyncPairSummary(
@@ -1965,7 +1614,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 86,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Waiting for your decision",
                         ),
                         FileSyncPairSummary(
@@ -1984,7 +1633,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                             failedCount = 0,
                             skippedCount = 0,
                             completedCount = 1_842,
-                            lastScanEpochMillis = 1,
+                            lastScanEpochMillis = 1_786_640_400_000L,
                             scheduleDescription = "Wi-Fi only",
                         ),
                     ),
@@ -1997,6 +1646,7 @@ internal fun MarketingFileSyncStatusMobileScenario() {
                 onResolve = { _, _, _ -> },
                 initialSelectedPairId = "fixture-mobile-client",
             )
+            }
         }
     }
 }
@@ -2106,7 +1756,7 @@ internal fun MarketingVirtualFileStorageDesktopScenario(scenario: MarketingCaptu
                         shape = RoundedCornerShape(999.dp),
                     ) {
                         Text(
-                            "Healthy",
+                            if (recovery) "Edits need review" else if (activation) "Not connected" else "Storage and connection",
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -2222,29 +1872,6 @@ private fun marketingVirtualFileStorageSnapshot(
 )
 
 @Composable
-internal fun MarketingAdaptiveAppScenario(scenario: MarketingCaptureScenario) {
-    require(
-        scenario == MarketingCaptureScenario.HomepageAppsDesktopDark ||
-            scenario == MarketingCaptureScenario.HomepageAppsDesktopLight ||
-            scenario == MarketingCaptureScenario.AdaptiveApp ||
-            scenario == MarketingCaptureScenario.TablesRowsDesktop ||
-            scenario == MarketingCaptureScenario.TablesRowFormDesktop ||
-            scenario == MarketingCaptureScenario.TablesColumnsDesktop ||
-            scenario == MarketingCaptureScenario.TablesViewsDesktop ||
-            scenario == MarketingCaptureScenario.TablesSharesDesktop ||
-            scenario == MarketingCaptureScenario.AdaptiveAppMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppCollectionMobile ||
-            scenario == MarketingCaptureScenario.AdaptiveAppContextMenuMobile ||
-            scenario == MarketingCaptureScenario.TablesColumnsMobile ||
-            scenario == MarketingCaptureScenario.TablesViewsMobile ||
-            scenario == MarketingCaptureScenario.TablesSharesMobile,
-    ) {
-        "${scenario.id} is not an adaptive data capture."
-    }
-    MarketingDynamicUiScenario(scenario)
-}
-
-@Composable
 internal fun MarketingMailWorkspaceScenario(scenario: MarketingCaptureScenario) {
     require(
         scenario in setOf(
@@ -2355,7 +1982,8 @@ internal fun MarketingHomeDashboardScenario(
 }
 
 @Composable
-internal fun MarketingDeckBoardScenario() {
+internal fun MarketingDeckBoardScenario(scenario: MarketingCaptureScenario? = null) {
+    val content: @Composable () -> Unit = {
     NativeDeckBoardSurface(
         state = DeckWorkspaceState.Board(
             board = marketingDeckBoard,
@@ -2373,6 +2001,15 @@ internal fun MarketingDeckBoardScenario() {
         onMoveCard = { _, _, _ -> },
         modifier = Modifier.fillMaxSize(),
     )
+    }
+    if (scenario?.presentation == NextcloudPresentation.Desktop) {
+        NextcloudDesktopShell(
+            selected = NextcloudDestination.Apps, onSelected = {},
+            identity = marketingDesktopIdentity(), activeAppId = "deck",
+            workspaceKind = dev.obiente.nextcloudnative.app.design.NextcloudDesktopWorkspaceKind.AppWorkspace,
+            content = content,
+        )
+    } else content()
 }
 
 private fun marketingSyncPair(
@@ -2397,7 +2034,7 @@ private fun marketingSyncPair(
     failedCount = 0,
     skippedCount = 0,
     completedCount = completed,
-    lastScanEpochMillis = 1,
+    lastScanEpochMillis = 1_786_640_400_000L,
     scheduleDescription = schedule,
 )
 

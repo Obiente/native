@@ -63,7 +63,7 @@ fun NextcloudCardOverflow(
     Box(modifier) {
         IconButton(
             onClick = { onExpandedChange(true) },
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(if (LocalNextcloudWorkspaceCapabilities.current.usesDenseControls) 40.dp else 48.dp),
         ) {
             Icon(NextcloudIcons.More, contentDescription = "Actions for $itemLabel")
         }

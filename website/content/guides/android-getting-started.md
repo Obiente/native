@@ -8,18 +8,18 @@ device: Mobile
 platforms: Android
 durationMinutes: 8
 difficulty: Getting started
-lastUpdated: 2026-08-23
+lastUpdated: 2026-08-30
 captureScenarios: guide-android-getting-started-home, guide-android-getting-started-files, guide-android-getting-started-calendar
 prerequisites: Android 8.0 or newer, Your Nextcloud server address and sign-in details, A current signed APK from the GitHub Releases page
 ---
 
 # Get started with Nextcloud Native on Android
 
-**Last reviewed: 2026-08-23.** The software and published packages may have
+**Last reviewed: 2026-08-30.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
-This guide covers the Android application that is available today. Nextcloud Native is alpha software, so keep another copy of important data and read the known limitations for the exact release before relying on sync or backup. iPhone and iPad builds are not available yet.
+Navigation instructions and screenshots reflect the reviewed source implementation; published APKs may differ. Nextcloud Native is alpha software, so keep another copy of important data and read the known limitations for the exact release before relying on sync or backup. iPhone and iPad builds are not available yet.
 
 ## 1. Connect your account and confirm the Android app is online
 
@@ -39,7 +39,9 @@ After the browser returns to the app, Home should show your account and an onlin
 @capture-alt: Nextcloud Native Android Files screen with folders, documents, previews, favorites, and explicit offline availability state for cloud content
 @capture-caption: Files keeps cloud visibility separate from offline availability, so seeing a file does not imply that its original bytes are already on the device.
 
-Open **Files** from Home or the app navigation. Browse into a folder and use an item's menu for actions such as previewing, sharing, or making a file available offline. A thumbnail or previously viewed preview can be cached even when the original is still online-only. Wait for the available-offline state before testing without a connection.
+Open **Files** from Home or the app navigation. When a workspace is open, its name replaces Apps in the bottom bar. Tap that name to switch to a pinned or recent app, search installed apps, or open Folder sync. **Browse apps** opens the full catalog. The selected pill marks the current workspace; switching away from an unsaved inline edit still requires a discard decision.
+
+Browse into a folder and use an item's menu for actions such as previewing, sharing, or making a file available offline. A thumbnail or previously viewed preview can be cached even when the original is still online-only. Wait for the available-offline state before testing without a connection.
 
 Nextcloud Native also appears in Android's system Files app while the account is connected. Opening a cloud file there downloads and caches a complete generation. Local edits are retained for guarded writeback; if the server changed first, the app records a conflict instead of silently replacing the newer remote file.
 

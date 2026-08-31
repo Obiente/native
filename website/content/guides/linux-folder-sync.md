@@ -8,14 +8,14 @@ device: Desktop
 platforms: Linux
 durationMinutes: 10
 difficulty: Advanced
-lastUpdated: 2026-08-23
+lastUpdated: 2026-08-30
 captureScenarios: guide-linux-folder-sync-workspace, guide-linux-folder-sync-locations, guide-linux-folder-sync-rules
 prerequisites: A connected Linux account, A local directory you can safely test, Enough local and Nextcloud storage for the first scan
 ---
 
 # Sync a Linux folder with Nextcloud Native
 
-**Last reviewed: 2026-08-23.** The software and published packages may have
+**Last reviewed: 2026-08-30.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -23,14 +23,14 @@ Linux folder sync keeps a normal local directory connected to one Nextcloud dire
 
 ## 1. Inspect the folder-sync workspace and current health
 
-@capture-alt: Nextcloud Native Linux folder-sync workspace with multiple pairs, directions, queued operations, recent runs, health, and a selected pair inspector
+@capture-alt: Nextcloud Native Linux folder-sync workspace with multiple pairs, directions, queued operations, check times, health, and a selected pair inspector
 @capture-caption: The Linux desktop workspace uses a dense pair list and inspector to expose mapping, schedule, rules, conflicts, and failures together.
 
-Open **Folder sync** from the sidebar. Existing pairs show their local and Nextcloud roots, direction, queued work, and last run. Select a pair to inspect its configuration and attention states. The desktop service checks configured pairs about every two minutes while the process is active, and **Sync now** remains available for an immediate requested run.
+Open **Folder sync** from the sidebar. Existing pairs show recognizable folder names, Nextcloud destinations, direction, observed work, and an exact **Last checked** timestamp. Select a pair to inspect both full locations, configuration and attention states. A check time is not a successful synchronization time. **Review issues** opens a pair with failed work or conflicts; **Search and filter** narrows larger lists. The desktop service checks configured pairs about every two minutes while the process is active, and **Sync now** remains available for an immediate requested run.
 
 Closing the main window keeps sync active in the tray by default. Use **Show sync activity** to inspect work, **Open Nextcloud Native** to restore the window, or **Quit** to stop the app and release its services cleanly. You can disable **Keep running when the window closes** in Settings if closing the window should quit instead.
 
-Start-on-login is separate and is disabled until you enable it. Without it, background checks do not begin until you launch Nextcloud Native after signing in to the computer. A stale last-run time, paused state, offline network, or visible failure needs attention even when the local files still look normal.
+Start-on-login is separate and is disabled until you enable it. Without it, background checks do not begin until you launch Nextcloud Native after signing in to the computer. A stale last-check time, paused state, offline network, or visible failure needs attention even when the local files still look normal.
 
 ## 2. Map a local directory to the intended Nextcloud folder
 
@@ -48,10 +48,12 @@ Choose **Two-way**, **Device to Nextcloud**, or **Nextcloud to device** accordin
 
 Start with **Ask before changing either copy** or **Keep both copies** for conflicts. Treat deletion policy separately: propagating a deletion can remove the counterpart even when there is no content conflict. Add ignores for generated output, lock files, or temporary application data, and review the estimated file count and size before continuing.
 
-Watch the first scan and queued operations. If a conflict appears, the inspector shows the local and Nextcloud type, size, and modification details for every item on the current page. Resolve one item at a time, or use a displayed **all** action only when the same choice is valid for the whole reviewed page. A batch validates every destination and decision before any operation starts. A changed destination rejects the whole page; an advanced selected source can be rebound when the destination is still unchanged and the same guarded choice remains safe. After preflight, operations run separately and keep their individual durable results. Additional conflict pages appear after the current page is resolved.
+Watch the first scan and queued operations. If a conflict appears, the inspector shows the local and Nextcloud type, size, and modification details for every item on the current page. Resolve one item at a time, or open **Apply a choice** only when the same choice is valid for the whole reviewed page. A batch validates every destination and decision before any operation starts. A changed destination rejects the whole page; an advanced selected source can be rebound when the destination is still unchanged and the same guarded choice remains safe. After preflight, operations run separately and keep their individual durable results. Additional conflict pages appear after the current page is resolved.
 
 If a conflict or ambiguous interrupted operation appears, compare both versions and preserve both when uncertain. A successful scan is evidence for that generation only. Keep independent backups of important data while the product remains an alpha, and do not treat bidirectional synchronization as backup history.
 
 A desktop sync pair supports no more than 100,000 selected entries or planned operations. The early check covers the local selection only and runs before the client hashes local file content. A larger remote tree or combined change plan can reach the limit later, so choose narrower roots or add ignore rules.
 
 Automatic checks wait longer after each repeated item failure. After five failed attempts, the item stays in the visible failed state until you use **Sync now** to request another attempt. Review the failure first. Repeatedly requesting a retry cannot repair a permissions error, an unsupported name, or a file that another application keeps changing.
+
+The **Review** setup step keeps direction, conflict policy and deletion policy visible before you start. In **Choose what syncs**, a partial checkbox means only some descendants are selected; opening that folder does not expand the sync scope. Removal is under the selected pair's **Settings** tab and still requires confirmation.

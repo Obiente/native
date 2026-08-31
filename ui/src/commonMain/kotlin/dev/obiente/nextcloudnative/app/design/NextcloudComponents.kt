@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -27,7 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,7 +50,7 @@ val DefaultNextcloudNavigationItems = listOf(
 )
 
 val DesktopNextcloudNavigationItems = listOf(
-    NextcloudNavigationItem(NextcloudDestination.Home, "Overview"),
+    NextcloudNavigationItem(NextcloudDestination.Home, "Home"),
     NextcloudNavigationItem(NextcloudDestination.FolderSync, "Folder sync"),
     NextcloudNavigationItem(NextcloudDestination.Activity, "Activity"),
     NextcloudNavigationItem(NextcloudDestination.Apps, "Apps"),
@@ -63,42 +64,50 @@ fun NextcloudBottomNavigation(
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
     items: List<NextcloudNavigationItem> = DefaultNextcloudNavigationItems,
+    activeApp: NextcloudDesktopSidebarApp? = null,
+    onSwitchApp: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         HorizontalDivider(
             thickness = 1.dp,
-            color = androidx.compose.material3.MaterialTheme.colorScheme.outlineVariant,
+            color = androidx.compose.material3.MaterialTheme.colorScheme.outlineVariant.copy(alpha = .6f),
         )
         NavigationBar(
             modifier = Modifier.fillMaxWidth(),
-            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.background,
+            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow,
             tonalElevation = 0.dp,
         ) {
             items.forEach { item ->
-                val icon = NextcloudIcons.destination(item.destination)
+                val navigation = nextcloudShellNavigationItem(item, selected, activeApp)
                 NavigationBarItem(
-                    selected = selected == item.destination,
+                    modifier = Modifier.semantics {
+                        if (navigation.switchesApps && onSwitchApp != null) contentDescription = "${navigation.label}. Switch app"
+                    },
+                    selected = navigation.selected,
                     enabled = enabled,
-                    onClick = { onSelected(item.destination) },
+                    onClick = {
+                        if (navigation.switchesApps && onSwitchApp != null) onSwitchApp() else onSelected(item.destination)
+                    },
                     icon = {
-                        Icon(
-                            icon,
-                            contentDescription = null,
-                            modifier = Modifier.size(if (selected == item.destination) 28.dp else 26.dp),
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(navigation.icon, contentDescription = null, modifier = Modifier.size(24.dp))
+                            if (navigation.switchesApps && onSwitchApp != null) Icon(NextcloudIcons.ExpandMore, null, Modifier.size(14.dp))
+                        }
                     },
                     label = {
                         Text(
-                            item.label,
-                            fontWeight = if (selected == item.destination) FontWeight.SemiBold else FontWeight.Normal,
+                            navigation.label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (navigation.selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                        selectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                        indicatorColor = Color.Transparent,
-                        unselectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.outline,
-                        unselectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.outline,
+                        selectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer,
+                        selectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+                        indicatorColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
+                        unselectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                     ),
                 )
             }
@@ -114,6 +123,8 @@ fun NextcloudNavigationRail(
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
     items: List<NextcloudNavigationItem> = DefaultNextcloudNavigationItems,
+    activeApp: NextcloudDesktopSidebarApp? = null,
+    onSwitchApp: (() -> Unit)? = null,
 ) {
     Box(
         modifier = modifier
@@ -121,35 +132,42 @@ fun NextcloudNavigationRail(
             .fillMaxHeight(),
     ) {
         NavigationRail(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             containerColor = androidx.compose.material3.MaterialTheme.colorScheme.background,
         ) {
             items.forEach { item ->
-                val icon = NextcloudIcons.destination(item.destination)
+                val navigation = nextcloudShellNavigationItem(item, selected, activeApp)
                 NavigationRailItem(
-                    selected = selected == item.destination,
+                    modifier = Modifier.semantics {
+                        if (navigation.switchesApps && onSwitchApp != null) contentDescription = "${navigation.label}. Switch app"
+                    },
+                    selected = navigation.selected,
                     enabled = enabled,
-                    onClick = { onSelected(item.destination) },
+                    onClick = {
+                        if (navigation.switchesApps && onSwitchApp != null) onSwitchApp() else onSelected(item.destination)
+                    },
                     icon = {
                         Icon(
-                            icon,
+                            navigation.icon,
                             contentDescription = null,
-                            modifier = Modifier.size(if (selected == item.destination) 28.dp else 26.dp),
+                            modifier = Modifier.size(24.dp),
                         )
                     },
                     label = {
                         Text(
-                            item.label,
-                            fontWeight = if (selected == item.destination) FontWeight.SemiBold else FontWeight.Normal,
+                            navigation.label,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (navigation.selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     },
                     alwaysShowLabel = true,
                     colors = NavigationRailItemDefaults.colors(
                         selectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
                         selectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                        indicatorColor = Color.Transparent,
-                        unselectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.outline,
-                        unselectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.outline,
+                        indicatorColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
+                        unselectedIconColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                     ),
                 )
             }

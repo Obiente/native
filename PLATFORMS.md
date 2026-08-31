@@ -52,6 +52,81 @@ evidence that device-specific acceptance criteria have passed.
 - Shared Compose components contain behavior and semantics. Platform layouts
   may arrange them differently.
 
+### Shared workspace interaction components
+
+Source review: 2026-08-30. This section describes the working implementation,
+not availability in a published package.
+
+`NextcloudCollectionWorkspaceScaffold` uses the same typed destinations and
+selection callbacks across layouts. Compact workspaces use short text tabs for
+small destination sets. For larger sets, the current workspace title opens the
+section chooser without a second header row. Back remains a separate action.
+The bottom sheet includes search when there are more than seven sections.
+Tablets and desktop retain rails and collapsible sidebars. A section
+change does not bypass the host's draft or mutation navigation guards.
+
+The shared app shell uses Home consistently across platforms. On phone and
+tablet, the Apps navigation slot identifies the open app; selecting it opens
+the app switcher with pinned and recent apps, installed-app search, Folder sync
+and a route to the full app catalog. Opening or dismissing the switcher leaves
+the workspace mounted. Switching apps still uses the host's guarded callbacks.
+Phone-to-tablet layout changes move the same workspace composition so local
+draft state is retained within that running session, not recreated by the
+navigation breakpoint.
+
+Desktop sidebars collapse on request and below 900dp. Both widths retain pinned,
+recent and current apps, with one selected app, labeled controls and full-name
+tooltips. Settings and the clickable account entry share the utility footer.
+Short windows scroll that footer with the navigation. Collapse state is a
+saveable presentation preference, not a server setting. Phone/tablet navigation
+and app switching also scroll at short heights and larger text sizes.
+
+`MediaImageCanvas` shares bounded zoom and pan behavior across touch, mouse,
+touchpad scroll, keyboard, and visible controls. Pinch or double-tap zooms;
+scrolling zooms around the pointer. When the image has keyboard focus, `+` and
+`-` zoom, `0` fits the image, `1` selects actual size, and arrow keys pan while
+zoomed. At fit size, Left/Right continue to navigate media through the viewer.
+Visible Fit and 1:1 controls distinguish fitting the window from one decoded
+image pixel per viewport pixel. Percentages describe the displayed decoded
+image, not a higher-resolution original that has not been loaded. These controls do not edit
+the source image. OS decoding, EXIF handling, and file access remain in their
+existing owners.
+
+Desktop Files can hide the library or details pane. Intermediate window widths
+show only one secondary pane at a time so the file list remains usable. App
+tiles open directly; pinning and compatibility details remain in overflow
+menus. Activity separates actionable notices from the remaining event history,
+and Settings opens account details on demand rather than reserving a permanent
+inspector for them.
+
+Folder sync presents queue state and last scan time separately. A completed
+scan is not presented as a successful completed sync. Phone pair rows open
+dedicated details; desktop retains a pair table and inspector. Conflict choices
+explain their consequences before the existing confirmation and revision checks.
+Storage distinguishes integration availability, connection state and retained
+edits, while transfer history uses verified receipt time for completed uploads.
+
+Existing Calendar events and editable dynamic records use in-place workspace
+editors. They reuse the same fields, validation and mutation paths as their
+dialog presentations. Save and Cancel stay with the form; dirty drafts require
+an explicit discard decision before navigation, and pending saves block leaving.
+Creation, pickers and short confirmations can still use dialogs.
+
+Calendar uses shared view selection, time-first event rows, named calendar
+checkboxes and event detail facts. Phone Month shows a compact date grid above
+the selected day's events; Week uses a day strip. Desktop has a continuous month
+grid with actionable event overflow and scrollable week columns. Shared date
+grouping includes multi-day events within a bounded visible window and respects
+exclusive all-day ends. The bounded editor prioritizes title and schedule, with
+compact recurrence and calendar selectors. Save/Cancel stay outside its scroll
+area. Production and captures use the same components. Talk bounds the
+composer and desktop message width. A failed Talk send retains the draft;
+refreshing only reads the conversation, and an uncertain resend needs explicit
+confirmation. Message timestamps show UTC without inferring delivery or read state.
+
+These source behaviors still require native-device interaction validation;
+shared rendering and deterministic tests are not a claim of identical input
+delivery on every operating system or touchpad.
 Office uses native document selection. Android embeds only user-requested
 Direct Editing sessions, not the Nextcloud dashboard or app navigation; desktop
 opens editing sessions in the system browser. Preview and Edit are separate
@@ -62,6 +137,12 @@ for the authentication, provider selection, and retry boundaries. Device-level
 Office acceptance remains separate from compiling or packaging this integration.
 
 ## Mobile product rules
+
+View switchers and form choices use common native components on phone and
+desktop. Calendar, compact Chores, Budget categories and dynamic enum fields
+share selection, focus and overflow behavior without sharing domain state or
+write policy. See [shared native choice controls](docs/shared-ui-controls.md)
+for the component contracts and current consumers.
 
 - Correct safe-area insets, system back, touch targets, and permission flows.
 - State restoration across rotation, activity recreation, and process death.

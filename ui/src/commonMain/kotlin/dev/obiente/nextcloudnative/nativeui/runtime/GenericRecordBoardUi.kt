@@ -135,6 +135,7 @@ internal fun GenericBoardCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            NativeRecordFacts(resource, record, modifier = Modifier.padding(top = NextcloudSpacing.XSmall), maximumFacts = 3)
         }
     }
 }
