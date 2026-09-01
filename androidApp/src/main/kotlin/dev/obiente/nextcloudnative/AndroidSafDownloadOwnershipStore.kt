@@ -51,30 +51,20 @@ internal class AndroidSafDownloadOwnershipStore(
                 "Could not list SAF download recovery storage."
             }.count { it.isFile && it.name.endsWith(ROW_SUFFIX) }
             check(rowCount < MAX_ROWS) { "Too many SAF download recovery records are pending." }
-            val temporary = File.createTempFile("ownership-", TEMP_SUFFIX, directory)
-            try {
-                FileOutputStream(temporary).use { fileOutput ->
-                    DataOutputStream(BufferedOutputStream(fileOutput)).use { output ->
-                        output.writeInt(MAGIC)
-                        output.writeInt(FORMAT_VERSION)
-                        output.writeUtf8(transaction.finalName)
-                        output.writeUtf8(transaction.token)
-                        output.flush()
-                        fileOutput.fd.sync()
-                    }
-                }
-                try {
-                    Files.move(
-                        temporary.toPath(),
-                        destination.toPath(),
-                        StandardCopyOption.ATOMIC_MOVE,
-                    )
-                } catch (_: AtomicMoveNotSupportedException) {
-                    Files.move(temporary.toPath(), destination.toPath())
-                }
-            } finally {
-                temporary.delete()
+            writeRow(destination, transaction, replace = false)
+        }
+
+        override fun replace(transaction: AndroidSafOwnedDownloadTransaction) = synchronized(LOCK) {
+            val destination = File(directory, rowName(scope, transaction.token))
+            check(destination.isFile) { "SAF download recovery ownership is missing." }
+            val previous = readRow(destination)
+            check(previous.finalName == transaction.finalName && previous.token == transaction.token) {
+                "SAF download recovery ownership collided."
             }
+            check(!previous.publicationCompleted || transaction.publicationCompleted) {
+                "SAF download recovery publication cannot be reverted."
+            }
+            if (previous != transaction) writeRow(destination, transaction, replace = true)
         }
 
         override fun remove(transaction: AndroidSafOwnedDownloadTransaction) = synchronized(LOCK) {
@@ -87,16 +77,64 @@ internal class AndroidSafDownloadOwnershipStore(
 
     private fun readRow(file: File): AndroidSafOwnedDownloadTransaction =
         DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
-            check(input.readInt() == MAGIC && input.readInt() == FORMAT_VERSION) {
+            check(input.readInt() == MAGIC)
+            val formatVersion = input.readInt()
+            check(formatVersion in 1..FORMAT_VERSION) {
                 "SAF download recovery storage has an invalid header."
             }
             val transaction = AndroidSafOwnedDownloadTransaction(
                 finalName = input.readUtf8(),
                 token = input.readUtf8(),
+                publicationCompleted = formatVersion >= 2 && input.readBoolean(),
             )
             check(input.read() == -1) { "SAF download recovery storage contains trailing data." }
             transaction
         }
+
+    private fun writeRow(
+        destination: File,
+        transaction: AndroidSafOwnedDownloadTransaction,
+        replace: Boolean,
+    ) {
+        val temporary = File.createTempFile("ownership-", TEMP_SUFFIX, directory)
+        try {
+            FileOutputStream(temporary).use { fileOutput ->
+                DataOutputStream(BufferedOutputStream(fileOutput)).use { output ->
+                    output.writeInt(MAGIC)
+                    output.writeInt(FORMAT_VERSION)
+                    output.writeUtf8(transaction.finalName)
+                    output.writeUtf8(transaction.token)
+                    output.writeBoolean(transaction.publicationCompleted)
+                    output.flush()
+                    fileOutput.fd.sync()
+                }
+            }
+            moveRow(temporary, destination, replace)
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    private fun moveRow(temporary: File, destination: File, replace: Boolean) {
+        try {
+            if (replace) {
+                Files.move(
+                    temporary.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } else {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            }
+        } catch (_: AtomicMoveNotSupportedException) {
+            if (replace) {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            } else {
+                Files.move(temporary.toPath(), destination.toPath())
+            }
+        }
+    }
 
     private fun DataOutputStream.writeUtf8(value: String) {
         val bytes = value.toByteArray(StandardCharsets.UTF_8)
@@ -133,7 +171,7 @@ internal class AndroidSafDownloadOwnershipStore(
     private companion object {
         val LOCK = Any()
         const val MAGIC = 0x4E435344 // NCSD
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
         const val MAX_FIELD_BYTES = 4 * 1024
         const val MAX_ROWS = 4_096
         const val ROW_SUFFIX = ".row"

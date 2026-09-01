@@ -21,6 +21,7 @@ internal interface AndroidSafPublicationDirectory<Document> {
 internal interface AndroidSafDownloadOwnership {
     fun transactions(): List<AndroidSafOwnedDownloadTransaction>
     fun add(transaction: AndroidSafOwnedDownloadTransaction)
+    fun replace(transaction: AndroidSafOwnedDownloadTransaction)
     fun remove(transaction: AndroidSafOwnedDownloadTransaction)
 }
 
@@ -42,12 +43,12 @@ internal class AndroidSafDownloadPublisher<Document>(
             val stage = ownedDocument(transaction.stageName)
             val backup = ownedDocument(transaction.backupName)
             when {
+                transaction.publicationCompleted && backup != null && stage == null ->
+                    deleteBestEffort(backup.document)
                 backup != null && stage != null && final == null -> {
                     restoreBackup(transaction, backup)
                     deleteBestEffort(stage.document)
                 }
-                backup != null && stage == null && final != null ->
-                    deleteBestEffort(backup.document)
                 backup != null && stage == null && final == null ->
                     restoreBackup(transaction, backup)
                 backup == null && stage != null ->
@@ -60,23 +61,31 @@ internal class AndroidSafDownloadPublisher<Document>(
     fun publish(
         finalName: String,
         currentDocument: Document?,
+        revalidateCurrent: () -> Unit = {},
         write: (OutputStream) -> Unit,
-    ) = publish(finalName, currentDocument, directory::createFile) { stage ->
-        directory.writeFile(stage, write)
-    }
+    ) = publish(
+        finalName = finalName,
+        currentDocument = currentDocument,
+        createStage = directory::createFile,
+        revalidateCurrent = revalidateCurrent,
+        prepareStage = { stage -> directory.writeFile(stage, write) },
+    )
 
     fun publish(
         finalName: String,
         currentDocument: Document?,
         createStage: (displayName: String) -> Document,
+        revalidateCurrent: () -> Unit = {},
         prepareStage: (Document) -> Unit,
     ) {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
         reconcile()
-        val transaction = AndroidSafOwnedDownloadTransaction(finalName, requireValidToken(newToken()))
+        var transaction = AndroidSafOwnedDownloadTransaction(finalName, requireValidToken(newToken()))
         ownership.add(transaction)
         val stage = try {
             createStage(transaction.stageName)
+        } catch (failure: CancellationException) {
+            throw failure
         } catch (failure: Throwable) {
             retireRecoveredOwnershipBestEffort(transaction)
             throw failure
@@ -89,6 +98,18 @@ internal class AndroidSafDownloadPublisher<Document>(
 
         try {
             prepareStage(stage)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Throwable) {
+            deleteBestEffort(stage)
+            retireRecoveredOwnershipBestEffort(transaction)
+            throw failure
+        }
+
+        try {
+            revalidateCurrent()
+        } catch (failure: CancellationException) {
+            throw failure
         } catch (failure: Throwable) {
             deleteBestEffort(stage)
             retireRecoveredOwnershipBestEffort(transaction)
@@ -97,10 +118,15 @@ internal class AndroidSafDownloadPublisher<Document>(
 
         val backup = currentDocument?.let { current ->
             try {
-                directory.rename(current, transaction.backupName)
-                requireNotNull(ownedDocument(transaction.backupName)?.document) {
+                val renamed = requireNotNull(directory.rename(current, transaction.backupName)) {
                     "The existing local item could not be protected before replacement."
                 }
+                require(ownedDocument(transaction.backupName)?.document == renamed) {
+                    "The local file provider changed the protected item identity."
+                }
+                renamed
+            } catch (failure: CancellationException) {
+                throw failure
             } catch (failure: Throwable) {
                 try {
                     recoverBeforePublication(transaction)
@@ -113,14 +139,20 @@ internal class AndroidSafDownloadPublisher<Document>(
         }
 
         try {
-            directory.rename(stage, finalName)
-            val final = directory.documents().singleOrNull { it.displayName == finalName }
-            val remainingStage = ownedDocument(transaction.stageName)
-            require(final != null && remainingStage == null) {
+            val publishedDocument = requireNotNull(directory.rename(stage, finalName)) {
                 "The staged local file could not be published."
             }
+            val final = directory.documents().singleOrNull { it.displayName == finalName }
+            val remainingStage = ownedDocument(transaction.stageName)
+            require(final?.document == publishedDocument && remainingStage == null) {
+                "The staged local file could not be published."
+            }
+            transaction = markPublished(transaction)
+        } catch (failure: CancellationException) {
+            throw failure
         } catch (failure: Throwable) {
-            if (isPublished(transaction)) {
+            if (isPublished(transaction, stage)) {
+                transaction = markPublished(transaction)
                 backup?.let(::deleteBestEffort)
                 retireRecoveredOwnershipBestEffort(transaction)
                 return
@@ -157,7 +189,6 @@ internal class AndroidSafDownloadPublisher<Document>(
         val stage = ownedDocument(transaction.stageName)
         val backup = ownedDocument(transaction.backupName)
         if (final != null && stage == null) {
-            backup?.let { deleteBestEffort(it.document) }
             return
         }
         if (backup != null && final == null) restoreBackup(transaction, backup)
@@ -186,9 +217,20 @@ internal class AndroidSafDownloadPublisher<Document>(
         }
     }
 
-    private fun isPublished(transaction: AndroidSafOwnedDownloadTransaction): Boolean =
-        directory.documents().any { it.displayName == transaction.finalName } &&
+    private fun isPublished(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        stage: Document,
+    ): Boolean =
+        directory.documents().any { document ->
+            document.displayName == transaction.finalName && document.document == stage
+        } &&
             ownedDocument(transaction.stageName) == null
+
+    private fun markPublished(transaction: AndroidSafOwnedDownloadTransaction): AndroidSafOwnedDownloadTransaction {
+        val published = transaction.copy(publicationCompleted = true)
+        ownership.replace(published)
+        return published
+    }
 
     private fun deleteBestEffort(document: Document) {
         try {
@@ -220,6 +262,7 @@ internal class AndroidSafDownloadPublisher<Document>(
 internal data class AndroidSafOwnedDownloadTransaction(
     val finalName: String,
     val token: String,
+    val publicationCompleted: Boolean = false,
 ) {
     init {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))

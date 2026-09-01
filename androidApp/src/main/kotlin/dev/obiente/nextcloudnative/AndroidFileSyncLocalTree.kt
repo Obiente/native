@@ -227,6 +227,7 @@ internal class AndroidSafFileSyncLocalTree(
             }
             if (existing.entry.kind == SyncEntryKind.Directory) return
         }
+        val replacementSnapshot = existing?.let(::replacementSnapshot)
         val parent = ensureParent(path)
         val finalName = path.substringAfterLast('/')
         if (existing == null) {
@@ -242,6 +243,7 @@ internal class AndroidSafFileSyncLocalTree(
                 finalName = finalName,
                 currentDocument = existing.uri,
                 createStage = directory::createDirectory,
+                revalidateCurrent = { requireUnchangedReplacement(path, replacementSnapshot) },
                 prepareStage = {},
             )
         }
@@ -267,13 +269,19 @@ internal class AndroidSafFileSyncLocalTree(
                 "The local file changed after the sync scan."
             }
         }
+        val replacementSnapshot = current?.let(::replacementSnapshot)
         val parentUri = ensureParent(path)
         val finalName = path.substringAfterLast('/')
         AndroidSafDownloadPublisher(
             directory = publicationDirectory(parentUri, path.substringBeforeLast('/', "")),
             ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
         )
-            .publish(finalName, current?.uri, write)
+            .publish(
+                finalName = finalName,
+                currentDocument = current?.uri,
+                revalidateCurrent = { requireUnchangedReplacement(path, replacementSnapshot) },
+                write = write,
+            )
     }
 
     override fun delete(path: String, expectedLocalRevision: String) {
@@ -286,20 +294,58 @@ internal class AndroidSafFileSyncLocalTree(
         }
     }
 
-    override fun resolve(path: String): AndroidLocalSyncDocument? {
+    override fun resolve(path: String): AndroidLocalSyncDocument? = resolve(path, ::children)
+
+    private fun resolveRaw(path: String): AndroidLocalSyncDocument? = resolve(path, ::rawChildren)
+
+    private fun resolve(
+        path: String,
+        listChildren: (parentUri: Uri, parentPath: String) -> List<AndroidLocalSyncDocument>,
+    ): AndroidLocalSyncDocument? {
         if (path.isBlank()) return null
         var parentPath = ""
         var parentUri = rootUri
         val segments = path.split('/')
         require(segments.size <= MAX_DEPTH)
         segments.forEachIndexed { index, segment ->
-            val match = children(parentUri, parentPath).singleOrNull { it.displayName == segment } ?: return null
+            val match = listChildren(parentUri, parentPath).singleOrNull {
+                it.displayName == segment
+            } ?: return null
             if (index == segments.lastIndex) return match
             if (match.entry.kind != SyncEntryKind.Directory) return null
             parentPath = match.entry.relativePath
             parentUri = match.uri
         }
         return null
+    }
+
+    private fun replacementSnapshot(document: AndroidLocalSyncDocument): List<AndroidLocalSyncDocument> {
+        val result = arrayListOf(document)
+        val pending = ArrayDeque<AndroidLocalSyncDocument>()
+        if (document.entry.kind == SyncEntryKind.Directory) pending += document
+        while (pending.isNotEmpty()) {
+            val parent = pending.removeFirst()
+            require(parent.entry.relativePath.count { it == '/' } < MAX_DEPTH) {
+                "The local replacement folder is nested too deeply."
+            }
+            rawChildren(parent.uri, parent.entry.relativePath).forEach { child ->
+                require(result.size < MAX_ENTRIES) {
+                    "The local replacement folder contains too many entries."
+                }
+                result += child
+                if (child.entry.kind == SyncEntryKind.Directory) pending += child
+            }
+        }
+        return result.sortedBy { it.entry.relativePath }
+    }
+
+    private fun requireUnchangedReplacement(
+        path: String,
+        expected: List<AndroidLocalSyncDocument>?,
+    ) {
+        val current = resolveRaw(path)
+        val actual = current?.let(::replacementSnapshot)
+        require(actual == expected) { "The local item changed while replacement content was staged." }
     }
 
     private fun ensureParent(path: String): Uri {
