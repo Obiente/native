@@ -11,6 +11,8 @@ import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.prefs.BackingStoreException
+import java.util.prefs.Preferences
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -214,7 +216,11 @@ class DesktopSecretStoreTest {
     fun macOsKeychainAddsUpdatesLoadsAndClearsWithoutPuttingSecretsInIdentityFields() {
         val api = FakeMacOsKeychainApi()
         val releasedItems = mutableListOf<Pointer>()
-        val store = MacOsKeychainSecretStore(api, releasedItems::add)
+        val store = MacOsKeychainSecretStore(
+            api,
+            releasedItems::add,
+            RecordingMacOsKeychainDeletionRecovery(),
+        )
         val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
         val first = "first-synthetic-secret".encodeToByteArray()
         val second = "second-synthetic-secret".encodeToByteArray()
@@ -400,6 +406,7 @@ class DesktopSecretStoreTest {
         val store = MacOsKeychainSecretStore(
             api = FakeMacOsKeychainApi(findFailure = -25_293),
             releaseItem = {},
+            deletionRecovery = RecordingMacOsKeychainDeletionRecovery(),
         )
         val reference = desktopSessionSecretReference("https://private.invalid", "synthetic-user")
 
@@ -415,7 +422,11 @@ class DesktopSecretStoreTest {
     @Test
     fun malformedMacOsKeychainValueIsRemovedAndReturnsToSignIn() {
         val api = FakeMacOsKeychainApi(initialSecret = ByteArray(2_561))
-        val store = MacOsKeychainSecretStore(api, releaseItem = {})
+        val store = MacOsKeychainSecretStore(
+            api,
+            releaseItem = {},
+            deletionRecovery = RecordingMacOsKeychainDeletionRecovery(),
+        )
         val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
 
         assertNull(store.load(reference))
@@ -426,7 +437,11 @@ class DesktopSecretStoreTest {
     @Test
     fun macOsKeychainConcurrentAddRaceUpdatesTheExistingItem() {
         val api = FakeMacOsKeychainApi(duplicateOnFirstAdd = true)
-        val store = MacOsKeychainSecretStore(api, releaseItem = {})
+        val store = MacOsKeychainSecretStore(
+            api,
+            releaseItem = {},
+            deletionRecovery = RecordingMacOsKeychainDeletionRecovery(),
+        )
         val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
         val expected = "replacement-synthetic-secret".encodeToByteArray()
 
@@ -435,10 +450,88 @@ class DesktopSecretStoreTest {
         assertContentEquals(expected, store.load(reference))
     }
 
+    @Test
+    fun failedMacOsKeychainDeletionRetriesAfterProcessRestart() {
+        val api = FakeMacOsKeychainApi(
+            initialSecret = "synthetic-session-secret".encodeToByteArray(),
+            deleteFailureAttempts = 1,
+        )
+        val recovery = RecordingMacOsKeychainDeletionRecovery()
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val firstProcess = MacOsKeychainSecretStore(api, releaseItem = {}, deletionRecovery = recovery)
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { firstProcess.clear(reference) }
+        assertEquals(setOf(reference.targetName), recovery.pendingTargetNames())
+        assertEquals(1, api.deleteAttempts)
+
+        val restarted = MacOsKeychainSecretStore(api, releaseItem = {}, deletionRecovery = recovery)
+
+        assertNull(restarted.load(reference))
+        assertEquals(emptySet(), recovery.pendingTargetNames())
+        assertEquals(2, api.deleteAttempts)
+    }
+
+    @Test
+    fun ambiguousDeletionCompletionRemainsRetryableBeforeReplacementSave() {
+        val api = FakeMacOsKeychainApi(initialSecret = "old-synthetic-secret".encodeToByteArray())
+        val recovery = RecordingMacOsKeychainDeletionRecovery(failCompleteAttempts = 1)
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val store = MacOsKeychainSecretStore(api, releaseItem = {}, deletionRecovery = recovery)
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { store.clear(reference) }
+        assertEquals(setOf(reference.targetName), recovery.pendingTargetNames())
+
+        val replacement = "replacement-synthetic-secret".encodeToByteArray()
+        store.save(reference, "alice", replacement)
+
+        assertContentEquals(replacement, store.load(reference))
+        assertEquals(emptySet(), recovery.pendingTargetNames())
+        assertEquals(1, api.deleteAttempts)
+    }
+
+    @Test
+    fun unavailableRecoveryJournalPreventsUntrackedKeychainDeletion() {
+        val api = FakeMacOsKeychainApi(initialSecret = "synthetic-session-secret".encodeToByteArray())
+        val recovery = RecordingMacOsKeychainDeletionRecovery(failPending = true)
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val store = MacOsKeychainSecretStore(api, releaseItem = {}, deletionRecovery = recovery)
+
+        assertFailsWith<DesktopSecretDeletionRecoveryUnavailableException> { store.clear(reference) }
+
+        assertEquals(0, api.deleteAttempts)
+        assertContentEquals("synthetic-session-secret".encodeToByteArray(), store.load(reference))
+    }
+
+    @Test
+    fun ambiguousJournalCompletionStaysPendingUntilDurablyRecorded() {
+        val preferences = Preferences.userRoot().node(
+            "dev/obiente/nextcloudnative/test-keychain-deletion/${UUID.randomUUID()}",
+        )
+        var flushAttempts = 0
+        val recovery = PreferencesMacOsKeychainDeletionRecovery(preferences) { node ->
+            flushAttempts += 1
+            if (flushAttempts == 2) throw BackingStoreException("Synthetic flush failure.")
+            node.flush()
+        }
+        val targetName = desktopSessionSecretReference("https://cloud.invalid", "alice").targetName
+        try {
+            recovery.markPending(targetName)
+
+            assertFailsWith<BackingStoreException> { recovery.markComplete(targetName) }
+            assertEquals(setOf(targetName), recovery.pendingTargetNames())
+
+            recovery.markComplete(targetName)
+            assertEquals(emptySet(), recovery.pendingTargetNames())
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
     private class FakeMacOsKeychainApi(
         private val findFailure: Int? = null,
         private val duplicateOnFirstAdd: Boolean = false,
         initialSecret: ByteArray? = null,
+        private var deleteFailureAttempts: Int = 0,
     ) : MacOsKeychainApi {
         private var secret: ByteArray? = initialSecret
         private var addAttempted = false
@@ -507,6 +600,10 @@ class DesktopSecretStoreTest {
 
         override fun SecKeychainItemDelete(itemRef: Pointer): Int {
             deleteAttempts += 1
+            if (deleteFailureAttempts > 0) {
+                deleteFailureAttempts -= 1
+                return -25_308
+            }
             secret = null
             return 0
         }
@@ -515,6 +612,28 @@ class DesktopSecretStoreTest {
             returnedSecret?.clear()
             returnedSecret = null
             return 0
+        }
+    }
+
+    private class RecordingMacOsKeychainDeletionRecovery(
+        private val failPending: Boolean = false,
+        private var failCompleteAttempts: Int = 0,
+    ) : MacOsKeychainDeletionRecovery {
+        private val pending = linkedSetOf<String>()
+
+        override fun pendingTargetNames(): Set<String> = pending.toSet()
+
+        override fun markPending(targetName: String) {
+            if (failPending) error("Synthetic unavailable deletion recovery.")
+            pending += targetName
+        }
+
+        override fun markComplete(targetName: String) {
+            if (failCompleteAttempts > 0) {
+                failCompleteAttempts -= 1
+                error("Synthetic ambiguous deletion completion.")
+            }
+            pending -= targetName
         }
     }
 

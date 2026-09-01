@@ -3843,9 +3843,7 @@ class DesktopNextcloudServices(
             val server = preferences.get(KEY_SERVER, null)
             val login = preferences.get(KEY_LOGIN, null)
             runCatching {
-                if (server != null && login != null) {
-                    secretStore.clear(desktopSessionSecretReference(server, login))
-                }
+                if (server != null && login != null) secretStore.clear(desktopSessionSecretReference(server, login))
             }.onFailure { failure ->
                 supportDiagnostics.record(
                     SupportDiagnosticEventDraft(
@@ -3856,6 +3854,7 @@ class DesktopNextcloudServices(
                         exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
                 )
+                if (failure is DesktopSecretDeletionRecoveryUnavailableException) throw failure
             }
             sessionPublicationGuard.serialize {
                 preferences.remove(KEY_SERVER)

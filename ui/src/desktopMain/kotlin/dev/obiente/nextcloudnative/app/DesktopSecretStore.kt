@@ -53,6 +53,13 @@ internal class DesktopSecretStoreUnavailableException(
     cause: Throwable? = null,
 ) : NextcloudSessionStorageUnavailableException(message, cause)
 
+internal class DesktopSecretDeletionRecoveryUnavailableException(
+    cause: Throwable,
+) : NextcloudSessionStorageUnavailableException(
+    "Secure credential cleanup could not be scheduled for retry.",
+    cause,
+)
+
 internal enum class DesktopSecretStoreUnavailableReason {
     StorageLockedOrUnavailable,
     ProviderMissing,
@@ -406,8 +413,16 @@ internal class SecretToolDesktopSecretStore(
 internal class MacOsKeychainSecretStore(
     private val api: MacOsKeychainApi = MacOsKeychainApiHolder.instance,
     private val releaseItem: (Pointer) -> Unit = MacOsCoreFoundationApiHolder::release,
+    private val deletionRecovery: MacOsKeychainDeletionRecovery = PreferencesMacOsKeychainDeletionRecovery(),
 ) : DesktopSecretStore {
+    private val deletionCoordinator = MacOsKeychainDeletionCoordinator(deletionRecovery, ::deleteTarget)
+
+    init {
+        deletionCoordinator.retryAllBestEffort()
+    }
+
     override fun load(reference: DesktopSecretReference): ByteArray? {
+        deletionCoordinator.retry(reference.targetName)
         val secretLength = IntByReference()
         val secretData = PointerByReference()
         val item = PointerByReference()
@@ -441,6 +456,7 @@ internal class MacOsKeychainSecretStore(
 
     override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
         require(secret.isNotEmpty() && secret.size <= MAX_SECRET_BYTES)
+        deletionCoordinator.retry(reference.targetName)
         val identity = reference.macOsIdentity()
         val item = PointerByReference()
         val findStatus = api.SecKeychainFindGenericPassword(
@@ -461,7 +477,11 @@ internal class MacOsKeychainSecretStore(
     }
 
     override fun clear(reference: DesktopSecretReference) {
-        val identity = reference.macOsIdentity()
+        deletionCoordinator.clear(reference.targetName)
+    }
+
+    private fun deleteTarget(targetName: String) {
+        val identity = targetName.macOsIdentity()
         val item = PointerByReference()
         val status = api.SecKeychainFindGenericPassword(
             null,
@@ -567,10 +587,12 @@ private data class MacOsKeychainIdentity(
     val account: ByteArray,
 )
 
-private fun DesktopSecretReference.macOsIdentity(): MacOsKeychainIdentity = MacOsKeychainIdentity(
-    service = targetName.encodeToByteArray(),
+private fun DesktopSecretReference.macOsIdentity(): MacOsKeychainIdentity = targetName.macOsIdentity()
+
+private fun String.macOsIdentity(): MacOsKeychainIdentity = MacOsKeychainIdentity(
+    service = encodeToByteArray(),
     account = MessageDigest.getInstance("SHA-256")
-        .digest(targetName.encodeToByteArray())
+        .digest(encodeToByteArray())
         .toHexString()
         .encodeToByteArray(),
 )

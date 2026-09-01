@@ -46,13 +46,24 @@ internal fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
 }
 
 @Composable
-internal fun SecureSessionStorageUnavailable(onRetry: () -> Unit) {
+internal fun SecureSessionStorageUnavailable(
+    onRetry: () -> Unit,
+    onSignInAgain: () -> Unit,
+) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        ErrorMessage(
-            "Secure session storage is locked or unavailable. Unlock it or allow " +
-                "Nextcloud Native access, then try again.",
-            onRetry,
-        )
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            Text(
+                "Secure session storage is locked or unavailable. Unlock it or allow " +
+                    "Nextcloud Native access, then try again, or discard the stored session and sign in again.",
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(onClick = onRetry) { Text("Try again") }
+            OutlinedButton(onClick = onSignInAgain) { Text("Sign in again") }
+        }
     }
 }
 
