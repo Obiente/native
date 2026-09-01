@@ -12,6 +12,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
@@ -167,6 +168,39 @@ internal class NextcloudFileSyncWorker(
         const val KEY_USER_ID = "user_id"
     }
 }
+
+internal class AndroidFileSyncScheduleRestorationWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val expectedAccountId = inputData.getString(KEY_ACCOUNT_ID)?.takeIf(String::isNotBlank)
+            ?: return@withContext Result.failure()
+        val services = AndroidNextcloudServices(applicationContext)
+        val session = services.loadSession()
+            ?.takeIf { restored -> isAndroidFileSyncScheduleRestorationCurrent(expectedAccountId, restored) }
+            ?: return@withContext Result.success()
+        runCatching {
+            val userId = services.loadServerInfo(session).userId
+            services.loadFileSyncCenter(session, userId)
+        }.fold(
+            onSuccess = { Result.success() },
+            onFailure = { failure ->
+                rethrowAndroidFileSyncCancellation(failure)
+                Result.retry()
+            },
+        )
+    }
+
+    internal companion object {
+        const val KEY_ACCOUNT_ID = "account_id"
+    }
+}
+
+internal fun isAndroidFileSyncScheduleRestorationCurrent(
+    expectedAccountId: String,
+    session: NextcloudSession,
+): Boolean = NextcloudDocumentIds.accountKey(session) == expectedAccountId
 
 internal fun syncConflictNotificationDetail(conflictCount: Int): String {
     require(conflictCount > 0)

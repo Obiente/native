@@ -5,7 +5,9 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -53,6 +55,7 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         persist: () -> Unit,
         cancelAll: () -> Unit,
         publishAccount: (String) -> Unit = {},
+        restoreSchedules: (String) -> Unit = {},
     ) {
         synchronized(monitor) {
             val accountChanged = accountId != replacementAccountId
@@ -65,6 +68,7 @@ internal class AndroidFileSyncSessionSchedulingGuard {
             } finally {
                 if (accountChanged) cancelAll()
             }
+            restoreSchedules(replacementAccountId)
         }
     }
 
@@ -161,6 +165,28 @@ internal class AndroidFileSyncScheduler(context: Context) {
         workManager.enqueueUniquePeriodicWork(
             workName(pairId),
             ExistingPeriodicWorkPolicy.UPDATE,
+            request,
+        )
+    }
+
+    fun restorePersistedPairSchedules(accountId: String) {
+        val request = OneTimeWorkRequestBuilder<AndroidFileSyncScheduleRestorationWorker>()
+            .setInputData(
+                Data.Builder()
+                    .putString(AndroidFileSyncScheduleRestorationWorker.KEY_ACCOUNT_ID, accountId)
+                    .build(),
+            )
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .addTag(TAG)
+            .build()
+        workManager.enqueueUniqueWork(
+            "file-sync-restore-$accountId",
+            ExistingWorkPolicy.REPLACE,
             request,
         )
     }

@@ -19,6 +19,7 @@ import org.json.JSONObject
 internal data class AndroidAccountCredentialState(
     val registry: NextcloudAccountRegistry,
     val sessions: Map<NextcloudAccountId, NextcloudSession>,
+    val mutationsAllowed: Boolean = true,
 ) {
     init {
         require(sessions.size <= MAX_ANDROID_ACCOUNT_CREDENTIALS)
@@ -32,20 +33,31 @@ internal data class AndroidAccountCredentialState(
     val activeSession: NextcloudSession?
         get() = registry.activeAccountId?.let(sessions::get)
 
-    fun upsertAndSelect(session: NextcloudSession): AndroidAccountCredentialState = copy(
-        registry = registry.upsertAndSelect(session.accountRecord()),
-        sessions = sessions + (session.accountId to session),
-    )
+    fun upsertAndSelect(session: NextcloudSession): AndroidAccountCredentialState {
+        requireMutationsAllowed()
+        return copy(
+            registry = registry.upsertAndSelect(session.accountRecord()),
+            sessions = sessions + (session.accountId to session),
+        )
+    }
 
     fun select(accountId: NextcloudAccountId): AndroidAccountCredentialState? {
+        requireMutationsAllowed()
         if (accountId !in sessions) return null
         return copy(registry = requireNotNull(registry.select(accountId)))
     }
 
-    fun remove(accountId: NextcloudAccountId): AndroidAccountCredentialState = copy(
-        registry = registry.remove(accountId),
-        sessions = sessions - accountId,
-    )
+    fun remove(accountId: NextcloudAccountId): AndroidAccountCredentialState {
+        requireMutationsAllowed()
+        return copy(
+            registry = registry.remove(accountId),
+            sessions = sessions - accountId,
+        )
+    }
+
+    private fun requireMutationsAllowed() {
+        check(mutationsAllowed) { "The account credential store version is unsupported." }
+    }
 
     companion object {
         val Empty = AndroidAccountCredentialState(NextcloudAccountRegistry.Empty, emptyMap())
@@ -125,6 +137,7 @@ internal fun decodeAndroidAccountCredentialState(encoded: String): RestoredAndro
 }
 
 internal fun encodeAndroidAccountCredentialState(state: AndroidAccountCredentialState): String = JSONObject()
+    .also { check(state.mutationsAllowed) { "The account credential store version is unsupported." } }
     .put(KEY_VERSION, ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION)
     .put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(state.registry))
     .put(
@@ -176,6 +189,8 @@ private fun restoreLegacyAndroidAccountCredentialState(
         state = AndroidAccountCredentialState(
             registry = credentialRegistry,
             sessions = mapOf(session.accountId to session),
+            mutationsAllowed = restoredRegistry.recoveryReason !=
+                NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion,
         ),
         needsPersistence = restoredRegistry.recoveryReason !=
             NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion,

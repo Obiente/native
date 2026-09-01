@@ -80,16 +80,23 @@ internal class AndroidAccountCredentialController(
         }?.let(::encryptState)
         withContext(Dispatchers.IO) { AndroidExternalFileHandoffRegistry.clear() }
         val scheduler = AndroidFileSyncScheduler(appContext)
-        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
-            persist = {
-                preferences.edit().apply {
-                    if (encodedReplacement == null) remove(KEY_SESSION) else putString(KEY_SESSION, encodedReplacement)
-                    remove(KEY_TEST_READ_ONLY)
-                }.apply()
-            },
-            cancelAll = scheduler::cancelAll,
-            clearPublishedAccount = { publishAccountIdentity(null) },
-        )
+        withContext(Dispatchers.IO) {
+            ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
+                persist = {
+                    val editor = preferences.edit().apply {
+                        if (encodedReplacement == null) {
+                            remove(KEY_SESSION)
+                        } else {
+                            putString(KEY_SESSION, encodedReplacement)
+                        }
+                        remove(KEY_TEST_READ_ONLY)
+                    }
+                    commitPreferences(editor)
+                },
+                cancelAll = scheduler::cancelAll,
+                clearPublishedAccount = { publishAccountIdentity(null) },
+            )
+        }
         clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(activeSession))
         notifyDocumentRootsChanged()
     }
@@ -102,17 +109,21 @@ internal class AndroidAccountCredentialController(
         val encrypted = encryptState(replacement)
         withContext(Dispatchers.IO) { AndroidExternalFileHandoffRegistry.clear() }
         val scheduler = AndroidFileSyncScheduler(appContext)
-        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
-            replacementAccountId = NextcloudDocumentIds.accountKey(session),
-            persist = {
-                preferences.edit()
-                    .putString(KEY_SESSION, encrypted)
-                    .remove(KEY_TEST_READ_ONLY)
-                    .apply()
-            },
-            cancelAll = scheduler::cancelAll,
-            publishAccount = publishAccountIdentity,
-        )
+        withContext(Dispatchers.IO) {
+            ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
+                replacementAccountId = NextcloudDocumentIds.accountKey(session),
+                persist = {
+                    commitPreferences(
+                        preferences.edit()
+                            .putString(KEY_SESSION, encrypted)
+                            .remove(KEY_TEST_READ_ONLY),
+                    )
+                },
+                cancelAll = scheduler::cancelAll,
+                publishAccount = publishAccountIdentity,
+                restoreSchedules = scheduler::restorePersistedPairSchedules,
+            )
+        }
         if (previousSession != null && previousSession.accountId != session.accountId) {
             clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(previousSession))
         }
@@ -137,14 +148,28 @@ internal class AndroidAccountCredentialController(
         return restoreAndroidAccountCredentialState(
             encoded = encoded,
             persistMigrated = { migrated ->
-                preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)).apply()
+                commitPreferences(
+                    preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)),
+                )
             },
             recordDiagnostic = recordDiagnostic,
         )
     }
 
-    private fun persistState(state: AndroidAccountCredentialState) {
-        preferences.edit().putString(KEY_SESSION, encryptState(state)).apply()
+    private suspend fun persistState(state: AndroidAccountCredentialState) = withContext(Dispatchers.IO) {
+        commitPreferences(preferences.edit().putString(KEY_SESSION, encryptState(state)))
+    }
+
+    private fun commitPreferences(editor: SharedPreferences.Editor) {
+        try {
+            requireCommittedAndroidAccountCredentialEdit(editor)
+        } catch (failure: Exception) {
+            recordCredentialFailure(
+                code = "ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED",
+                operation = "account-credentials.persist",
+            )
+            throw failure
+        }
     }
 
     private fun encryptState(state: AndroidAccountCredentialState): String = try {
@@ -173,4 +198,8 @@ internal class AndroidAccountCredentialController(
         const val KEY_SESSION = "encrypted_session"
         const val KEY_TEST_READ_ONLY = "emulator_test_read_only"
     }
+}
+
+internal fun requireCommittedAndroidAccountCredentialEdit(editor: SharedPreferences.Editor) {
+    check(editor.commit()) { "The account credential store could not be committed." }
 }
