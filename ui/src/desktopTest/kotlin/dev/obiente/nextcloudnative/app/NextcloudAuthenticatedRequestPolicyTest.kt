@@ -89,7 +89,24 @@ class NextcloudAuthenticatedRequestPolicyTest {
     }
 
     @Test
-    fun `method-changing redirects are rejected while 307 and 308 preserve request content`() {
+    fun `bodyless GET and HEAD may follow 301 and 302`() {
+        listOf("GET", "HEAD").forEach { method ->
+            val request = policy.requestBuilder("https://cloud.example.test/cloud/dav/source")
+                .method(method, null)
+                .build()
+            listOf(301, 302).forEach { status ->
+                val followed = assertIs<NextcloudAuthenticatedRedirectDecision.Follow>(
+                    policy.redirectDecision(request, status, "/cloud/dav/target"),
+                )
+                assertEquals(method, followed.request.method)
+                assertEquals(null, followed.request.body)
+                assertEquals(request.header("Authorization"), followed.request.header("Authorization"))
+            }
+        }
+    }
+
+    @Test
+    fun `method-changing redirects reject mutations while 307 and 308 preserve request content`() {
         val body = "payload".toRequestBody()
         val request = policy.requestBuilder("https://cloud.example.test/cloud/dav/source")
             .method("PROPPATCH", body)
@@ -109,6 +126,17 @@ class NextcloudAuthenticatedRequestPolicyTest {
             assertSame(body, followed.request.body)
             assertEquals(request.header("Authorization"), followed.request.header("Authorization"))
         }
+    }
+
+    @Test
+    fun `303 remains rejected for a bodyless GET`() {
+        val request = policy.requestBuilder("https://cloud.example.test/cloud/dav/source").get().build()
+
+        val rejected = assertIs<NextcloudAuthenticatedRedirectDecision.Reject>(
+            policy.redirectDecision(request, 303, "/cloud/dav/target"),
+        )
+
+        assertEquals(NextcloudAuthenticatedRedirectRejection.MethodMayChange, rejected.reason)
     }
 
     @Test

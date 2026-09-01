@@ -1,8 +1,9 @@
 package dev.obiente.nextcloudnative
 
-import dev.obiente.nextcloudnative.app.NextcloudSession
-import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRedirectException
 import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRequestPolicy
+import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.executeNextcloudAuthenticatedRequest
 import java.io.ByteArrayOutputStream
@@ -107,6 +108,8 @@ internal class NextcloudDocumentWebDav(
                     etag = response.header("ETag") ?: response.header("OC-Etag"),
                 )
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException("read document")
         } catch (failure: IOException) {
             // A CancellationSignal cancels the OkHttp call, which normally surfaces as an
             // IOException. Prefer the platform cancellation exception supplied by the adapter.
@@ -165,6 +168,8 @@ internal class NextcloudDocumentWebDav(
                     limited = parsed.size > maximumResults,
                 )
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException("search documents")
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -223,6 +228,8 @@ internal class NextcloudDocumentWebDav(
                     limited = parsed.size > maximumEntries,
                 )
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException("list folder")
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -491,6 +498,8 @@ internal class NextcloudDocumentWebDav(
                 }
                 DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException(operation)
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -530,6 +539,8 @@ internal class NextcloudDocumentWebDav(
                 if (response.code != 207) throw response.toDocumentException(operation)
                 consume(response.body.byteStream())
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException(operation)
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure

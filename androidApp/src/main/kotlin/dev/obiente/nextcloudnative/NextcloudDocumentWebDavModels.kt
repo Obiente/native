@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRedirectException
 import dev.obiente.nextcloudnative.app.NextcloudFile
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -23,7 +24,19 @@ internal class DocumentWebDavException(
     val status: Int,
     message: String,
     val retryAfterSeconds: Long? = null,
-) : Exception(message)
+    val redirectReason: String? = null,
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
+internal fun NextcloudAuthenticatedRedirectException.toDocumentException(
+    operation: String,
+): DocumentWebDavException = DocumentWebDavException(
+    error = DocumentWebDavError.Server,
+    status = status,
+    message = "Nextcloud could not safely redirect the request to $operation.",
+    redirectReason = diagnosticReason,
+    cause = this,
+)
 
 internal fun Response.toDocumentException(operation: String): DocumentWebDavException {
     val error = when (code) {

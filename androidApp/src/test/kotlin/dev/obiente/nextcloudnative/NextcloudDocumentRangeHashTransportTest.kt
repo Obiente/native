@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -70,7 +70,7 @@ class NextcloudDocumentRangeHashTransportTest {
             )
             server.start()
 
-            assertFails {
+            val failure = assertFailsWith<DocumentWebDavException> {
                 NextcloudDocumentWebDav(OkHttpClient()).readFileRangeHash(
                     session = NextcloudSession(server.url("/cloud").toString(), "alice", "secret"),
                     userId = "alice",
@@ -82,6 +82,10 @@ class NextcloudDocumentRangeHashTransportTest {
                 )
             }
 
+            assertEquals(DocumentWebDavError.Server, failure.error)
+            assertEquals(307, failure.status)
+            assertEquals("unsafe_target", failure.redirectReason)
+            assertIs<dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRedirectException>(failure.cause)
             assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
             assertEquals(1, server.requestCount)
         }

@@ -39,7 +39,11 @@ class NextcloudAuthenticatedRequestPolicy(
         if (status !in REDIRECT_STATUS_RANGE || status == 304) {
             return NextcloudAuthenticatedRedirectDecision.DeliverResponse
         }
-        if (status !in METHOD_PRESERVING_REDIRECT_STATUSES) {
+        val safeBodylessReadRedirect =
+            status in BODYLESS_READ_REDIRECT_STATUSES &&
+                request.method in BODYLESS_READ_METHODS &&
+                request.body == null
+        if (status !in METHOD_PRESERVING_REDIRECT_STATUSES && !safeBodylessReadRedirect) {
             return NextcloudAuthenticatedRedirectDecision.Reject(
                 NextcloudAuthenticatedRedirectRejection.MethodMayChange,
             )
@@ -110,6 +114,8 @@ class NextcloudAuthenticatedRequestPolicy(
 
     private companion object {
         val REDIRECT_STATUS_RANGE = 300..399
+        val BODYLESS_READ_REDIRECT_STATUSES = setOf(301, 302)
+        val BODYLESS_READ_METHODS = setOf("GET", "HEAD")
         val METHOD_PRESERVING_REDIRECT_STATUSES = setOf(307, 308)
     }
 }
@@ -122,19 +128,21 @@ internal sealed interface NextcloudAuthenticatedRedirectDecision {
     ) : NextcloudAuthenticatedRedirectDecision
 }
 
-internal enum class NextcloudAuthenticatedRedirectRejection {
-    InvalidLocation,
-    MethodMayChange,
-    MissingLocation,
-    NonReplayableBody,
-    TooManyHops,
-    UnsafeTarget,
+internal enum class NextcloudAuthenticatedRedirectRejection(val diagnosticValue: String) {
+    InvalidLocation("invalid_location"),
+    MethodMayChange("method_may_change"),
+    MissingLocation("missing_location"),
+    NonReplayableBody("non_replayable_body"),
+    TooManyHops("too_many_hops"),
+    UnsafeTarget("unsafe_target"),
 }
 
-internal class NextcloudAuthenticatedRedirectException(
-    val reason: NextcloudAuthenticatedRedirectRejection,
+class NextcloudAuthenticatedRedirectException internal constructor(
+    internal val reason: NextcloudAuthenticatedRedirectRejection,
     val status: Int,
-) : IllegalStateException("The authenticated request redirect was rejected ($reason, HTTP $status).")
+) : IllegalStateException("The authenticated request redirect was rejected ($reason, HTTP $status).") {
+    val diagnosticReason: String = reason.diagnosticValue
+}
 
 fun <T> executeNextcloudAuthenticatedRequest(
     client: OkHttpClient,

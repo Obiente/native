@@ -3,10 +3,12 @@ package dev.obiente.nextcloudnative.app
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class DesktopFileSyncRemoteTreeRedirectTest {
     @Test
@@ -37,6 +39,58 @@ class DesktopFileSyncRemoteTreeRedirectTest {
             assertEquals("Basic YWxpY2U6c2VjcmV0", initial.headers["Authorization"])
             assertEquals(initial.headers["Authorization"], redirected.headers["Authorization"])
             assertEquals("1", redirected.url.queryParameter("redirected"))
+        }
+    }
+
+    @Test
+    fun `302 DAV method rejection becomes a desktop file sync error`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder().code(302)
+                    .addHeader("Location", "/cloud/remote.php/dav/files/alice/Vault/?redirected=1")
+                    .build(),
+            )
+            server.start()
+            val tree = DesktopFileSyncRemoteTree(
+                session = NextcloudSession(server.url("/cloud").toString(), "alice", "secret"),
+                userId = "alice",
+                remoteRootPath = "Vault",
+                httpClient = OkHttpClient(),
+            )
+
+            val failure = assertFailsWith<DesktopFileSyncHttpStatusException> { tree.scan() }
+
+            assertEquals(302, failure.statusCode)
+            assertEquals("method_may_change", failure.redirectReason)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `mutation executor translates redirect rejection into file sync error`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder().code(302)
+                    .addHeader("Location", "/cloud/remote.php/dav/files/alice/target.bin")
+                    .build(),
+            )
+            server.start()
+            val policy = NextcloudAuthenticatedRequestPolicy(
+                NextcloudSession(server.url("/cloud").toString(), "alice", "secret"),
+                "redirect-test",
+            )
+            val request = policy.requestBuilder(server.url("/cloud/source.bin").toString())
+                .put("payload".toRequestBody())
+                .build()
+            val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).build()
+
+            val failure = assertFailsWith<DesktopFileSyncHttpStatusException> {
+                DesktopHttpMutationExecutor(client).execute(request, onAmbiguousNetworkResult = {}) { Unit }
+            }
+
+            assertEquals(302, failure.statusCode)
+            assertEquals("method_may_change", failure.redirectReason)
+            assertEquals(1, server.requestCount)
         }
     }
 

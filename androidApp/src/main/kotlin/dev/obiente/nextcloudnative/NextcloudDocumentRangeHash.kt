@@ -1,7 +1,8 @@
 package dev.obiente.nextcloudnative
 
-import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRedirectException
 import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRequestPolicy
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
 import dev.obiente.nextcloudnative.app.executeNextcloudAuthenticatedRequest
 import dev.obiente.nextcloudnative.app.hashExactJvmFileSyncSlice
@@ -53,6 +54,8 @@ internal fun NextcloudDocumentWebDav.readFileRangeHash(
             }
             hashExactJvmFileSyncSlice(response.body.byteStream(), length, requireExhausted = true)
         }
+    } catch (failure: NextcloudAuthenticatedRedirectException) {
+        throw failure.toDocumentException("verify document range")
     } finally {
         cancellation.setOnCancelAction(null)
         cancellation.throwIfCancelled()

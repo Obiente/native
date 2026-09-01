@@ -9,11 +9,22 @@ internal class DesktopFileSyncScanStoppedException : RuntimeException()
 internal class DesktopFileSyncHttpStatusException(
     val statusCode: Int,
     operation: String,
-) : RuntimeException("Could not $operation (HTTP $statusCode).") {
+    val redirectReason: String? = null,
+    cause: Throwable? = null,
+) : RuntimeException("Could not $operation (HTTP $statusCode).", cause) {
     init {
         require(statusCode in 100..599)
     }
 }
+
+internal fun NextcloudAuthenticatedRedirectException.toDesktopFileSyncHttpStatusException(
+    operation: String,
+): DesktopFileSyncHttpStatusException = DesktopFileSyncHttpStatusException(
+    statusCode = status,
+    operation = operation,
+    redirectReason = diagnosticReason,
+    cause = this,
+)
 
 internal class DesktopFileSyncAmbiguousMutationException(cause: IOException) : IOException(
     "The remote sync mutation ended without a verified result.",
