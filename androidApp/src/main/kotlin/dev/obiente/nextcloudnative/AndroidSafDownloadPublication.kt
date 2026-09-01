@@ -122,6 +122,13 @@ internal class AndroidSafDownloadPublisher<Document>(
                 val renamed = requireNotNull(directory.rename(current, transaction.backupName)) {
                     "The existing local item could not be protected before replacement."
                 }
+                val protected = requireNotNull(
+                    directory.documents().singleOrNull { document -> document.document == renamed },
+                ) { "The protected local item could not be resolved after rename." }
+                if (protected.displayName != transaction.backupName) {
+                    transaction = transaction.copy(backupDisplayName = protected.displayName)
+                    ownership.replace(transaction)
+                }
                 require(ownedDocument(transaction.backupName)?.document == renamed) {
                     "The local file provider changed the protected item identity."
                 }
@@ -288,15 +295,24 @@ internal data class AndroidSafOwnedDownloadTransaction(
     val token: String,
     val publicationAttempted: Boolean = false,
     val publicationCompleted: Boolean = false,
+    val backupDisplayName: String? = null,
 ) {
+    val stageName: String = ".$finalName.nextcloud-native-download-$token"
+    val backupName: String = backupDisplayName ?: ".$finalName.nextcloud-native-backup-$token"
+
     init {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
         require(token == requireValidToken(token))
         require(!publicationCompleted || publicationAttempted)
+        require(
+            backupDisplayName == null ||
+                backupDisplayName.isNotBlank() &&
+                '/' !in backupDisplayName &&
+                backupDisplayName.none(Char::isISOControl) &&
+                backupDisplayName != finalName &&
+                backupDisplayName != stageName,
+        ) { "The protected local item name is invalid." }
     }
-
-    val stageName: String = ".$finalName.nextcloud-native-download-$token"
-    val backupName: String = ".$finalName.nextcloud-native-backup-$token"
 }
 
 internal fun requireValidToken(token: String): String {

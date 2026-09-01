@@ -137,8 +137,28 @@ internal fun reconcileSafDownloadsBeforeGrantRelease(
     releasesLocalGrant: Boolean,
 ): Boolean {
     if (!releasesLocalGrant) return true
-    return try {
+    val treeUri = Uri.parse(localRootId)
+    val hasPersistedGrant = try {
+        context.contentResolver.persistedUriPermissions.any { permission ->
+            permission.uri == treeUri && permission.isReadPermission && permission.isWritePermission
+        }
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        return false
+    }
+    return reconcileSafDownloadsBeforeGrantRelease(hasPersistedGrant) {
         createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads()
+    }
+}
+
+internal fun reconcileSafDownloadsBeforeGrantRelease(
+    hasPersistedGrant: Boolean,
+    reconcile: () -> Unit,
+): Boolean {
+    if (!hasPersistedGrant) return true
+    return try {
+        reconcile()
         true
     } catch (failure: CancellationException) {
         throw failure

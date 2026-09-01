@@ -28,7 +28,7 @@ internal class AndroidSafDownloadOwnershipStore(
         override fun transactions(
             observedNames: Set<String>,
         ): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
-            ownershipRows()
+            ownershipRows(scope, observedRecoveryTokens(observedNames))
                 .filter { row ->
                     row.scope == scope ||
                         row.transaction.stageName in observedNames ||
@@ -40,19 +40,19 @@ internal class AndroidSafDownloadOwnershipStore(
 
         override fun add(transaction: AndroidSafOwnedDownloadTransaction) = synchronized(LOCK) {
             ensureDirectory()
-            val existing = ownershipRows().singleOrNull { row -> row.transaction.token == transaction.token }
+            val existing = ownershipRows(tokens = setOf(transaction.token)).singleOrNull()
             if (existing != null) {
                 check(existing.transaction == transaction) { "SAF download recovery ownership collided." }
                 return@synchronized
             }
             val destination = File(directory, rowName(scope, transaction.token))
-            val rowCount = ownershipRows().size
+            val rowCount = ownershipFiles().size
             check(rowCount < MAX_ROWS) { "Too many SAF download recovery records are pending." }
             writeRow(destination, transaction, replace = false)
         }
 
         override fun replace(transaction: AndroidSafOwnedDownloadTransaction) = synchronized(LOCK) {
-            val row = ownershipRows().singleOrNull { stored -> stored.transaction.token == transaction.token }
+            val row = ownershipRows(tokens = setOf(transaction.token)).singleOrNull()
             checkNotNull(row) { "SAF download recovery ownership is missing." }
             val previous = row.transaction
             check(previous.finalName == transaction.finalName && previous.token == transaction.token) {
@@ -64,32 +64,54 @@ internal class AndroidSafDownloadOwnershipStore(
             check(!previous.publicationCompleted || transaction.publicationCompleted) {
                 "SAF download recovery publication cannot be reverted."
             }
+            check(
+                previous.backupDisplayName == null ||
+                    previous.backupDisplayName == transaction.backupDisplayName,
+            ) { "SAF download recovery backup identity cannot be changed." }
             if (previous != transaction) writeRow(row.file, transaction, replace = true)
         }
 
         override fun remove(transaction: AndroidSafOwnedDownloadTransaction) = synchronized(LOCK) {
-            val row = ownershipRows().singleOrNull { stored -> stored.transaction.token == transaction.token }
+            val row = ownershipRows(tokens = setOf(transaction.token)).singleOrNull()
                 ?: return@synchronized
             check(row.transaction == transaction) { "SAF download recovery ownership collided." }
             check(row.file.delete()) { "Could not retire SAF download recovery ownership." }
         }
     }
 
-    private fun ownershipRows(): List<StoredOwnershipRow> {
+    private fun ownershipRows(
+        scope: String? = null,
+        tokens: Set<String> = emptySet(),
+    ): List<StoredOwnershipRow> = ownershipFiles()
+        .mapNotNull(::ownershipReference)
+        .filter { reference -> reference.scope == scope || reference.token in tokens }
+        .map { reference ->
+            val transaction = readRow(reference.file)
+            check(transaction.token == reference.token) { "SAF download recovery row name is invalid." }
+            StoredOwnershipRow(reference.file, reference.scope, transaction)
+        }
+
+    private fun ownershipFiles(): List<File> {
         if (!directory.exists()) return emptyList()
         check(directory.isDirectory) { "SAF download recovery storage is invalid." }
         return checkNotNull(directory.listFiles()) { "Could not list SAF download recovery storage." }
             .filter { file -> file.isFile && file.name.endsWith(ROW_SUFFIX) }
-            .map { file ->
-                val transaction = readRow(file)
-                val suffix = "-${transaction.token}$ROW_SUFFIX"
-                check(file.name.endsWith(suffix)) { "SAF download recovery row name is invalid." }
-                val scope = file.name.removeSuffix(suffix)
-                check(scope.length == SCOPE_HEX_CHARACTERS && scope.all { it in HEX_CHARACTERS }) {
-                    "SAF download recovery row scope is invalid."
-                }
-                StoredOwnershipRow(file, scope, transaction)
-            }
+    }
+
+    private fun ownershipReference(file: File): StoredOwnershipReference? {
+        val name = file.name.removeSuffix(ROW_SUFFIX)
+        if (name.length != SCOPE_HEX_CHARACTERS + 1 + TOKEN_CHARACTERS) return null
+        if (name[SCOPE_HEX_CHARACTERS] != '-') return null
+        val scope = name.take(SCOPE_HEX_CHARACTERS)
+        if (scope.any { it !in HEX_CHARACTERS }) return null
+        val token = runCatching { requireValidToken(name.takeLast(TOKEN_CHARACTERS)) }.getOrNull() ?: return null
+        return StoredOwnershipReference(file, scope, token)
+    }
+
+    private fun observedRecoveryTokens(names: Set<String>): Set<String> = names.flatMapTo(mutableSetOf()) { name ->
+        RECOVERY_TOKEN_PATTERN.findAll(name).mapNotNull { match ->
+            runCatching { requireValidToken(match.value) }.getOrNull()
+        }.toList()
     }
 
     private fun readRow(file: File): AndroidSafOwnedDownloadTransaction =
@@ -103,11 +125,13 @@ internal class AndroidSafDownloadOwnershipStore(
             val token = input.readUtf8()
             val publicationCompleted = formatVersion >= 2 && input.readBoolean()
             val publicationAttempted = if (formatVersion >= 3) input.readBoolean() else publicationCompleted
+            val backupDisplayName = if (formatVersion >= 4 && input.readBoolean()) input.readUtf8() else null
             val transaction = AndroidSafOwnedDownloadTransaction(
                 finalName = finalName,
                 token = token,
                 publicationAttempted = publicationAttempted,
                 publicationCompleted = publicationCompleted,
+                backupDisplayName = backupDisplayName,
             )
             check(input.read() == -1) { "SAF download recovery storage contains trailing data." }
             transaction
@@ -128,6 +152,8 @@ internal class AndroidSafDownloadOwnershipStore(
                     output.writeUtf8(transaction.token)
                     output.writeBoolean(transaction.publicationCompleted)
                     output.writeBoolean(transaction.publicationAttempted)
+                    output.writeBoolean(transaction.backupDisplayName != null)
+                    transaction.backupDisplayName?.let { displayName -> output.writeUtf8(displayName) }
                     output.flush()
                     fileOutput.fd.sync()
                 }
@@ -194,14 +220,24 @@ internal class AndroidSafDownloadOwnershipStore(
     private companion object {
         val LOCK = Any()
         const val MAGIC = 0x4E435344 // NCSD
-        const val FORMAT_VERSION = 3
+        const val FORMAT_VERSION = 4
         const val SCOPE_HEX_CHARACTERS = 64
+        const val TOKEN_CHARACTERS = 36
         const val MAX_FIELD_BYTES = 4 * 1024
         const val MAX_ROWS = 4_096
         const val ROW_SUFFIX = ".row"
         const val TEMP_SUFFIX = ".tmp"
         val HEX_CHARACTERS = '0'..'9' union 'a'..'f'
+        val RECOVERY_TOKEN_PATTERN = Regex(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        )
     }
+
+    private data class StoredOwnershipReference(
+        val file: File,
+        val scope: String,
+        val token: String,
+    )
 
     private data class StoredOwnershipRow(
         val file: File,

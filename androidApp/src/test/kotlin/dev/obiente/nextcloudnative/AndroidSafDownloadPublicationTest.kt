@@ -356,6 +356,53 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
+    fun `provider normalized backup name is persisted before failed publication recovery`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val providerBackupName = "provider-backup-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames[transaction.backupName] = providerBackupName
+            failBeforeRenameTo = "Archive"
+        }
+
+        assertFailsWith<IOException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(18, 19))
+            }
+        }
+
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `provider normalized backup name remains owned across restart`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val providerBackupName = "provider-backup-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames[transaction.backupName] = providerBackupName
+            failNextDeletionOfName = providerBackupName
+        }
+        val first = publisher(directory)
+
+        first.publish("Archive", directory.documentNamed("Archive")) { output ->
+            output.write(byteArrayOf(20, 21))
+        }
+
+        val persisted = directory.ownership.transactions().single()
+        assertEquals(providerBackupName, persisted.backupDisplayName)
+        assertEquals(listOf("Archive"), first.visibleDocuments().map { it.displayName })
+        assertEquals(setOf("Archive", providerBackupName), directory.names().toSet())
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
     fun `file ownership survives recreation and follows its recovery token after a parent move`() {
         val root = Files.createTempDirectory("saf-download-ownership-").toFile()
         try {
@@ -368,7 +415,15 @@ class AndroidSafDownloadPublicationTest {
                 listOf(transaction),
                 restarted.forDirectory("content://provider/tree/root/document/one").transactions(),
             )
-            val attempted = transaction.copy(publicationAttempted = true)
+            val protected = transaction.copy(backupDisplayName = "provider-backup-$TOKEN")
+            restarted.forDirectory("content://provider/tree/root/document/one").replace(protected)
+            assertEquals(
+                listOf(protected),
+                AndroidSafDownloadOwnershipStore(root)
+                    .forDirectory("content://provider/tree/root/document/one")
+                    .transactions(),
+            )
+            val attempted = protected.copy(publicationAttempted = true)
             restarted.forDirectory("content://provider/tree/root/document/one").replace(attempted)
             assertEquals(
                 listOf(attempted),
@@ -401,11 +456,37 @@ class AndroidSafDownloadPublicationTest {
         }
     }
 
+    @Test
+    fun `malformed ownership row blocks only its encoded recovery scope`() {
+        val root = Files.createTempDirectory("saf-download-ownership-malformed-").toFile()
+        try {
+            val first = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+            val second = AndroidSafOwnedDownloadTransaction("Photos", OTHER_TOKEN)
+            val store = AndroidSafDownloadOwnershipStore(root)
+            store.forDirectory("content://provider/tree/root/document/one").add(first)
+            store.forDirectory("content://provider/tree/root/document/two").add(second)
+            val damaged = root.listFiles().orEmpty().single { file -> "-${first.token}.row" in file.name }
+            damaged.writeBytes(byteArrayOf(0x01, 0x02))
+
+            assertFailsWith<Exception> {
+                store.forDirectory("content://provider/tree/root/document/one").transactions()
+            }
+            assertEquals(
+                listOf(second),
+                store.forDirectory("content://provider/tree/root/document/two").transactions(),
+            )
+            assertTrue(damaged.isFile)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun publisher(directory: FakeSafDirectory) =
         AndroidSafDownloadPublisher(directory, directory.ownership) { TOKEN }
 
     private companion object {
         const val TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
+        const val OTHER_TOKEN = "fedcba98-7654-3210-fedc-ba9876543210"
     }
 }
 
@@ -425,8 +506,10 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var throwAfterRenameTo: String? = null
     var failBeforeRenameTo: String? = null
     var replaceStageWithUnrelatedFinalBeforeRenameTo: String? = null
+    val normalizedRenameNames = mutableMapOf<String, String>()
     var failNextBackupDeletion: Boolean = false
     var failNextStageDeletion: Boolean = false
+    var failNextDeletionOfName: String? = null
     var documentsFailure: IOException? = null
     var cancelNextDocumentsAfterRenameFailure: CancellationException? = null
     private var documentsCancellation: CancellationException? = null
@@ -470,7 +553,6 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     }
 
     override fun rename(document: Int, displayName: String): Int {
-        require(entries.values.none { it.document != document && it.displayName == displayName })
         if (
             replaceStageWithUnrelatedFinalBeforeRenameTo == displayName &&
             ".nextcloud-native-download-" in entries.getValue(document).displayName
@@ -486,7 +568,9 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
             cancelNextDocumentsAfterRenameFailure = null
             throw IOException("rename failed before publication")
         }
-        entries.getValue(document).displayName = displayName
+        val actualDisplayName = normalizedRenameNames.remove(displayName) ?: displayName
+        require(entries.values.none { it.document != document && it.displayName == actualDisplayName })
+        entries.getValue(document).displayName = actualDisplayName
         if (throwAfterRenameTo == displayName) {
             throwAfterRenameTo = null
             throw IOException("rename result was lost")
@@ -497,6 +581,10 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     override fun delete(document: Int): Boolean {
         deleteCalls += 1
         val entry = entries.getValue(document)
+        if (failNextDeletionOfName == entry.displayName) {
+            failNextDeletionOfName = null
+            return false
+        }
         if (failNextBackupDeletion && ".nextcloud-native-backup-" in entry.displayName) {
             failNextBackupDeletion = false
             return false
