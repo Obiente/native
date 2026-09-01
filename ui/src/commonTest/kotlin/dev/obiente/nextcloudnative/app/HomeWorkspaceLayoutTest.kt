@@ -289,6 +289,25 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
+    fun `legacy account layout is rebound and copied to the canonical key`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyLayout = defaultHomeWorkspaceLayout(legacyScope)
+            .hide(HomeSectionIds.PhotoBackup)
+            .resize(HomeSectionIds.Activity, HomeSectionSize.Dense)
+        assertTrue(repository.save(legacyLayout))
+
+        val loaded = repository.load(currentScope, legacyScope.accountScopeDigest)
+
+        assertEquals(currentScope, loaded.scope)
+        assertEquals(legacyLayout.sections, loaded.sections)
+        assertEquals(loaded, repository.load(currentScope))
+        assertEquals(currentScope.persistenceKey, storage.lastKey)
+    }
+
+    @Test
     fun `repository reports snapshot encoding failures without touching storage`() {
         val storage = RecordingHomeWorkspaceStorage()
         val repository = HomeWorkspaceLayoutRepository(

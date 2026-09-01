@@ -38,6 +38,25 @@ class NextcloudAccountIdentityTest {
     }
 
     @Test
+    fun canonicalIdentityRetainsThePreviousPersistenceDigestForMigration() {
+        val canonical = session()
+        val equivalent = canonical.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443/Cloud/")
+
+        assertEquals(
+            accountPersistenceScopeDigests(canonical).current,
+            accountPersistenceScopeDigests(equivalent).current,
+        )
+        assertNotEquals(
+            legacyPreviewCacheDigest(canonical),
+            legacyPreviewCacheDigest(equivalent),
+        )
+        assertEquals(
+            legacyPreviewCacheDigest(equivalent),
+            accountPersistenceScopeDigests(equivalent).legacy,
+        )
+    }
+
+    @Test
     fun nonDefaultPortsRemainDifferentAccounts() {
         val canonical = session()
 

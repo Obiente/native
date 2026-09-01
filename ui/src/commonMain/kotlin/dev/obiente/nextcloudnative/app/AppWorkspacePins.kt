@@ -19,16 +19,26 @@ internal data class AppWorkspacePinsLoad(
 internal class AppWorkspacePinsRepository(
     private val storage: HomeWorkspaceLayoutStorage,
 ) {
-    fun load(accountScopeDigest: String): List<String> {
-        return loadWithProvenance(accountScopeDigest).appIds
+    fun load(accountScopeDigest: String, legacyAccountScopeDigest: String? = null): List<String> {
+        return loadWithProvenance(accountScopeDigest, legacyAccountScopeDigest).appIds
     }
 
-    fun loadWithProvenance(accountScopeDigest: String): AppWorkspacePinsLoad {
+    fun loadWithProvenance(
+        accountScopeDigest: String,
+        legacyAccountScopeDigest: String? = null,
+    ): AppWorkspacePinsLoad {
         val read = runCatching { storage.read(persistenceKey(accountScopeDigest)) }
         if (read.isFailure) {
             return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = false)
         }
-        val encoded = read.getOrNull()
+        var migratedFromLegacy = false
+        val encoded = read.getOrNull() ?: legacyAccountScopeDigest?.let { legacyScope ->
+            val legacyRead = runCatching { storage.read(persistenceKey(legacyScope)) }
+            if (legacyRead.isFailure) {
+                return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = false)
+            }
+            legacyRead.getOrNull()?.also { migratedFromLegacy = true }
+        }
             ?: return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
         if (encoded.length !in 1..MAX_APP_WORKSPACE_PINS_CHARACTERS) {
             return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
@@ -39,10 +49,9 @@ internal class AppWorkspacePinsRepository(
         if (snapshot.schemaVersion != APP_WORKSPACE_PINS_SCHEMA_VERSION) {
             return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
         }
-        return AppWorkspacePinsLoad(
-            validatedAppWorkspacePinnedIds(snapshot.appIds) ?: defaultAppWorkspacePinnedIds(),
-            storageAuthoritative = true,
-        )
+        val appIds = validatedAppWorkspacePinnedIds(snapshot.appIds) ?: defaultAppWorkspacePinnedIds()
+        val migrated = !migratedFromLegacy || save(accountScopeDigest, appIds)
+        return AppWorkspacePinsLoad(appIds, storageAuthoritative = migrated)
     }
 
     fun save(accountScopeDigest: String, appIds: List<String>): Boolean {

@@ -233,14 +233,15 @@ internal fun NativeDashboardScreen(
     val workspaceRepository = remember(workspaceStorage) {
         HomeWorkspaceLayoutRepository(workspaceStorage)
     }
-    val workspaceScope = remember(session.serverUrl, session.loginName, formFactor) {
+    val workspacePersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
+    val workspaceScope = remember(workspacePersistenceScopes.current, formFactor) {
         HomeWorkspaceScope(
-            accountScopeDigest = previewCacheDigest(session),
+            accountScopeDigest = workspacePersistenceScopes.current,
             formFactor = formFactor,
         )
     }
-    var workspaceLayout by remember(workspaceScope) {
-        mutableStateOf(workspaceRepository.load(workspaceScope))
+    var workspaceLayout by remember(workspaceScope, workspacePersistenceScopes.legacy) {
+        mutableStateOf(workspaceRepository.load(workspaceScope, workspacePersistenceScopes.legacy))
     }
 
     NativeDashboardPresentation(

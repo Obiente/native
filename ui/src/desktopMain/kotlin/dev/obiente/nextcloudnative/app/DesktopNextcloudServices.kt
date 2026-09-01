@@ -3691,9 +3691,9 @@ class DesktopNextcloudServices(
             }
         }
     }
-
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         sessionPublicationGuard.serialize {
+            val encodedRegistry = prepareDesktopAccountRegistry(session)
             listOf(session.serverUrl, session.loginName, session.appPassword)
                 .forEach(supportDiagnostics::registerPrivateValue)
             try {
@@ -3719,9 +3719,9 @@ class DesktopNextcloudServices(
                 )
                 throw failure
             }
+            persistDesktopAccountRegistry(preferences, encodedRegistry)
             preferences.put(KEY_SERVER, session.serverUrl)
             preferences.put(KEY_LOGIN, session.loginName)
-            persistDesktopAccountRegistry(preferences, session)
             val accountIdentity = desktopFileCacheAccountId(session)
             supportDiagnostics.setActiveAccountIdentity(accountIdentity)
             supportIntake.setActiveAccountIdentity(accountIdentity)
