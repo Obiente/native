@@ -43,6 +43,19 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun selectionFlushesRegistryAndLegacyMetadataBeforeReturning() = withStore { preferences, secrets ->
+        var flushCount = 0
+        val persistence = persistence(preferences, secrets) { flushCount += 1 }
+        persistence.saveSession(firstSession())
+        persistence.saveSession(secondSession())
+
+        assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
+        assertEquals(3, flushCount)
+        assertEquals(firstSession().serverUrl, preferences.get("server", null))
+        assertEquals(firstSession().loginName, preferences.get("login", null))
+    }
+
+    @Test
     fun unsupportedFutureRegistryUsesLegacyCredentialWithoutOverwritingIt() = withStore { preferences, secrets ->
         val session = firstSession()
         val futureRegistry = """{"version":2,"futureAccounts":[{"id":"future"}]}"""
@@ -72,6 +85,45 @@ class DesktopAccountCredentialPersistenceTest {
         assertEquals(listOf("ACCOUNT_REGISTRY_MALFORMED"), diagnostics.mapNotNull { it.code })
         assertDiagnosticsExcludePrivateValues(diagnostics)
     }
+
+    @Test
+    fun legacyMigrationFlushesBeforeDeletingTheOnlyLegacyCredential() = withStore { preferences, secrets ->
+        val session = firstSession()
+        val legacyReference = desktopSessionSecretReference(session.serverUrl, session.loginName)
+        putLegacySession(preferences, secrets, session)
+        var legacyPresentAtFlush = false
+
+        val restored = persistence(preferences, secrets) {
+            legacyPresentAtFlush = secrets.load(legacyReference) != null
+        }.loadActiveSession()
+
+        assertEquals(session, restored)
+        assertTrue(legacyPresentAtFlush)
+        assertNull(secrets.load(legacyReference))
+    }
+
+    @Test
+    fun failedMigrationFlushKeepsLegacyCredentialAndRollsBackCachedMetadata() =
+        withStore { preferences, secrets ->
+            val session = firstSession()
+            val legacyReference = desktopSessionSecretReference(session.serverUrl, session.loginName)
+            putLegacySession(preferences, secrets, session)
+            val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+            var flushAttempts = 0
+
+            val restored = persistence(preferences, secrets, diagnostics) {
+                flushAttempts += 1
+                if (flushAttempts == 1) error("synthetic flush failure")
+            }.loadActiveSession()
+
+            assertEquals(session, restored)
+            assertNull(preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
+            assertNotNull(secrets.load(legacyReference))
+            assertEquals(
+                listOf("ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED", "ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED"),
+                diagnostics.mapNotNull { it.code },
+            )
+        }
 
     @Test
     fun activeRegistryMismatchNeverBindsTheLegacyPasswordToAnotherAccount() = withStore { preferences, secrets ->
@@ -167,7 +219,8 @@ class DesktopAccountCredentialPersistenceTest {
         preferences: Preferences,
         secrets: MemorySecretStore,
         diagnostics: MutableList<SupportDiagnosticEventDraft> = mutableListOf(),
-    ) = DesktopAccountCredentialPersistence(preferences, secrets, diagnostics::add)
+        flushPreferences: () -> Unit = preferences::flush,
+    ) = DesktopAccountCredentialPersistence(preferences, secrets, diagnostics::add, flushPreferences)
 
     private fun putLegacySession(
         preferences: Preferences,
