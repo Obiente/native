@@ -152,6 +152,51 @@ class NextcloudAccountRegistryTest {
     }
 
     @Test
+    fun fullRegistryReplacesTheStaleActiveRecordWithTheLegacySession() {
+        val legacy = session("https://legacy.example.test", "alice", "private-app-password")
+        val persistedAccounts = (0 until MAX_LOCAL_ACCOUNTS).map { index ->
+            session("https://account-$index.example.test", "user-$index", "secret-$index").accountRecord()
+        }
+        val staleActive = persistedAccounts[17]
+        val encoded = encodeNextcloudAccountRegistry(
+            NextcloudAccountRegistry(persistedAccounts, staleActive.id),
+        )
+
+        val restored = restoreNextcloudAccountRegistry(encoded, legacy)
+
+        assertEquals(NextcloudAccountRegistryRecoveryReason.ActiveSessionMismatch, restored.recoveryReason)
+        assertEquals(legacy.accountId, restored.registry.activeAccountId)
+        assertEquals(MAX_LOCAL_ACCOUNTS, restored.registry.accounts.size)
+        assertTrue(legacy.accountRecord() in restored.registry.accounts)
+        assertFalse(staleActive in restored.registry.accounts)
+        assertTrue(restored.needsPersistence)
+    }
+
+    @Test
+    fun fullUnselectedRegistryUsesADeterministicBoundedReplacement() {
+        val legacy = session("https://legacy.example.test", "alice", "private-app-password")
+        val persistedAccounts = (0 until MAX_LOCAL_ACCOUNTS).map { index ->
+            session("https://account-$index.example.test", "user-$index", "secret-$index").accountRecord()
+        }
+        val displaced = persistedAccounts.maxBy { account -> account.id.storageKey }
+        val forward = encodeNextcloudAccountRegistry(
+            NextcloudAccountRegistry(persistedAccounts, activeAccountId = null),
+        )
+        val reverse = encodeNextcloudAccountRegistry(
+            NextcloudAccountRegistry(persistedAccounts.reversed(), activeAccountId = null),
+        )
+
+        val restoredForward = restoreNextcloudAccountRegistry(forward, legacy)
+        val restoredReverse = restoreNextcloudAccountRegistry(reverse, legacy)
+
+        assertEquals(restoredForward, restoredReverse)
+        assertEquals(MAX_LOCAL_ACCOUNTS, restoredForward.registry.accounts.size)
+        assertEquals(legacy.accountId, restoredForward.registry.activeAccountId)
+        assertTrue(legacy.accountRecord() in restoredForward.registry.accounts)
+        assertFalse(displaced in restoredForward.registry.accounts)
+    }
+
+    @Test
     fun removalDoesNotSilentlySelectAnotherAccount() {
         val first = session("https://one.example.test", "alice", "first-secret")
         val second = session("https://two.example.test", "alice", "second-secret")

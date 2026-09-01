@@ -121,7 +121,7 @@ fun restoreNextcloudAccountRegistry(
             )
         }
         return RestoredNextcloudAccountRegistry(
-            registry = persisted.upsertAndSelect(legacyAccount),
+            registry = persisted.reconcileLegacyActiveAccount(legacyAccount),
             source = NextcloudAccountRegistrySource.LegacySession,
             recoveryReason = NextcloudAccountRegistryRecoveryReason.ActiveSessionMismatch,
         )
@@ -149,6 +149,16 @@ fun restoreNextcloudAccountRegistry(
         source = NextcloudAccountRegistrySource.Empty,
         recoveryReason = encoded?.let { NextcloudAccountRegistryRecoveryReason.MalformedRegistry },
     )
+}
+
+private fun NextcloudAccountRegistry.reconcileLegacyActiveAccount(
+    legacyAccount: NextcloudAccountRecord,
+): NextcloudAccountRegistry {
+    if (accounts.any { account -> account.id == legacyAccount.id } || accounts.size < MAX_LOCAL_ACCOUNTS) {
+        return upsertAndSelect(legacyAccount)
+    }
+    val displacedId = activeAccountId ?: accounts.maxBy { account -> account.id.storageKey }.id
+    return remove(displacedId).upsertAndSelect(legacyAccount)
 }
 
 fun encodeNextcloudAccountRegistry(registry: NextcloudAccountRegistry): String =

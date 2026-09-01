@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -17,7 +18,13 @@ internal class HomeWorkspaceLayoutRepository(
         ::encodeHomeWorkspaceLayoutSnapshot,
 ) {
     fun load(scope: HomeWorkspaceScope, legacyAccountScopeDigest: String? = null): HomeWorkspaceLayout {
-        val encoded = runCatching { storage.read(scope.persistenceKey) }.getOrNull()
+        val encoded = try {
+            storage.read(scope.persistenceKey)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            return defaultHomeWorkspaceLayout(scope)
+        }
         if (encoded != null) return decodeHomeWorkspaceLayoutSnapshot(scope, encoded)
         val legacyScope = legacyAccountScopeDigest?.let { digest ->
             HomeWorkspaceScope(digest, scope.formFactor)
