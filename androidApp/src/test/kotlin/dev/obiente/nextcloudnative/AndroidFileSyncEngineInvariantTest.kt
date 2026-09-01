@@ -206,29 +206,79 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertFailsWith<IllegalStateException> {
             removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    true
+                },
                 cleanLedger = {
                     events += "clean"
                     error("ledger unavailable")
                 },
                 persistRemoval = { events += "persist" },
                 cancelSchedule = { events += "cancel" },
+                releaseLocalGrant = { events += "release" },
             )
         }
 
-        assertEquals(listOf("clean"), events)
+        assertEquals(listOf("reconcile", "clean"), events)
     }
 
     @Test
-    fun pairRemovalPersistsBeforeCancellingItsSchedule() = runBlocking {
+    fun pairRemovalReconcilesBeforePersistingAndReleasingItsGrant() = runBlocking {
         val events = mutableListOf<String>()
 
-        removeConfiguredFileSyncPair(
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                true
+            },
             cleanLedger = { events += "clean" },
             persistRemoval = { events += "persist" },
             cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
         )
 
-        assertEquals(listOf("clean", "persist", "cancel"), events)
+        assertTrue(removed)
+        assertEquals(listOf("reconcile", "clean", "persist", "cancel", "release"), events)
+    }
+
+    @Test
+    fun pairRemovalRetainsItsStateAndGrantWhenLocalRecoveryIsUnavailable() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                false
+            },
+            cleanLedger = { events += "clean" },
+            persistRemoval = { events += "persist" },
+            cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
+        )
+
+        assertFalse(removed)
+        assertEquals(listOf("reconcile"), events)
+    }
+
+    @Test
+    fun pairRemovalRecoveryPropagatesCancellationBeforeAnyMutation() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    throw CancellationException("pair removal cancelled")
+                },
+                cleanLedger = { events += "clean" },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        assertEquals(listOf("reconcile"), events)
     }
 
     @Test

@@ -81,6 +81,7 @@ internal interface AndroidFileSyncLocalTree {
     }
     fun delete(path: String, expectedLocalRevision: String)
     fun resolve(path: String): AndroidLocalSyncDocument?
+    fun reconcileOwnedDownloads() = Unit
 }
 
 /**
@@ -126,6 +127,34 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }
         return result.sortedBy { it.entry.relativePath }
+    }
+
+    override fun reconcileOwnedDownloads() {
+        val pending = ArrayDeque<Pair<String, Uri>>()
+        pending += "" to rootUri
+        var visitedEntries = 0
+        while (pending.isNotEmpty()) {
+            val (parentPath, parentUri) = pending.removeFirst()
+            require(parentPath.count { it == '/' } < MAX_DEPTH) {
+                "The local recovery folder is nested too deeply."
+            }
+            val publisher = downloadPublisher(parentUri, parentPath)
+            publisher.reconcile()
+            require(!publisher.hasPendingRecovery()) {
+                "A local download still needs safe recovery. Run this folder sync before removing it."
+            }
+            val visibleUris = publisher.visibleDocuments().mapTo(mutableSetOf()) { it.document }
+            rawChildren(parentUri, parentPath).forEach { document ->
+                if (document.uri !in visibleUris) return@forEach
+                require(visitedEntries < MAX_ENTRIES) {
+                    "The local recovery folder contains too many entries."
+                }
+                visitedEntries += 1
+                if (document.entry.kind == SyncEntryKind.Directory) {
+                    pending += document.entry.relativePath to document.uri
+                }
+            }
+        }
     }
 
     override fun contentHash(
@@ -375,27 +404,35 @@ internal class AndroidSafFileSyncLocalTree(
     }
 
     private fun children(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
-        val publisher = AndroidSafDownloadPublisher(
-            directory = publicationDirectory(parentUri, parentPath),
-            ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
-        )
+        val publisher = downloadPublisher(parentUri, parentPath)
         publisher.reconcile()
         val visibleUris = publisher.visibleDocuments().mapTo(mutableSetOf()) { it.document }
         return rawChildren(parentUri, parentPath).filter { it.uri in visibleUris }
     }
 
+    private fun downloadPublisher(
+        parentUri: Uri,
+        parentPath: String,
+    ): AndroidSafDownloadPublisher<Uri> = AndroidSafDownloadPublisher(
+        directory = publicationDirectory(parentUri, parentPath),
+        ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
+    )
+
     private fun rawChildren(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
         val parentId = DocumentsContract.getDocumentId(parentUri)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-        return resolver.query(childrenUri, PROJECTION, null, null, null)?.use { cursor ->
+        val cursor = requireNotNull(resolver.query(childrenUri, PROJECTION, null, null, null)) {
+            "The local file provider could not list the selected folder."
+        }
+        return cursor.use {
             buildList {
-                while (cursor.moveToNext()) {
-                    val documentId = cursor.getString(0)
-                    val name = cursor.getString(1)?.takeIf(String::isNotBlank) ?: continue
+                while (it.moveToNext()) {
+                    val documentId = it.getString(0)
+                    val name = it.getString(1)?.takeIf(String::isNotBlank) ?: continue
                     if (name.contains('/') || name.any(Char::isISOControl)) continue
-                    val mimeType = cursor.getString(2).orEmpty()
-                    val modified = if (cursor.isNull(3)) 0L else cursor.getLong(3)
-                    val size = if (cursor.isNull(4)) null else cursor.getLong(4).coerceAtLeast(0L)
+                    val mimeType = it.getString(2).orEmpty()
+                    val modified = if (it.isNull(3)) 0L else it.getLong(3)
+                    val size = if (it.isNull(4)) null else it.getLong(4).coerceAtLeast(0L)
                     val path = if (parentPath.isBlank()) name else "$parentPath/$name"
                     val kind = if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
                         SyncEntryKind.Directory

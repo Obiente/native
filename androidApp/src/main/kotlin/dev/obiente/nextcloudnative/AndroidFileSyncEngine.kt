@@ -1,10 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
@@ -313,12 +311,17 @@ internal class AndroidFileSyncEngine(context: Context) {
                 )
             }
             val remaining = removeFileSyncPair(cleanupResult.state, pairId)
-            val mediaStore = createAndroidMediaBackupLedgerStore(
-                context = appContext,
-                recoverInterruptedTransfers = false,
-            )
-            removeConfiguredFileSyncPair(
+            val releasesLocalGrant = pair.localRootId.startsWith("content://") &&
+                remaining.pairs.none { it.localRootId == pair.localRootId }
+            val removed = removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    reconcileSafDownloadsBeforeGrantRelease(appContext, pair.localRootId, releasesLocalGrant)
+                },
                 cleanLedger = {
+                    val mediaStore = createAndroidMediaBackupLedgerStore(
+                        context = appContext,
+                        recoverInterruptedTransfers = false,
+                    )
                     try {
                         mediaStore.deleteUnfinishedSource(
                             accountId = pair.accountId,
@@ -344,17 +347,14 @@ internal class AndroidFileSyncEngine(context: Context) {
                     )
                 },
                 cancelSchedule = { scheduler.cancel(pairId) },
+                releaseLocalGrant = {
+                    releaseSafGrantAfterPairRemoval(appContext, pair.localRootId, releasesLocalGrant)
+                },
             )
-            if (
-                pair.localRootId.startsWith("content://") &&
-                remaining.pairs.none { it.localRootId == pair.localRootId }
-            ) {
-                runCatching {
-                    appContext.contentResolver.releasePersistableUriPermission(
-                        Uri.parse(pair.localRootId),
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                    )
-                }
+            if (!removed) {
+                return@withLock FileSyncCenterActionResult.Rejected(
+                    "A local download still needs safe recovery. Run this folder sync before removing it.",
+                )
             }
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }

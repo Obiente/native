@@ -118,6 +118,7 @@ class AndroidSafDownloadPublicationTest {
         val transaction = AndroidSafOwnedDownloadTransaction(
             finalName = "Archive",
             token = TOKEN,
+            publicationAttempted = true,
             publicationCompleted = true,
         )
         val directory = FakeSafDirectory().apply {
@@ -128,6 +129,47 @@ class AndroidSafDownloadPublicationTest {
         publisher(directory).reconcile()
 
         assertEquals(emptyList(), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `restart after publication rename never restores an attempted backup`() {
+        val transaction = AndroidSafOwnedDownloadTransaction(
+            finalName = "Archive",
+            token = TOKEN,
+            publicationAttempted = true,
+        )
+        val directory = FakeSafDirectory().apply {
+            ownership.add(transaction)
+            addDirectory(transaction.backupName)
+            addFile("Archive", byteArrayOf(23, 24))
+        }
+        val restarted = publisher(directory)
+
+        restarted.reconcile()
+        directory.delete(directory.documentNamed("Archive"))
+        restarted.reconcile()
+
+        assertEquals(listOf(transaction.backupName), directory.names())
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `unavailable provider listing retains physical and durable recovery state`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            ownership.add(transaction)
+            addDirectory(transaction.backupName)
+            documentsFailure = IOException("provider unavailable")
+        }
+
+        assertFailsWith<IOException> { publisher(directory).reconcile() }
+
+        assertEquals(listOf(transaction.backupName), directory.names())
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+        directory.documentsFailure = null
+        publisher(directory).reconcile()
+        assertEquals(listOf("Archive"), directory.names())
         assertEquals(emptyList(), directory.ownership.transactions())
     }
 
@@ -272,7 +314,7 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
-    fun `file ownership survives store recreation and stays scoped to its SAF directory`() {
+    fun `file ownership survives recreation and follows its recovery token after a parent move`() {
         val root = Files.createTempDirectory("saf-download-ownership-").toFile()
         try {
             val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
@@ -284,10 +326,10 @@ class AndroidSafDownloadPublicationTest {
                 listOf(transaction),
                 restarted.forDirectory("content://provider/tree/root/document/one").transactions(),
             )
-            val published = transaction.copy(publicationCompleted = true)
-            restarted.forDirectory("content://provider/tree/root/document/one").replace(published)
+            val attempted = transaction.copy(publicationAttempted = true)
+            restarted.forDirectory("content://provider/tree/root/document/one").replace(attempted)
             assertEquals(
-                listOf(published),
+                listOf(attempted),
                 AndroidSafDownloadOwnershipStore(root)
                     .forDirectory("content://provider/tree/root/document/one")
                     .transactions(),
@@ -296,8 +338,16 @@ class AndroidSafDownloadPublicationTest {
                 emptyList(),
                 restarted.forDirectory("content://provider/tree/root/document/two").transactions(),
             )
+            val relocated = restarted.forDirectory("content://provider/tree/root/document/two")
+            assertEquals(
+                listOf(attempted),
+                relocated.transactions(setOf(attempted.backupName)),
+            )
+            val published = attempted.copy(publicationCompleted = true)
+            relocated.replace(published)
+            assertEquals(listOf(published), relocated.transactions(setOf(published.backupName)))
 
-            restarted.forDirectory("content://provider/tree/root/document/one").remove(published)
+            relocated.remove(published)
             assertEquals(
                 emptyList(),
                 AndroidSafDownloadOwnershipStore(root)
@@ -335,6 +385,7 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var replaceStageWithUnrelatedFinalBeforeRenameTo: String? = null
     var failNextBackupDeletion: Boolean = false
     var failNextStageDeletion: Boolean = false
+    var documentsFailure: IOException? = null
     var deleteCalls: Int = 0
     val ownership = FakeSafDownloadOwnership()
 
@@ -349,8 +400,9 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
 
     fun names(): List<String> = entries.values.map { it.displayName }.sorted()
 
-    override fun documents(): List<AndroidSafPublicationDocument<Int>> = entries.values.map { entry ->
-        AndroidSafPublicationDocument(entry.document, entry.displayName)
+    override fun documents(): List<AndroidSafPublicationDocument<Int>> {
+        documentsFailure?.let { throw it }
+        return entries.values.map { entry -> AndroidSafPublicationDocument(entry.document, entry.displayName) }
     }
 
     override fun createFile(displayName: String): Int = addFile(displayName)
@@ -417,7 +469,7 @@ private class FakeSafDownloadOwnership : AndroidSafDownloadOwnership {
     var failNextAdd = false
     var failNextRemove = false
 
-    override fun transactions(): List<AndroidSafOwnedDownloadTransaction> = records.toList()
+    override fun transactions(observedNames: Set<String>): List<AndroidSafOwnedDownloadTransaction> = records.toList()
 
     override fun add(transaction: AndroidSafOwnedDownloadTransaction) {
         if (failNextAdd) {

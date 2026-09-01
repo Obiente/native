@@ -19,7 +19,7 @@ internal interface AndroidSafPublicationDirectory<Document> {
 }
 
 internal interface AndroidSafDownloadOwnership {
-    fun transactions(): List<AndroidSafOwnedDownloadTransaction>
+    fun transactions(observedNames: Set<String> = emptySet()): List<AndroidSafOwnedDownloadTransaction>
     fun add(transaction: AndroidSafOwnedDownloadTransaction)
     fun replace(transaction: AndroidSafOwnedDownloadTransaction)
     fun remove(transaction: AndroidSafOwnedDownloadTransaction)
@@ -38,7 +38,8 @@ internal class AndroidSafDownloadPublisher<Document>(
     private val newToken: () -> String = { UUID.randomUUID().toString() },
 ) {
     fun reconcile() {
-        ownership.transactions().forEach { transaction ->
+        val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
+        ownership.transactions(observedNames).forEach { transaction ->
             val final = directory.documents().singleOrNull { it.displayName == transaction.finalName }
             val stage = ownedDocument(transaction.stageName)
             val backup = ownedDocument(transaction.backupName)
@@ -49,7 +50,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                     restoreBackup(transaction, backup)
                     deleteBestEffort(stage.document)
                 }
-                backup != null && stage == null && final == null ->
+                backup != null && stage == null && final == null && !transaction.publicationAttempted ->
                     restoreBackup(transaction, backup)
                 backup == null && stage != null ->
                     deleteBestEffort(stage.document)
@@ -137,6 +138,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 throw failure
             }
         }
+        transaction = markPublicationAttempted(transaction)
 
         try {
             val publishedDocument = requireNotNull(directory.rename(stage, finalName)) {
@@ -170,10 +172,17 @@ internal class AndroidSafDownloadPublisher<Document>(
     }
 
     fun visibleDocuments(): List<AndroidSafPublicationDocument<Document>> {
-        val ownedNames = ownership.transactions().flatMapTo(mutableSetOf()) { transaction ->
+        val documents = directory.documents()
+        val observedNames = documents.mapTo(mutableSetOf()) { it.displayName }
+        val ownedNames = ownership.transactions(observedNames).flatMapTo(mutableSetOf()) { transaction ->
             listOf(transaction.stageName, transaction.backupName)
         }
-        return directory.documents().filterNot { it.displayName in ownedNames }
+        return documents.filterNot { it.displayName in ownedNames }
+    }
+
+    fun hasPendingRecovery(): Boolean {
+        val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
+        return ownership.transactions(observedNames).isNotEmpty()
     }
 
     private fun ownedDocument(name: String): AndroidSafPublicationDocument<Document>? =
@@ -227,9 +236,17 @@ internal class AndroidSafDownloadPublisher<Document>(
             ownedDocument(transaction.stageName) == null
 
     private fun markPublished(transaction: AndroidSafOwnedDownloadTransaction): AndroidSafOwnedDownloadTransaction {
-        val published = transaction.copy(publicationCompleted = true)
+        val published = transaction.copy(publicationAttempted = true, publicationCompleted = true)
         ownership.replace(published)
         return published
+    }
+
+    private fun markPublicationAttempted(
+        transaction: AndroidSafOwnedDownloadTransaction,
+    ): AndroidSafOwnedDownloadTransaction {
+        val attempted = transaction.copy(publicationAttempted = true)
+        ownership.replace(attempted)
+        return attempted
     }
 
     private fun deleteBestEffort(document: Document) {
@@ -262,11 +279,13 @@ internal class AndroidSafDownloadPublisher<Document>(
 internal data class AndroidSafOwnedDownloadTransaction(
     val finalName: String,
     val token: String,
+    val publicationAttempted: Boolean = false,
     val publicationCompleted: Boolean = false,
 ) {
     init {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
         require(token == requireValidToken(token))
+        require(!publicationCompleted || publicationAttempted)
     }
 
     val stageName: String = ".$finalName.nextcloud-native-download-$token"

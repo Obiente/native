@@ -1,7 +1,11 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -113,11 +117,50 @@ internal fun <T> loadFileSyncPresentationSnapshot(
 }
 
 internal suspend fun removeConfiguredFileSyncPair(
+    reconcileLocalDownloads: suspend () -> Boolean,
     cleanLedger: suspend () -> Unit,
     persistRemoval: suspend () -> Unit,
     cancelSchedule: suspend () -> Unit,
-) {
+    releaseLocalGrant: suspend () -> Unit,
+): Boolean {
+    if (!reconcileLocalDownloads()) return false
     cleanLedger()
     persistRemoval()
     cancelSchedule()
+    releaseLocalGrant()
+    return true
+}
+
+internal fun reconcileSafDownloadsBeforeGrantRelease(
+    context: Context,
+    localRootId: String,
+    releasesLocalGrant: Boolean,
+): Boolean {
+    if (!releasesLocalGrant) return true
+    return try {
+        createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads()
+        true
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        false
+    }
+}
+
+internal fun releaseSafGrantAfterPairRemoval(
+    context: Context,
+    localRootId: String,
+    releasesLocalGrant: Boolean,
+) {
+    if (!releasesLocalGrant) return
+    try {
+        context.contentResolver.releasePersistableUriPermission(
+            Uri.parse(localRootId),
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+        )
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        // The pair is gone, so a later picker can release or replace this stale grant.
+    }
 }
