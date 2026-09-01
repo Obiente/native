@@ -1,72 +1,225 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudAccountId
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistryRecoveryReason
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.accountRecord
+import dev.obiente.nextcloudnative.app.decodeNextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.restoreNextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.singleAccountRegistry
 import dev.obiente.nextcloudnative.app.toNonSecretSupportDiagnosticExceptionDraft
+import org.json.JSONArray
 import org.json.JSONObject
+
+internal data class AndroidAccountCredentialState(
+    val registry: NextcloudAccountRegistry,
+    val sessions: Map<NextcloudAccountId, NextcloudSession>,
+) {
+    init {
+        require(sessions.size <= MAX_ANDROID_ACCOUNT_CREDENTIALS)
+        require(sessions.size == registry.accounts.size)
+        require(sessions.all { (id, session) ->
+            id == session.accountId && registry.accounts.any { account -> account == session.accountRecord() }
+        })
+        require(registry.activeAccountId == null || registry.activeAccountId in sessions)
+    }
+
+    val activeSession: NextcloudSession?
+        get() = registry.activeAccountId?.let(sessions::get)
+
+    fun upsertAndSelect(session: NextcloudSession): AndroidAccountCredentialState = copy(
+        registry = registry.upsertAndSelect(session.accountRecord()),
+        sessions = sessions + (session.accountId to session),
+    )
+
+    fun select(accountId: NextcloudAccountId): AndroidAccountCredentialState? {
+        if (accountId !in sessions) return null
+        return copy(registry = requireNotNull(registry.select(accountId)))
+    }
+
+    fun remove(accountId: NextcloudAccountId): AndroidAccountCredentialState = copy(
+        registry = registry.remove(accountId),
+        sessions = sessions - accountId,
+    )
+
+    companion object {
+        val Empty = AndroidAccountCredentialState(NextcloudAccountRegistry.Empty, emptyMap())
+    }
+}
+
+internal data class RestoredAndroidAccountCredentialState(
+    val state: AndroidAccountCredentialState?,
+    val needsPersistence: Boolean = false,
+    val diagnosticCode: String? = null,
+)
+
+internal fun restoreAndroidAccountCredentialState(
+    encoded: String,
+    persistMigrated: (String) -> Unit,
+    recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
+): AndroidAccountCredentialState? {
+    val restored = decodeAndroidAccountCredentialState(encoded)
+    restored.diagnosticCode?.let { code -> recordAccountCredentialDiagnostic(code, recordDiagnostic) }
+    if (restored.needsPersistence && restored.state != null) {
+        runCatching { persistMigrated(encodeAndroidAccountCredentialState(restored.state)) }
+            .onFailure { failure ->
+                recordAccountCredentialDiagnostic(
+                    code = "ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED",
+                    recordDiagnostic = recordDiagnostic,
+                    failure = failure,
+                )
+            }
+    }
+    return restored.state
+}
+
+internal fun decodeAndroidAccountCredentialState(encoded: String): RestoredAndroidAccountCredentialState {
+    if (encoded.encodeToByteArray().size > MAX_ANDROID_ACCOUNT_CREDENTIAL_STORE_BYTES) {
+        return malformedAndroidAccountCredentialState()
+    }
+    return try {
+        val json = JSONObject(encoded)
+        if (!json.has(KEY_VERSION)) {
+            restoreLegacyAndroidAccountCredentialState(json)
+        } else {
+            require(json.getInt(KEY_VERSION) == ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION)
+            val registry = requireNotNull(decodeNextcloudAccountRegistry(json.getString(KEY_ACCOUNT_REGISTRY)))
+            val encodedSessions = json.getJSONArray(KEY_CREDENTIALS)
+            require(encodedSessions.length() <= MAX_ANDROID_ACCOUNT_CREDENTIALS)
+            val sessions = linkedMapOf<NextcloudAccountId, NextcloudSession>()
+            repeat(encodedSessions.length()) { index ->
+                val encodedSession = encodedSessions.getJSONObject(index)
+                val session = NextcloudSession(
+                    serverUrl = encodedSession.getString(KEY_SERVER_URL),
+                    loginName = encodedSession.getString(KEY_LOGIN_NAME),
+                    appPassword = encodedSession.getString(KEY_APP_PASSWORD),
+                )
+                val claimedAccountId = encodedSession.getString(KEY_ACCOUNT_ID)
+                if (claimedAccountId != session.accountId.storageKey) throw AndroidCredentialMismatchException()
+                if (sessions.put(session.accountId, session) != null) throw AndroidCredentialMismatchException()
+            }
+            if (sessions.size != registry.accounts.size || sessions.any { (_, session) ->
+                    registry.accounts.none { account -> account == session.accountRecord() }
+                }
+            ) {
+                throw AndroidCredentialMismatchException()
+            }
+            if (registry.activeAccountId != null && registry.activeAccountId !in sessions) {
+                throw AndroidCredentialMismatchException()
+            }
+            RestoredAndroidAccountCredentialState(AndroidAccountCredentialState(registry, sessions))
+        }
+    } catch (_: AndroidCredentialMismatchException) {
+        RestoredAndroidAccountCredentialState(
+            state = null,
+            diagnosticCode = "ACCOUNT_CREDENTIAL_SLOT_MISMATCH",
+        )
+    } catch (_: Exception) {
+        malformedAndroidAccountCredentialState()
+    }
+}
+
+internal fun encodeAndroidAccountCredentialState(state: AndroidAccountCredentialState): String = JSONObject()
+    .put(KEY_VERSION, ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION)
+    .put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(state.registry))
+    .put(
+        KEY_CREDENTIALS,
+        JSONArray().also { credentials ->
+            state.sessions.values.sortedBy { session -> session.accountId.storageKey }.forEach { session ->
+                credentials.put(
+                    JSONObject()
+                        .put(KEY_ACCOUNT_ID, session.accountId.storageKey)
+                        .put(KEY_SERVER_URL, session.serverUrl)
+                        .put(KEY_LOGIN_NAME, session.loginName)
+                        .put(KEY_APP_PASSWORD, session.appPassword),
+                )
+            }
+        },
+    )
+    .toString()
+    .also { encoded ->
+        require(encoded.encodeToByteArray().size <= MAX_ANDROID_ACCOUNT_CREDENTIAL_STORE_BYTES)
+    }
 
 internal fun restoreAndroidPersistedSession(
     encoded: String,
-    persistMigrated: (String) -> Boolean,
+    persistMigrated: (String) -> Unit,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
-): NextcloudSession {
-    val json = JSONObject(encoded)
+): NextcloudSession = requireNotNull(
+    restoreAndroidAccountCredentialState(encoded, persistMigrated, recordDiagnostic)?.activeSession,
+) { "The active account credential is unavailable." }
+
+internal fun encodeAndroidPersistedSession(session: NextcloudSession): String =
+    encodeAndroidAccountCredentialState(AndroidAccountCredentialState.Empty.upsertAndSelect(session))
+
+private fun restoreLegacyAndroidAccountCredentialState(
+    json: JSONObject,
+): RestoredAndroidAccountCredentialState {
     val session = NextcloudSession(
-        serverUrl = json.getString("serverUrl"),
-        loginName = json.getString("loginName"),
-        appPassword = json.getString("appPassword"),
+        serverUrl = json.getString(KEY_SERVER_URL),
+        loginName = json.getString(KEY_LOGIN_NAME),
+        appPassword = json.getString(KEY_APP_PASSWORD),
     )
     val encodedRegistry = when (val registry = json.opt(KEY_ACCOUNT_REGISTRY)) {
         null -> null
         is String -> registry
         else -> ""
     }
-    val restored = restoreNextcloudAccountRegistry(encodedRegistry, session)
-    restored.recoveryReason?.let { reason ->
-        recordDiagnostic(
-            SupportDiagnosticEventDraft(
-                severity = SupportDiagnosticSeverity.Warning,
-                component = SupportDiagnosticComponent.Authentication,
-                operation = "account-registry.restore",
-                outcome = "recovered",
-                code = reason.diagnosticCode,
-            ),
-        )
-    }
-    if (restored.needsPersistence) {
-        runCatching {
-            val migrated = json
-                .put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(restored.registry))
-                .toString()
-            check(persistMigrated(migrated)) {
-                "Could not persist the migrated account registry."
-            }
-        }.onFailure { failure ->
-            recordDiagnostic(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Warning,
-                    component = SupportDiagnosticComponent.Authentication,
-                    operation = "account-registry.migrate",
-                    outcome = "failed",
-                    code = "ACCOUNT_REGISTRY_MIGRATION_FAILED",
-                    exception = failure.toNonSecretSupportDiagnosticExceptionDraft(),
-                ),
-            )
-        }
-    }
-    return session
+    val restoredRegistry = restoreNextcloudAccountRegistry(encodedRegistry, session)
+    val credentialRegistry = singleAccountRegistry(session)
+    return RestoredAndroidAccountCredentialState(
+        state = AndroidAccountCredentialState(
+            registry = credentialRegistry,
+            sessions = mapOf(session.accountId to session),
+        ),
+        needsPersistence = restoredRegistry.recoveryReason !=
+            NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion,
+        diagnosticCode = restoredRegistry.recoveryReason?.diagnosticCode ?: if (
+            restoredRegistry.registry != credentialRegistry
+        ) {
+            "ACCOUNT_CREDENTIAL_SLOT_MISMATCH"
+        } else {
+            null
+        },
+    )
 }
 
-internal fun encodeAndroidPersistedSession(session: NextcloudSession): String = JSONObject()
-    .put("serverUrl", session.serverUrl)
-    .put("loginName", session.loginName)
-    .put("appPassword", session.appPassword)
-    .put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(singleAccountRegistry(session)))
-    .toString()
+private fun malformedAndroidAccountCredentialState() = RestoredAndroidAccountCredentialState(
+    state = null,
+    diagnosticCode = "ACCOUNT_CREDENTIAL_STORE_MALFORMED",
+)
 
+private fun recordAccountCredentialDiagnostic(
+    code: String,
+    recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
+    failure: Throwable? = null,
+) {
+    recordDiagnostic(
+        SupportDiagnosticEventDraft(
+            severity = SupportDiagnosticSeverity.Warning,
+            component = SupportDiagnosticComponent.Authentication,
+            operation = "account-credentials.restore",
+            outcome = "recovered",
+            code = code,
+            exception = failure?.toNonSecretSupportDiagnosticExceptionDraft(),
+        ),
+    )
+}
+
+private class AndroidCredentialMismatchException : IllegalArgumentException()
+
+private const val ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION = 2
+private const val MAX_ANDROID_ACCOUNT_CREDENTIALS = 64
+private const val MAX_ANDROID_ACCOUNT_CREDENTIAL_STORE_BYTES = 512 * 1024
+private const val KEY_VERSION = "version"
 private const val KEY_ACCOUNT_REGISTRY = "account_registry_v1"
+private const val KEY_CREDENTIALS = "credentials"
+private const val KEY_ACCOUNT_ID = "accountId"
+private const val KEY_SERVER_URL = "serverUrl"
+private const val KEY_LOGIN_NAME = "loginName"
+private const val KEY_APP_PASSWORD = "appPassword"

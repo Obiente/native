@@ -262,6 +262,18 @@ internal fun desktopSessionSecretReference(serverUrl: String, loginName: String)
     )
 }
 
+internal fun desktopAccountSecretReference(accountId: NextcloudAccountId): DesktopSecretReference =
+    DesktopSecretReference(
+        targetName = "$WINDOWS_CREDENTIAL_PREFIX/session/v2/${accountId.storageKey}",
+        label = "Nextcloud Native account credential",
+        attributes = linkedMapOf(
+            "application" to DESKTOP_APPLICATION_ID,
+            "purpose" to "account-session",
+            "account" to accountId.storageKey,
+            "schema" to "2",
+        ),
+    )
+
 internal fun desktopDeckDraftSecretReference(): DesktopSecretReference = DesktopSecretReference(
     targetName = "$WINDOWS_CREDENTIAL_PREFIX/deck-card-drafts/v1",
     label = "nati.ve Deck draft encryption",
