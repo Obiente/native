@@ -99,6 +99,7 @@ class DesktopFileSyncCleanupCancellationTest {
                         """.trimIndent(),
                     ).build(),
             )
+            server.enqueue(MockResponse.Builder().code(412).build())
             val directory = Files.createTempDirectory("desktop-sync-cleanup-block-").toFile()
             val localRoot = directory.resolve("local").apply { mkdirs() }
             val session = NextcloudSession(server.url("/").toString(), "alice", "secret")
@@ -134,7 +135,7 @@ class DesktopFileSyncCleanupCancellationTest {
 
                 assertIs<FileSyncCenterActionResult.Rejected>(result)
                 assertEquals(FileSyncRejectionScope.Preflight, result.scope)
-                assertEquals(2, server.requestCount)
+                assertEquals(3, server.requestCount)
                 assertEquals(listOf(cleanup), store.loadPair(pair.id).coordinator.pairs.single().pendingUploadCleanups)
             } finally {
                 directory.deleteRecursively()
