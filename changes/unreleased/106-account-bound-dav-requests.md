@@ -1,6 +1,6 @@
 category: fix
 issue: 106
-pull: none
+pull: 428
 platforms: android, desktop
 user-facing: yes
 
