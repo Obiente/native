@@ -1021,6 +1021,7 @@ class DesktopNextcloudServices(
         supportIntake.setActiveAccountIdentity(identity)
     }
     private val sessionPublicationGuard = DesktopSessionPublicationGuard()
+    private val accountOperationGuard = DesktopAccountOperationGuard()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
@@ -1652,7 +1653,6 @@ class DesktopNextcloudServices(
         },
     )
     private val startOnLoginController = DesktopStartOnLoginController()
-    private val fileSyncRunLock = Mutex()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var backgroundFileSyncJob: Job? = null
     private val mutableFileSyncTraySnapshot = MutableStateFlow(
@@ -2703,9 +2703,9 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-run", diagnosticFields) {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
@@ -2753,9 +2753,9 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
@@ -2800,9 +2800,9 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve-batch", diagnosticFields) {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
@@ -2925,23 +2925,23 @@ class DesktopNextcloudServices(
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         var diagnosticAccountId: String? = null
         try {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
+                    return@syncRun FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
                 }
                 val session = loadSession()
-                    ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+                    ?: return@syncRun FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
                 val accountId = desktopFileCacheAccountId(session)
                 diagnosticAccountId = accountId
                 val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         failure.message ?: "Could not load the signed-in account.",
                     )
                 }
                 val initial = loadDesktopFileSyncCenter(session)
                 if (initial.pairs.isEmpty()) {
                     publishFileSyncTraySnapshot(initial, emptyList())
-                    return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
+                    return@syncRun FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
                 }
                 mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
                     phase = DesktopFileSyncTrayPhase.Syncing,
@@ -3683,12 +3683,14 @@ class DesktopNextcloudServices(
         session
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        sessionPublicationGuard.serialize {
-            accountCredentials.saveSession(session)
-            accountSessionPublication.publish(session)
+        accountOperationGuard.serializeWhenSyncIdle {
+            sessionPublicationGuard.serialize {
+                accountCredentials.saveSession(session)
+                accountSessionPublication.publish(session)
+            }
+            synchronized(fileRangeSessionLock) { sessionClearing = false }
+            startDesktopSyncLifecycle()
         }
-        synchronized(fileRangeSessionLock) { sessionClearing = false }
-        startDesktopSyncLifecycle()
     }
 
     override fun listAccounts() = sessionPublicationGuard.serialize(accountCredentials::listAccounts)
@@ -3704,45 +3706,54 @@ class DesktopNextcloudServices(
 
     override suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         withContext(Dispatchers.IO) {
-            if (activeAccountId() == accountId) return@withContext loadSession(accountId)
-            val hasLiveAccountResources = synchronized(fileRangeSessionLock) {
-                activeFileRangeSessions.isNotEmpty()
-            } || synchronized(virtualFolderHydrationJobs) {
-                virtualFolderHydrationJobs.values.any { job -> job.isActive }
-            } || synchronized(virtualFileProviderLock) {
-                linuxVirtualFileSystem != null ||
-                    windowsCloudFilesProvider != null ||
-                    virtualFileCacheTierMutations.isNotEmpty()
-            }
-            if (hasLiveAccountResources) {
-                recordSupportDiagnostic(desktopAccountSelectionBlockedDiagnostic())
-                return@withContext null
-            }
-            val syncJob = synchronized(this@DesktopNextcloudServices) {
-                backgroundFileSyncJob.also { backgroundFileSyncJob = null }
-            }
-            syncJob?.cancel()
-            syncJob?.join()
-            val selected = sessionPublicationGuard.serialize {
-                accountCredentials.selectAccount(accountId)?.also { session ->
-                    accountSessionPublication.publish(session)
+            accountOperationGuard.serialize operation@{
+                if (activeAccountId() == accountId) return@operation loadSession(accountId)
+                val hasLiveAccountResources = synchronized(fileRangeSessionLock) {
+                    activeFileRangeSessions.isNotEmpty()
+                } || synchronized(virtualFolderHydrationJobs) {
+                    virtualFolderHydrationJobs.values.any { job -> job.isActive }
+                } || synchronized(virtualFileProviderLock) {
+                    linuxVirtualFileSystem != null ||
+                        windowsCloudFilesProvider != null ||
+                        virtualFileCacheTierMutations.isNotEmpty()
                 }
+                if (hasLiveAccountResources) {
+                    recordSupportDiagnostic(desktopAccountSelectionBlockedDiagnostic())
+                    return@operation null
+                }
+                val syncJob = synchronized(this@DesktopNextcloudServices) {
+                    backgroundFileSyncJob.also { backgroundFileSyncJob = null }
+                }
+                syncJob?.cancel()
+                syncJob?.join()
+                val selected = accountOperationGuard.withSyncRunLock {
+                    sessionPublicationGuard.serialize {
+                        accountCredentials.selectAccount(accountId)?.also { session ->
+                            accountSessionPublication.publish(session)
+                        }
+                    }
+                }
+                startDesktopSyncLifecycle()
+                selected
             }
-            startDesktopSyncLifecycle()
-            selected
         }
 
-    override suspend fun removeAccount(accountId: NextcloudAccountId): Boolean {
-        if (activeAccountId() == accountId) {
-            clearSession()
-            return true
-        }
-        return withContext(Dispatchers.IO) {
-            sessionPublicationGuard.serialize { accountCredentials.removeAccount(accountId) }
+    override suspend fun removeAccount(accountId: NextcloudAccountId): Boolean = withContext(Dispatchers.IO) {
+        accountOperationGuard.serialize {
+            if (activeAccountId() == accountId) {
+                clearSessionForAccountOperation()
+                true
+            } else {
+                sessionPublicationGuard.serialize { accountCredentials.removeAccount(accountId) }
+            }
         }
     }
 
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
+        accountOperationGuard.serialize { clearSessionForAccountOperation() }
+    }
+
+    private suspend fun clearSessionForAccountOperation() {
         val userHome = File(System.getProperty("user.home"))
         val rangeSessions = synchronized(fileRangeSessionLock) {
             sessionClearing = true
@@ -3763,111 +3774,97 @@ class DesktopNextcloudServices(
                 active
             }
             syncJob?.cancel()
-            val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
-            rangeSessions.forEach { source -> runCatching(source::close) }
-            hydrationJobs.forEach { job -> job.join() }
-            accountId?.let { clearedAccountId ->
-                val prefix = "$clearedAccountId\u0000"
-                synchronized(virtualFolderMutationLock) {
-                    virtualFolderMutationGenerationsByJob.keys.removeIf { key -> key.startsWith(prefix) }
-                    virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith(prefix) }
-                    virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
-                }
-            }
             syncJob?.join()
-            synchronized(virtualFileProviderLock) {
-                linuxVirtualFileSystem?.unmount()
-                linuxVirtualFileSystem = null
-                linuxVirtualMetadataBackend = null
-                linuxVirtualFileMountIdentity = null
-                linuxVirtualFileFailure = null
-                val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
-                val provider = windowsCloudFilesProvider
-                try {
-                    if (provider != null) {
-                        provider.removeSyncRoot()
-                    } else if (isWindowsDesktop()) {
-                        unregisterWindowsCloudFilesRootForUninstall(preferences)
+            accountOperationGuard.withSyncRunLock {
+                val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
+                rangeSessions.forEach { source -> runCatching(source::close) }
+                hydrationJobs.forEach { job -> job.join() }
+                accountId?.let { clearedAccountId ->
+                    val prefix = "$clearedAccountId\u0000"
+                    synchronized(virtualFolderMutationLock) {
+                        virtualFolderMutationGenerationsByJob.keys.removeIf { key -> key.startsWith(prefix) }
+                        virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith(prefix) }
+                        virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
                     }
-                    windowsCloudFilesFailure = null
-                } catch (failure: Throwable) {
-                    windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
-                    supportDiagnostics.record(
-                        SupportDiagnosticEventDraft(
-                            severity = SupportDiagnosticSeverity.Error,
-                            component = SupportDiagnosticComponent.VirtualFiles,
-                            operation = "cloud-files.signout-cleanup",
-                            outcome = "failed",
-                            fields = accountId?.let {
-                                listOf(
-                                    SupportDiagnosticFieldDraft(
-                                        "account",
-                                        it,
-                                        SupportDiagnosticValuePrivacy.Identifier,
+                }
+                synchronized(virtualFileProviderLock) {
+                    linuxVirtualFileSystem?.unmount()
+                    linuxVirtualFileSystem = null
+                    linuxVirtualMetadataBackend = null
+                    linuxVirtualFileMountIdentity = null
+                    linuxVirtualFileFailure = null
+                    val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
+                    val provider = windowsCloudFilesProvider
+                    try {
+                        if (provider != null) {
+                            provider.removeSyncRoot()
+                        } else if (isWindowsDesktop()) {
+                            unregisterWindowsCloudFilesRootForUninstall(preferences)
+                        }
+                        windowsCloudFilesFailure = null
+                    } catch (failure: Throwable) {
+                        windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
+                        supportDiagnostics.record(
+                            SupportDiagnosticEventDraft(
+                                severity = SupportDiagnosticSeverity.Error,
+                                component = SupportDiagnosticComponent.VirtualFiles,
+                                operation = "cloud-files.signout-cleanup",
+                                outcome = "failed",
+                                fields = desktopAccountDiagnosticFields(accountId),
+                                exception = failure.toSupportDiagnosticExceptionDraft(),
+                            ),
+                        )
+                    } finally {
+                        runCatching { provider?.close() }
+                        windowsCloudFilesProvider = null
+                        windowsCloudFilesIdentity = null
+                        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
+                        accountId?.let {
+                            clearWindowsCloudFilesRootPreferences(
+                                preferences,
+                                it,
+                                desktopWindowsCloudFilesRoot(it, userHome).toPath(),
+                            )
+                            clearWindowsCloudFilesRootPreferences(
+                                preferences,
+                                it,
+                                desktopLegacyWindowsCloudFilesRoot(it, userHome).toPath(),
+                            )
+                        }
+                        if (isWindowsDesktop()) {
+                            val uninstallFailure = runCatching {
+                                unregisterWindowsCloudFilesRootForUninstall(preferences, userHome = userHome)
+                            }.exceptionOrNull()
+                            if (uninstallFailure != null) {
+                                windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
+                                    uninstallFailure.message ?: windowsCloudFilesFailureMessage
+                                )
+                                supportDiagnostics.record(
+                                    SupportDiagnosticEventDraft(
+                                        severity = SupportDiagnosticSeverity.Error,
+                                        component = SupportDiagnosticComponent.VirtualFiles,
+                                        operation = "cloud-files.signout-cleanup-retry",
+                                        outcome = "failed",
+                                        fields = desktopAccountDiagnosticFields(accountId),
+                                        exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
                                     ),
                                 )
-                            }.orEmpty(),
-                            exception = failure.toSupportDiagnosticExceptionDraft(),
-                        ),
-                    )
-                } finally {
-                    runCatching { provider?.close() }
-                    windowsCloudFilesProvider = null
-                    windowsCloudFilesIdentity = null
-                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
-                    accountId?.let {
-                        clearWindowsCloudFilesRootPreferences(
-                            preferences,
-                            it,
-                            desktopWindowsCloudFilesRoot(it, userHome).toPath(),
-                        )
-                        clearWindowsCloudFilesRootPreferences(
-                            preferences,
-                            it,
-                            desktopLegacyWindowsCloudFilesRoot(it, userHome).toPath(),
-                        )
-                    }
-                    if (isWindowsDesktop()) {
-                        val uninstallFailure = runCatching {
-                            unregisterWindowsCloudFilesRootForUninstall(preferences, userHome = userHome)
-                        }.exceptionOrNull()
-                        if (uninstallFailure != null) {
-                            windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
-                                uninstallFailure.message ?: windowsCloudFilesFailureMessage
-                            )
-                            supportDiagnostics.record(
-                                SupportDiagnosticEventDraft(
-                                    severity = SupportDiagnosticSeverity.Error,
-                                    component = SupportDiagnosticComponent.VirtualFiles,
-                                    operation = "cloud-files.signout-cleanup-retry",
-                                    outcome = "failed",
-                                    fields = accountId?.let {
-                                        listOf(
-                                            SupportDiagnosticFieldDraft(
-                                                "account",
-                                                it,
-                                                SupportDiagnosticValuePrivacy.Identifier,
-                                            ),
-                                        )
-                                    }.orEmpty(),
-                                    exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
-                                ),
-                            )
+                            }
                         }
                     }
                 }
-            }
-            mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
-                phase = DesktopFileSyncTrayPhase.Idle,
-            )
-            sessionPublicationGuard.serialize {
-                if (activeAccountId != null) {
-                    check(accountCredentials.removeAccount(activeAccountId))
+                mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
+                    phase = DesktopFileSyncTrayPhase.Idle,
+                )
+                sessionPublicationGuard.serialize {
+                    if (activeAccountId != null) {
+                        check(accountCredentials.removeAccount(activeAccountId))
+                    }
+                    supportDiagnostics.setActiveAccountIdentity(null)
+                    supportIntake.setActiveAccountIdentity(null)
                 }
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
+                cleared = true
             }
-            cleared = true
         } finally {
             if (!cleared) {
                 synchronized(fileRangeSessionLock) { sessionClearing = false }

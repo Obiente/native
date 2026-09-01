@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
@@ -7,13 +8,28 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.json.JSONObject
+import java.lang.reflect.Proxy
 
 class AndroidPersistedSessionTest {
+    @Test
+    fun accountCredentialEditsUseCheckedSynchronousCommit() {
+        val successfulCalls = mutableListOf<String>()
+        requireCommittedAndroidAccountCredentialEdit(recordingEditor(commitResult = true, successfulCalls))
+        assertEquals(listOf("commit"), successfulCalls)
+
+        val failedCalls = mutableListOf<String>()
+        assertFailsWith<IllegalStateException> {
+            requireCommittedAndroidAccountCredentialEdit(recordingEditor(commitResult = false, failedCalls))
+        }
+        assertEquals(listOf("commit"), failedCalls)
+    }
+
     @Test
     fun legacyPayloadMigratesOnceAndRestartsWithTheSameActiveAccount() {
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
@@ -224,9 +240,14 @@ class AndroidPersistedSessionTest {
             recordDiagnostic = diagnostics::add,
         )
 
-        assertEquals(firstSession(), requireNotNull(restored).activeSession)
+        val readOnly = requireNotNull(restored)
+        assertEquals(firstSession(), readOnly.activeSession)
         assertFalse(migrated)
         assertEquals(listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"), diagnostics.mapNotNull { it.code })
+        assertFailsWith<IllegalStateException> { readOnly.upsertAndSelect(secondSession()) }
+        assertFailsWith<IllegalStateException> { readOnly.select(firstSession().accountId) }
+        assertFailsWith<IllegalStateException> { readOnly.remove(firstSession().accountId) }
+        assertFailsWith<IllegalStateException> { encodeAndroidAccountCredentialState(readOnly) }
     }
 
     @Test
@@ -267,6 +288,21 @@ class AndroidPersistedSessionTest {
         assertFalse(rendered.contains("alice"))
         assertFalse(rendered.contains("cloud.example.test"))
     }
+
+    private fun recordingEditor(
+        commitResult: Boolean,
+        calls: MutableList<String>,
+    ): SharedPreferences.Editor = Proxy.newProxyInstance(
+        SharedPreferences.Editor::class.java.classLoader,
+        arrayOf(SharedPreferences.Editor::class.java),
+    ) { proxy, method, _ ->
+        calls += method.name
+        when (method.name) {
+            "commit" -> commitResult
+            "apply" -> Unit
+            else -> proxy
+        }
+    } as SharedPreferences.Editor
 
     private fun legacyPayload(session: NextcloudSession): String = JSONObject()
         .put("serverUrl", session.serverUrl)

@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.scanFileSyncPair
@@ -56,6 +57,25 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertEquals(verified.contentHash, reconciled[0].contentHash)
         assertEquals(scanHashes.getValue(unverified.relativePath), reconciled[1].contentHash)
+    }
+
+    @Test
+    fun scheduleRestorationRejectsAStaleAccountSwitch() {
+        val selected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
+        val other = NextcloudSession("https://cloud.example.test/nextcloud", "bob", "other-secret")
+
+        assertTrue(
+            isAndroidFileSyncScheduleRestorationCurrent(
+                NextcloudDocumentIds.accountKey(selected),
+                selected,
+            ),
+        )
+        assertFalse(
+            isAndroidFileSyncScheduleRestorationCurrent(
+                NextcloudDocumentIds.accountKey(selected),
+                other,
+            ),
+        )
     }
 
     @Test
@@ -720,13 +740,19 @@ class AndroidFileSyncEngineInvariantTest {
             replacementAccountId = "account-new",
             persist = { events += "save-new-session" },
             cancelAll = { events += "cancel-old-work" },
+            restoreSchedules = { events += "restore-$it-work" },
         )
         val newToken = requireNotNull(guard.capture("account-new"))
 
         assertFalse(guard.runIfCurrent(oldToken) { events += "schedule-old-account" })
         assertTrue(guard.runIfCurrent(newToken) { events += "schedule-new-account" })
         assertEquals(
-            listOf("save-new-session", "cancel-old-work", "schedule-new-account"),
+            listOf(
+                "save-new-session",
+                "cancel-old-work",
+                "restore-account-new-work",
+                "schedule-new-account",
+            ),
             events,
         )
     }

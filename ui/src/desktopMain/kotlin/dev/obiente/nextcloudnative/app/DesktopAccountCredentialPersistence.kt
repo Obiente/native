@@ -6,6 +6,7 @@ internal class DesktopAccountCredentialPersistence(
     private val preferences: Preferences,
     private val secretStore: DesktopSecretStore,
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
+    private val flushPreferences: () -> Unit = preferences::flush,
 ) {
     fun loadActiveSession(): NextcloudSession? {
         val read = readRegistry()
@@ -52,28 +53,27 @@ internal class DesktopAccountCredentialPersistence(
         val updatedRegistry = registry.upsertAndSelect(session.accountRecord())
         val encodedRegistry = prepareRegistry(updatedRegistry)
         saveSecret(session)
-        persistRegistry(encodedRegistry)
-        persistLegacyActiveMetadata(session.accountRecord())
+        persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
     }
 
     fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? {
         val registry = readRegistry().registry ?: return null
         val session = loadSession(accountId) ?: return null
-        persistRegistry(requireNotNull(registry.select(accountId)))
-        persistLegacyActiveMetadata(session.accountRecord())
+        val selected = requireNotNull(registry.select(accountId))
+        persistAccountState(prepareRegistry(selected), selected.activeAccount)
         return session
     }
 
     fun removeAccount(accountId: NextcloudAccountId): Boolean {
         val registry = readRegistry().registry ?: return false
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return false
+        val clearLegacyCredential = legacyMetadataMatches(record)
+        val updated = registry.remove(accountId)
+        persistAccountState(prepareRegistry(updated), updated.activeAccount)
         clearSecret(desktopAccountSecretReference(accountId))
-        if (legacyMetadataMatches(record)) {
+        if (clearLegacyCredential) {
             clearSecret(desktopSessionSecretReference(record.serverUrl, record.loginName))
-            preferences.remove(KEY_SERVER)
-            preferences.remove(KEY_LOGIN)
         }
-        persistRegistry(registry.remove(accountId))
         return true
     }
 
@@ -95,7 +95,7 @@ internal class DesktopAccountCredentialPersistence(
         try {
             val encodedRegistry = prepareRegistry(restored.registry)
             saveSecret(legacy)
-            persistRegistry(encodedRegistry)
+            persistAccountState(encodedRegistry, restored.registry.activeAccount)
         } catch (failure: Exception) {
             recordCredentialDiagnostic(
                 code = "ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED",
@@ -104,7 +104,6 @@ internal class DesktopAccountCredentialPersistence(
             )
             return legacy
         }
-        persistLegacyActiveMetadata(legacy.accountRecord())
         clearLegacyCredentialAfterMigration(legacy)
         return legacy
     }
@@ -175,18 +174,31 @@ internal class DesktopAccountCredentialPersistence(
             }
         }
 
-    private fun persistRegistry(registry: NextcloudAccountRegistry) {
-        persistRegistry(prepareRegistry(registry))
-    }
-
-    private fun persistRegistry(encodedRegistry: String) {
+    private fun persistAccountState(
+        encodedRegistry: String,
+        activeAccount: NextcloudAccountRecord?,
+    ) {
         require(encodedRegistry.length <= Preferences.MAX_VALUE_LENGTH)
-        preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodedRegistry)
-    }
-
-    private fun persistLegacyActiveMetadata(record: NextcloudAccountRecord) {
-        preferences.put(KEY_SERVER, record.serverUrl)
-        preferences.put(KEY_LOGIN, record.loginName)
+        val previous = DesktopAccountPreferenceSnapshot(
+            registry = preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null),
+            server = preferences.get(KEY_SERVER, null),
+            login = preferences.get(KEY_LOGIN, null),
+        )
+        try {
+            preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodedRegistry)
+            preferences.putOrRemove(KEY_SERVER, activeAccount?.serverUrl)
+            preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
+            flushPreferences()
+        } catch (failure: Exception) {
+            previous.restore(preferences)
+            runCatching(flushPreferences)
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED",
+                "account-credentials.persist",
+                failure,
+            )
+            throw failure
+        }
     }
 
     private fun legacyMetadataMatches(record: NextcloudAccountRecord): Boolean =
@@ -220,10 +232,26 @@ internal class DesktopAccountCredentialPersistence(
         val registry: NextcloudAccountRegistry?,
     )
 
+    private data class DesktopAccountPreferenceSnapshot(
+        val registry: String?,
+        val server: String?,
+        val login: String?,
+    ) {
+        fun restore(preferences: Preferences) {
+            preferences.putOrRemove(DESKTOP_ACCOUNT_REGISTRY_KEY, registry)
+            preferences.putOrRemove(KEY_SERVER, server)
+            preferences.putOrRemove(KEY_LOGIN, login)
+        }
+    }
+
     private companion object {
         const val KEY_SERVER = "server"
         const val KEY_LOGIN = "login"
     }
+}
+
+private fun Preferences.putOrRemove(key: String, value: String?) {
+    if (value == null) remove(key) else put(key, value)
 }
 
 private fun NextcloudAccountRecord.toSession(appPassword: String) = NextcloudSession(
