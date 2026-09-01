@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
@@ -15,6 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.json.JSONArray
 
@@ -398,6 +400,67 @@ class AndroidDurableMultipartUploadPolicyTest {
             listOf(queuedForA),
             queuedDurableUploadsForAccount(listOf(queuedForA, queuedForB, completedForA), ACCOUNT_A),
         )
+    }
+
+    @Test
+    fun `ambiguous scheduling keeps the durable job queued across restart`() = runBlocking {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
+        val acceptedWork = mutableSetOf<String>()
+
+        val result = persistAndScheduleDurableUpload(
+            job = job,
+            persist = persisted::add,
+            schedule = { queued ->
+                acceptedWork += queued.id
+                throw IOException("The scheduler completion signal was lost")
+            },
+        )
+
+        assertIs<DurableUploadEnqueueResult.Queued>(result)
+        assertEquals(listOf(job), persisted)
+        assertEquals(setOf(job.id), acceptedWork)
+
+        val workRecoveredAfterRestart = persisted
+            .filter { queued -> queued.state == DurableUploadState.Queued }
+            .map(AndroidDurableMultipartUploadJob::id)
+        assertEquals(listOf(job.id), workRecoveredAfterRestart)
+    }
+
+    @Test
+    fun `cancellation after persistence propagates without discarding restart state`() {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                persistAndScheduleDurableUpload(
+                    job = job,
+                    persist = persisted::add,
+                    schedule = { throw CancellationException("Owner stopped") },
+                )
+            }
+        }
+
+        assertEquals(listOf(job), persisted)
+    }
+
+    @Test
+    fun `persistence failure never reaches the scheduler`() {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        var scheduled = false
+
+        assertFailsWith<IOException> {
+            runBlocking {
+                persistAndScheduleDurableUpload(
+                    job = job,
+                    persist = { throw IOException("Queue storage is unavailable") },
+                    schedule = { scheduled = true },
+                )
+            }
+        }
+
+        assertFalse(scheduled)
     }
 
     @Test
