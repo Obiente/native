@@ -1,6 +1,6 @@
 package dev.obiente.nextcloudnative
 
-import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
@@ -16,16 +16,24 @@ import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 
 internal fun createAndroidFileSyncLocalTree(
-    resolver: ContentResolver,
+    context: Context,
     rootId: String,
-): AndroidFileSyncLocalTree =
-    if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
+): AndroidFileSyncLocalTree {
+    val appContext = context.applicationContext
+    return if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
         AndroidMediaStoreSyncLocalTree(
             root = resolveMediaStoreSyncRoot(rootId, Environment.getExternalStorageDirectory()),
         )
     } else {
-        AndroidSafFileSyncLocalTree(resolver, rootId)
+        AndroidSafFileSyncLocalTree(
+            resolver = appContext.contentResolver,
+            rootId = rootId,
+            downloadOwnershipStore = AndroidSafDownloadOwnershipStore(
+                File(appContext.filesDir, "file-sync-saf-download-ownership"),
+            ),
+        )
     }
+}
 
 internal fun resolveMediaStoreSyncRoot(rootId: String, externalStorageRoot: File): File {
     require(rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {

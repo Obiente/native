@@ -243,7 +243,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             )
         }
         // Constructing the adapter verifies that its persisted SAF grant or detected media root is usable.
-        createAndroidFileSyncLocalTree(appContext.contentResolver, localRoot.localRootId)
+        createAndroidFileSyncLocalTree(appContext, localRoot.localRootId)
         val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
         val accountId = NextcloudDocumentIds.accountKey(session)
         val current = store.load()
@@ -420,7 +420,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             configuration.includesSyncPath(relativePath, kind)
         }
         val remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
-        val local = createAndroidFileSyncLocalTree(appContext.contentResolver, initialPair.localRootId)
+        val local = createAndroidFileSyncLocalTree(appContext, initialPair.localRootId)
         val contentReadBudget = AndroidFileSyncContentReadBudget()
         val scannedLocalEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry)
         val localEntries = verifyAndroidRemoteDeletionContent(
@@ -730,21 +730,17 @@ internal class AndroidFileSyncEngine(context: Context) {
             }
             is FileSyncOperation.Download -> {
                 val source = requireNotNull(work.observedRemote)
-                if (work.observedLocal?.kind?.let { it != source.kind } == true) {
-                    local.delete(
-                        operation.relativePath,
-                        requireNotNull(operation.expectedLocalRevision),
-                    )
-                }
-                val expectedLocal = operation.expectedLocalRevision
-                    .takeUnless { work.observedLocal?.kind?.let { kind -> kind != source.kind } == true }
                 if (source.kind == SyncEntryKind.Directory) {
-                    local.createDirectory(operation.relativePath, expectedLocal)
+                    local.createDirectory(operation.relativePath, operation.expectedLocalRevision)
                 } else {
                     streamAndroidFileSyncDownload(
                         declaredByteCount = source.size,
                         writeLocal = { write ->
-                            local.writeFileFromStream(operation.relativePath, expectedLocal, write)
+                            local.writeFileFromStream(
+                                operation.relativePath,
+                                operation.expectedLocalRevision,
+                                write,
+                            )
                         },
                         readRemote = { destination, maximumBytes ->
                             remote.streamDownload(operation.relativePath, source.etag, destination, maximumBytes)

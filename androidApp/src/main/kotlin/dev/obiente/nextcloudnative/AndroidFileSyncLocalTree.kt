@@ -16,7 +16,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.channels.Channels
 import java.security.MessageDigest
-import java.util.UUID
 
 internal data class AndroidLocalSyncDocument(
     val entry: LocalSyncEntry,
@@ -93,6 +92,7 @@ internal interface AndroidFileSyncLocalTree {
 internal class AndroidSafFileSyncLocalTree(
     private val resolver: ContentResolver,
     rootId: String,
+    private val downloadOwnershipStore: AndroidSafDownloadOwnershipStore,
 ) : AndroidFileSyncLocalTree {
     private val treeUri = Uri.parse(rootId)
     private val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -225,17 +225,26 @@ internal class AndroidSafFileSyncLocalTree(
             require(existing?.entry?.revision == expectedLocalRevision) {
                 "The local folder changed after the sync scan."
             }
-            require(existing.entry.kind == SyncEntryKind.Directory)
-            return
+            if (existing.entry.kind == SyncEntryKind.Directory) return
         }
         val parent = ensureParent(path)
-        val created = DocumentsContract.createDocument(
-            resolver,
-            parent,
-            DocumentsContract.Document.MIME_TYPE_DIR,
-            path.substringAfterLast('/'),
-        )
-        requireNotNull(created) { "The local folder could not be created." }
+        val finalName = path.substringAfterLast('/')
+        if (existing == null) {
+            requireNotNull(createDirectoryDocument(parent, finalName)) {
+                "The local folder could not be created."
+            }
+        } else {
+            val directory = publicationDirectory(parent, path.substringBeforeLast('/', ""))
+            AndroidSafDownloadPublisher(
+                directory = directory,
+                ownership = downloadOwnershipStore.forDirectory(parent.toString()),
+            ).publish(
+                finalName = finalName,
+                currentDocument = existing.uri,
+                createStage = directory::createDirectory,
+                prepareStage = {},
+            )
+        }
     }
 
     override fun writeFile(path: String, source: File, expectedLocalRevision: String?) {
@@ -257,43 +266,14 @@ internal class AndroidSafFileSyncLocalTree(
             require(current?.entry?.revision == expectedLocalRevision) {
                 "The local file changed after the sync scan."
             }
-            require(current.entry.kind == SyncEntryKind.File) { "The local item changed type." }
         }
         val parentUri = ensureParent(path)
         val finalName = path.substringAfterLast('/')
-        val token = UUID.randomUUID().toString()
-        val stagedName = ".$finalName.nextcloud-native-download-$token"
-        val staged = requireNotNull(
-            DocumentsContract.createDocument(
-                resolver,
-                parentUri,
-                "application/octet-stream",
-                stagedName,
-            ),
-        ) { "A staged local file could not be created." }
-        var backup: Uri? = null
-        try {
-            writeDocument(staged, write)
-            if (current != null) {
-                backup = requireNotNull(
-                    DocumentsContract.renameDocument(
-                        resolver,
-                        current.uri,
-                        ".$finalName.nextcloud-native-backup-$token",
-                    ),
-                ) { "The existing local file could not be protected before replacement." }
-            }
-            requireNotNull(DocumentsContract.renameDocument(resolver, staged, finalName)) {
-                "The staged local file could not be published."
-            }
-            backup?.let { DocumentsContract.deleteDocument(resolver, it) }
-        } catch (failure: Throwable) {
-            runCatching { DocumentsContract.deleteDocument(resolver, staged) }
-            backup?.let { protected ->
-                runCatching { DocumentsContract.renameDocument(resolver, protected, finalName) }
-            }
-            throw failure
-        }
+        AndroidSafDownloadPublisher(
+            directory = publicationDirectory(parentUri, path.substringBeforeLast('/', "")),
+            ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
+        )
+            .publish(finalName, current?.uri, write)
     }
 
     override fun delete(path: String, expectedLocalRevision: String) {
@@ -349,6 +329,16 @@ internal class AndroidSafFileSyncLocalTree(
     }
 
     private fun children(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
+        val publisher = AndroidSafDownloadPublisher(
+            directory = publicationDirectory(parentUri, parentPath),
+            ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
+        )
+        publisher.reconcile()
+        val visibleUris = publisher.visibleDocuments().mapTo(mutableSetOf()) { it.document }
+        return rawChildren(parentUri, parentPath).filter { it.uri in visibleUris }
+    }
+
+    private fun rawChildren(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
         val parentId = DocumentsContract.getDocumentId(parentUri)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
         return resolver.query(childrenUri, PROJECTION, null, null, null)?.use { cursor ->
@@ -384,6 +374,46 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }.orEmpty()
     }
+
+    private fun publicationDirectory(
+        parentUri: Uri,
+        parentPath: String,
+    ): AndroidSafPublicationDirectory<Uri> = object : AndroidSafPublicationDirectory<Uri> {
+        override fun documents(): List<AndroidSafPublicationDocument<Uri>> =
+            rawChildren(parentUri, parentPath).map { document ->
+                AndroidSafPublicationDocument(document.uri, document.displayName)
+            }
+
+        override fun createFile(displayName: String): Uri = requireNotNull(
+            DocumentsContract.createDocument(
+                resolver,
+                parentUri,
+                "application/octet-stream",
+                displayName,
+            ),
+        ) { "A staged local file could not be created." }
+
+        override fun createDirectory(displayName: String): Uri = requireNotNull(
+            createDirectoryDocument(parentUri, displayName),
+        ) { "A staged local folder could not be created." }
+
+        override fun writeFile(document: Uri, write: (OutputStream) -> Unit) {
+            writeDocument(document, write)
+        }
+
+        override fun rename(document: Uri, displayName: String): Uri? =
+            DocumentsContract.renameDocument(resolver, document, displayName)
+
+        override fun delete(document: Uri): Boolean = DocumentsContract.deleteDocument(resolver, document)
+    }
+
+    private fun createDirectoryDocument(parentUri: Uri, displayName: String): Uri? =
+        DocumentsContract.createDocument(
+            resolver,
+            parentUri,
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            displayName,
+        )
 
     private fun writeDocument(uri: Uri, write: (OutputStream) -> Unit) {
         val descriptor = requireNotNull(resolver.openFileDescriptor(uri, "rwt")) {
