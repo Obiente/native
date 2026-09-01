@@ -397,7 +397,7 @@ internal class DesktopFileSyncRemoteTree(
         session = session,
         userId = userId,
         rootPath = rootPath,
-        client = client,
+        httpClient = client,
         tree = this,
         onMutationCommitted = onMutationCommitted,
         onAmbiguousMutationResult = onAmbiguousMutationResult,
