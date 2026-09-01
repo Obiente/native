@@ -341,11 +341,16 @@ internal data class AndroidDurableUploadResource(
 }
 
 internal class AndroidDurableMultipartUploadStore(
-    context: Context,
-    preferenceName: String = PREFERENCES,
+    private val storage: AndroidDurableMultipartUploadEncryptedStorage,
+    private val cipher: AndroidDurableMultipartUploadCipher,
 ) {
-    private val preferences = context.applicationContext.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
-    private val cipher = SessionCipher()
+    constructor(
+        context: Context,
+        preferenceName: String = PREFERENCES,
+    ) : this(
+        storage = SharedPreferencesDurableMultipartUploadStorage(context, preferenceName),
+        cipher = SessionDurableMultipartUploadCipher(),
+    )
 
     fun add(job: AndroidDurableMultipartUploadJob) = synchronized(LOCK) {
         val current = readAll().toMutableList()
@@ -399,27 +404,44 @@ internal class AndroidDurableMultipartUploadStore(
     }
 
     private fun readAll(): List<AndroidDurableMultipartUploadJob> {
-        val encrypted = preferences.getString(KEY_JOBS, null) ?: return emptyList()
-        return runCatching {
+        val encrypted = try {
+            storage.read()
+        } catch (failure: Exception) {
+            throw AndroidDurableMultipartUploadRecoveryException(failure)
+        } ?: return emptyList()
+        return try {
             val array = JSONArray(cipher.decrypt(encrypted))
-            buildList {
-                repeat(array.length().coerceAtMost(MAX_STORED_UPLOADS)) { index ->
-                    runCatching { array.getJSONObject(index).toJob() }
-                        .getOrNull()
-                        ?.let(::add)
+            check(array.length() <= MAX_STORED_UPLOADS) {
+                "The durable upload queue contains too many rows."
+            }
+            val jobs = buildList {
+                repeat(array.length()) { index ->
+                    add(array.getJSONObject(index).toJob())
                 }
-            }.distinctBy(AndroidDurableMultipartUploadJob::id)
-        }.getOrElse { emptyList() }
+            }
+            check(jobs.distinctBy(AndroidDurableMultipartUploadJob::id).size == jobs.size) {
+                "The durable upload queue contains duplicate rows."
+            }
+            jobs
+        } catch (failure: Exception) {
+            throw AndroidDurableMultipartUploadRecoveryException(failure)
+        }
     }
 
     private fun writeAll(jobs: List<AndroidDurableMultipartUploadJob>) {
         val array = JSONArray()
         jobs.forEach { array.put(it.toJson()) }
-        check(
-            preferences.edit()
-                .putString(KEY_JOBS, cipher.encrypt(array.toString()))
-                .commit(),
-        ) { "The durable upload queue could not be saved." }
+        val encrypted = try {
+            cipher.encrypt(array.toString())
+        } catch (failure: Exception) {
+            throw IllegalStateException("The durable upload queue could not be saved.", failure)
+        }
+        val saved = try {
+            storage.write(encrypted)
+        } catch (failure: Exception) {
+            throw IllegalStateException("The durable upload queue could not be saved.", failure)
+        }
+        check(saved) { "The durable upload queue could not be saved." }
     }
 
     internal companion object {
@@ -431,6 +453,44 @@ internal class AndroidDurableMultipartUploadStore(
         const val MAX_ACTIVE_UPLOADS_PER_RESOURCE = 4
         const val MAX_STORED_UPLOADS = 64
     }
+}
+
+internal interface AndroidDurableMultipartUploadEncryptedStorage {
+    fun read(): String?
+    fun write(value: String): Boolean
+}
+
+internal interface AndroidDurableMultipartUploadCipher {
+    fun encrypt(value: String): String
+    fun decrypt(value: String): String
+}
+
+internal class AndroidDurableMultipartUploadRecoveryException(
+    cause: Exception,
+) : IllegalStateException(
+    "The saved background upload queue is unavailable. Its recovery data was left unchanged.",
+    cause,
+)
+
+private class SharedPreferencesDurableMultipartUploadStorage(
+    context: Context,
+    preferenceName: String,
+) : AndroidDurableMultipartUploadEncryptedStorage {
+    private val preferences = context.applicationContext.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
+
+    override fun read(): String? = preferences.getString(AndroidDurableMultipartUploadStore.KEY_JOBS, null)
+
+    override fun write(value: String): Boolean = preferences.edit()
+        .putString(AndroidDurableMultipartUploadStore.KEY_JOBS, value)
+        .commit()
+}
+
+private class SessionDurableMultipartUploadCipher : AndroidDurableMultipartUploadCipher {
+    private val cipher = SessionCipher()
+
+    override fun encrypt(value: String): String = cipher.encrypt(value)
+
+    override fun decrypt(value: String): String = cipher.decrypt(value)
 }
 
 internal fun requireCanAddDurableUpload(
