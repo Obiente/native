@@ -1,5 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
+import com.sun.jna.Memory
+import com.sun.jna.Pointer
+import com.sun.jna.ptr.IntByReference
+import com.sun.jna.ptr.PointerByReference
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -122,13 +126,145 @@ class DesktopSecretStoreTest {
     }
 
     @Test
-    fun platformSelectionUsesWindowsCredentialManagerOnlyOnWindows() {
+    fun platformSelectionUsesEachNativeCredentialStore() {
         assertEquals(
             DesktopSecretStoreKind.WindowsCredentialManager,
             desktopSecretStoreKind("Windows 11"),
         )
         assertEquals(DesktopSecretStoreKind.SecretService, desktopSecretStoreKind("Linux"))
-        assertEquals(DesktopSecretStoreKind.SecretService, desktopSecretStoreKind("Mac OS X"))
+        assertEquals(DesktopSecretStoreKind.MacOsKeychain, desktopSecretStoreKind("Mac OS X"))
+    }
+
+    @Test
+    fun macOsKeychainAddsUpdatesLoadsAndClearsWithoutPuttingSecretsInIdentityFields() {
+        val api = FakeMacOsKeychainApi()
+        val releasedItems = mutableListOf<Pointer>()
+        val store = MacOsKeychainSecretStore(api, releasedItems::add)
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val first = "first-synthetic-secret".encodeToByteArray()
+        val second = "second-synthetic-secret".encodeToByteArray()
+
+        assertNull(store.load(reference))
+        store.save(reference, "alice", first)
+        assertContentEquals(first, store.load(reference))
+        store.save(reference, "alice", second)
+        assertContentEquals(second, store.load(reference))
+        store.clear(reference)
+        assertNull(store.load(reference))
+
+        assertEquals(reference.targetName, api.lastService)
+        assertEquals("alice", api.lastAccount)
+        assertFalse(api.lastService.orEmpty().contains("cloud.invalid"))
+        assertFalse(api.lastService.orEmpty().contains("alice"))
+        assertTrue(releasedItems.isNotEmpty())
+    }
+
+    @Test
+    fun macOsKeychainDenialIsActionableAndDoesNotExposeCredentialIdentity() {
+        val store = MacOsKeychainSecretStore(
+            api = FakeMacOsKeychainApi(findFailure = -25_293),
+            releaseItem = {},
+        )
+        val reference = desktopSessionSecretReference("https://private.invalid", "synthetic-user")
+
+        val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+            store.load(reference)
+        }
+
+        assertTrue(failure.message.orEmpty().contains("denied"))
+        assertFalse(failure.message.orEmpty().contains("private.invalid"))
+        assertFalse(failure.message.orEmpty().contains("synthetic-user"))
+    }
+
+    @Test
+    fun macOsKeychainConcurrentAddRaceUpdatesTheExistingItem() {
+        val api = FakeMacOsKeychainApi(duplicateOnFirstAdd = true)
+        val store = MacOsKeychainSecretStore(api, releaseItem = {})
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val expected = "replacement-synthetic-secret".encodeToByteArray()
+
+        store.save(reference, "alice", expected)
+
+        assertContentEquals(expected, store.load(reference))
+    }
+
+    private class FakeMacOsKeychainApi(
+        private val findFailure: Int? = null,
+        private val duplicateOnFirstAdd: Boolean = false,
+    ) : MacOsKeychainApi {
+        private var secret: ByteArray? = null
+        private var addAttempted = false
+        private var returnedSecret: Memory? = null
+        private val item = Memory(1)
+        var lastService: String? = null
+            private set
+        var lastAccount: String? = null
+            private set
+
+        override fun SecKeychainFindGenericPassword(
+            keychainOrArray: Pointer?,
+            serviceNameLength: Int,
+            serviceName: ByteArray,
+            accountNameLength: Int,
+            accountName: ByteArray,
+            secretLength: IntByReference?,
+            secretData: PointerByReference?,
+            itemRef: PointerByReference,
+        ): Int {
+            lastService = serviceName.copyOf(serviceNameLength).decodeToString()
+            lastAccount = accountName.copyOf(accountNameLength).decodeToString()
+            findFailure?.let { return it }
+            val stored = secret ?: return -25_300
+            if (secretLength != null && secretData != null) {
+                returnedSecret = Memory(stored.size.toLong()).also { memory ->
+                    memory.write(0, stored, 0, stored.size)
+                    secretData.value = memory
+                }
+                secretLength.value = stored.size
+            }
+            itemRef.value = item
+            return 0
+        }
+
+        override fun SecKeychainAddGenericPassword(
+            keychain: Pointer?,
+            serviceNameLength: Int,
+            serviceName: ByteArray,
+            accountNameLength: Int,
+            accountName: ByteArray,
+            secretLength: Int,
+            secretData: ByteArray,
+            itemRef: PointerByReference?,
+        ): Int {
+            if (duplicateOnFirstAdd && !addAttempted) {
+                addAttempted = true
+                secret = "concurrent-synthetic-secret".encodeToByteArray()
+                return -25_299
+            }
+            secret = secretData.copyOf(secretLength)
+            return 0
+        }
+
+        override fun SecKeychainItemModifyAttributesAndData(
+            itemRef: Pointer,
+            attributes: Pointer?,
+            secretLength: Int,
+            secretData: ByteArray,
+        ): Int {
+            secret = secretData.copyOf(secretLength)
+            return 0
+        }
+
+        override fun SecKeychainItemDelete(itemRef: Pointer): Int {
+            secret = null
+            return 0
+        }
+
+        override fun SecKeychainItemFreeContent(attributes: Pointer?, secretData: Pointer?): Int {
+            returnedSecret?.clear()
+            returnedSecret = null
+            return 0
+        }
     }
 
     @Test

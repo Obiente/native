@@ -5,6 +5,7 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.WString
+import com.sun.jna.ptr.IntByReference
 import com.sun.jna.ptr.PointerByReference
 import com.sun.jna.win32.StdCallLibrary
 import com.sun.jna.win32.W32APIOptions
@@ -51,20 +52,22 @@ internal class DesktopSecretStoreUnavailableException(
 ) : IllegalStateException(message, cause)
 
 internal enum class DesktopSecretStoreKind {
+    MacOsKeychain,
     SecretService,
     WindowsCredentialManager,
 }
 
 internal fun desktopSecretStoreKind(osName: String = System.getProperty("os.name", "")): DesktopSecretStoreKind =
-    if (osName.startsWith("Windows", ignoreCase = true)) {
-        DesktopSecretStoreKind.WindowsCredentialManager
-    } else {
-        DesktopSecretStoreKind.SecretService
+    when {
+        osName.startsWith("Windows", ignoreCase = true) -> DesktopSecretStoreKind.WindowsCredentialManager
+        osName.startsWith("Mac", ignoreCase = true) -> DesktopSecretStoreKind.MacOsKeychain
+        else -> DesktopSecretStoreKind.SecretService
     }
 
 internal fun defaultDesktopSecretStore(
     osName: String = System.getProperty("os.name", ""),
 ): DesktopSecretStore = when (desktopSecretStoreKind(osName)) {
+    DesktopSecretStoreKind.MacOsKeychain -> MacOsKeychainSecretStore()
     DesktopSecretStoreKind.SecretService -> SecretToolDesktopSecretStore()
     DesktopSecretStoreKind.WindowsCredentialManager -> WindowsCredentialManagerSecretStore()
 }
@@ -187,6 +190,206 @@ internal class SecretToolDesktopSecretStore(
             add(value)
         }
     }
+}
+
+internal class MacOsKeychainSecretStore(
+    private val api: MacOsKeychainApi = MacOsKeychainApiHolder.instance,
+    private val releaseItem: (Pointer) -> Unit = MacOsCoreFoundationApiHolder::release,
+) : DesktopSecretStore {
+    override fun load(reference: DesktopSecretReference): ByteArray? {
+        val secretLength = IntByReference()
+        val secretData = PointerByReference()
+        val item = PointerByReference()
+        val identity = reference.macOsIdentity()
+        val status = api.SecKeychainFindGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            secretLength,
+            secretData,
+            item,
+        )
+        if (status == ERR_SEC_ITEM_NOT_FOUND) return null
+        checkMacOsKeychainStatus(status, "load")
+        val size = secretLength.value
+        val data = secretData.value
+        val itemPointer = item.value
+        try {
+            check(size in 1..MAX_SECRET_BYTES && data != null) {
+                "macOS Keychain returned an invalid secret size."
+            }
+            return data.getByteArray(0, size)
+        } finally {
+            if (data != null) api.SecKeychainItemFreeContent(null, data)
+            if (itemPointer != null) releaseItem(itemPointer)
+        }
+    }
+
+    override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
+        require(secret.isNotEmpty() && secret.size <= MAX_SECRET_BYTES)
+        val identity = reference.macOsIdentity()
+        val item = PointerByReference()
+        val findStatus = api.SecKeychainFindGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            null,
+            null,
+            item,
+        )
+        when (findStatus) {
+            ERR_SEC_ITEM_NOT_FOUND -> add(identity, secret)
+            ERR_SEC_SUCCESS -> update(checkNotNull(item.value), secret)
+            else -> checkMacOsKeychainStatus(findStatus, "find before save")
+        }
+    }
+
+    override fun clear(reference: DesktopSecretReference) {
+        val identity = reference.macOsIdentity()
+        val item = PointerByReference()
+        val status = api.SecKeychainFindGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            null,
+            null,
+            item,
+        )
+        if (status == ERR_SEC_ITEM_NOT_FOUND) return
+        checkMacOsKeychainStatus(status, "find before clear")
+        val itemPointer = checkNotNull(item.value) { "macOS Keychain returned an empty item." }
+        try {
+            checkMacOsKeychainStatus(api.SecKeychainItemDelete(itemPointer), "clear")
+        } finally {
+            releaseItem(itemPointer)
+        }
+    }
+
+    private fun add(identity: MacOsKeychainIdentity, secret: ByteArray) {
+        val status = api.SecKeychainAddGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            secret.size,
+            secret,
+            null,
+        )
+        if (status != ERR_SEC_DUPLICATE_ITEM) {
+            checkMacOsKeychainStatus(status, "save")
+            return
+        }
+        val item = PointerByReference()
+        checkMacOsKeychainStatus(
+            api.SecKeychainFindGenericPassword(
+                null,
+                identity.service.size,
+                identity.service,
+                identity.account.size,
+                identity.account,
+                null,
+                null,
+                item,
+            ),
+            "find after concurrent save",
+        )
+        update(checkNotNull(item.value), secret)
+    }
+
+    private fun update(item: Pointer, secret: ByteArray) {
+        try {
+            checkMacOsKeychainStatus(
+                api.SecKeychainItemModifyAttributesAndData(item, null, secret.size, secret),
+                "update",
+            )
+        } finally {
+            releaseItem(item)
+        }
+    }
+}
+
+internal interface MacOsKeychainApi : com.sun.jna.Library {
+    fun SecKeychainFindGenericPassword(
+        keychainOrArray: Pointer?,
+        serviceNameLength: Int,
+        serviceName: ByteArray,
+        accountNameLength: Int,
+        accountName: ByteArray,
+        secretLength: IntByReference?,
+        secretData: PointerByReference?,
+        itemRef: PointerByReference,
+    ): Int
+
+    fun SecKeychainAddGenericPassword(
+        keychain: Pointer?,
+        serviceNameLength: Int,
+        serviceName: ByteArray,
+        accountNameLength: Int,
+        accountName: ByteArray,
+        secretLength: Int,
+        secretData: ByteArray,
+        itemRef: PointerByReference?,
+    ): Int
+
+    fun SecKeychainItemModifyAttributesAndData(
+        itemRef: Pointer,
+        attributes: Pointer?,
+        secretLength: Int,
+        secretData: ByteArray,
+    ): Int
+
+    fun SecKeychainItemDelete(itemRef: Pointer): Int
+
+    fun SecKeychainItemFreeContent(attributes: Pointer?, secretData: Pointer?): Int
+}
+
+private data class MacOsKeychainIdentity(
+    val service: ByteArray,
+    val account: ByteArray,
+)
+
+private fun DesktopSecretReference.macOsIdentity(): MacOsKeychainIdentity = MacOsKeychainIdentity(
+    service = targetName.encodeToByteArray(),
+    account = (
+        attributes["login"]
+            ?: attributes["purpose"]
+            ?: DESKTOP_APPLICATION_ID
+        ).encodeToByteArray(),
+)
+
+private fun checkMacOsKeychainStatus(status: Int, operation: String) {
+    if (status == ERR_SEC_SUCCESS) return
+    val reason = when (status) {
+        ERR_SEC_AUTH_FAILED -> "Keychain access was denied."
+        ERR_SEC_INTERACTION_NOT_ALLOWED -> "The login Keychain is locked or unavailable."
+        else -> "macOS Keychain failed to $operation the desktop secret (error $status)."
+    }
+    throw DesktopSecretStoreUnavailableException(reason)
+}
+
+private object MacOsKeychainApiHolder {
+    val instance: MacOsKeychainApi by lazy {
+        Native.load(MACOS_SECURITY_FRAMEWORK, MacOsKeychainApi::class.java)
+    }
+}
+
+private object MacOsCoreFoundationApiHolder {
+    private val api: MacOsCoreFoundationApi by lazy {
+        Native.load(MACOS_CORE_FOUNDATION_FRAMEWORK, MacOsCoreFoundationApi::class.java)
+    }
+
+    fun release(pointer: Pointer) = api.CFRelease(pointer)
+}
+
+private interface MacOsCoreFoundationApi : com.sun.jna.Library {
+    fun CFRelease(pointer: Pointer)
 }
 
 internal class WindowsCredentialManagerSecretStore(
@@ -318,6 +521,14 @@ private const val WINDOWS_CREDENTIAL_PREFIX = "Obiente/NextcloudNative"
 private const val CRED_TYPE_GENERIC = 1
 private const val CRED_PERSIST_LOCAL_MACHINE = 2
 private const val ERROR_NOT_FOUND = 1_168
+private const val ERR_SEC_SUCCESS = 0
+private const val ERR_SEC_AUTH_FAILED = -25_293
+private const val ERR_SEC_DUPLICATE_ITEM = -25_299
+private const val ERR_SEC_ITEM_NOT_FOUND = -25_300
+private const val ERR_SEC_INTERACTION_NOT_ALLOWED = -25_308
+private const val MACOS_SECURITY_FRAMEWORK = "/System/Library/Frameworks/Security.framework/Security"
+private const val MACOS_CORE_FOUNDATION_FRAMEWORK =
+    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 private const val MAX_SECRET_BYTES = 2_560
 private const val MISSING_SECRET_TOOL_MESSAGE =
     "Secure credential storage is unavailable. Install libsecret-tools on Debian or Ubuntu, or libsecret on Fedora or RHEL, then restart Nextcloud Native."
