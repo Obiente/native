@@ -116,6 +116,16 @@ class DesktopDeckCardDraftStoreTest {
         }
 
     @Test
+    fun `uninspectable draft directory conservatively requires the legacy secret`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-unreadable").toFile()
+        try {
+            assertTrue(desktopDeckLegacySecretRequired(root, listFiles = { null }))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `clear removes only the requested account resource`() =
         withStore { root, _, store ->
             val session = session()

@@ -49,8 +49,14 @@ internal interface DesktopSecretStore {
 
 internal class DesktopSecretStoreUnavailableException(
     message: String,
+    val reason: DesktopSecretStoreUnavailableReason = DesktopSecretStoreUnavailableReason.StorageLockedOrUnavailable,
     cause: Throwable? = null,
 ) : NextcloudSessionStorageUnavailableException(message, cause)
+
+internal enum class DesktopSecretStoreUnavailableReason {
+    StorageLockedOrUnavailable,
+    ProviderMissing,
+}
 
 internal enum class DesktopSecretStoreKind {
     MacOsKeychain,
@@ -105,7 +111,14 @@ internal class MigratingDesktopSecretStore(
             retryLegacyCleanup(reference)
             return null
         }
-        val secret = legacy.load(reference) ?: return null
+        val secret = try {
+            legacy.load(reference)
+        } catch (failure: DesktopSecretStoreUnavailableException) {
+            if (failure.reason == DesktopSecretStoreUnavailableReason.ProviderMissing) {
+                throw NextcloudSessionLegacyMigrationUnavailableException(failure)
+            }
+            throw failure
+        } ?: return null
         primary.save(reference, username = null, secret = secret)
         adoptAndRetryLegacyCleanupBestEffort(reference)
         return secret
@@ -242,7 +255,11 @@ internal class SecretToolDesktopSecretStore(
         val process = runCatching {
             startProcess(secretToolCommand("lookup", reference))
         }.getOrElse { failure ->
-            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
         }
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "nextcloud-native-secret-reader").apply { isDaemon = true }
@@ -273,7 +290,7 @@ internal class SecretToolDesktopSecretStore(
             }
             process.destroyForcibly()
             output.cancel(true)
-            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, cause = failure)
         } finally {
             if (!timedOut) runCatching { process.inputStream.close() }
             executor.shutdownNow()
@@ -292,13 +309,17 @@ internal class SecretToolDesktopSecretStore(
             }
         }
         val process = runCatching { startProcess(command) }.getOrElse { failure ->
-            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
         }
         runCatching {
             process.outputStream.use { it.write(secret) }
         }.getOrElse { failure ->
             process.destroyForcibly()
-            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, cause = failure)
         }
         if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()
@@ -321,7 +342,11 @@ internal class SecretToolDesktopSecretStore(
             }
         }
         val process = runCatching { startProcess(command) }.getOrElse { failure ->
-            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
         }
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "nextcloud-native-secret-search").apply { isDaemon = true }
@@ -341,7 +366,7 @@ internal class SecretToolDesktopSecretStore(
             timedOut = true
             process.destroyForcibly()
             output.cancel(true)
-            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, cause = failure)
         } finally {
             if (!timedOut) runCatching { process.inputStream.close() }
             executor.shutdownNow()
@@ -352,7 +377,11 @@ internal class SecretToolDesktopSecretStore(
         val process = runCatching {
             startProcess(secretToolCommand("clear", reference))
         }.getOrElse { failure ->
-            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
         }
         if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()

@@ -16,8 +16,11 @@ internal suspend fun reconcileDesktopBackgroundSession(
     onFailure: (NextcloudSession?, Throwable) -> Unit = { _, _ -> },
 ): Boolean {
     val loaded = loadNextcloudSessionSafely(loadSession)
-    if (loaded == NextcloudSessionLoadState.SecureStorageUnavailable) return false
-    val session = (loaded as NextcloudSessionLoadState.Loaded).session
+    val session = when (loaded) {
+        is NextcloudSessionLoadState.Loaded -> loaded.session
+        NextcloudSessionLoadState.SecureStorageUnavailable,
+        NextcloudSessionLoadState.LegacyMigrationUnavailable -> return false
+    }
     try {
         reconcile(session)
     } catch (failure: CancellationException) {

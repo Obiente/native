@@ -543,6 +543,16 @@ fun NextcloudNativeApp(
             }
             if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
                 SecureSessionStorageUnavailable(onRetry = { sessionLoadAttempt += 1 })
+            } else if (sessionLoad == NextcloudSessionLoadState.LegacyMigrationUnavailable) {
+                LegacySessionMigrationUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = {
+                        scope.launch {
+                            services.clearSession()
+                            sessionLoadAttempt += 1
+                        }
+                    },
+                )
             } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(

@@ -55,3 +55,25 @@ internal fun SecureSessionStorageUnavailable(onRetry: () -> Unit) {
         )
     }
 }
+
+@Composable
+internal fun LegacySessionMigrationUnavailable(
+    onRetry: () -> Unit,
+    onSignInAgain: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(NextcloudSpacing.XLarge),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            Text(
+                "The previous session needs the legacy secure-storage provider. Install the provider " +
+                    "and try again, or discard the stored session and sign in again.",
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(onClick = onRetry) { Text("Try again") }
+            OutlinedButton(onClick = onSignInAgain) { Text("Sign in again") }
+        }
+    }
+}

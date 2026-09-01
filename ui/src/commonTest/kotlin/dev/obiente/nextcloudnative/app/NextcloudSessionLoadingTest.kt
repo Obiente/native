@@ -33,6 +33,18 @@ class NextcloudSessionLoadingTest {
     }
 
     @Test
+    fun missingLegacyMigrationProviderKeepsItsRecoveryCategory() {
+        assertEquals(
+            NextcloudSessionLoadState.LegacyMigrationUnavailable,
+            loadNextcloudSessionSafely {
+                throw NextcloudSessionLegacyMigrationUnavailableException(
+                    NextcloudSessionStorageUnavailableException("private provider failure"),
+                )
+            },
+        )
+    }
+
+    @Test
     fun unrelatedProgrammingFailureIsNotPresentedAsUnavailableStorage() {
         assertFailsWith<IllegalStateException> {
             loadNextcloudSessionSafely { error("synthetic invariant failure") }

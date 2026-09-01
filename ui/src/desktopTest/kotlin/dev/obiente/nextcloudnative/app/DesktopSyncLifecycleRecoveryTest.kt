@@ -25,4 +25,21 @@ class DesktopSyncLifecycleRecoveryTest {
 
         assertEquals(listOf<NextcloudSession?>(expected), reconciled)
     }
+
+    @Test
+    fun missingLegacyMigrationProviderDefersBackgroundReconciliation() = runBlocking {
+        var reconciled = false
+
+        assertFalse(
+            reconcileDesktopBackgroundSession(
+                loadSession = {
+                    throw NextcloudSessionLegacyMigrationUnavailableException(
+                        NextcloudSessionStorageUnavailableException("synthetic missing provider"),
+                    )
+                },
+                reconcile = { reconciled = true },
+            ),
+        )
+        assertFalse(reconciled)
+    }
 }

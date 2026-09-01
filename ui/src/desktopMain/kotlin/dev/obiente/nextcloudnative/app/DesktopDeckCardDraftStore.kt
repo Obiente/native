@@ -24,9 +24,7 @@ import org.json.JSONObject
 internal class DesktopDeckCardDraftStore(
     private val root: File = desktopDeckDraftDirectory(),
     private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(
-        legacySecretRequired = {
-            root.listFiles().orEmpty().any { file -> file.name.matches(DRAFT_FILE_PATTERN) }
-        },
+        legacySecretRequired = { desktopDeckLegacySecretRequired(root) },
     ),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
@@ -294,6 +292,16 @@ internal class DesktopDeckCardDraftStore(
         const val AES_ALGORITHM = "AES"
         val DRAFT_FILE_PATTERN = Regex("^draft_[0-9a-f]{64}\\.json\\.enc$")
     }
+}
+
+internal fun desktopDeckLegacySecretRequired(
+    root: File,
+    listFiles: (File) -> Array<File>? = File::listFiles,
+): Boolean {
+    if (!root.exists()) return false
+    if (!root.isDirectory) return true
+    val entries = listFiles(root) ?: return true
+    return entries.any { file -> file.name.matches(DesktopDeckCardDraftStore.DRAFT_FILE_PATTERN) }
 }
 
 internal fun interface DesktopDeckDraftKeyProvider {

@@ -39,6 +39,7 @@ class DesktopSecretStoreTest {
 
         assertTrue(failure.message.orEmpty().contains("libsecret-tools"))
         assertTrue(failure.message.orEmpty().contains("libsecret"))
+        assertEquals(DesktopSecretStoreUnavailableReason.ProviderMissing, failure.reason)
         assertFalse(failure.message.orEmpty().contains("Cannot run program"))
         assertFalse(failure.message.orEmpty().contains("synthetic-user"))
         assertFalse(failure.message.orEmpty().contains("synthetic-secret"))
@@ -94,10 +95,11 @@ class DesktopSecretStoreTest {
         val primary = RecordingSecretStore()
         val adoption = RecordingSecretStoreAdoption()
 
-        assertFailsWith<DesktopSecretStoreUnavailableException> {
+        val failure = assertFailsWith<NextcloudSessionLegacyMigrationUnavailableException> {
             MigratingDesktopSecretStore(primary, legacy, adoption).load(reference)
         }
 
+        assertTrue(failure.message.orEmpty().contains("legacy secure-storage provider"))
         assertNull(primary.load(reference))
         assertEquals(DesktopSecretStoreAdoptionState.NotAdopted, adoption.state(reference))
     }
