@@ -14,7 +14,10 @@ enum class LoginPollFallbackReason {
 
 data class LoginPollHttpExecution(
     val interpretation: LoginPollHttpInterpretation,
+    /** Whether later polls should keep using the compatibility endpoint. */
     val usedFallback: Boolean,
+    /** Whether the response interpreted for this execution came from the compatibility endpoint. */
+    val responseUsedFallback: Boolean,
     val selectedFallbackReason: LoginPollFallbackReason? = null,
 )
 
@@ -32,6 +35,7 @@ fun executeLoginPollHttp(
     fun failed(result: LoginPollResult) = LoginPollHttpExecution(
         interpretation = LoginPollHttpInterpretation(result),
         usedFallback = usedFallback,
+        responseUsedFallback = responseCameFromFallback,
         selectedFallbackReason = selectedFallbackReason,
     )
 
@@ -89,6 +93,7 @@ fun executeLoginPollHttp(
     return LoginPollHttpExecution(
         interpretation = interpretLoginPollHttpResponse(response.status, response.body, challenge),
         usedFallback = usedFallback,
+        responseUsedFallback = responseCameFromFallback,
         selectedFallbackReason = selectedFallbackReason,
     )
 }

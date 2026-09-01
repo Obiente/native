@@ -4025,13 +4025,15 @@ class DesktopNextcloudServices(
         when (result) {
             LoginPollResult.Pending -> {
                 if (loginPollPendingTokens.add(challenge.token)) {
-                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.usedFallback))
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.responseUsedFallback))
                 }
             }
             is LoginPollResult.Approved -> {
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
-                runCatching { recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.usedFallback)) }
+                runCatching {
+                    recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.responseUsedFallback))
+                }
             }
             else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
         }

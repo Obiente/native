@@ -55,6 +55,7 @@ class JvmLoginFlowTransportTest {
         assertEquals(LoginPollResult.Pending, execution.interpretation.result)
         assertNull(execution.selectedFallbackReason)
         assertEquals(false, execution.usedFallback)
+        assertEquals(false, execution.responseUsedFallback)
 
         val laterApproval = executeLoginPollHttp(
             challenge = challenge(
@@ -127,6 +128,7 @@ class JvmLoginFlowTransportTest {
         )
         assertNull(execution.selectedFallbackReason)
         assertEquals(false, execution.usedFallback)
+        assertEquals(true, execution.responseUsedFallback)
     }
 
     @Test
