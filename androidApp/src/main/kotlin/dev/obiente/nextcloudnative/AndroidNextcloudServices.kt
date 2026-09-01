@@ -55,6 +55,7 @@ import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.GroupwareDavRequest
 import dev.obiente.nextcloudnative.app.NextcloudAppEntry
 import dev.obiente.nextcloudnative.app.NextcloudActivity
+import dev.obiente.nextcloudnative.app.NextcloudAccountId
 import dev.obiente.nextcloudnative.app.NextcloudConditionalRead
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditingCapabilities
 import dev.obiente.nextcloudnative.app.NextcloudDocumentEditSession
@@ -409,7 +410,6 @@ internal class AndroidNextcloudServices(
     private val appContext = context.applicationContext
     private val activity = context as? Activity
     private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
-    private val sessionCipher = SessionCipher()
     private val httpClient = OkHttpClient.Builder()
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
@@ -480,6 +480,19 @@ internal class AndroidNextcloudServices(
         context = appContext,
         diagnostics = supportDiagnostics,
         client = httpClient,
+    )
+    private val accountCredentials = AndroidAccountCredentialController(
+        context = appContext,
+        preferences = preferences,
+        sessionCipher = SessionCipher(),
+        registerSessionPrivateValues = ::registerSessionPrivateValues,
+        recordDiagnostic = ::recordSupportDiagnostic,
+        publishAccountIdentity = { accountIdentity ->
+            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
+            supportIntake.setActiveAccountIdentity(accountIdentity)
+        },
+        clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
+        notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
     )
 
     init {
@@ -918,85 +931,24 @@ internal class AndroidNextcloudServices(
         )
     }
 
-    override fun loadSession(): NextcloudSession? {
-        return ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
-            load = {
-                val encrypted = preferences.getString(KEY_SESSION, null)
-                    ?: return@restorePersistedSession null
-                runCatching {
-                    restoreAndroidPersistedSession(
-                        encoded = sessionCipher.decrypt(encrypted),
-                        persistMigrated = { migrated ->
-                            preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)).commit()
-                        },
-                        recordDiagnostic = ::recordSupportDiagnostic,
-                    )
-                }.onFailure { failure ->
-                    recordSupportDiagnostic(
-                        SupportDiagnosticEventDraft(
-                            severity = SupportDiagnosticSeverity.Error,
-                            component = SupportDiagnosticComponent.Authentication,
-                            operation = "session.load",
-                            outcome = "failed",
-                            exception = failure.toSupportDiagnosticExceptionDraft(),
-                        ),
-                    )
-                }.getOrNull()
-            },
-            accountIdOf = NextcloudDocumentIds::accountKey,
-            publishAccount = { session, accountIdentity ->
-                session?.let(::registerSessionPrivateValues)
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            },
-        )
-    }
+    override fun loadSession(): NextcloudSession? = accountCredentials.loadSession()
 
     override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) =
         withContext(Dispatchers.IO) {
             deckCardDrafts.migrateLegacyEntries(session)
         }
 
-    override suspend fun saveSession(session: NextcloudSession) {
-        registerSessionPrivateValues(session)
-        val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
-        val replacementAccountId = NextcloudDocumentIds.cacheAccountId(session)
-        val encrypted = runCatching { sessionCipher.encrypt(encodeAndroidPersistedSession(session)) }
-            .onFailure { failure ->
-                recordSupportDiagnostic(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "session.save",
-                        outcome = "failed",
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-            }
-            .getOrThrow()
-        withContext(Dispatchers.IO) {
-            AndroidExternalFileHandoffRegistry.clear()
-        }
-        val scheduler = AndroidFileSyncScheduler(appContext)
-        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
-            replacementAccountId = NextcloudDocumentIds.accountKey(session),
-            persist = {
-                preferences.edit()
-                    .putString(KEY_SESSION, encrypted)
-                    .remove(KEY_TEST_READ_ONLY)
-                    .apply()
-            },
-            cancelAll = scheduler::cancelAll,
-            publishAccount = { accountIdentity ->
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            },
-        )
-        if (previousAccountId != null && previousAccountId != replacementAccountId) {
-            nativeMediaPreviewCache.clearAccount(previousAccountId)
-        }
-        notifyDocumentsRootsChanged()
-    }
+    override suspend fun saveSession(session: NextcloudSession) = accountCredentials.saveSession(session)
+
+    override fun listAccounts() = accountCredentials.listAccounts()
+
+    override fun activeAccountId() = accountCredentials.activeAccountId()
+
+    override fun loadSession(accountId: NextcloudAccountId) = accountCredentials.loadSession(accountId)
+
+    override suspend fun selectAccount(accountId: NextcloudAccountId) = accountCredentials.selectAccount(accountId)
+
+    override suspend fun removeAccount(accountId: NextcloudAccountId) = accountCredentials.removeAccount(accountId)
 
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
@@ -1031,41 +983,7 @@ internal class AndroidNextcloudServices(
         deckCardDrafts.discardAll()
     }
 
-    override suspend fun clearSession() {
-        try {
-            val accountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
-            withContext(Dispatchers.IO) {
-                AndroidExternalFileHandoffRegistry.clear()
-            }
-            val scheduler = AndroidFileSyncScheduler(appContext)
-            ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
-                persist = {
-                    preferences.edit()
-                        .remove(KEY_SESSION)
-                        .remove(KEY_TEST_READ_ONLY)
-                        .apply()
-                },
-                cancelAll = scheduler::cancelAll,
-                clearPublishedAccount = {
-                    supportDiagnostics.setActiveAccountIdentity(null)
-                    supportIntake.setActiveAccountIdentity(null)
-                },
-            )
-            accountId?.let(nativeMediaPreviewCache::clearAccount)
-            notifyDocumentsRootsChanged()
-        } catch (failure: Throwable) {
-            recordSupportDiagnostic(
-                SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Error,
-                    component = SupportDiagnosticComponent.Authentication,
-                    operation = "session.clear",
-                    outcome = "failed",
-                    exception = failure.toSupportDiagnosticExceptionDraft(),
-                ),
-            )
-            throw failure
-        }
-    }
+    override suspend fun clearSession() = accountCredentials.clearSession()
 
     override fun openExternalUrl(url: String) {
         appContext.startActivity(
@@ -3887,8 +3805,6 @@ internal class AndroidNextcloudServices(
     private companion object {
         const val KEY_THEME = "theme_preference"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
-        const val KEY_SESSION = "encrypted_session"
-        const val KEY_TEST_READ_ONLY = "emulator_test_read_only"
         const val USER_AGENT = "Nextcloud-Native/0.1.0 (Android)"
         const val DAV_NAMESPACE = "DAV:"
         const val OWNCLOUD_NAMESPACE = "http://owncloud.org/ns"

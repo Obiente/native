@@ -843,6 +843,23 @@ class DesktopSecretStoreTest {
     }
 
     @Test
+    fun accountCredentialReferenceContainsOnlyTheOpaqueAccountIdentity() {
+        val session = NextcloudSession(
+            serverUrl = "https://cloud.invalid",
+            loginName = "alice",
+            appPassword = "private-app-password",
+        )
+
+        val reference = desktopAccountSecretReference(session.accountId)
+        val rendered = listOf(reference.targetName, reference.label, reference.attributes.toString()).joinToString()
+
+        assertTrue(rendered.contains(session.accountId.storageKey))
+        assertFalse(rendered.contains(session.serverUrl))
+        assertFalse(rendered.contains(session.loginName))
+        assertFalse(rendered.contains(session.appPassword))
+    }
+
+    @Test
     fun windowsCredentialManagerRoundTripUsesCurrentUserCredentialSet() {
         if (desktopSecretStoreKind() != DesktopSecretStoreKind.WindowsCredentialManager) return
         val store = WindowsCredentialManagerSecretStore()
