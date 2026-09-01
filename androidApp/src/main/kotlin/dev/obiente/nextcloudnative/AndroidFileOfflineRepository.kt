@@ -45,6 +45,11 @@ import java.util.concurrent.TimeUnit
 
 internal enum class AndroidOfflineExecutionOutcome { Complete, Retry }
 
+internal fun DocumentWebDavException.isRetryableOfflineDownloadFailure(): Boolean =
+    error == DocumentWebDavError.Locked ||
+        error == DocumentWebDavError.Throttled ||
+        error == DocumentWebDavError.Server
+
 internal data class AndroidOfflineContent(
     val file: NextcloudFile,
     val content: File,
@@ -527,16 +532,18 @@ internal class AndroidFileOfflineRepository(context: Context) {
                                 System.currentTimeMillis() + seconds * 1_000L
                             },
                         )
-                        DocumentWebDavError.Locked, DocumentWebDavError.Server ->
-                            retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
                         else -> {
-                            finish(
-                                job.id,
-                                FileOfflineJobResult.PermanentFailure(
-                                    failure.message ?: "Could not download this file for offline use.",
-                                ),
-                            )
-                            AndroidOfflineExecutionOutcome.Complete
+                            if (failure.isRetryableOfflineDownloadFailure()) {
+                                retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
+                            } else {
+                                finish(
+                                    job.id,
+                                    FileOfflineJobResult.PermanentFailure(
+                                        failure.message ?: "Could not download this file for offline use.",
+                                    ),
+                                )
+                                AndroidOfflineExecutionOutcome.Complete
+                            }
                         }
                     }
                     else -> {

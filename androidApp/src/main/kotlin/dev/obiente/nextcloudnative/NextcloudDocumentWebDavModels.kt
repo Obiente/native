@@ -16,6 +16,7 @@ internal enum class DocumentWebDavError {
     InsufficientStorage,
     TooLarge,
     Throttled,
+    RedirectRejected,
     Server,
 }
 
@@ -31,7 +32,7 @@ internal class DocumentWebDavException(
 internal fun NextcloudAuthenticatedRedirectException.toDocumentException(
     operation: String,
 ): DocumentWebDavException = DocumentWebDavException(
-    error = DocumentWebDavError.Server,
+    error = DocumentWebDavError.RedirectRejected,
     status = status,
     message = "Nextcloud could not safely redirect the request to $operation.",
     redirectReason = diagnosticReason,
@@ -61,6 +62,7 @@ internal fun Response.toDocumentException(operation: String): DocumentWebDavExce
         DocumentWebDavError.InsufficientStorage -> "The Nextcloud server does not have enough free storage."
         DocumentWebDavError.TooLarge -> "The document is larger than the current provider limit."
         DocumentWebDavError.Throttled -> "Nextcloud asked this upload to wait before trying again."
+        DocumentWebDavError.RedirectRejected -> "Nextcloud returned a redirect that could not be followed safely."
         DocumentWebDavError.Server -> "Nextcloud could not $operation (HTTP $code)."
     }
     return DocumentWebDavException(

@@ -95,7 +95,7 @@ class NextcloudDocumentWebDavRedirectTest {
                 )
             }
 
-            assertEquals(DocumentWebDavError.Server, failure.error)
+            assertEquals(DocumentWebDavError.RedirectRejected, failure.error)
             assertEquals(307, failure.status)
             assertEquals("unsafe_target", failure.redirectReason)
             assertIs<dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRedirectException>(failure.cause)
@@ -122,6 +122,7 @@ class NextcloudDocumentWebDavRedirectTest {
                 webDav.execute(request, "write document")
             }
 
+            assertEquals(DocumentWebDavError.RedirectRejected, failure.error)
             assertEquals(302, failure.status)
             assertEquals("method_may_change", failure.redirectReason)
             assertEquals(1, server.requestCount)
