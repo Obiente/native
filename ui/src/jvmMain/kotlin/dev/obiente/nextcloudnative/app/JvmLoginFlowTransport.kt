@@ -86,6 +86,7 @@ fun executeLoginPollHttp(
         if (compatibilityResponse != null && compatibilityResponse.status in 200..299) {
             response = compatibilityResponse
             usedFallback = true
+            responseCameFromFallback = true
             selectedFallbackReason = LoginPollFallbackReason.AdvertisedEndpointNotFound
         }
     }

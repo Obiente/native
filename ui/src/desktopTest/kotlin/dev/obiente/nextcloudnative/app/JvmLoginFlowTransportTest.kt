@@ -33,6 +33,11 @@ class JvmLoginFlowTransportTest {
         assertIs<LoginPollResult.Approved>(execution.interpretation.result)
         assertEquals(LoginPollFallbackReason.AdvertisedEndpointNotFound, execution.selectedFallbackReason)
         assertEquals(true, execution.usedFallback)
+        assertEquals(true, execution.responseUsedFallback)
+        val diagnosticFields = execution.interpretation
+            .toApprovedDiagnostic(execution.responseUsedFallback)
+            .fields.associate { it.name to it.value }
+        assertEquals("true", diagnosticFields["poll_fallback_used"])
     }
 
     @Test
@@ -129,6 +134,9 @@ class JvmLoginFlowTransportTest {
         assertNull(execution.selectedFallbackReason)
         assertEquals(false, execution.usedFallback)
         assertEquals(true, execution.responseUsedFallback)
+        val diagnosticFields = loginPollPendingDiagnostic(execution.responseUsedFallback)
+            .fields.associate { it.name to it.value }
+        assertEquals("fallback", diagnosticFields["endpoint_role"])
     }
 
     @Test
@@ -151,6 +159,7 @@ class JvmLoginFlowTransportTest {
         assertIs<LoginPollResult.Approved>(execution.interpretation.result)
         assertEquals(LoginPollFallbackReason.PreExchangeFailure, execution.selectedFallbackReason)
         assertEquals(true, execution.usedFallback)
+        assertEquals(true, execution.responseUsedFallback)
     }
 
     @Test

@@ -31,6 +31,7 @@ import dev.obiente.nextcloudnative.app.LoginPollHttpResponse
 import dev.obiente.nextcloudnative.app.executeLoginPollHttp
 import dev.obiente.nextcloudnative.app.interpretLoginChallengeHttpResponse
 import dev.obiente.nextcloudnative.app.loginPollEndpointFallbackDiagnostic
+import dev.obiente.nextcloudnative.app.normalizeServerUrl
 import dev.obiente.nextcloudnative.app.toApprovedDiagnostic
 import dev.obiente.nextcloudnative.app.toStartedDiagnostic
 import dev.obiente.nextcloudnative.app.confirmTextFileDavSave
@@ -246,7 +247,6 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.io.IOException
 import java.io.OutputStream
-import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -1358,13 +1358,15 @@ internal class AndroidNextcloudServices(
         when (val result = interpretation.result) {
             LoginPollResult.Pending -> {
                 if (loginPollPendingTokens.add(challenge.token)) {
-                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.usedFallback))
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.responseUsedFallback))
                 }
             }
             is LoginPollResult.Approved -> {
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
-                runCatching { recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.usedFallback)) }
+                runCatching {
+                    recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.responseUsedFallback))
+                }
             }
             else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
         }
@@ -3769,23 +3771,6 @@ internal class AndroidNextcloudServices(
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
         .replace("'", "&apos;")
-
-    private fun normalizeServerUrl(
-        value: String,
-        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
-    ): String {
-        val withScheme = value.trim().let { if ("://" in it) it else "https://$it" }
-        val uri = URI(withScheme)
-        val scheme = uri.scheme?.lowercase()
-        require(
-            scheme == "https" ||
-                (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp),
-        ) {
-            "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
-        }
-        require(!uri.host.isNullOrBlank()) { "Enter a valid Nextcloud server address." }
-        return withScheme.trimEnd('/').removeSuffix("/index.php")
-    }
 
     private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
         if (serverUrl.startsWith("http://", ignoreCase = true)) {

@@ -178,7 +178,7 @@ private data class LoginChallengeFields(
     val loginUrl: String,
 )
 
-internal fun normalizeServerUrl(
+fun normalizeServerUrl(
     value: String,
     transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
 ): String {
