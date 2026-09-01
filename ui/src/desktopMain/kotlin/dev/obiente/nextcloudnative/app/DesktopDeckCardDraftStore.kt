@@ -341,6 +341,9 @@ internal class PlatformDeckDraftKeyProvider(
     private fun lookup(): ByteArray? {
         val stored = try {
             secretStore.load(desktopDeckDraftSecretReference())
+        } catch (failure: NextcloudSessionLegacyMigrationUnavailableException) {
+            if (legacySecretRequired()) throw failure
+            null
         } catch (failure: DesktopSecretStoreUnavailableException) {
             if (legacySecretRequired()) throw failure
             null

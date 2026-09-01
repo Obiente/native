@@ -365,6 +365,27 @@ class DesktopSecretStoreTest {
     }
 
     @Test
+    fun freshMacOsDraftKeyCanBypassAMissingLegacyProvider() {
+        val primary = RecordingSecretStore()
+        val migrating = MigratingDesktopSecretStore(
+            primary = primary,
+            legacy = SecretToolDesktopSecretStore(
+                startProcess = { throw java.io.IOException("synthetic missing executable") },
+            ),
+            adoption = RecordingSecretStoreAdoption(),
+        )
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = migrating,
+            legacySecretRequired = { false },
+        )
+
+        val key = provider.encryptionKey()
+
+        assertEquals(DesktopDeckCardDraftStore.AES_KEY_BYTES, key.size)
+        assertTrue(primary.values.containsKey(desktopDeckDraftSecretReference().targetName))
+    }
+
+    @Test
     fun existingDraftNeverCreatesAReplacementKeyAfterAmbiguousLegacyLookup() {
         val provider = PlatformDeckDraftKeyProvider(
             secretStore = RecordingSecretStore(failLoad = true),
