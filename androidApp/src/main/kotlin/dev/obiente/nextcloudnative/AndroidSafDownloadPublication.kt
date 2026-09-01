@@ -129,11 +129,7 @@ internal class AndroidSafDownloadPublisher<Document>(
             } catch (failure: CancellationException) {
                 throw failure
             } catch (failure: Throwable) {
-                try {
-                    recoverBeforePublication(transaction)
-                } catch (recoveryFailure: Throwable) {
-                    failure.addSuppressed(recoveryFailure)
-                }
+                recoverBeforePublicationOrSuppress(transaction, failure)
                 retireRecoveredOwnershipBestEffort(transaction)
                 throw failure
             }
@@ -159,11 +155,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 retireRecoveredOwnershipBestEffort(transaction)
                 return
             }
-            try {
-                recoverBeforePublication(transaction)
-            } catch (recoveryFailure: Throwable) {
-                failure.addSuppressed(recoveryFailure)
-            }
+            recoverBeforePublicationOrSuppress(transaction, failure)
             retireRecoveredOwnershipBestEffort(transaction)
             throw failure
         }
@@ -171,13 +163,28 @@ internal class AndroidSafDownloadPublisher<Document>(
         retireRecoveredOwnershipBestEffort(transaction)
     }
 
-    fun visibleDocuments(): List<AndroidSafPublicationDocument<Document>> {
-        val documents = directory.documents()
+    fun visibleDocuments(
+        documents: List<AndroidSafPublicationDocument<Document>> = directory.documents(),
+    ): List<AndroidSafPublicationDocument<Document>> {
         val observedNames = documents.mapTo(mutableSetOf()) { it.displayName }
         val ownedNames = ownership.transactions(observedNames).flatMapTo(mutableSetOf()) { transaction ->
             listOf(transaction.stageName, transaction.backupName)
         }
         return documents.filterNot { it.displayName in ownedNames }
+    }
+
+    private fun recoverBeforePublicationOrSuppress(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        originalFailure: Throwable,
+    ) {
+        try {
+            recoverBeforePublication(transaction)
+        } catch (cancelled: CancellationException) {
+            cancelled.addSuppressed(originalFailure)
+            throw cancelled
+        } catch (recoveryFailure: Throwable) {
+            originalFailure.addSuppressed(recoveryFailure)
+        }
     }
 
     fun hasPendingRecovery(): Boolean {

@@ -143,8 +143,13 @@ internal class AndroidSafFileSyncLocalTree(
             require(!publisher.hasPendingRecovery()) {
                 "A local download still needs safe recovery. Run this folder sync before removing it."
             }
-            val visibleUris = publisher.visibleDocuments().mapTo(mutableSetOf()) { it.document }
-            rawChildren(parentUri, parentPath).forEach { document ->
+            val listedChildren = rawChildren(parentUri, parentPath)
+            val visibleUris = publisher.visibleDocuments(
+                listedChildren.map { document ->
+                    AndroidSafPublicationDocument(document.uri, document.displayName)
+                },
+            ).mapTo(mutableSetOf()) { it.document }
+            listedChildren.forEach { document ->
                 if (document.uri !in visibleUris) return@forEach
                 require(visitedEntries < MAX_ENTRIES) {
                     "The local recovery folder contains too many entries."
@@ -406,8 +411,13 @@ internal class AndroidSafFileSyncLocalTree(
     private fun children(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
         val publisher = downloadPublisher(parentUri, parentPath)
         publisher.reconcile()
-        val visibleUris = publisher.visibleDocuments().mapTo(mutableSetOf()) { it.document }
-        return rawChildren(parentUri, parentPath).filter { it.uri in visibleUris }
+        val listedChildren = rawChildren(parentUri, parentPath)
+        val visibleUris = publisher.visibleDocuments(
+            listedChildren.map { document ->
+                AndroidSafPublicationDocument(document.uri, document.displayName)
+            },
+        ).mapTo(mutableSetOf()) { it.document }
+        return listedChildren.filter { it.uri in visibleUris }
     }
 
     private fun downloadPublisher(

@@ -174,6 +174,48 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
+    fun `visible filtering retains a same-name document whose provider identity changed`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            ownership.add(transaction)
+            addFile("Archive", byteArrayOf(1))
+            addFile(transaction.stageName, byteArrayOf(2))
+        }
+        val obsoleteDocument = directory.documentNamed("Archive")
+        directory.replaceDocumentIdentity("Archive")
+        val listed = directory.documents()
+        directory.documentsFailure = IOException("A second provider listing is unavailable")
+
+        val visible = publisher(directory).visibleDocuments(listed)
+
+        assertEquals(listOf("Archive"), visible.map { it.displayName })
+        assertTrue(visible.single().document != obsoleteDocument)
+        assertEquals(listed.single { it.displayName == "Archive" }.document, visible.single().document)
+    }
+
+    @Test
+    fun `cancellation raised by failed-backup recovery remains cancellation`() {
+        val cancellation = CancellationException("worker stopped during recovery")
+        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            failBeforeRenameTo = transaction.backupName
+            cancelNextDocumentsAfterRenameFailure = cancellation
+        }
+
+        val thrown = assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(3, 4))
+            }
+        }
+
+        assertEquals(cancellation, thrown)
+        assertTrue(thrown.suppressedExceptions.single() is IOException)
+        assertEquals(setOf("Archive", transaction.stageName), directory.names().toSet())
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+    }
+
+    @Test
     fun `restart restores a protected directory and hides the abandoned stage`() {
         val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory().apply {
@@ -386,6 +428,8 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var failNextBackupDeletion: Boolean = false
     var failNextStageDeletion: Boolean = false
     var documentsFailure: IOException? = null
+    var cancelNextDocumentsAfterRenameFailure: CancellationException? = null
+    private var documentsCancellation: CancellationException? = null
     var deleteCalls: Int = 0
     val ownership = FakeSafDownloadOwnership()
 
@@ -400,7 +444,17 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
 
     fun names(): List<String> = entries.values.map { it.displayName }.sorted()
 
+    fun replaceDocumentIdentity(displayName: String) {
+        val previous = entryNamed(displayName)
+        entries.remove(previous.document)
+        add(displayName, previous.kind, previous.bytes)
+    }
+
     override fun documents(): List<AndroidSafPublicationDocument<Int>> {
+        documentsCancellation?.let { cancellation ->
+            documentsCancellation = null
+            throw cancellation
+        }
         documentsFailure?.let { throw it }
         return entries.values.map { entry -> AndroidSafPublicationDocument(entry.document, entry.displayName) }
     }
@@ -428,6 +482,8 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
         }
         if (failBeforeRenameTo == displayName) {
             failBeforeRenameTo = null
+            documentsCancellation = cancelNextDocumentsAfterRenameFailure
+            cancelNextDocumentsAfterRenameFailure = null
             throw IOException("rename failed before publication")
         }
         entries.getValue(document).displayName = displayName
