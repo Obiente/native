@@ -47,6 +47,20 @@ class LoginEndpointSecurityTest {
     }
 
     @Test
+    fun encodedBasePathIsPreservedInCompatibilityEndpoint() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "https://cloud.example.com/next%20cloud",
+            loginUrl = "https://cloud.example.com/next%20cloud/login",
+            pollEndpoint = "https://cloud.example.com/custom/poll",
+        )
+
+        assertEquals(
+            "https://cloud.example.com/next%20cloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
+    }
+
+    @Test
     fun unsafeLoginEndpointsAreRejectedBeforeOpeningTheBrowser() {
         assertFailsWith<IllegalArgumentException> {
             validateLoginEndpointRelationships(

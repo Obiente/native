@@ -26,6 +26,7 @@ fun executeLoginPollHttp(
 ): LoginPollHttpExecution {
     val fallbackEndpoint = challenge.pollFallbackEndpoint
     var usedFallback = fallbackAlreadySelected
+    var responseCameFromFallback = fallbackAlreadySelected
     var selectedFallbackReason: LoginPollFallbackReason? = null
 
     fun failed(result: LoginPollResult) = LoginPollHttpExecution(
@@ -55,9 +56,12 @@ fun executeLoginPollHttp(
                     when {
                         compatibilityResponse.status in 200..299 -> compatibilityResponse.also {
                             usedFallback = true
+                            responseCameFromFallback = true
                             selectedFallbackReason = LoginPollFallbackReason.PreExchangeFailure
                         }
-                        compatibilityResponse.status == 404 -> compatibilityResponse
+                        compatibilityResponse.status == 404 -> compatibilityResponse.also {
+                            responseCameFromFallback = true
+                        }
                         else -> return failed(primaryFailure)
                     }
                 }
@@ -69,7 +73,7 @@ fun executeLoginPollHttp(
         }
     }
 
-    if (response.status == 404 && !usedFallback && fallbackEndpoint != null) {
+    if (response.status == 404 && !responseCameFromFallback && fallbackEndpoint != null) {
         val compatibilityResponse = try {
             attempt(fallbackEndpoint)
         } catch (failure: LoginPollRequestFailure) {

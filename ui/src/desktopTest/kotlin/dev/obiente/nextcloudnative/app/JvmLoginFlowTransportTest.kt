@@ -101,6 +101,7 @@ class JvmLoginFlowTransportTest {
     @Test
     fun `pre exchange DNS failure probes pending compatibility endpoint without pinning it`() {
         var diagnostic: JvmNetworkFailureDiagnostic? = null
+        val endpoints = mutableListOf<String>()
         val execution = executeLoginPollHttp(
             challenge = challenge(
                 pollEndpoint = "https://internal.example.test/login/v2/poll",
@@ -108,6 +109,7 @@ class JvmLoginFlowTransportTest {
             ),
             fallbackAlreadySelected = false,
             poll = { endpoint ->
+                endpoints += endpoint
                 diagnostic = if (endpoint.contains("internal")) dnsFailure() else null
                 if (diagnostic != null) throw IOException("synthetic DNS failure")
                 LoginPollHttpResponse(status = 404, body = "[]")
@@ -116,6 +118,13 @@ class JvmLoginFlowTransportTest {
         )
 
         assertEquals(LoginPollResult.Pending, execution.interpretation.result)
+        assertEquals(
+            listOf(
+                "https://internal.example.test/login/v2/poll",
+                "https://cloud.example.test/index.php/login/v2/poll",
+            ),
+            endpoints,
+        )
         assertNull(execution.selectedFallbackReason)
         assertEquals(false, execution.usedFallback)
     }

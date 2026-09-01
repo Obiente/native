@@ -82,13 +82,5 @@ private fun URI.effectivePort(): Int = when {
 
 private fun URI.canonicalPollEndpoint(): String {
     val basePath = rawPath.orEmpty().trimEnd('/')
-    return URI(
-        scheme,
-        null,
-        host,
-        port,
-        "$basePath/index.php/login/v2/poll",
-        null,
-        null,
-    ).toASCIIString()
+    return URI("$scheme://$rawAuthority$basePath/index.php/login/v2/poll").toASCIIString()
 }
