@@ -3854,7 +3854,8 @@ class DesktopNextcloudServices(
                         exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
                 )
-                if (failure is DesktopSecretDeletionRecoveryUnavailableException) throw failure
+                if (failure is DesktopSecretDeletionRecoveryUnavailableException ||
+                    failure is DesktopSecretLegacyCleanupUnavailableException) throw failure
             }
             sessionPublicationGuard.serialize {
                 preferences.remove(KEY_SERVER)

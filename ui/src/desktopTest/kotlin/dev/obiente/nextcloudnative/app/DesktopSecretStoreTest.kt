@@ -336,6 +336,63 @@ class DesktopSecretStoreTest {
     }
 
     @Test
+    fun unavailableAdoptionAndLegacyCleanupCannotExposeAKeychainValue() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val expected = "keychain-session-secret".encodeToByteArray()
+        val store = MigratingDesktopSecretStore(
+            primary = RecordingSecretStore(mutableMapOf(reference.targetName to expected)),
+            legacy = RecordingSecretStore(
+                mutableMapOf(reference.targetName to "stale-session-secret".encodeToByteArray()),
+                failClear = true,
+            ),
+            adoption = RecordingSecretStoreAdoption(failWrites = true),
+        )
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { store.load(reference) }
+    }
+
+    @Test
+    fun failedLegacyCleanupKeepsSignOutReferenceRetryable() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val primary = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "keychain-session-secret".encodeToByteArray()),
+        )
+        val legacy = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "legacy-session-secret".encodeToByteArray()),
+            failClearAttempts = 1,
+        )
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(primary, legacy, adoption)
+
+        assertFailsWith<DesktopSecretLegacyCleanupUnavailableException> { store.clear(reference) }
+        assertNull(primary.load(reference))
+        assertTrue(legacy.values.containsKey(reference.targetName))
+
+        store.clear(reference)
+
+        assertNull(legacy.load(reference))
+        assertEquals(2, legacy.clearAttempts)
+    }
+
+    @Test
+    fun failedKeychainClearStillRemovesTheLegacyCredential() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val primary = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "keychain-session-secret".encodeToByteArray()),
+            failClear = true,
+        )
+        val legacy = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "legacy-session-secret".encodeToByteArray()),
+        )
+        val store = MigratingDesktopSecretStore(primary, legacy, RecordingSecretStoreAdoption())
+
+        assertFailsWith<IllegalStateException> { store.clear(reference) }
+
+        assertNull(legacy.load(reference))
+        assertEquals(1, legacy.clearAttempts)
+    }
+
+    @Test
     fun failedLegacyCleanupRetriesWithoutReadingTheStaleValueAgain() {
         val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
         val expected = "keychain-session-secret".encodeToByteArray()
@@ -399,6 +456,33 @@ class DesktopSecretStoreTest {
         )
 
         assertFailsWith<DesktopSecretStoreUnavailableException> { provider.encryptionKey() }
+    }
+
+    @Test
+    fun existingDraftNeverCreatesAReplacementForAConfirmedMissingKey() {
+        val secrets = RecordingSecretStore()
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = secrets,
+            legacySecretRequired = { true },
+        )
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { provider.encryptionKey() }
+        assertFalse(secrets.values.containsKey(desktopDeckDraftSecretReference().targetName))
+    }
+
+    @Test
+    fun existingDraftNeverCreatesAReplacementForAMalformedKey() {
+        val reference = desktopDeckDraftSecretReference()
+        val secrets = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "not-base64".encodeToByteArray()),
+        )
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = secrets,
+            legacySecretRequired = { true },
+        )
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { provider.encryptionKey() }
+        assertContentEquals("not-base64".encodeToByteArray(), secrets.values.getValue(reference.targetName))
     }
 
     @Test

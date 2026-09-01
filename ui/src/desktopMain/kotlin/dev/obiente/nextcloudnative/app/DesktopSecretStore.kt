@@ -60,6 +60,13 @@ internal class DesktopSecretDeletionRecoveryUnavailableException(
     cause,
 )
 
+internal class DesktopSecretLegacyCleanupUnavailableException(
+    cause: Throwable,
+) : NextcloudSessionStorageUnavailableException(
+    "The legacy secure credential could not be cleared safely.",
+    cause,
+)
+
 internal enum class DesktopSecretStoreUnavailableReason {
     StorageLockedOrUnavailable,
     ProviderMissing,
@@ -137,29 +144,46 @@ internal class MigratingDesktopSecretStore(
     }
 
     override fun clear(reference: DesktopSecretReference) {
-        markAdoptedBestEffort(reference)
-        primary.clear(reference)
-        retryLegacyCleanup(reference)
+        markAdopted(reference)
+        val primaryFailure = try {
+            primary.clear(reference)
+            null
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            failure
+        }
+        retryLegacyCleanup(reference)?.let { failure ->
+            primaryFailure?.let(failure::addSuppressed)
+            throw DesktopSecretLegacyCleanupUnavailableException(failure)
+        }
+        primaryFailure?.let { throw it }
     }
 
     private fun adoptAndRetryLegacyCleanupBestEffort(reference: DesktopSecretReference) {
-        markAdoptedBestEffort(reference)
-        retryLegacyCleanup(reference)
+        val adoptionDurable = markAdopted(reference)
+        val legacyCleanupFailure = retryLegacyCleanup(reference)
+        if (!adoptionDurable && legacyCleanupFailure != null) {
+            throw DesktopSecretStoreUnavailableException(
+                "Keychain adoption and legacy credential cleanup are both unavailable.",
+                cause = legacyCleanupFailure,
+            )
+        }
     }
 
-    private fun markAdoptedBestEffort(reference: DesktopSecretReference) {
+    private fun markAdopted(reference: DesktopSecretReference): Boolean =
         try {
             if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
                 adoption.markAdopted(reference)
             }
+            true
         } catch (failure: kotlinx.coroutines.CancellationException) {
             throw failure
         } catch (_: Exception) {
-            // A valid primary secret remains usable even when migration bookkeeping is unavailable.
+            false
         }
-    }
 
-    private fun retryLegacyCleanup(reference: DesktopSecretReference) {
+    private fun retryLegacyCleanup(reference: DesktopSecretReference): Exception? {
         val alreadyClean = try {
             adoption.state(reference) == DesktopSecretStoreAdoptionState.AdoptedAndClean
         } catch (failure: kotlinx.coroutines.CancellationException) {
@@ -167,14 +191,13 @@ internal class MigratingDesktopSecretStore(
         } catch (_: Exception) {
             false
         }
-        if (alreadyClean) return
+        if (alreadyClean) return null
         try {
             legacy.clear(reference)
         } catch (failure: kotlinx.coroutines.CancellationException) {
             throw failure
-        } catch (_: Exception) {
-            // Adoption prevents stale reads; the pending state retries cleanup on the next operation.
-            return
+        } catch (failure: Exception) {
+            return failure
         }
         try {
             adoption.markLegacyCleanupComplete(reference)
@@ -183,6 +206,7 @@ internal class MigratingDesktopSecretStore(
         } catch (_: Exception) {
             // Legacy cleanup is already complete; only the optional durable marker is unavailable.
         }
+        return null
     }
 }
 

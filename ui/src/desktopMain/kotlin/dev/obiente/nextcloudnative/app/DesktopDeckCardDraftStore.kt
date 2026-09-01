@@ -352,9 +352,18 @@ internal class PlatformDeckDraftKeyProvider(
             ?.let { value -> value.copyOf(minOf(value.size, MAX_ENCODED_KEY_BYTES)) }
             ?.decodeToString()
             ?.trim()
-            ?: return null
-        if (encoded.isBlank()) return null
-        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
+            ?: return missingKey()
+        if (encoded.isBlank()) return missingKey()
+        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull() ?: missingKey()
+    }
+
+    private fun missingKey(): ByteArray? {
+        if (legacySecretRequired()) {
+            throw DesktopSecretStoreUnavailableException(
+                "The Deck draft encryption key is missing while encrypted drafts still exist.",
+            )
+        }
+        return null
     }
 
     private companion object {

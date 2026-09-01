@@ -4,4 +4,4 @@ pull: 430
 platforms: macos
 user-facing: yes
 
-Store desktop login credentials and local Deck draft keys in the user's macOS Keychain, migrate existing Secret Service values, keep locked Keychain access safely retryable, and durably retry credential deletion after sign-out.
+Store desktop login credentials and Deck draft keys in macOS Keychain, migrate Secret Service values, and keep locked access and sign-out cleanup retryable. Preserve encrypted Deck drafts instead of replacing a missing key.
