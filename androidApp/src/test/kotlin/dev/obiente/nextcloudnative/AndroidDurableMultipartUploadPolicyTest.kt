@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.json.JSONArray
 
@@ -384,6 +385,62 @@ class AndroidDurableMultipartUploadPolicyTest {
         )
     }
 
+    @Test
+    fun `background upload resolves the queued account instead of the active account`() {
+        val queuedSession = fixtureSession("alice")
+        val activeSession = fixtureSession("bob")
+        val loadedAccountIds = mutableListOf<String>()
+
+        val resolved = resolveDurableUploadSession(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            accounts = listOf(activeSession.accountRecord(), queuedSession.accountRecord()),
+            loadSession = { accountId ->
+                loadedAccountIds += accountId.storageKey
+                when (accountId) {
+                    queuedSession.accountId -> queuedSession
+                    activeSession.accountId -> activeSession
+                    else -> null
+                }
+            },
+        )
+
+        assertEquals(queuedSession, resolved)
+        assertEquals(listOf(queuedSession.accountId.storageKey), loadedAccountIds)
+    }
+
+    @Test
+    fun `background upload never substitutes another account on the same server path`() {
+        val queuedSession = fixtureSession("alice")
+        val otherSession = fixtureSession("bob")
+        var credentialRead = false
+
+        val missing = resolveDurableUploadSession(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            accounts = listOf(otherSession.accountRecord()),
+            loadSession = {
+                credentialRead = true
+                otherSession
+            },
+        )
+
+        assertNull(missing)
+        assertFalse(credentialRead)
+    }
+
+    @Test
+    fun `background upload rejects a credential that does not match its registry owner`() {
+        val queuedSession = fixtureSession("alice")
+        val otherSession = fixtureSession("bob")
+
+        val resolved = resolveDurableUploadSession(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            accounts = listOf(queuedSession.accountRecord(), otherSession.accountRecord()),
+            loadSession = { otherSession },
+        )
+
+        assertNull(resolved)
+    }
+
     private fun fixtureJob(
         index: Int,
         account: String,
@@ -421,6 +478,12 @@ class AndroidDurableMultipartUploadPolicyTest {
     )
 
     private fun selectionId(index: Int): String = "selection-${index.toString().padStart(16, '0')}"
+
+    private fun fixtureSession(loginName: String): NextcloudSession = NextcloudSession(
+        serverUrl = "https://cloud.example.test/nextcloud",
+        loginName = loginName,
+        appPassword = "fixture-password",
+    )
 
     private companion object {
         const val ACCOUNT_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
