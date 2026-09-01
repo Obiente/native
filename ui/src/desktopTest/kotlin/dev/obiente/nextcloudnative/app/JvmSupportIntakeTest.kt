@@ -1409,7 +1409,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             val persistedPending = File(fixture.temporaryRoot, "pending.json").readText().replace(
                 Regex("\\\"archiveName\\\":\\\"[^\\\"]+\\\""),
                 "\"archiveName\":null",
