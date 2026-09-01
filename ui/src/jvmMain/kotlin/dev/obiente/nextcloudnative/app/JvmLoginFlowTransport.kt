@@ -49,10 +49,17 @@ fun executeLoginPollHttp(
             !usedFallback &&
             fallbackEndpoint != null
         ) {
+            val primaryFailure = failure.result
             try {
-                attempt(fallbackEndpoint).also {
-                    usedFallback = true
-                    selectedFallbackReason = LoginPollFallbackReason.PreExchangeFailure
+                attempt(fallbackEndpoint).let { compatibilityResponse ->
+                    when {
+                        compatibilityResponse.status in 200..299 -> compatibilityResponse.also {
+                            usedFallback = true
+                            selectedFallbackReason = LoginPollFallbackReason.PreExchangeFailure
+                        }
+                        compatibilityResponse.status == 404 -> compatibilityResponse
+                        else -> return failed(primaryFailure)
+                    }
                 }
             } catch (fallbackFailure: LoginPollRequestFailure) {
                 return failed(fallbackFailure.result)

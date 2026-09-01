@@ -99,7 +99,7 @@ class JvmLoginFlowTransportTest {
     }
 
     @Test
-    fun `pre exchange DNS failure still selects compatibility endpoint`() {
+    fun `pre exchange DNS failure probes pending compatibility endpoint without pinning it`() {
         var diagnostic: JvmNetworkFailureDiagnostic? = null
         val execution = executeLoginPollHttp(
             challenge = challenge(
@@ -116,8 +116,76 @@ class JvmLoginFlowTransportTest {
         )
 
         assertEquals(LoginPollResult.Pending, execution.interpretation.result)
+        assertNull(execution.selectedFallbackReason)
+        assertEquals(false, execution.usedFallback)
+    }
+
+    @Test
+    fun `pre exchange DNS failure selects compatibility endpoint after approval`() {
+        var diagnostic: JvmNetworkFailureDiagnostic? = null
+        val execution = executeLoginPollHttp(
+            challenge = challenge(
+                pollEndpoint = "https://internal.example.test/login/v2/poll",
+                fallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
+            ),
+            fallbackAlreadySelected = false,
+            poll = { endpoint ->
+                diagnostic = if (endpoint.contains("internal")) dnsFailure() else null
+                if (diagnostic != null) throw IOException("synthetic DNS failure")
+                approvedResponse()
+            },
+            networkFailure = { diagnostic },
+        )
+
+        assertIs<LoginPollResult.Approved>(execution.interpretation.result)
         assertEquals(LoginPollFallbackReason.PreExchangeFailure, execution.selectedFallbackReason)
         assertEquals(true, execution.usedFallback)
+    }
+
+    @Test
+    fun `incompatible fallback response preserves retryable advertised endpoint failure`() {
+        listOf(405, 503).forEach { fallbackStatus ->
+            var diagnostic: JvmNetworkFailureDiagnostic? = null
+            val endpoints = mutableListOf<String>()
+            val challenge = challenge(
+                pollEndpoint = "https://internal.example.test/login/v2/poll",
+                fallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
+            )
+            val execution = executeLoginPollHttp(
+                challenge = challenge,
+                fallbackAlreadySelected = false,
+                poll = { endpoint ->
+                    endpoints += endpoint
+                    diagnostic = if (endpoint.contains("internal")) dnsFailure() else null
+                    if (diagnostic != null) throw IOException("synthetic DNS failure")
+                    LoginPollHttpResponse(status = fallbackStatus, body = "unavailable")
+                },
+                networkFailure = { diagnostic },
+            )
+
+            assertIs<LoginPollResult.RetryablePreExchangeFailure>(execution.interpretation.result)
+            assertNull(execution.selectedFallbackReason)
+            assertEquals(false, execution.usedFallback)
+            assertEquals(
+                listOf(
+                    "https://internal.example.test/login/v2/poll",
+                    "https://cloud.example.test/index.php/login/v2/poll",
+                ),
+                endpoints,
+            )
+
+            val laterApproval = executeLoginPollHttp(
+                challenge = challenge,
+                fallbackAlreadySelected = execution.usedFallback,
+                poll = { endpoint ->
+                    endpoints += endpoint
+                    approvedResponse()
+                },
+                networkFailure = { null },
+            )
+            assertEquals("https://internal.example.test/login/v2/poll", endpoints.last())
+            assertIs<LoginPollResult.Approved>(laterApproval.interpretation.result)
+        }
     }
 
     @Test
