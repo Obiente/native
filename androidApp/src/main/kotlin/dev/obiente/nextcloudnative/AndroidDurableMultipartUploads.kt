@@ -38,8 +38,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
     ): DurableUploadEnqueueResult {
         val accountId = NextcloudDocumentIds.accountKey(session)
         val picker = AndroidLocalUploadPicker(appContext)
-        var storedJob: AndroidDurableMultipartUploadJob? = null
-        return runCatching {
+        return try {
             val safeRequest = request.requireSafe()
             picker.requirePersisted(safeRequest.file)
             val job = AndroidDurableMultipartUploadJob(
@@ -51,15 +50,18 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                 state = DurableUploadState.Queued,
                 message = null,
             )
-            store.add(job)
-            storedJob = job
-            schedule(job).await()
-            DurableUploadEnqueueResult.Queued(job.status())
-        }.getOrElse { error ->
-            storedJob?.let { job ->
-                runCatching { store.remove(job.id) }
-            }
-            if (!store.hasActiveSelection(request.file.selectionId)) {
+            persistAndScheduleDurableUpload(
+                job = job,
+                persist = store::add,
+                schedule = { queued -> schedule(queued).await() },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            val selectionIsDefinitelyInactive = runCatching {
+                !store.hasActiveSelection(request.file.selectionId)
+            }.getOrNull() == true
+            if (selectionIsDefinitelyInactive) {
                 picker.release(request.file)
             }
             DurableUploadEnqueueResult.Rejected(
@@ -209,6 +211,27 @@ internal suspend fun keepRetryingQueuedDurableUploadScheduling(
         }
         wait(followUpDelayMillis)
     }
+}
+
+/**
+ * Persists the upload before asking WorkManager to schedule it. WorkManager acceptance and its
+ * completion signal are not atomic, so a scheduling failure after persistence is ambiguous: the
+ * durable queued job must remain authoritative and can be scheduled again after process restart.
+ */
+internal suspend fun persistAndScheduleDurableUpload(
+    job: AndroidDurableMultipartUploadJob,
+    persist: (AndroidDurableMultipartUploadJob) -> Unit,
+    schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+): DurableUploadEnqueueResult.Queued {
+    persist(job)
+    try {
+        schedule(job)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The scheduler may already own this work. Keep the journal and retry scheduling later.
+    }
+    return DurableUploadEnqueueResult.Queued(job.status())
 }
 
 internal sealed interface DurableUploadAccountResolution {
