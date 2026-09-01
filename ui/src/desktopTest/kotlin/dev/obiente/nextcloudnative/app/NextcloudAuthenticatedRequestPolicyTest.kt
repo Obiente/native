@@ -58,6 +58,8 @@ class NextcloudAuthenticatedRequestPolicyTest {
             "https://cloud.example.test/cloud/%252e%252e/admin",
             "https://cloud.example.test/cloud/safe%252f%252e%252e%252fadmin",
             "https://cloud.example.test/cloud/safe%255c%252e%252e%255cadmin",
+            "https://cloud.example.test/cloud/%2525252e%2525252e/admin",
+            "https://cloud.example.test/cloud/still-changing-%25252541",
         ).forEach { target ->
             assertFailsWith<IllegalArgumentException>(target) { policy.requestBuilder(target) }
         }
@@ -171,6 +173,7 @@ class NextcloudAuthenticatedRequestPolicyTest {
             "/cloud2/dav" to NextcloudAuthenticatedRedirectRejection.UnsafeTarget,
             "https://user@cloud.example.test/cloud/dav" to NextcloudAuthenticatedRedirectRejection.UnsafeTarget,
             "/cloud/%252e%252e/admin" to NextcloudAuthenticatedRedirectRejection.InvalidLocation,
+            "/cloud/%2525252e%2525252e/admin" to NextcloudAuthenticatedRedirectRejection.InvalidLocation,
         )
 
         cases.forEach { (location, reason) ->

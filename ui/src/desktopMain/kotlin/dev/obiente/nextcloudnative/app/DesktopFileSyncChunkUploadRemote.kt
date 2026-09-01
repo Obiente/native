@@ -341,14 +341,14 @@ internal class DesktopFileSyncChunkUploadRemote(
     private fun requestBuilder(url: String): Request.Builder = requestPolicy.requestBuilder(url)
 
     private fun <T> executeRequest(request: Request, consume: (okhttp3.Response) -> T): T = try {
-        executeNextcloudAuthenticatedRequest(
-            client = client,
-            initialRequest = request,
-            executeCall = { call ->
-                executeDesktopFileSyncCancellableCall(call, shouldContinue) { active -> active.execute() }
-            },
-            consume = consume,
-        )
+        withDesktopFileSyncCallCancellation(shouldContinue) { executeCall ->
+            executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = executeCall,
+                consume = consume,
+            )
+        }
     } catch (failure: NextcloudAuthenticatedRedirectException) {
         throw failure.toDesktopFileSyncHttpStatusException("follow authenticated chunk upload redirect")
     }

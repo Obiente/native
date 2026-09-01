@@ -757,13 +757,16 @@ internal class DesktopFileSyncRemoteTree(
         shouldContinue: (() -> Boolean)? = null,
         consume: (okhttp3.Response) -> T,
     ): T = try {
-        executeNextcloudAuthenticatedRequest(
-            client = client, initialRequest = request,
-            executeCall = { call ->
-                shouldContinue?.let { executeDesktopFileSyncCancellableCall(call, it) { active -> active.execute() } }
-                    ?: call.execute()
-            }, consume = consume,
-        )
+        val execute: (((okhttp3.Call) -> okhttp3.Response) -> T) = { executeCall ->
+            executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = executeCall,
+                consume = consume,
+            )
+        }
+        shouldContinue?.let { withDesktopFileSyncCallCancellation(it, execute) }
+            ?: execute { call -> call.execute() }
     } catch (failure: NextcloudAuthenticatedRedirectException) {
         throw failure.toDesktopFileSyncHttpStatusException("follow authenticated DAV redirect")
     }

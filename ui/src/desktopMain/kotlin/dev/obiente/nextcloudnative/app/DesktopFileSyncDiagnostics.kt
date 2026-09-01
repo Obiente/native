@@ -117,20 +117,36 @@ internal fun DesktopFileSyncProgressEvent.toSupportDiagnosticEventDraft(): Suppo
         operation = "sync.item",
         outcome = "failed",
         message = "A desktop folder sync item failed.",
-        fields = listOf(
-            SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
-            SupportDiagnosticFieldDraft("work", workId.toString(), SupportDiagnosticValuePrivacy.Identifier),
-            SupportDiagnosticFieldDraft("operation_type", operation.desktopFileSyncOperationCode()),
-            SupportDiagnosticFieldDraft("attempt_count_bucket", desktopFileSyncAttemptBucket(attemptCount)),
-            SupportDiagnosticFieldDraft("item_bytes_bucket", desktopFileSyncByteBucket(sizeBytes)),
-            SupportDiagnosticFieldDraft("local_entries_bucket", snapshot.localEntryCountBucket),
-            SupportDiagnosticFieldDraft("remote_entries_bucket", snapshot.remoteEntryCountBucket),
-            SupportDiagnosticFieldDraft("local_file_bytes_bucket", snapshot.localFileBytesBucket),
-            SupportDiagnosticFieldDraft("remote_file_bytes_bucket", snapshot.remoteFileBytesBucket),
-            SupportDiagnosticFieldDraft("failure_kind", failureKind ?: "unknown"),
-        ),
+        fields = buildList {
+            add(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
+            add(SupportDiagnosticFieldDraft("work", workId.toString(), SupportDiagnosticValuePrivacy.Identifier))
+            add(SupportDiagnosticFieldDraft("operation_type", operation.desktopFileSyncOperationCode()))
+            add(SupportDiagnosticFieldDraft("attempt_count_bucket", desktopFileSyncAttemptBucket(attemptCount)))
+            add(SupportDiagnosticFieldDraft("item_bytes_bucket", desktopFileSyncByteBucket(sizeBytes)))
+            add(SupportDiagnosticFieldDraft("local_entries_bucket", snapshot.localEntryCountBucket))
+            add(SupportDiagnosticFieldDraft("remote_entries_bucket", snapshot.remoteEntryCountBucket))
+            add(SupportDiagnosticFieldDraft("local_file_bytes_bucket", snapshot.localFileBytesBucket))
+            add(SupportDiagnosticFieldDraft("remote_file_bytes_bucket", snapshot.remoteFileBytesBucket))
+            add(SupportDiagnosticFieldDraft("failure_kind", failureDiagnostic?.kind ?: "unknown"))
+            failureDiagnostic?.redirectReason?.let { add(SupportDiagnosticFieldDraft("redirect_reason", it)) }
+        },
     )
 }
+
+internal data class DesktopFileSyncFailureDiagnostic(
+    val kind: String,
+    val redirectReason: String? = null,
+) {
+    init {
+        require(kind.isNotBlank())
+        require(redirectReason == null || redirectReason.isNotBlank())
+    }
+}
+
+internal fun desktopFileSyncFailureDiagnostic(failure: Throwable) = DesktopFileSyncFailureDiagnostic(
+    kind = desktopFileSyncFailureKind(failure),
+    redirectReason = (failure as? DesktopFileSyncHttpStatusException)?.redirectReason,
+)
 
 internal fun desktopFileSyncFailureKind(failure: Throwable): String = when (failure) {
     is DesktopFileSyncAmbiguousMutationException -> "ambiguous_delivery"

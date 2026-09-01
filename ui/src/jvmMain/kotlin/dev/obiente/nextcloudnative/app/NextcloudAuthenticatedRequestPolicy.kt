@@ -216,7 +216,7 @@ private fun containsEncodedTraversal(rawSegment: String): Boolean {
         if (decoded == candidate) return false
         candidate = decoded
     }
-    return candidate.split('/', '\\').any { segment -> segment == "." || segment == ".." }
+    return true
 }
 
 private fun decodePercentAscii(value: String): String? {

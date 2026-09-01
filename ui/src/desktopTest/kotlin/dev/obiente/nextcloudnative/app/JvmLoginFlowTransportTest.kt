@@ -232,6 +232,33 @@ class JvmLoginFlowTransportTest {
         assertEquals(false, execution.usedFallback)
     }
 
+    @Test
+    fun `malformed compatibility approval is never diagnosed as retry safe`() {
+        val execution = executeLoginPollHttp(
+            challenge = challenge(
+                pollEndpoint = "https://cloud.example.test/login/v2/poll",
+                fallbackEndpoint = "https://cloud.example.test/index.php/login/v2/poll",
+            ),
+            fallbackAlreadySelected = false,
+            poll = { endpoint ->
+                if ("/index.php/" in endpoint) {
+                    LoginPollHttpResponse(200, "not-json")
+                } else {
+                    LoginPollHttpResponse(404, "[]")
+                }
+            },
+            networkFailure = { null },
+        )
+
+        assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(execution.interpretation.result)
+        val fields = loginPollEndpointFallbackDiagnostic(
+            requireNotNull(execution.selectedFallbackReason),
+            execution.interpretation.result,
+        ).fields.associate { it.name to it.value }
+        assertEquals("true", fields["exchange_started"])
+        assertEquals("false", fields["safe_to_retry"])
+    }
+
     private fun challenge(pollEndpoint: String, fallbackEndpoint: String?) = LoginChallenge(
         enteredServerUrl = "https://cloud.example.test/nextcloud",
         pollEndpoint = pollEndpoint,

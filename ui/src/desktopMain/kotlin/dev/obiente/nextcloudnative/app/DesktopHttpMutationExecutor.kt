@@ -28,20 +28,19 @@ internal class DesktopHttpMutationExecutor(client: OkHttpClient) {
             .tag(DesktopHttpMutationAttempt::class.java, attempt)
             .build()
         return try {
-            val executeCall = { activeCall: okhttp3.Call ->
-                shouldContinue?.let { continuation ->
-                    executeDesktopFileSyncCancellableCall(activeCall, continuation) { it.execute() }
-                } ?: activeCall.execute()
-            }
             val consumeTracked = { response: Response ->
                 if (response.isSuccessful) runCatching(onAcceptedResponse)
                 consume(response)
             }
-            if (trackedRequest.tag(NextcloudAuthenticatedRequestPolicy::class.java) != null) {
-                executeNextcloudAuthenticatedRequest(trackedClient, trackedRequest, executeCall, consumeTracked)
-            } else {
-                executeCall(trackedClient.newCall(trackedRequest)).use { response -> consumeTracked(response) }
+            val execute: (((okhttp3.Call) -> Response) -> T) = { executeCall ->
+                if (trackedRequest.tag(NextcloudAuthenticatedRequestPolicy::class.java) != null) {
+                    executeNextcloudAuthenticatedRequest(trackedClient, trackedRequest, executeCall, consumeTracked)
+                } else {
+                    executeCall(trackedClient.newCall(trackedRequest)).use(consumeTracked)
+                }
             }
+            shouldContinue?.let { withDesktopFileSyncCallCancellation(it, execute) }
+                ?: execute { call -> call.execute() }
         } catch (failure: NextcloudAuthenticatedRedirectException) {
             throw failure.toDesktopFileSyncHttpStatusException("follow authenticated mutation redirect")
         } catch (cancelled: CancellationException) {

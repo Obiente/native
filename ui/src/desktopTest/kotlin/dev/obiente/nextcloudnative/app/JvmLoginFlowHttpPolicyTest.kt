@@ -110,15 +110,19 @@ class JvmLoginFlowHttpPolicyTest {
     fun `fallback diagnostic distinguishes a routed 404 from a pre exchange failure`() {
         val routed = loginPollEndpointFallbackDiagnostic(
             LoginPollFallbackReason.AdvertisedEndpointNotFound,
+            LoginPollResult.AmbiguousAfterExchangeFailure("The response was invalid."),
         ).fields.associate { it.name to it.value }
         val preExchange = loginPollEndpointFallbackDiagnostic(
             LoginPollFallbackReason.PreExchangeFailure,
+            LoginPollResult.RetryablePreExchangeFailure("NETWORK_DNS_UNRESOLVED"),
         ).fields.associate { it.name to it.value }
 
         assertEquals("advertised_endpoint_not_found", routed["reason"])
         assertEquals("true", routed["exchange_started"])
+        assertEquals("false", routed["safe_to_retry"])
         assertEquals("pre_exchange_failure", preExchange["reason"])
         assertEquals("false", preExchange["exchange_started"])
+        assertEquals("true", preExchange["safe_to_retry"])
     }
 
     private fun challenge() = LoginChallenge(

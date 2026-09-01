@@ -4018,7 +4018,9 @@ class DesktopNextcloudServices(
         )
         execution.selectedFallbackReason?.let { reason ->
             loginPollFallbackTokens += challenge.token
-            runCatching { recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic(reason)) }
+            runCatching {
+                recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic(reason, execution.interpretation.result))
+            }
         }
         val interpretation = execution.interpretation
         val result = interpretation.result

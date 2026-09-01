@@ -126,14 +126,23 @@ fun LoginChallengeHttpInterpretation.toStartedDiagnostic(): SupportDiagnosticEve
         ),
     )
 
-fun loginPollEndpointFallbackDiagnostic(reason: LoginPollFallbackReason): SupportDiagnosticEventDraft =
+fun loginPollEndpointFallbackDiagnostic(
+    reason: LoginPollFallbackReason,
+    result: LoginPollResult,
+): SupportDiagnosticEventDraft =
     SupportDiagnosticEventDraft(
         severity = SupportDiagnosticSeverity.Info,
         component = SupportDiagnosticComponent.Authentication,
         operation = "login.poll",
         outcome = "endpoint-fallback",
         fields = listOf(
-            SupportDiagnosticFieldDraft("safe_to_retry", "true"),
+            SupportDiagnosticFieldDraft(
+                "safe_to_retry",
+                (
+                    result is LoginPollResult.Pending ||
+                        result is LoginPollResult.RetryablePreExchangeFailure
+                ).toString(),
+            ),
             SupportDiagnosticFieldDraft(
                 "exchange_started",
                 (reason == LoginPollFallbackReason.AdvertisedEndpointNotFound).toString(),
