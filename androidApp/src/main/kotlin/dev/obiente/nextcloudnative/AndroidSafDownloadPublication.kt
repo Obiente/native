@@ -39,23 +39,35 @@ internal class AndroidSafDownloadPublisher<Document>(
 ) {
     fun reconcile() {
         val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
-        ownership.transactions(observedNames).forEach { transaction ->
+        ownership.transactions(observedNames).forEach { originalTransaction ->
+            var transaction = originalTransaction
             val final = directory.documents().singleOrNull { it.displayName == transaction.finalName }
             val stage = ownedDocument(transaction.stageName)
             val backup = ownedDocument(transaction.backupName)
+            if (backup != null && !transaction.backupProtected && !transaction.publicationCompleted) {
+                transaction = transaction.copy(backupProtected = true)
+                ownership.replace(transaction)
+            }
             when {
                 transaction.publicationCompleted && backup != null && stage == null ->
                     deleteBestEffort(backup.document)
                 backup != null && stage != null && final == null -> {
-                    restoreBackup(transaction, backup)
+                    transaction = restoreBackup(transaction, backup)
                     deleteBestEffort(stage.document)
                 }
                 backup != null && stage == null && final == null && !transaction.publicationAttempted ->
-                    restoreBackup(transaction, backup)
-                backup == null && stage != null ->
+                    transaction = restoreBackup(transaction, backup)
+                backup == null && stage != null && !transaction.backupProtected ->
                     deleteBestEffort(stage.document)
             }
             retireRecoveredOwnershipBestEffort(transaction)
+        }
+    }
+
+    fun reconcileForSync() {
+        reconcile()
+        require(!hasPendingRecovery()) {
+            "A local download still needs safe recovery."
         }
     }
 
@@ -80,7 +92,7 @@ internal class AndroidSafDownloadPublisher<Document>(
         prepareStage: (Document) -> Unit,
     ) {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
-        reconcile()
+        reconcileForSync()
         var transaction = AndroidSafOwnedDownloadTransaction(finalName, requireValidToken(newToken()))
         ownership.add(transaction)
         val stage = try {
@@ -125,10 +137,11 @@ internal class AndroidSafDownloadPublisher<Document>(
                 val protected = requireNotNull(
                     directory.documents().singleOrNull { document -> document.document == renamed },
                 ) { "The protected local item could not be resolved after rename." }
-                if (protected.displayName != transaction.backupName) {
-                    transaction = transaction.copy(backupDisplayName = protected.displayName)
-                    ownership.replace(transaction)
-                }
+                transaction = transaction.copy(
+                    backupDisplayName = protected.displayName.takeIf { it != transaction.backupName },
+                    backupProtected = true,
+                )
+                ownership.replace(transaction)
                 require(ownedDocument(transaction.backupName)?.document == renamed) {
                     "The local file provider changed the protected item identity."
                 }
@@ -137,7 +150,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 throw failure
             } catch (failure: Throwable) {
                 recoverBeforePublicationOrSuppress(transaction, failure)
-                retireRecoveredOwnershipBestEffort(transaction)
+                    ?.let(::retireRecoveredOwnershipBestEffort)
                 throw failure
             }
         }
@@ -163,7 +176,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 return
             }
             recoverBeforePublicationOrSuppress(transaction, failure)
-            retireRecoveredOwnershipBestEffort(transaction)
+                ?.let(::retireRecoveredOwnershipBestEffort)
             throw failure
         }
         backup?.let(::deleteBestEffort)
@@ -183,7 +196,7 @@ internal class AndroidSafDownloadPublisher<Document>(
     private fun recoverBeforePublicationOrSuppress(
         transaction: AndroidSafOwnedDownloadTransaction,
         originalFailure: Throwable,
-    ) {
+    ): AndroidSafOwnedDownloadTransaction? =
         try {
             recoverBeforePublication(transaction)
         } catch (cancelled: CancellationException) {
@@ -191,8 +204,8 @@ internal class AndroidSafDownloadPublisher<Document>(
             throw cancelled
         } catch (recoveryFailure: Throwable) {
             originalFailure.addSuppressed(recoveryFailure)
+            null
         }
-    }
 
     fun hasPendingRecovery(): Boolean {
         val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
@@ -207,37 +220,77 @@ internal class AndroidSafDownloadPublisher<Document>(
         document: Document,
     ): Boolean = directory.documents().any { it.displayName == name && it.document == document }
 
-    private fun recoverBeforePublication(transaction: AndroidSafOwnedDownloadTransaction) {
+    private fun recoverBeforePublication(
+        transaction: AndroidSafOwnedDownloadTransaction,
+    ): AndroidSafOwnedDownloadTransaction {
         val final = directory.documents().singleOrNull { it.displayName == transaction.finalName }
         val stage = ownedDocument(transaction.stageName)
         val backup = ownedDocument(transaction.backupName)
         if (final != null && stage == null) {
-            return
+            return transaction
         }
-        if (backup != null && final == null) restoreBackup(transaction, backup)
+        check(!transaction.backupProtected || backup != null) {
+            "The protected local item identity is unavailable."
+        }
+        val recovered = if (backup != null && final == null) {
+            restoreBackup(transaction, backup)
+        } else {
+            transaction
+        }
         ownedDocument(transaction.stageName)?.let {
             deleteBestEffort(it.document)
         }
+        return recovered
     }
 
     private fun restoreBackup(
         transaction: AndroidSafOwnedDownloadTransaction,
         backup: AndroidSafPublicationDocument<Document>,
-    ) {
-        try {
-            directory.rename(backup.document, transaction.finalName)
+    ): AndroidSafOwnedDownloadTransaction {
+        val restoredDocument = try {
+            requireNotNull(directory.rename(backup.document, transaction.finalName)) {
+                "The protected local item could not be restored."
+            }
         } catch (failure: Throwable) {
-            val final = directory.documents().singleOrNull { it.displayName == transaction.finalName }
-            val remainingBackup = ownedDocument(transaction.backupName)
             if (failure is CancellationException) throw failure
-            if (final != null && remainingBackup == null) return
+            val documents = directory.documents()
+            val restored = documents.singleOrNull { it.document == backup.document }
+            var recovered = transaction
+            if (restored != null && restored.displayName != transaction.backupName) {
+                recovered = transaction.copy(backupDisplayName = restored.displayName)
+                ownership.replace(recovered)
+            }
+            val exactRestored = documents.singleOrNull {
+                it.displayName == transaction.finalName && it.document == backup.document
+            }
+            val remainingBackup = documents.singleOrNull {
+                it.displayName == recovered.backupName && it.document == backup.document
+            }
+            if (exactRestored != null && remainingBackup == null) {
+                return clearRestoredBackupName(recovered)
+            }
             throw failure
         }
-        val final = directory.documents().singleOrNull { it.displayName == transaction.finalName }
-        val remainingBackup = ownedDocument(transaction.backupName)
-        require(final != null && remainingBackup == null) {
+        val restored = requireNotNull(
+            directory.documents().singleOrNull { it.document == restoredDocument },
+        ) { "The restored local item could not be resolved after rename." }
+        if (restored.displayName != transaction.finalName) {
+            ownership.replace(transaction.copy(backupDisplayName = restored.displayName))
+            error("The local file provider changed the restored item name.")
+        }
+        require(restored.document == restoredDocument && ownedDocument(transaction.backupName) == null) {
             "The protected local item could not be restored."
         }
+        return clearRestoredBackupName(transaction)
+    }
+
+    private fun clearRestoredBackupName(
+        transaction: AndroidSafOwnedDownloadTransaction,
+    ): AndroidSafOwnedDownloadTransaction {
+        if (transaction.backupDisplayName == null && !transaction.backupProtected) return transaction
+        val restored = transaction.copy(backupDisplayName = null, backupProtected = false)
+        ownership.replace(restored)
+        return restored
     }
 
     private fun isPublished(
@@ -274,7 +327,11 @@ internal class AndroidSafDownloadPublisher<Document>(
     }
 
     private fun retireRecoveredOwnership(transaction: AndroidSafOwnedDownloadTransaction) {
-        if (ownedDocument(transaction.stageName) == null && ownedDocument(transaction.backupName) == null) {
+        if (
+            ownedDocument(transaction.stageName) == null &&
+            ownedDocument(transaction.backupName) == null &&
+            (!transaction.backupProtected || transaction.publicationCompleted)
+        ) {
             ownership.remove(transaction)
         }
     }
@@ -296,6 +353,7 @@ internal data class AndroidSafOwnedDownloadTransaction(
     val publicationAttempted: Boolean = false,
     val publicationCompleted: Boolean = false,
     val backupDisplayName: String? = null,
+    val backupProtected: Boolean = backupDisplayName != null,
 ) {
     val stageName: String = ".$finalName.nextcloud-native-download-$token"
     val backupName: String = backupDisplayName ?: ".$finalName.nextcloud-native-backup-$token"
@@ -304,6 +362,7 @@ internal data class AndroidSafOwnedDownloadTransaction(
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
         require(token == requireValidToken(token))
         require(!publicationCompleted || publicationAttempted)
+        require(backupDisplayName == null || backupProtected)
         require(
             backupDisplayName == null ||
                 backupDisplayName.isNotBlank() &&

@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -12,6 +14,32 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AndroidSafDownloadPublicationTest {
+    @Test
+    fun `same-size SAF metadata cannot hide replacement content changes`() {
+        val weakMetadata = LocalSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.File,
+            revision = "saf-unchanged-metadata",
+            size = 2L,
+            modifiedEpochMillis = null,
+        )
+        val expected = listOf(
+            AndroidSafReplacementEvidence(
+                entry = weakMetadata,
+                documentIdentity = "content://provider/archive",
+                displayName = "Archive",
+                contentHash = "sha256:${"0".repeat(64)}",
+            ),
+        )
+        val changed = expected.map { evidence ->
+            evidence.copy(contentHash = "sha256:${"1".repeat(64)}")
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            requireUnchangedAndroidSafReplacement(expected, changed)
+        }
+    }
+
     @Test
     fun `cancellation before publication preserves the mismatched directory`() {
         val directory = FakeSafDirectory().apply { addDirectory("Archive") }
@@ -105,12 +133,79 @@ class AndroidSafDownloadPublicationTest {
         val restarted = publisher(directory)
 
         restarted.reconcile()
-        restarted.reconcile()
+        assertFailsWith<IllegalArgumentException> { restarted.reconcileForSync() }
 
         assertEquals(FakeSafKind.Directory, directory.entryNamed(transaction.backupName).kind)
         assertContentEquals(byteArrayOf(21, 22), directory.entryNamed("Archive").bytes)
         assertEquals(listOf("Archive"), restarted.visibleDocuments().map { it.displayName })
-        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertEquals(listOf(transaction.copy(backupProtected = true)), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `provider-normalized restore identity remains owned across restart`() {
+        val providerBackupName = "provider-backup-$TOKEN"
+        val restoredBackupName = "restored-provider-backup-$TOKEN"
+        val transaction = AndroidSafOwnedDownloadTransaction(
+            finalName = "Archive",
+            token = TOKEN,
+            backupDisplayName = providerBackupName,
+        )
+        val directory = FakeSafDirectory().apply {
+            ownership.add(transaction)
+            addDirectory(providerBackupName)
+            addFile(transaction.stageName, byteArrayOf(3, 4))
+            normalizedRenameNames[transaction.finalName] = restoredBackupName
+        }
+
+        assertFailsWith<IllegalStateException> { publisher(directory).reconcile() }
+
+        val relocated = directory.ownership.transactions().single()
+        assertEquals(restoredBackupName, relocated.backupDisplayName)
+        assertEquals(setOf(restoredBackupName, transaction.stageName), directory.names().toSet())
+        assertEquals(emptyList(), publisher(directory).visibleDocuments())
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `unrelated final cannot satisfy an ambiguous backup restore`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            ownership.add(transaction)
+            addDirectory(transaction.backupName)
+            addFile(transaction.stageName, byteArrayOf(5, 6))
+            replaceBackupWithUnrelatedFinalBeforeRenameTo = transaction.finalName
+        }
+
+        assertFailsWith<IOException> { publisher(directory).reconcile() }
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
+
+        assertContentEquals(byteArrayOf(31, 32), directory.entryNamed("Archive").bytes)
+        assertEquals(setOf("Archive", transaction.stageName), directory.names().toSet())
+        assertEquals(listOf(transaction.copy(backupProtected = true)), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `lost protected backup keeps the completed stage for manual recovery`() {
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            removeBackupBeforeStageRenameFailureTo = "Archive"
+        }
+
+        assertFailsWith<IOException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(41, 42))
+            }
+        }
+
+        val transaction = directory.ownership.transactions().single()
+        assertTrue(transaction.backupProtected)
+        assertEquals(listOf(transaction.stageName), directory.names())
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
     }
 
     @Test
@@ -151,7 +246,7 @@ class AndroidSafDownloadPublicationTest {
         restarted.reconcile()
 
         assertEquals(listOf(transaction.backupName), directory.names())
-        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertEquals(listOf(transaction.copy(backupProtected = true)), directory.ownership.transactions())
     }
 
     @Test
@@ -415,7 +510,10 @@ class AndroidSafDownloadPublicationTest {
                 listOf(transaction),
                 restarted.forDirectory("content://provider/tree/root/document/one").transactions(),
             )
-            val protected = transaction.copy(backupDisplayName = "provider-backup-$TOKEN")
+            val protected = transaction.copy(
+                backupDisplayName = "provider-backup-$TOKEN",
+                backupProtected = true,
+            )
             restarted.forDirectory("content://provider/tree/root/document/one").replace(protected)
             assertEquals(
                 listOf(protected),
@@ -423,7 +521,17 @@ class AndroidSafDownloadPublicationTest {
                     .forDirectory("content://provider/tree/root/document/one")
                     .transactions(),
             )
-            val attempted = protected.copy(publicationAttempted = true)
+            val relocatedBackup = protected.copy(backupDisplayName = "restored-backup-$TOKEN")
+            restarted.forDirectory("content://provider/tree/root/document/one").replace(relocatedBackup)
+            assertEquals(
+                listOf(relocatedBackup),
+                AndroidSafDownloadOwnershipStore(root)
+                    .forDirectory("content://provider/tree/root/document/one")
+                    .transactions(),
+            )
+            val restored = relocatedBackup.copy(backupDisplayName = null, backupProtected = false)
+            restarted.forDirectory("content://provider/tree/root/document/one").replace(restored)
+            val attempted = restored.copy(publicationAttempted = true)
             restarted.forDirectory("content://provider/tree/root/document/one").replace(attempted)
             assertEquals(
                 listOf(attempted),
@@ -506,6 +614,8 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var throwAfterRenameTo: String? = null
     var failBeforeRenameTo: String? = null
     var replaceStageWithUnrelatedFinalBeforeRenameTo: String? = null
+    var replaceBackupWithUnrelatedFinalBeforeRenameTo: String? = null
+    var removeBackupBeforeStageRenameFailureTo: String? = null
     val normalizedRenameNames = mutableMapOf<String, String>()
     var failNextBackupDeletion: Boolean = false
     var failNextStageDeletion: Boolean = false
@@ -553,6 +663,24 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     }
 
     override fun rename(document: Int, displayName: String): Int {
+        if (
+            removeBackupBeforeStageRenameFailureTo == displayName &&
+            ".nextcloud-native-download-" in entries.getValue(document).displayName
+        ) {
+            removeBackupBeforeStageRenameFailureTo = null
+            val backup = entries.values.single { ".nextcloud-native-backup-" in it.displayName }
+            entries.remove(backup.document)
+            throw IOException("protected backup disappeared before publication")
+        }
+        if (
+            replaceBackupWithUnrelatedFinalBeforeRenameTo == displayName &&
+            ".nextcloud-native-backup-" in entries.getValue(document).displayName
+        ) {
+            replaceBackupWithUnrelatedFinalBeforeRenameTo = null
+            entries.remove(document)
+            addFile(displayName, byteArrayOf(31, 32))
+            throw IOException("backup disappeared during restore")
+        }
         if (
             replaceStageWithUnrelatedFinalBeforeRenameTo == displayName &&
             ".nextcloud-native-download-" in entries.getValue(document).displayName

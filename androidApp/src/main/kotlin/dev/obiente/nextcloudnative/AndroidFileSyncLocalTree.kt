@@ -23,6 +23,20 @@ internal data class AndroidLocalSyncDocument(
     val displayName: String,
 )
 
+internal data class AndroidSafReplacementEvidence(
+    val entry: LocalSyncEntry,
+    val documentIdentity: String,
+    val displayName: String,
+    val contentHash: String?,
+)
+
+internal fun requireUnchangedAndroidSafReplacement(
+    expected: List<AndroidSafReplacementEvidence>?,
+    actual: List<AndroidSafReplacementEvidence>?,
+) {
+    require(actual == expected) { "The local item changed while replacement content was staged." }
+}
+
 internal data class AndroidFileSyncContentHashRead(
     val contentHash: String?,
     val bytesRead: Long,
@@ -139,10 +153,7 @@ internal class AndroidSafFileSyncLocalTree(
                 "The local recovery folder is nested too deeply."
             }
             val publisher = downloadPublisher(parentUri, parentPath)
-            publisher.reconcile()
-            require(!publisher.hasPendingRecovery()) {
-                "A local download still needs safe recovery. Run this folder sync before removing it."
-            }
+            publisher.reconcileForSync()
             val listedChildren = rawChildren(parentUri, parentPath)
             val visibleUris = publisher.visibleDocuments(
                 listedChildren.map { document ->
@@ -353,8 +364,8 @@ internal class AndroidSafFileSyncLocalTree(
         return null
     }
 
-    private fun replacementSnapshot(document: AndroidLocalSyncDocument): List<AndroidLocalSyncDocument> {
-        val result = arrayListOf(document)
+    private fun replacementSnapshot(document: AndroidLocalSyncDocument): List<AndroidSafReplacementEvidence> {
+        val result = arrayListOf(replacementEvidence(document))
         val pending = ArrayDeque<AndroidLocalSyncDocument>()
         if (document.entry.kind == SyncEntryKind.Directory) pending += document
         while (pending.isNotEmpty()) {
@@ -366,20 +377,55 @@ internal class AndroidSafFileSyncLocalTree(
                 require(result.size < MAX_ENTRIES) {
                     "The local replacement folder contains too many entries."
                 }
-                result += child
+                result += replacementEvidence(child)
                 if (child.entry.kind == SyncEntryKind.Directory) pending += child
             }
         }
         return result.sortedBy { it.entry.relativePath }
     }
 
+    private fun replacementEvidence(document: AndroidLocalSyncDocument): AndroidSafReplacementEvidence =
+        AndroidSafReplacementEvidence(
+            entry = document.entry,
+            documentIdentity = document.uri.toString(),
+            displayName = document.displayName,
+            contentHash = if (document.entry.kind == SyncEntryKind.File) {
+                replacementContentHash(document)
+            } else {
+                null
+            },
+        )
+
+    private fun replacementContentHash(document: AndroidLocalSyncDocument): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        var bytesRead = 0L
+        requireNotNull(resolver.openInputStream(document.uri)) {
+            "The local replacement item could not be opened for verification."
+        }.use { input ->
+            val buffer = ByteArray(BUFFER_BYTES)
+            while (true) {
+                if (Thread.currentThread().isInterrupted) {
+                    throw kotlinx.coroutines.CancellationException("Local replacement verification cancelled.")
+                }
+                val count = input.read(buffer)
+                if (count < 0) break
+                bytesRead = Math.addExact(bytesRead, count.toLong())
+                digest.update(buffer, 0, count)
+            }
+        }
+        require(document.entry.size == null || document.entry.size == bytesRead) {
+            "The local replacement item changed during content verification."
+        }
+        return "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    }
+
     private fun requireUnchangedReplacement(
         path: String,
-        expected: List<AndroidLocalSyncDocument>?,
+        expected: List<AndroidSafReplacementEvidence>?,
     ) {
         val current = resolveRaw(path)
         val actual = current?.let(::replacementSnapshot)
-        require(actual == expected) { "The local item changed while replacement content was staged." }
+        requireUnchangedAndroidSafReplacement(expected, actual)
     }
 
     private fun ensureParent(path: String): Uri {
@@ -410,7 +456,7 @@ internal class AndroidSafFileSyncLocalTree(
 
     private fun children(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
         val publisher = downloadPublisher(parentUri, parentPath)
-        publisher.reconcile()
+        publisher.reconcileForSync()
         val listedChildren = rawChildren(parentUri, parentPath)
         val visibleUris = publisher.visibleDocuments(
             listedChildren.map { document ->
