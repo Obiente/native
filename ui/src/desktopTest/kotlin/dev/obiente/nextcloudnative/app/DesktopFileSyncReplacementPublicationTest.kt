@@ -257,7 +257,7 @@ class DesktopFileSyncReplacementPublicationTest {
             )
             assertTrue(requests.none { it.method == "PUT" || it.method == "MOVE" })
             assertTrue(requests[5].url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId"))
-            assertTrue(requests.last().url.encodedPath.endsWith("/archive.bin"))
+            assertEquals(requests[1].url.encodedPath, requests.last().url.encodedPath)
         } finally {
             assertTrue(source.delete())
         }
