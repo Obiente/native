@@ -62,7 +62,7 @@ fun remoteFolderPickerOperations(
 ): RemoteFolderPickerOperations {
     require(userId.isNotBlank())
     return RemoteFolderPickerOperations(
-        identity = "${session.serverUrl}|${session.loginName}|$userId",
+        identity = "${session.accountId.storageKey}|$userId",
         listCached = { path -> services.listFilesCachedWithSource(session, userId, path) },
         listNetwork = { path -> services.listFilesWithSource(session, userId, path) },
         createDirectoryIfAbsent = { path -> services.createDirectoryIfAbsent(session, userId, path) },

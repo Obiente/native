@@ -7118,7 +7118,7 @@ internal fun shouldShowDynamicRecordFallbackDetail(
     selectedRecordResourceId?.sameDynamicResourceAs(viewResourceId) == true
 
 private object ActivityWorkspaceMemoryCache {
-    private val entries = linkedMapOf<String, ActivityTimelineState>()
+    private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, ActivityTimelineState>()
 
     fun get(session: NextcloudSession, filterId: String): ActivityTimelineState? {
         val key = key(session, filterId)
@@ -7132,8 +7132,8 @@ private object ActivityWorkspaceMemoryCache {
         while (entries.size > MAXIMUM_RETAINED_ACTIVITY_ACCOUNTS) entries.remove(entries.keys.first())
     }
 
-    private fun key(session: NextcloudSession, filterId: String): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$filterId"
+    private fun key(session: NextcloudSession, filterId: String): Pair<NextcloudAccountId, String> =
+        session.accountId to filterId
 }
 
 @Composable
@@ -11889,34 +11889,31 @@ private enum class MarkdownFileViewMode {
 }
 
 internal object TalkWorkspaceMemoryCache {
-    private val rooms = linkedMapOf<String, List<TalkRoom>>()
-    private val messages = linkedMapOf<String, List<TalkMessage>>()
+    private val rooms = linkedMapOf<NextcloudAccountId, List<TalkRoom>>()
+    private val messages = linkedMapOf<Pair<NextcloudAccountId, String>, List<TalkMessage>>()
 
-    fun rooms(session: NextcloudSession): List<TalkRoom>? = touch(rooms, accountKey(session))
+    fun rooms(session: NextcloudSession): List<TalkRoom>? = touch(rooms, session.accountId)
 
     fun storeRooms(session: NextcloudSession, value: List<TalkRoom>) {
-        store(rooms, accountKey(session), value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
+        store(rooms, session.accountId, value, MAXIMUM_RETAINED_TALK_ACCOUNTS)
     }
 
     fun messages(session: NextcloudSession, roomToken: String): List<TalkMessage>? =
-        touch(messages, "${accountKey(session)}\n$roomToken")
+        touch(messages, session.accountId to roomToken)
 
     fun storeMessages(session: NextcloudSession, roomToken: String, value: List<TalkMessage>) {
         store(
             messages,
-            "${accountKey(session)}\n$roomToken",
+            session.accountId to roomToken,
             value,
             MAXIMUM_RETAINED_TALK_ROOMS,
         )
     }
 
-    private fun accountKey(session: NextcloudSession): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
-
-    private fun <T> touch(entries: LinkedHashMap<String, T>, key: String): T? =
+    private fun <Key, T> touch(entries: LinkedHashMap<Key, T>, key: Key): T? =
         entries.remove(key)?.also { entries[key] = it }
 
-    private fun <T> store(entries: LinkedHashMap<String, T>, key: String, value: T, maximum: Int) {
+    private fun <Key, T> store(entries: LinkedHashMap<Key, T>, key: Key, value: T, maximum: Int) {
         entries.remove(key)
         entries[key] = value
         while (entries.size > maximum) entries.remove(entries.keys.first())

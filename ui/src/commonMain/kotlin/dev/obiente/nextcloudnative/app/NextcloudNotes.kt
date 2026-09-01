@@ -870,9 +870,7 @@ internal fun NextcloudNoteEditor(
     navigationCommitInProgress: Boolean = false,
     onMutationInProgressChanged: (Boolean) -> Unit = {},
 ) {
-    val accountKey = remember(session.serverUrl, session.loginName) {
-        session.serverUrl.trimEnd('/').lowercase() + '\u0000' + session.loginName
-    }
+    val accountKey = remember(session.serverUrl, session.loginName) { session.accountId }
     val accountScope = remember(session.serverUrl, session.loginName) {
         durableMutationAccountScope(session)
     }
