@@ -1410,7 +1410,7 @@ private sealed interface UserStatusSurfaceState {
 }
 
 private object UserStatusWorkspaceMemoryCache {
-    private val entries = linkedMapOf<String, UserStatusSurfaceState.Available>()
+    private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
 
     fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
         val key = key(session)
@@ -1424,8 +1424,7 @@ private object UserStatusWorkspaceMemoryCache {
         while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
     }
 
-    private fun key(session: NextcloudSession): String =
-        "${session.serverUrl.trimEnd('/')}\n${session.loginName}"
+    private fun key(session: NextcloudSession): NextcloudAccountId = session.accountId
 }
 
 private enum class StatusExpiryChoice(val label: String, val seconds: Long?) {
