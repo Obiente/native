@@ -8,6 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.json.JSONObject
 
@@ -69,6 +70,26 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun unsupportedFutureRegistryIsNotPersistedOver() {
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        var migrated = false
+        val futureRegistry = """{"version":2,"futureAccounts":[]}"""
+        val payload = JSONObject(legacyPayload())
+            .put(ACCOUNT_REGISTRY_KEY, futureRegistry)
+            .toString()
+
+        val session = restoreAndroidPersistedSession(
+            encoded = payload,
+            persistMigrated = { migrated = true },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        assertEquals("alice", session.loginName)
+        assertFalse(migrated)
+        assertEquals(listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"), diagnostics.mapNotNull { it.code })
+    }
+
+    @Test
     fun savedPayloadKeepsCredentialsOutsideTheRegistry() {
         val session = restoreAndroidPersistedSession(
             encoded = legacyPayload(),
@@ -82,6 +103,27 @@ class AndroidPersistedSessionTest {
         assertEquals("private-app-password", payload.getString("appPassword"))
         assertFalse(encodedRegistry.contains("private-app-password"))
         assertFalse(encodedRegistry.contains("appPassword"))
+    }
+
+    @Test
+    fun migrationFailureAttachesABoundedCauseWithoutPrivateValues() {
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+
+        val session = restoreAndroidPersistedSession(
+            encoded = legacyPayload(),
+            persistMigrated = { error("private-app-password at cloud.example.test for alice") },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        assertEquals("alice", session.loginName)
+        val diagnostic = diagnostics.single()
+        assertEquals("ACCOUNT_REGISTRY_MIGRATION_FAILED", diagnostic.code)
+        val exception = assertNotNull(diagnostic.exception)
+        assertNull(exception.message)
+        val rendered = diagnostic.toString()
+        assertFalse(rendered.contains("private-app-password"))
+        assertFalse(rendered.contains("cloud.example.test"))
+        assertFalse(rendered.contains("alice"))
     }
 
     private fun legacyPayload(): String = JSONObject()

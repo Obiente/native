@@ -22,6 +22,22 @@ class AppWorkspacePinsTest {
     }
 
     @Test
+    fun `legacy account key is copied to the canonical key on first load`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val current = "a".repeat(64)
+        val legacy = "b".repeat(64)
+        assertTrue(repository.save(legacy, listOf("files", "deck")))
+
+        val loaded = repository.loadWithProvenance(current, legacy)
+
+        assertEquals(listOf("files", "deck"), loaded.appIds)
+        assertTrue(loaded.storageAuthoritative)
+        assertEquals(listOf("files", "deck"), repository.load(current))
+        assertTrue(storage.values.keys.any { key -> key.endsWith(current) })
+    }
+
+    @Test
     fun `pin toggles canonical aliases without duplicates`() {
         assertEquals(listOf("files", "spreed"), toggleAppWorkspacePin(listOf("files"), "talk"))
         assertEquals(listOf("files"), toggleAppWorkspacePin(listOf("files", "spreed"), "talk"))

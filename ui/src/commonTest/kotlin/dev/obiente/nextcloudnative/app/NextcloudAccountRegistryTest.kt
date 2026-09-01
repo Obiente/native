@@ -88,6 +88,53 @@ class NextcloudAccountRegistryTest {
     }
 
     @Test
+    fun unsupportedRegistryVersionUsesLegacySessionWithoutOverwritingFutureData() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+        val futureRegistry = """
+            {
+              "version": 2,
+              "activeAccount": "future-account",
+              "records": [{"future": true}]
+            }
+        """.trimIndent()
+
+        val restored = restoreNextcloudAccountRegistry(futureRegistry, session)
+
+        assertEquals(NextcloudAccountRegistrySource.LegacySession, restored.source)
+        assertEquals(NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion, restored.recoveryReason)
+        assertEquals(session.accountRecord(), restored.registry.activeAccount)
+        assertFalse(restored.needsPersistence)
+    }
+
+    @Test
+    fun unsupportedRegistryVersionWithoutLegacyCredentialsRemainsUntouched() {
+        val futureRegistry = """{"version":99,"accounts":[]}"""
+
+        val restored = restoreNextcloudAccountRegistry(futureRegistry, legacySession = null)
+
+        assertEquals(NextcloudAccountRegistry.Empty, restored.registry)
+        assertEquals(NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion, restored.recoveryReason)
+        assertFalse(restored.needsPersistence)
+    }
+
+    @Test
+    fun zeroAndNegativeRegistryVersionsRemainMalformedAndRepairable() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+
+        listOf(0, -1).forEach { version ->
+            val restored = restoreNextcloudAccountRegistry(
+                encoded = """{"version":$version,"accounts":[]}""",
+                legacySession = session,
+            )
+
+            assertEquals(NextcloudAccountRegistrySource.LegacySession, restored.source)
+            assertEquals(NextcloudAccountRegistryRecoveryReason.MalformedRegistry, restored.recoveryReason)
+            assertEquals(session.accountRecord(), restored.registry.activeAccount)
+            assertTrue(restored.needsPersistence)
+        }
+    }
+
+    @Test
     fun staleActiveSelectionPreservesRecordsWithoutRebindingLegacyCredentials() {
         val legacy = session("https://one.example.test", "alice", "private-app-password")
         val other = session("https://two.example.test", "alice", "other-private-app-password")

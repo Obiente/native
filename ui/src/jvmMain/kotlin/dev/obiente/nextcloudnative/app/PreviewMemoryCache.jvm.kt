@@ -13,6 +13,12 @@ internal actual fun deriveNextcloudAccountId(serverUrl: String, loginName: Strin
 
 internal actual fun previewCacheDigest(session: NextcloudSession): String = session.accountId.storageKey
 
+internal actual fun legacyPreviewCacheDigest(session: NextcloudSession): String {
+    val identity = session.serverUrl.trimEnd('/') + "\u0000" + session.loginName
+    return MessageDigest.getInstance("SHA-256").digest(identity.encodeToByteArray())
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
+
 private fun canonicalAccountServerUrl(value: String): String {
     val url = value.trim().toHttpUrlOrNull()
     requireNotNull(url) { "The account server address is invalid." }

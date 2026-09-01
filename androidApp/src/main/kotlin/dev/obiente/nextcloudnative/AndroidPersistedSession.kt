@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.restoreNextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.singleAccountRegistry
+import dev.obiente.nextcloudnative.app.toNonSecretSupportDiagnosticExceptionDraft
 import org.json.JSONObject
 
 internal fun restoreAndroidPersistedSession(
@@ -42,7 +43,7 @@ internal fun restoreAndroidPersistedSession(
             persistMigrated(
                 json.put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(restored.registry)).toString(),
             )
-        }.onFailure {
+        }.onFailure { failure ->
             recordDiagnostic(
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Warning,
@@ -50,6 +51,7 @@ internal fun restoreAndroidPersistedSession(
                     operation = "account-registry.migrate",
                     outcome = "failed",
                     code = "ACCOUNT_REGISTRY_MIGRATION_FAILED",
+                    exception = failure.toNonSecretSupportDiagnosticExceptionDraft(),
                 ),
             )
         }
