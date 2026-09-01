@@ -153,10 +153,89 @@ class DesktopSecretStoreTest {
         assertNull(store.load(reference))
 
         assertEquals(reference.targetName, api.lastService)
-        assertEquals("alice", api.lastAccount)
+        assertEquals(64, api.lastAccount?.length)
+        assertFalse(api.lastAccount.orEmpty().contains("alice"))
         assertFalse(api.lastService.orEmpty().contains("cloud.invalid"))
         assertFalse(api.lastService.orEmpty().contains("alice"))
         assertTrue(releasedItems.isNotEmpty())
+    }
+
+    @Test
+    fun existingSecretServiceSessionsAndDraftKeysMigrateBeforeKeychainAdoption() {
+        val sessionReference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val draftReference = desktopDeckDraftSecretReference()
+        val legacy = RecordingSecretStore(
+            mutableMapOf(
+                sessionReference.targetName to "session-secret".encodeToByteArray(),
+                draftReference.targetName to "draft-secret".encodeToByteArray(),
+            ),
+        )
+        val primary = RecordingSecretStore()
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(primary, legacy, adoption)
+
+        assertContentEquals("session-secret".encodeToByteArray(), store.load(sessionReference))
+        assertContentEquals("draft-secret".encodeToByteArray(), store.load(draftReference))
+
+        assertContentEquals("session-secret".encodeToByteArray(), primary.load(sessionReference))
+        assertContentEquals("draft-secret".encodeToByteArray(), primary.load(draftReference))
+        assertNull(legacy.load(sessionReference))
+        assertNull(legacy.load(draftReference))
+        assertTrue(adoption.isAdopted(sessionReference))
+        assertTrue(adoption.isAdopted(draftReference))
+    }
+
+    @Test
+    fun adoptedKeychainReferenceNeverResurrectsAStaleLegacySecret() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val stale = "stale-session-secret".encodeToByteArray()
+        val legacy = RecordingSecretStore(
+            mutableMapOf(reference.targetName to stale),
+            ignoreClear = true,
+        )
+        val primary = RecordingSecretStore()
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(primary, legacy, adoption)
+
+        store.save(reference, "alice", "current-session-secret".encodeToByteArray())
+        legacy.values[reference.targetName] = stale
+        store.clear(reference)
+
+        assertNull(store.load(reference))
+        assertContentEquals(stale, legacy.values.getValue(reference.targetName))
+    }
+
+    @Test
+    fun failedKeychainMigrationLeavesTheLegacySecretRetryable() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val expected = "legacy-session-secret".encodeToByteArray()
+        val legacy = RecordingSecretStore(mutableMapOf(reference.targetName to expected))
+        val primary = RecordingSecretStore(failSave = true)
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(primary, legacy, adoption)
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { store.load(reference) }
+
+        assertContentEquals(expected, legacy.load(reference))
+        assertFalse(adoption.isAdopted(reference))
+    }
+
+    @Test
+    fun throwingLegacyCleanupCannotBlockAnAdoptedKeychainValue() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val expected = "keychain-session-secret".encodeToByteArray()
+        val legacy = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "legacy-session-secret".encodeToByteArray()),
+            failClear = true,
+        )
+        val primary = RecordingSecretStore(mutableMapOf(reference.targetName to expected))
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(primary, legacy, adoption)
+
+        assertContentEquals(expected, store.load(reference))
+        assertContentEquals(expected, store.load(reference))
+        assertEquals(1, legacy.clearAttempts)
+        assertTrue(adoption.isAdopted(reference))
     }
 
     @Test
@@ -264,6 +343,40 @@ class DesktopSecretStoreTest {
             returnedSecret?.clear()
             returnedSecret = null
             return 0
+        }
+    }
+
+    private class RecordingSecretStore(
+        val values: MutableMap<String, ByteArray> = mutableMapOf(),
+        private val failSave: Boolean = false,
+        private val ignoreClear: Boolean = false,
+        private val failClear: Boolean = false,
+    ) : DesktopSecretStore {
+        var clearAttempts = 0
+            private set
+
+        override fun load(reference: DesktopSecretReference): ByteArray? =
+            values[reference.targetName]?.copyOf()
+
+        override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
+            if (failSave) throw DesktopSecretStoreUnavailableException("Synthetic unavailable store.")
+            values[reference.targetName] = secret.copyOf()
+        }
+
+        override fun clear(reference: DesktopSecretReference) {
+            clearAttempts += 1
+            if (failClear) error("Synthetic legacy cleanup failure.")
+            if (!ignoreClear) values.remove(reference.targetName)
+        }
+    }
+
+    private class RecordingSecretStoreAdoption : DesktopSecretStoreAdoption {
+        private val adopted = mutableSetOf<String>()
+
+        override fun isAdopted(reference: DesktopSecretReference): Boolean = reference.targetName in adopted
+
+        override fun markAdopted(reference: DesktopSecretReference) {
+            adopted += reference.targetName
         }
     }
 

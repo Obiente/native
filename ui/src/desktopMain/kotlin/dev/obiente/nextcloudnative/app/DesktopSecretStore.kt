@@ -13,6 +13,7 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.prefs.Preferences
 
 internal data class DesktopSecretReference(
     val targetName: String,
@@ -49,7 +50,7 @@ internal interface DesktopSecretStore {
 internal class DesktopSecretStoreUnavailableException(
     message: String,
     cause: Throwable? = null,
-) : IllegalStateException(message, cause)
+) : NextcloudSessionStorageUnavailableException(message, cause)
 
 internal enum class DesktopSecretStoreKind {
     MacOsKeychain,
@@ -67,9 +68,82 @@ internal fun desktopSecretStoreKind(osName: String = System.getProperty("os.name
 internal fun defaultDesktopSecretStore(
     osName: String = System.getProperty("os.name", ""),
 ): DesktopSecretStore = when (desktopSecretStoreKind(osName)) {
-    DesktopSecretStoreKind.MacOsKeychain -> MacOsKeychainSecretStore()
+    DesktopSecretStoreKind.MacOsKeychain -> MigratingDesktopSecretStore(
+        primary = MacOsKeychainSecretStore(),
+        legacy = SecretToolDesktopSecretStore(),
+        adoption = PreferencesDesktopSecretStoreAdoption(),
+    )
     DesktopSecretStoreKind.SecretService -> SecretToolDesktopSecretStore()
     DesktopSecretStoreKind.WindowsCredentialManager -> WindowsCredentialManagerSecretStore()
+}
+
+internal interface DesktopSecretStoreAdoption {
+    fun isAdopted(reference: DesktopSecretReference): Boolean
+
+    fun markAdopted(reference: DesktopSecretReference)
+}
+
+internal class MigratingDesktopSecretStore(
+    private val primary: DesktopSecretStore,
+    private val legacy: DesktopSecretStore,
+    private val adoption: DesktopSecretStoreAdoption,
+) : DesktopSecretStore {
+    override fun load(reference: DesktopSecretReference): ByteArray? {
+        primary.load(reference)?.let { secret ->
+            adoptAndClearLegacyOnce(reference)
+            return secret
+        }
+        if (adoption.isAdopted(reference)) return null
+        val secret = legacy.load(reference) ?: return null
+        primary.save(reference, username = null, secret = secret)
+        adoptAndClearLegacyOnce(reference)
+        return secret
+    }
+
+    override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
+        primary.save(reference, username, secret)
+        adoptAndClearLegacyOnce(reference)
+    }
+
+    override fun clear(reference: DesktopSecretReference) {
+        val alreadyAdopted = adoption.isAdopted(reference)
+        if (!alreadyAdopted) adoption.markAdopted(reference)
+        primary.clear(reference)
+        if (!alreadyAdopted) clearLegacyBestEffort(reference)
+    }
+
+    private fun adoptAndClearLegacyOnce(reference: DesktopSecretReference) {
+        if (adoption.isAdopted(reference)) return
+        adoption.markAdopted(reference)
+        clearLegacyBestEffort(reference)
+    }
+
+    private fun clearLegacyBestEffort(reference: DesktopSecretReference) {
+        try {
+            legacy.clear(reference)
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // The durable adoption marker prevents a stale legacy value from being read again.
+        }
+    }
+}
+
+private class PreferencesDesktopSecretStoreAdoption(
+    private val preferences: Preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/secret-store-adoption-v1"),
+) : DesktopSecretStoreAdoption {
+    override fun isAdopted(reference: DesktopSecretReference): Boolean =
+        preferences.getBoolean(reference.adoptionKey(), false)
+
+    override fun markAdopted(reference: DesktopSecretReference) {
+        preferences.putBoolean(reference.adoptionKey(), true)
+        preferences.flush()
+    }
+
+    private fun DesktopSecretReference.adoptionKey(): String = MessageDigest.getInstance("SHA-256")
+        .digest(targetName.encodeToByteArray())
+        .toHexString()
 }
 
 internal fun desktopSessionSecretReference(serverUrl: String, loginName: String): DesktopSecretReference {
@@ -357,11 +431,10 @@ private data class MacOsKeychainIdentity(
 
 private fun DesktopSecretReference.macOsIdentity(): MacOsKeychainIdentity = MacOsKeychainIdentity(
     service = targetName.encodeToByteArray(),
-    account = (
-        attributes["login"]
-            ?: attributes["purpose"]
-            ?: DESKTOP_APPLICATION_ID
-        ).encodeToByteArray(),
+    account = MessageDigest.getInstance("SHA-256")
+        .digest(targetName.encodeToByteArray())
+        .toHexString()
+        .encodeToByteArray(),
 )
 
 private fun checkMacOsKeychainStatus(status: Int, operation: String) {

@@ -159,7 +159,7 @@ boundaries.
 
 ## Implemented alpha surfaces
 
-**Last reviewed: 2026-08-20.** Repository implementation may have changed. The
+**Last reviewed: 2026-09-01.** Repository implementation may have changed. The
 [default branch](https://github.com/Obiente/nc-native/tree/main) is the source of
 truth for current code. A listed surface can still have platform, version,
 action, or lifecycle limitations and is not a shipped-support guarantee.
@@ -167,8 +167,8 @@ action, or lifecycle limitations and is not a shipped-support guarantee.
 The repository already contains runnable Android and Linux desktop
 applications with:
 
-- Nextcloud Login Flow v2 with Android Keystore and Linux Secret Service
-  credential storage;
+- Nextcloud Login Flow v2 with Android Keystore, Linux Secret Service, Windows
+  Credential Manager, and source-tested macOS Keychain credential storage;
 - authenticated native Files browsing, list/grid layouts, previews, sharing
   foundations, text editing, and media viewing;
 - Photos and Memories collections, albums, tags, people, favorites, RAW/JPEG
@@ -220,7 +220,7 @@ The dependency gates and data-safety criteria are in
 
 ## Platform status
 
-**Last reviewed: 2026-08-20.** Platform availability may have changed. The
+**Last reviewed: 2026-09-01.** Platform availability may have changed. The
 [GitHub Releases page](https://github.com/Obiente/nc-native/releases) is the
 source of truth for published artifacts and limitations. This table is not a
 stable-support guarantee.
@@ -230,7 +230,7 @@ stable-support guarantee.
 | Android | Active application target with signed APK/AAB prereleases; hosted CI covers unit tests and packaging, while connected-device instrumentation remains separate |
 | Linux | Primary interactive desktop development target, distributable plus RPM/DEB prereleases |
 | Windows | x86-64 MSI, native Credential Manager login storage, and Cloud Files sync under active prerelease qualification |
-| macOS | Early DMG packaging artifact; native Keychain login storage and supported authenticated use are not implemented yet |
+| macOS | Early DMG packaging artifact; native Keychain storage is covered by deterministic source tests, but authenticated use has not been live-validated or qualified |
 | iOS / iPadOS | Planned platform target; no supported launcher is shipped yet |
 
 Android and desktop already share domain models, semantic components, and
@@ -278,8 +278,9 @@ Android release artifacts are signed with the project's protected release key.
 Desktop packages are provided per successful platform build. Windows MSI
 packages use native Credential Manager storage, include keyless GitHub build
 provenance, and are currently unsigned, so SmartScreen may require choosing
-`More info > Run anyway`. macOS packages still prove packaging only and do not
-yet have native Keychain login integration.
+`More info > Run anyway`. The source includes deterministically tested macOS
+Keychain integration, but the macOS package remains a packaging artifact until
+authenticated use passes a live macOS acceptance run.
 Read each release's known limitations before installing over an existing test
 build.
 
