@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import mockwebserver3.MockResponse
@@ -23,6 +24,12 @@ class AndroidDetachedDownloadTransportTest {
     @Test
     fun `detached download exposes and validates the response etag`() = runBlocking {
         MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(307)
+                    .addHeader("Location", "/cloud/version-2.bin")
+                    .build(),
+            )
             server.enqueue(
                 MockResponse.Builder()
                     .code(200)
@@ -36,8 +43,8 @@ class AndroidDetachedDownloadTransportTest {
                 val result = FileOutputStream(destination).use { output ->
                     downloadAndroidDetachedFile(
                         client = OkHttpClient(),
-                        session = NextcloudSession(server.url("/").toString(), "alice", "secret"),
-                        url = server.url("/version.bin").toString(),
+                        session = NextcloudSession(server.url("/cloud").toString(), "alice", "secret"),
+                        url = server.url("/cloud/version.bin").toString(),
                         output = output,
                         maximumBytes = Long.MAX_VALUE,
                         userAgent = "test",
@@ -51,8 +58,50 @@ class AndroidDetachedDownloadTransportTest {
 
                 assertEquals("\"listed-version\"", result.etag)
                 assertEquals("historical", destination.readText())
+                val initial = assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+                val redirected = assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+                assertEquals("Basic YWxpY2U6c2VjcmV0", initial.headers["Authorization"])
+                assertEquals(initial.headers["Authorization"], redirected.headers["Authorization"])
+                assertEquals("/cloud/version-2.bin", redirected.url.encodedPath)
             } finally {
                 destination.delete()
+            }
+        }
+    }
+
+    @Test
+    fun `detached download rejects another origin before sending credentials`() = runBlocking {
+        MockWebServer().use { accountServer ->
+            MockWebServer().use { unrelatedServer ->
+                accountServer.start()
+                unrelatedServer.start()
+                val destination = Files.createTempFile("ncn-detached-origin-", ".tmp").toFile()
+                try {
+                    assertFailsWith<IllegalArgumentException> {
+                        FileOutputStream(destination).use { output ->
+                            downloadAndroidDetachedFile(
+                                client = OkHttpClient(),
+                                session = NextcloudSession(
+                                    accountServer.url("/cloud").toString(),
+                                    "alice",
+                                    "secret",
+                                ),
+                                url = unrelatedServer.url("/capture.bin").toString(),
+                                output = output,
+                                maximumBytes = Long.MAX_VALUE,
+                                userAgent = "test",
+                                failureMessage = { status -> "HTTP $status" },
+                                limitMessage = "Too large",
+                                onNetworkFailure = { _, _, _ -> },
+                            )
+                        }
+                    }
+
+                    assertEquals(0, accountServer.requestCount)
+                    assertEquals(0, unrelatedServer.requestCount)
+                } finally {
+                    destination.delete()
+                }
             }
         }
     }
