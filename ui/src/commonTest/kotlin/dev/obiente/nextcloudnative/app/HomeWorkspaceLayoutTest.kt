@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -308,6 +309,42 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
+    fun `failed canonical read never overwrites it from a stale legacy layout`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyLayout = defaultHomeWorkspaceLayout(legacyScope).hide(HomeSectionIds.PhotoBackup)
+        val canonicalLayout = defaultHomeWorkspaceLayout(currentScope).hide(HomeSectionIds.Activity)
+        assertTrue(repository.save(canonicalLayout))
+        val canonicalValue = storage.value(currentScope.persistenceKey)
+        assertTrue(repository.save(legacyLayout))
+        storage.failedReadKey = currentScope.persistenceKey
+
+        val loaded = repository.load(currentScope, legacyScope.accountScopeDigest)
+
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), loaded)
+        assertEquals(legacyScope.persistenceKey, storage.lastKey)
+        assertEquals(canonicalValue, storage.value(currentScope.persistenceKey))
+        storage.failedReadKey = null
+        assertEquals(canonicalLayout, repository.load(currentScope))
+    }
+
+    @Test
+    fun `canonical read cancellation remains control flow`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        storage.failedReadKey = currentScope.persistenceKey
+        storage.readFailure = CancellationException("synthetic cancellation")
+
+        assertFailsWith<CancellationException> {
+            repository.load(currentScope, legacyAccountScopeDigest = "b".repeat(64))
+        }
+        assertEquals(null, storage.lastKey)
+    }
+
+    @Test
     fun `repository reports snapshot encoding failures without touching storage`() {
         val storage = RecordingHomeWorkspaceStorage()
         val repository = HomeWorkspaceLayoutRepository(
@@ -361,13 +398,20 @@ class HomeWorkspaceLayoutTest {
         private val values = mutableMapOf<String, String>()
         var lastKey: String? = null
         var lastValue: String? = null
+        var failedReadKey: String? = null
+        var readFailure: Throwable = IllegalStateException("synthetic canonical read failure")
 
-        override fun read(persistenceKey: String): String? = values[persistenceKey]
+        override fun read(persistenceKey: String): String? {
+            if (persistenceKey == failedReadKey) throw readFailure
+            return values[persistenceKey]
+        }
 
         override fun write(persistenceKey: String, encodedSnapshot: String) {
             lastKey = persistenceKey
             lastValue = encodedSnapshot
             values[persistenceKey] = encodedSnapshot
         }
+
+        fun value(persistenceKey: String): String? = values[persistenceKey]
     }
 }
