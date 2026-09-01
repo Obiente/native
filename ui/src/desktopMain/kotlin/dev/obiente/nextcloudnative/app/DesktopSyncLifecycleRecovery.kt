@@ -1,6 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import java.util.prefs.Preferences
+
+internal fun desktopStoredSessionAccountId(preferences: Preferences): String? =
+    preferences.get("server", null)?.let { server ->
+        preferences.get("login", null)?.let { login ->
+            desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
+        }
+    }
 
 internal suspend fun reconcileDesktopBackgroundSession(
     loadSession: () -> NextcloudSession?,

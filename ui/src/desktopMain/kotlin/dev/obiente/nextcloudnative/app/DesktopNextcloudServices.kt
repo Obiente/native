@@ -3736,7 +3736,7 @@ class DesktopNextcloudServices(
         }
         var cleared = false
         try {
-            val accountId = loadSession()?.let(::desktopFileCacheAccountId)
+            val accountId = desktopStoredSessionAccountId(preferences)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3867,7 +3867,7 @@ class DesktopNextcloudServices(
         } finally {
             if (!cleared) {
                 synchronized(fileRangeSessionLock) { sessionClearing = false }
-                if (loadSession() != null) startDesktopSyncLifecycle()
+                if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
             }
         }
     }

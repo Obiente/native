@@ -98,7 +98,7 @@ internal class MigratingDesktopSecretStore(
 ) : DesktopSecretStore {
     override fun load(reference: DesktopSecretReference): ByteArray? {
         primary.load(reference)?.let { secret ->
-            adoptAndRetryLegacyCleanup(reference)
+            adoptAndRetryLegacyCleanupBestEffort(reference)
             return secret
         }
         if (adoption.state(reference) != DesktopSecretStoreAdoptionState.NotAdopted) {
@@ -107,39 +107,61 @@ internal class MigratingDesktopSecretStore(
         }
         val secret = legacy.load(reference) ?: return null
         primary.save(reference, username = null, secret = secret)
-        adoptAndRetryLegacyCleanup(reference)
+        adoptAndRetryLegacyCleanupBestEffort(reference)
         return secret
     }
 
     override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
         primary.save(reference, username, secret)
-        adoptAndRetryLegacyCleanup(reference)
+        adoptAndRetryLegacyCleanupBestEffort(reference)
     }
 
     override fun clear(reference: DesktopSecretReference) {
-        if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
-            adoption.markAdopted(reference)
-        }
+        markAdoptedBestEffort(reference)
         primary.clear(reference)
         retryLegacyCleanup(reference)
     }
 
-    private fun adoptAndRetryLegacyCleanup(reference: DesktopSecretReference) {
-        if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
-            adoption.markAdopted(reference)
-        }
+    private fun adoptAndRetryLegacyCleanupBestEffort(reference: DesktopSecretReference) {
+        markAdoptedBestEffort(reference)
         retryLegacyCleanup(reference)
     }
 
+    private fun markAdoptedBestEffort(reference: DesktopSecretReference) {
+        try {
+            if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
+                adoption.markAdopted(reference)
+            }
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // A valid primary secret remains usable even when migration bookkeeping is unavailable.
+        }
+    }
+
     private fun retryLegacyCleanup(reference: DesktopSecretReference) {
-        if (adoption.state(reference) == DesktopSecretStoreAdoptionState.AdoptedAndClean) return
+        val alreadyClean = try {
+            adoption.state(reference) == DesktopSecretStoreAdoptionState.AdoptedAndClean
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+        if (alreadyClean) return
         try {
             legacy.clear(reference)
-            adoption.markLegacyCleanupComplete(reference)
         } catch (failure: kotlinx.coroutines.CancellationException) {
             throw failure
         } catch (_: Exception) {
             // Adoption prevents stale reads; the pending state retries cleanup on the next operation.
+            return
+        }
+        try {
+            adoption.markLegacyCleanupComplete(reference)
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // Legacy cleanup is already complete; only the optional durable marker is unavailable.
         }
     }
 }
@@ -377,8 +399,9 @@ internal class MacOsKeychainSecretStore(
         val data = secretData.value
         val itemPointer = item.value
         try {
-            check(size in 1..MAX_SECRET_BYTES && data != null) {
-                "macOS Keychain returned an invalid secret size."
+            if (size !in 1..MAX_SECRET_BYTES || data == null) {
+                clear(reference)
+                return null
             }
             return data.getByteArray(0, size)
         } finally {

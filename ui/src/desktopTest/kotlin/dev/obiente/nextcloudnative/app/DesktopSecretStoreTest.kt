@@ -315,6 +315,19 @@ class DesktopSecretStoreTest {
     }
 
     @Test
+    fun unavailableAdoptionMetadataCannotBlockAValidKeychainValue() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val expected = "keychain-session-secret".encodeToByteArray()
+        val store = MigratingDesktopSecretStore(
+            primary = RecordingSecretStore(mutableMapOf(reference.targetName to expected)),
+            legacy = RecordingSecretStore(),
+            adoption = RecordingSecretStoreAdoption(failWrites = true),
+        )
+
+        assertContentEquals(expected, store.load(reference))
+    }
+
+    @Test
     fun failedLegacyCleanupRetriesWithoutReadingTheStaleValueAgain() {
         val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
         val expected = "keychain-session-secret".encodeToByteArray()
@@ -377,6 +390,17 @@ class DesktopSecretStoreTest {
     }
 
     @Test
+    fun malformedMacOsKeychainValueIsRemovedAndReturnsToSignIn() {
+        val api = FakeMacOsKeychainApi(initialSecret = ByteArray(2_561))
+        val store = MacOsKeychainSecretStore(api, releaseItem = {})
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+
+        assertNull(store.load(reference))
+        assertEquals(1, api.deleteAttempts)
+        assertNull(store.load(reference))
+    }
+
+    @Test
     fun macOsKeychainConcurrentAddRaceUpdatesTheExistingItem() {
         val api = FakeMacOsKeychainApi(duplicateOnFirstAdd = true)
         val store = MacOsKeychainSecretStore(api, releaseItem = {})
@@ -391,14 +415,17 @@ class DesktopSecretStoreTest {
     private class FakeMacOsKeychainApi(
         private val findFailure: Int? = null,
         private val duplicateOnFirstAdd: Boolean = false,
+        initialSecret: ByteArray? = null,
     ) : MacOsKeychainApi {
-        private var secret: ByteArray? = null
+        private var secret: ByteArray? = initialSecret
         private var addAttempted = false
         private var returnedSecret: Memory? = null
         private val item = Memory(1)
         var lastService: String? = null
             private set
         var lastAccount: String? = null
+            private set
+        var deleteAttempts: Int = 0
             private set
 
         override fun SecKeychainFindGenericPassword(
@@ -456,6 +483,7 @@ class DesktopSecretStoreTest {
         }
 
         override fun SecKeychainItemDelete(itemRef: Pointer): Int {
+            deleteAttempts += 1
             secret = null
             return 0
         }
@@ -502,17 +530,21 @@ class DesktopSecretStoreTest {
         }
     }
 
-    private class RecordingSecretStoreAdoption : DesktopSecretStoreAdoption {
+    private class RecordingSecretStoreAdoption(
+        private val failWrites: Boolean = false,
+    ) : DesktopSecretStoreAdoption {
         private val states = mutableMapOf<String, DesktopSecretStoreAdoptionState>()
 
         override fun state(reference: DesktopSecretReference): DesktopSecretStoreAdoptionState =
             states[reference.targetName] ?: DesktopSecretStoreAdoptionState.NotAdopted
 
         override fun markAdopted(reference: DesktopSecretReference) {
+            if (failWrites) error("Synthetic unavailable adoption metadata.")
             states[reference.targetName] = DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup
         }
 
         override fun markLegacyCleanupComplete(reference: DesktopSecretReference) {
+            if (failWrites) error("Synthetic unavailable adoption metadata.")
             check(state(reference) != DesktopSecretStoreAdoptionState.NotAdopted)
             states[reference.targetName] = DesktopSecretStoreAdoptionState.AdoptedAndClean
         }
