@@ -27,17 +27,21 @@ internal class DesktopHttpMutationExecutor(client: OkHttpClient) {
         val trackedRequest = request.newBuilder()
             .tag(DesktopHttpMutationAttempt::class.java, attempt)
             .build()
-        val call = trackedClient.newCall(trackedRequest)
         return try {
-            val execute = { activeCall: okhttp3.Call ->
-                activeCall.execute().use { response ->
-                    if (response.isSuccessful) runCatching(onAcceptedResponse)
-                    consume(response)
-                }
+            val executeCall = { activeCall: okhttp3.Call ->
+                shouldContinue?.let { continuation ->
+                    executeDesktopFileSyncCancellableCall(activeCall, continuation) { it.execute() }
+                } ?: activeCall.execute()
             }
-            shouldContinue?.let { continuation ->
-                executeDesktopFileSyncCancellableCall(call, continuation, execute)
-            } ?: execute(call)
+            val consumeTracked = { response: Response ->
+                if (response.isSuccessful) runCatching(onAcceptedResponse)
+                consume(response)
+            }
+            if (trackedRequest.tag(NextcloudAuthenticatedRequestPolicy::class.java) != null) {
+                executeNextcloudAuthenticatedRequest(trackedClient, trackedRequest, executeCall, consumeTracked)
+            } else {
+                executeCall(trackedClient.newCall(trackedRequest)).use { response -> consumeTracked(response) }
+            }
         } catch (cancelled: CancellationException) {
             if (attempt.networkExchangeStarted) runCatching(onAmbiguousNetworkResult)
             throw cancelled

@@ -47,6 +47,18 @@ class JvmLoginFlowHttpPolicyTest {
     }
 
     @Test
+    fun `server normalization rejects components that would rewrite the login request`() {
+        listOf(
+            "https://person@cloud.example.test/nextcloud",
+            "https://cloud.example.test/nextcloud?route=other",
+            "https://cloud.example.test/nextcloud#other",
+            "https://cloud.example.test:99999/nextcloud",
+        ).forEach { address ->
+            assertFailsWith<IllegalArgumentException> { normalizeServerUrl(address) }
+        }
+    }
+
+    @Test
     fun `not found poll response is the pending protocol state`() {
         val interpretation = interpretLoginPollHttpResponse(
             status = 404,
@@ -92,6 +104,21 @@ class JvmLoginFlowHttpPolicyTest {
         val failure = assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(interpretation.result)
         assertEquals("LOGIN_POLL_RESPONSE_INVALID", failure.code)
         assertNull(interpretation.approvedLoginName)
+    }
+
+    @Test
+    fun `fallback diagnostic distinguishes a routed 404 from a pre exchange failure`() {
+        val routed = loginPollEndpointFallbackDiagnostic(
+            LoginPollFallbackReason.AdvertisedEndpointNotFound,
+        ).fields.associate { it.name to it.value }
+        val preExchange = loginPollEndpointFallbackDiagnostic(
+            LoginPollFallbackReason.PreExchangeFailure,
+        ).fields.associate { it.name to it.value }
+
+        assertEquals("advertised_endpoint_not_found", routed["reason"])
+        assertEquals("true", routed["exchange_started"])
+        assertEquals("pre_exchange_failure", preExchange["reason"])
+        assertEquals("false", preExchange["exchange_started"])
     }
 
     private fun challenge() = LoginChallenge(

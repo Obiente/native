@@ -126,7 +126,7 @@ fun LoginChallengeHttpInterpretation.toStartedDiagnostic(): SupportDiagnosticEve
         ),
     )
 
-fun loginPollEndpointFallbackDiagnostic(): SupportDiagnosticEventDraft =
+fun loginPollEndpointFallbackDiagnostic(reason: LoginPollFallbackReason): SupportDiagnosticEventDraft =
     SupportDiagnosticEventDraft(
         severity = SupportDiagnosticSeverity.Info,
         component = SupportDiagnosticComponent.Authentication,
@@ -134,7 +134,17 @@ fun loginPollEndpointFallbackDiagnostic(): SupportDiagnosticEventDraft =
         outcome = "endpoint-fallback",
         fields = listOf(
             SupportDiagnosticFieldDraft("safe_to_retry", "true"),
-            SupportDiagnosticFieldDraft("exchange_started", "false"),
+            SupportDiagnosticFieldDraft(
+                "exchange_started",
+                (reason == LoginPollFallbackReason.AdvertisedEndpointNotFound).toString(),
+            ),
+            SupportDiagnosticFieldDraft(
+                "reason",
+                when (reason) {
+                    LoginPollFallbackReason.AdvertisedEndpointNotFound -> "advertised_endpoint_not_found"
+                    LoginPollFallbackReason.PreExchangeFailure -> "pre_exchange_failure"
+                },
+            ),
         ),
     )
 
@@ -178,9 +188,12 @@ internal fun normalizeServerUrl(
     require(
         (scheme == "https" ||
             (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp)) &&
-            !uri.host.isNullOrBlank(),
+            !uri.host.isNullOrBlank() && (uri.port == -1 || uri.port in 1..65_535),
     ) {
         "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
+    }
+    require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null) {
+        "The server address contains unsupported URL components."
     }
     return candidate.trimEnd('/').removeSuffix("/index.php")
 }
