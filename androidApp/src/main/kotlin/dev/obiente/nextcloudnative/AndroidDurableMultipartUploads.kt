@@ -18,6 +18,8 @@ import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.LocalUploadFile
 import dev.obiente.nextcloudnative.app.MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS
 import dev.obiente.nextcloudnative.app.MultipartTextField
+import dev.obiente.nextcloudnative.app.NextcloudAccountId
+import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -187,10 +189,17 @@ internal class DeckAttachmentUploadWorker(
         picker: AndroidLocalUploadPicker,
         jobId: String,
     ): Result {
-        val accountServices = AndroidNextcloudServices(applicationContext)
-        val session = accountServices.loadSession()
-        if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
-            when (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.accountRetentionSnapshot())) {
+        val services = AndroidNextcloudServices(applicationContext)
+        val accountSnapshot = services.accountRetentionSnapshot()
+        val session = (accountSnapshot as? AndroidAccountRetentionSnapshot.Available)?.let { available ->
+            resolveDurableUploadSession(
+                expectedAccountId = initial.accountId,
+                accounts = available.accounts,
+                loadSession = services::loadSession,
+            )
+        }
+        if (session == null) {
+            when (durableUploadAccountMismatchOutcome(initial.accountId, accountSnapshot)) {
                 DurableUploadAccountMismatchOutcome.RetryAccountRecovery -> {
                     recordUploadDiagnostic(
                         severity = SupportDiagnosticSeverity.Warning,
@@ -252,13 +261,13 @@ internal class DeckAttachmentUploadWorker(
             target = DurableUploadState.Uploading,
             message = null,
         ) ?: return Result.success()
-        val services = AndroidNextcloudServices(
+        val uploadServices = AndroidNextcloudServices(
             applicationContext,
             localUploadPicker = picker,
             accountMutationLeaseHeld = true,
         )
         val outcome = runCatching {
-            services.executeNextcloudMultipartUpload(session, started.request)
+            uploadServices.executeNextcloudMultipartUpload(session, started.request)
         }
         outcome.onSuccess { response ->
             val state = durableUploadStateForHttpResponse(response.status)
@@ -351,6 +360,19 @@ internal fun queuedDurableUploadsForAccount(
     accountId: String,
 ): List<AndroidDurableMultipartUploadJob> = jobs.filter { job ->
     job.accountId == accountId && job.state == DurableUploadState.Queued
+}
+
+internal fun resolveDurableUploadSession(
+    expectedAccountId: String,
+    accounts: List<NextcloudAccountRecord>,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): NextcloudSession? {
+    val account = accounts.singleOrNull { record ->
+        NextcloudDocumentIds.accountKey(record.serverUrl, record.loginName) == expectedAccountId
+    } ?: return null
+    return loadSession(account.id)?.takeIf { session ->
+        NextcloudDocumentIds.accountKey(session) == expectedAccountId
+    }
 }
 
 internal data class AndroidDurableMultipartUploadJob(
