@@ -238,7 +238,7 @@ private val accountRegistryJson = Json {
 }
 
 private const val ACCOUNT_REGISTRY_VERSION = 1
-private const val MAX_LOCAL_ACCOUNTS = 64
+internal const val MAX_LOCAL_ACCOUNTS = 64
 private const val MAX_ACCOUNT_REGISTRY_BYTES = 256 * 1024
 private const val MAX_ACCOUNT_SERVER_URL_LENGTH = 8 * 1024
 private const val MAX_ACCOUNT_LOGIN_NAME_LENGTH = 1024
