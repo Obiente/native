@@ -130,12 +130,20 @@ internal fun executeDesktopFileSyncUpload(
     val expectedDirectoryEtag = requireNotNull(expectedRemoteEtag)
     val transferPlan = nextcloudUploadTransferPlan(source.length())
     if (transferPlan is NextcloudUploadTransferPlan.Chunked) {
-        val recoveringPublication = checkpoint?.let {
-            it.commitInFlight && it.localRevision == exactLocal.revision && it.transferPlan == transferPlan
-        } == true
+        val matchingCheckpoint = checkpoint?.takeIf {
+            it.localRevision == exactLocal.revision && it.contentRevision == exactLocal.revision &&
+                it.contentHash == exactLocal.contentHash && it.transferPlan == transferPlan
+        }
+        if (checkpoint != null && matchingCheckpoint == null) {
+            check(
+                remote.resumableUploadRemote(shouldContinue, expectedDirectoryEtag)
+                    .discardCheckpointUpload(checkpoint, relativePath),
+            ) { "An unverified upload stage still requires recovery." }
+        }
+        val recoveringPublication = matchingCheckpoint?.commitInFlight == true
         if (!recoveringPublication) remote.requireDirectoryGeneration(relativePath, expectedDirectoryEtag)
         return resumeDesktopFileSyncUpload(
-            source, relativePath, exactLocal, expectedDirectoryEtag, checkpoint,
+            source, relativePath, exactLocal, expectedDirectoryEtag, matchingCheckpoint,
             persistCheckpoint, remote, shouldContinue,
             replacingDirectoryEtag = expectedDirectoryEtag,
         )

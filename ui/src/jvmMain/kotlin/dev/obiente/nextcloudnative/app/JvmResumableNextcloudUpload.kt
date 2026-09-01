@@ -161,7 +161,7 @@ fun cleanupJvmFileSyncOwnedUploads(
     return JvmFileSyncUploadCleanupResult(updated, unresolved)
 }
 
-private fun JvmResumableNextcloudUploadRemote.discardCheckpointUpload(
+internal fun JvmResumableNextcloudUploadRemote.discardCheckpointUpload(
     checkpoint: FileSyncUploadCheckpoint,
     relativePath: String,
 ): Boolean = discardOwnedUpload(
