@@ -67,7 +67,7 @@ class DesktopSecretStoreTest {
     }
 
     @Test
-    fun secretLookupTimeoutIncludesReadingStandardOutput() {
+    fun secretLookupTimeoutIsReportedAsUnavailableSecureStorage() {
         val store = SecretToolDesktopSecretStore(
             timeoutMillis = 100,
             startProcess = { NeverCompletingProcess() },
@@ -79,10 +79,80 @@ class DesktopSecretStoreTest {
         )
         val startedAt = System.nanoTime()
 
-        val failure = assertFailsWith<IllegalStateException> { store.load(reference) }
+        val failure = assertFailsWith<DesktopSecretStoreUnavailableException> { store.load(reference) }
 
-        assertTrue(failure.message.orEmpty().contains("Timed out"))
+        assertTrue(failure.message.orEmpty().contains("running and unlocked"))
         assertTrue(System.nanoTime() - startedAt < 1_000_000_000L)
+    }
+
+    @Test
+    fun failedSecretLookupCannotBeMistakenForConfirmedAbsenceDuringMigration() {
+        val reference = desktopDeckDraftSecretReference()
+        val legacy = SecretToolDesktopSecretStore(
+            startProcess = { throw java.io.IOException("synthetic missing executable") },
+        )
+        val primary = RecordingSecretStore()
+        val adoption = RecordingSecretStoreAdoption()
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> {
+            MigratingDesktopSecretStore(primary, legacy, adoption).load(reference)
+        }
+
+        assertNull(primary.load(reference))
+        assertEquals(DesktopSecretStoreAdoptionState.NotAdopted, adoption.state(reference))
+    }
+
+    @Test
+    fun rejectedSecretLookupCannotBeMistakenForConfirmedAbsenceDuringMigration() {
+        val reference = desktopDeckDraftSecretReference()
+        val legacy = SecretToolDesktopSecretStore(
+            startProcess = { CompletedProcess(exitCode = 1) },
+        )
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> {
+            MigratingDesktopSecretStore(
+                RecordingSecretStore(),
+                legacy,
+                RecordingSecretStoreAdoption(),
+            ).load(reference)
+        }
+    }
+
+    @Test
+    fun emptyUnlockedSearchConfirmsThatNoLegacySecretExists() {
+        val reference = desktopDeckDraftSecretReference()
+        val legacy = SecretToolDesktopSecretStore(
+            startProcess = { command ->
+                CompletedProcess(exitCode = if (command[1] == "search") 0 else 1)
+            },
+        )
+        val adoption = RecordingSecretStoreAdoption()
+
+        assertNull(MigratingDesktopSecretStore(RecordingSecretStore(), legacy, adoption).load(reference))
+
+        assertEquals(DesktopSecretStoreAdoptionState.NotAdopted, adoption.state(reference))
+    }
+
+    @Test
+    fun failedLegacyClearIsReportedUnlessSearchConfirmsTheItemIsGone() {
+        val reference = desktopDeckDraftSecretReference()
+        val stillPresent = SecretToolDesktopSecretStore(
+            startProcess = { command ->
+                if (command[1] == "search") {
+                    CompletedProcess(0, "synthetic matching item".encodeToByteArray())
+                } else {
+                    CompletedProcess(1)
+                }
+            },
+        )
+        val absent = SecretToolDesktopSecretStore(
+            startProcess = { command ->
+                CompletedProcess(exitCode = if (command[1] == "search") 0 else 1)
+            },
+        )
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { stillPresent.clear(reference) }
+        absent.clear(reference)
     }
 
     private class NeverCompletingProcess : Process() {
@@ -112,11 +182,14 @@ class DesktopSecretStoreTest {
         override fun isAlive(): Boolean = completion.count > 0L
     }
 
-    private class CompletedProcess(private val exitCode: Int) : Process() {
+    private class CompletedProcess(
+        private val exitCode: Int,
+        private val input: ByteArray = ByteArray(0),
+    ) : Process() {
         private val output = ByteArrayOutputStream()
 
         override fun getOutputStream(): OutputStream = output
-        override fun getInputStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun getInputStream(): InputStream = ByteArrayInputStream(input)
         override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
         override fun waitFor(): Int = exitCode
         override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = true
@@ -181,8 +254,8 @@ class DesktopSecretStoreTest {
         assertContentEquals("draft-secret".encodeToByteArray(), primary.load(draftReference))
         assertNull(legacy.load(sessionReference))
         assertNull(legacy.load(draftReference))
-        assertTrue(adoption.isAdopted(sessionReference))
-        assertTrue(adoption.isAdopted(draftReference))
+        assertEquals(DesktopSecretStoreAdoptionState.AdoptedAndClean, adoption.state(sessionReference))
+        assertEquals(DesktopSecretStoreAdoptionState.AdoptedAndClean, adoption.state(draftReference))
     }
 
     @Test
@@ -217,7 +290,7 @@ class DesktopSecretStoreTest {
         assertFailsWith<DesktopSecretStoreUnavailableException> { store.load(reference) }
 
         assertContentEquals(expected, legacy.load(reference))
-        assertFalse(adoption.isAdopted(reference))
+        assertEquals(DesktopSecretStoreAdoptionState.NotAdopted, adoption.state(reference))
     }
 
     @Test
@@ -234,8 +307,56 @@ class DesktopSecretStoreTest {
 
         assertContentEquals(expected, store.load(reference))
         assertContentEquals(expected, store.load(reference))
-        assertEquals(1, legacy.clearAttempts)
-        assertTrue(adoption.isAdopted(reference))
+        assertEquals(2, legacy.clearAttempts)
+        assertEquals(
+            DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup,
+            adoption.state(reference),
+        )
+    }
+
+    @Test
+    fun failedLegacyCleanupRetriesWithoutReadingTheStaleValueAgain() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val expected = "keychain-session-secret".encodeToByteArray()
+        val legacy = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "legacy-session-secret".encodeToByteArray()),
+            failClearAttempts = 1,
+        )
+        val primary = RecordingSecretStore(mutableMapOf(reference.targetName to expected))
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(primary, legacy, adoption)
+
+        assertContentEquals(expected, store.load(reference))
+        assertEquals(DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup, adoption.state(reference))
+        assertContentEquals(expected, store.load(reference))
+
+        assertEquals(2, legacy.clearAttempts)
+        assertEquals(DesktopSecretStoreAdoptionState.AdoptedAndClean, adoption.state(reference))
+        assertNull(legacy.load(reference))
+    }
+
+    @Test
+    fun freshDraftKeyCanBeCreatedWhenNoDraftDependsOnAnUnavailableLegacyStore() {
+        val secrets = RecordingSecretStore(failLoadAttempts = 1)
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = secrets,
+            legacySecretRequired = { false },
+        )
+
+        val key = provider.encryptionKey()
+
+        assertEquals(DesktopDeckCardDraftStore.AES_KEY_BYTES, key.size)
+        assertTrue(secrets.values.containsKey(desktopDeckDraftSecretReference().targetName))
+    }
+
+    @Test
+    fun existingDraftNeverCreatesAReplacementKeyAfterAmbiguousLegacyLookup() {
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = RecordingSecretStore(failLoad = true),
+            legacySecretRequired = { true },
+        )
+
+        assertFailsWith<DesktopSecretStoreUnavailableException> { provider.encryptionKey() }
     }
 
     @Test
@@ -349,14 +470,22 @@ class DesktopSecretStoreTest {
     private class RecordingSecretStore(
         val values: MutableMap<String, ByteArray> = mutableMapOf(),
         private val failSave: Boolean = false,
+        private val failLoad: Boolean = false,
+        private var failLoadAttempts: Int = 0,
         private val ignoreClear: Boolean = false,
         private val failClear: Boolean = false,
+        private var failClearAttempts: Int = 0,
     ) : DesktopSecretStore {
         var clearAttempts = 0
             private set
 
-        override fun load(reference: DesktopSecretReference): ByteArray? =
-            values[reference.targetName]?.copyOf()
+        override fun load(reference: DesktopSecretReference): ByteArray? {
+            if (failLoad || failLoadAttempts > 0) {
+                if (failLoadAttempts > 0) failLoadAttempts -= 1
+                throw DesktopSecretStoreUnavailableException("Synthetic unavailable store.")
+            }
+            return values[reference.targetName]?.copyOf()
+        }
 
         override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
             if (failSave) throw DesktopSecretStoreUnavailableException("Synthetic unavailable store.")
@@ -365,18 +494,27 @@ class DesktopSecretStoreTest {
 
         override fun clear(reference: DesktopSecretReference) {
             clearAttempts += 1
-            if (failClear) error("Synthetic legacy cleanup failure.")
+            if (failClear || failClearAttempts > 0) {
+                if (failClearAttempts > 0) failClearAttempts -= 1
+                error("Synthetic legacy cleanup failure.")
+            }
             if (!ignoreClear) values.remove(reference.targetName)
         }
     }
 
     private class RecordingSecretStoreAdoption : DesktopSecretStoreAdoption {
-        private val adopted = mutableSetOf<String>()
+        private val states = mutableMapOf<String, DesktopSecretStoreAdoptionState>()
 
-        override fun isAdopted(reference: DesktopSecretReference): Boolean = reference.targetName in adopted
+        override fun state(reference: DesktopSecretReference): DesktopSecretStoreAdoptionState =
+            states[reference.targetName] ?: DesktopSecretStoreAdoptionState.NotAdopted
 
         override fun markAdopted(reference: DesktopSecretReference) {
-            adopted += reference.targetName
+            states[reference.targetName] = DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup
+        }
+
+        override fun markLegacyCleanupComplete(reference: DesktopSecretReference) {
+            check(state(reference) != DesktopSecretStoreAdoptionState.NotAdopted)
+            states[reference.targetName] = DesktopSecretStoreAdoptionState.AdoptedAndClean
         }
     }
 

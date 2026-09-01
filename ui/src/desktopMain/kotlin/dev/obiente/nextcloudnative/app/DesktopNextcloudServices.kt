@@ -1682,15 +1682,15 @@ class DesktopNextcloudServices(
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }
-                    val virtualFolderSession = loadSession()
-                    runCatching { reconcileConfiguredVirtualFolders(virtualFolderSession) }
-                        .onFailure { failure ->
-                            publishFileSyncRunFailure(
-                                virtualFolderSession?.let(::desktopFileCacheAccountId),
-                                DesktopFileSyncRunSource.Background,
-                                failure,
-                            )
-                        }
+                    reconcileDesktopBackgroundSession(
+                        ::loadSession, ::reconcileConfiguredVirtualFolders,
+                    ) { session, failure ->
+                        publishFileSyncRunFailure(
+                            session?.let(::desktopFileCacheAccountId),
+                            DesktopFileSyncRunSource.Background,
+                            failure,
+                        )
+                    }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
             }

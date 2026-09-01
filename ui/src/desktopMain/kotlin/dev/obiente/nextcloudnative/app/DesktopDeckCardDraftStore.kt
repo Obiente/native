@@ -23,7 +23,11 @@ import org.json.JSONObject
  */
 internal class DesktopDeckCardDraftStore(
     private val root: File = desktopDeckDraftDirectory(),
-    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(),
+    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(
+        legacySecretRequired = {
+            root.listFiles().orEmpty().any { file -> file.name.matches(DRAFT_FILE_PATTERN) }
+        },
+    ),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
 ) {
@@ -299,6 +303,7 @@ internal fun interface DesktopDeckDraftKeyProvider {
 internal class PlatformDeckDraftKeyProvider(
     private val secretStore: DesktopSecretStore = defaultDesktopSecretStore(),
     private val random: SecureRandom = SecureRandom(),
+    private val legacySecretRequired: () -> Boolean = { true },
 ) : DesktopDeckDraftKeyProvider {
     @Volatile
     private var cached: ByteArray? = null
@@ -326,7 +331,13 @@ internal class PlatformDeckDraftKeyProvider(
     }
 
     private fun lookup(): ByteArray? {
-        val encoded = secretStore.load(desktopDeckDraftSecretReference())
+        val stored = try {
+            secretStore.load(desktopDeckDraftSecretReference())
+        } catch (failure: DesktopSecretStoreUnavailableException) {
+            if (legacySecretRequired()) throw failure
+            null
+        }
+        val encoded = stored
             ?.let { value -> value.copyOf(minOf(value.size, MAX_ENCODED_KEY_BYTES)) }
             ?.decodeToString()
             ?.trim()

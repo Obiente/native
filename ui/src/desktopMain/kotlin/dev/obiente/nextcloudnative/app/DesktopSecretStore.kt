@@ -78,9 +78,17 @@ internal fun defaultDesktopSecretStore(
 }
 
 internal interface DesktopSecretStoreAdoption {
-    fun isAdopted(reference: DesktopSecretReference): Boolean
+    fun state(reference: DesktopSecretReference): DesktopSecretStoreAdoptionState
 
     fun markAdopted(reference: DesktopSecretReference)
+
+    fun markLegacyCleanupComplete(reference: DesktopSecretReference)
+}
+
+internal enum class DesktopSecretStoreAdoptionState {
+    NotAdopted,
+    AdoptedPendingLegacyCleanup,
+    AdoptedAndClean,
 }
 
 internal class MigratingDesktopSecretStore(
@@ -90,41 +98,48 @@ internal class MigratingDesktopSecretStore(
 ) : DesktopSecretStore {
     override fun load(reference: DesktopSecretReference): ByteArray? {
         primary.load(reference)?.let { secret ->
-            adoptAndClearLegacyOnce(reference)
+            adoptAndRetryLegacyCleanup(reference)
             return secret
         }
-        if (adoption.isAdopted(reference)) return null
+        if (adoption.state(reference) != DesktopSecretStoreAdoptionState.NotAdopted) {
+            retryLegacyCleanup(reference)
+            return null
+        }
         val secret = legacy.load(reference) ?: return null
         primary.save(reference, username = null, secret = secret)
-        adoptAndClearLegacyOnce(reference)
+        adoptAndRetryLegacyCleanup(reference)
         return secret
     }
 
     override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
         primary.save(reference, username, secret)
-        adoptAndClearLegacyOnce(reference)
+        adoptAndRetryLegacyCleanup(reference)
     }
 
     override fun clear(reference: DesktopSecretReference) {
-        val alreadyAdopted = adoption.isAdopted(reference)
-        if (!alreadyAdopted) adoption.markAdopted(reference)
+        if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
+            adoption.markAdopted(reference)
+        }
         primary.clear(reference)
-        if (!alreadyAdopted) clearLegacyBestEffort(reference)
+        retryLegacyCleanup(reference)
     }
 
-    private fun adoptAndClearLegacyOnce(reference: DesktopSecretReference) {
-        if (adoption.isAdopted(reference)) return
-        adoption.markAdopted(reference)
-        clearLegacyBestEffort(reference)
+    private fun adoptAndRetryLegacyCleanup(reference: DesktopSecretReference) {
+        if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
+            adoption.markAdopted(reference)
+        }
+        retryLegacyCleanup(reference)
     }
 
-    private fun clearLegacyBestEffort(reference: DesktopSecretReference) {
+    private fun retryLegacyCleanup(reference: DesktopSecretReference) {
+        if (adoption.state(reference) == DesktopSecretStoreAdoptionState.AdoptedAndClean) return
         try {
             legacy.clear(reference)
+            adoption.markLegacyCleanupComplete(reference)
         } catch (failure: kotlinx.coroutines.CancellationException) {
             throw failure
         } catch (_: Exception) {
-            // The durable adoption marker prevents a stale legacy value from being read again.
+            // Adoption prevents stale reads; the pending state retries cleanup on the next operation.
         }
     }
 }
@@ -133,17 +148,34 @@ private class PreferencesDesktopSecretStoreAdoption(
     private val preferences: Preferences = Preferences.userRoot()
         .node("dev/obiente/nextcloudnative/secret-store-adoption-v1"),
 ) : DesktopSecretStoreAdoption {
-    override fun isAdopted(reference: DesktopSecretReference): Boolean =
-        preferences.getBoolean(reference.adoptionKey(), false)
+    override fun state(reference: DesktopSecretReference): DesktopSecretStoreAdoptionState =
+        when (preferences.get(reference.adoptionKey(), null)) {
+            ADOPTED_AND_CLEAN -> DesktopSecretStoreAdoptionState.AdoptedAndClean
+            ADOPTED_PENDING_CLEANUP, LEGACY_ADOPTED_VALUE ->
+                DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup
+            else -> DesktopSecretStoreAdoptionState.NotAdopted
+        }
 
     override fun markAdopted(reference: DesktopSecretReference) {
-        preferences.putBoolean(reference.adoptionKey(), true)
+        preferences.put(reference.adoptionKey(), ADOPTED_PENDING_CLEANUP)
+        preferences.flush()
+    }
+
+    override fun markLegacyCleanupComplete(reference: DesktopSecretReference) {
+        check(state(reference) != DesktopSecretStoreAdoptionState.NotAdopted)
+        preferences.put(reference.adoptionKey(), ADOPTED_AND_CLEAN)
         preferences.flush()
     }
 
     private fun DesktopSecretReference.adoptionKey(): String = MessageDigest.getInstance("SHA-256")
         .digest(targetName.encodeToByteArray())
         .toHexString()
+
+    private companion object {
+        const val LEGACY_ADOPTED_VALUE = "true"
+        const val ADOPTED_PENDING_CLEANUP = "adopted-pending-legacy-cleanup"
+        const val ADOPTED_AND_CLEAN = "adopted-and-clean"
+    }
 }
 
 internal fun desktopSessionSecretReference(serverUrl: String, loginName: String): DesktopSecretReference {
@@ -187,7 +219,9 @@ internal class SecretToolDesktopSecretStore(
     override fun load(reference: DesktopSecretReference): ByteArray? {
         val process = runCatching {
             startProcess(secretToolCommand("lookup", reference))
-        }.getOrElse { return null }
+        }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+        }
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "nextcloud-native-secret-reader").apply { isDaemon = true }
         }
@@ -203,17 +237,21 @@ internal class SecretToolDesktopSecretStore(
             val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
             val remainingMillis = (timeoutMillis - elapsedMillis).coerceAtLeast(1L)
             val bytes = output.get(remainingMillis, TimeUnit.MILLISECONDS)
-            if (process.exitValue() != 0 || bytes.isEmpty()) return null
+            if (process.exitValue() != 0) {
+                if (!hasMatchingSecret(reference)) return null
+                throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+            }
+            if (bytes.isEmpty()) return null
             check(bytes.size <= MAX_SECRET_BYTES) { "The desktop secret service returned an oversized value." }
             return bytes.trimSingleTrailingLineBreak()
-        } catch (_: TimeoutException) {
+        } catch (failure: TimeoutException) {
             timedOut = true
             runCatching {
                 process.descendants().forEach { child -> runCatching { child.destroyForcibly() } }
             }
             process.destroyForcibly()
             output.cancel(true)
-            error("Timed out while loading a desktop secret.")
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
         } finally {
             if (!timedOut) runCatching { process.inputStream.close() }
             executor.shutdownNow()
@@ -249,11 +287,59 @@ internal class SecretToolDesktopSecretStore(
         }
     }
 
+    private fun hasMatchingSecret(reference: DesktopSecretReference): Boolean {
+        val command = buildList {
+            add("secret-tool")
+            add("search")
+            add("--all")
+            add("--unlock")
+            reference.attributes.forEach { (key, value) ->
+                add(key)
+                add(value)
+            }
+        }
+        val process = runCatching { startProcess(command) }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+        }
+        val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "nextcloud-native-secret-search").apply { isDaemon = true }
+        }
+        val output = executor.submit<ByteArray> {
+            process.inputStream.use { it.readNBytes(MAX_SECRET_SEARCH_BYTES + 1) }
+        }
+        var timedOut = false
+        try {
+            if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) throw TimeoutException()
+            val bytes = output.get(timeoutMillis, TimeUnit.MILLISECONDS)
+            if (process.exitValue() != 0 || bytes.size > MAX_SECRET_SEARCH_BYTES) {
+                throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+            }
+            return bytes.isNotEmpty()
+        } catch (failure: TimeoutException) {
+            timedOut = true
+            process.destroyForcibly()
+            output.cancel(true)
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
+        } finally {
+            if (!timedOut) runCatching { process.inputStream.close() }
+            executor.shutdownNow()
+        }
+    }
+
     override fun clear(reference: DesktopSecretReference) {
         val process = runCatching {
             startProcess(secretToolCommand("clear", reference))
-        }.getOrElse { return }
-        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+        }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+        }
+        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
+            process.destroyForcibly()
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+        }
+        if (process.exitValue() != 0) {
+            if (!hasMatchingSecret(reference)) return
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+        }
     }
 
     private fun secretToolCommand(command: String, reference: DesktopSecretReference): List<String> = buildList {
@@ -603,7 +689,8 @@ private const val MACOS_SECURITY_FRAMEWORK = "/System/Library/Frameworks/Securit
 private const val MACOS_CORE_FOUNDATION_FRAMEWORK =
     "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 private const val MAX_SECRET_BYTES = 2_560
+private const val MAX_SECRET_SEARCH_BYTES = 256 * 1024
 private const val MISSING_SECRET_TOOL_MESSAGE =
     "Secure credential storage is unavailable. Install libsecret-tools on Debian or Ubuntu, or libsecret on Fedora or RHEL, then restart Nextcloud Native."
 private const val KEYRING_UNAVAILABLE_MESSAGE =
-    "Could not save the account securely. Make sure your desktop keyring is running and unlocked, then try again."
+    "Secure credential storage is unavailable. Make sure your desktop keyring is running and unlocked, then try again."
