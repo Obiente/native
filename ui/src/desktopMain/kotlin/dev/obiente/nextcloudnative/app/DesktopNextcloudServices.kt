@@ -1013,6 +1013,13 @@ class DesktopNextcloudServices(
         ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
         ?: Files.createTempDirectory("nextcloud-native-test-support-intake").toFile()
     private val secretStore = defaultDesktopSecretStore()
+    private val accountCredentials = DesktopAccountCredentialPersistence(preferences, secretStore, supportDiagnostics::record)
+    private val accountSessionPublication = DesktopAccountSessionPublication(
+        supportDiagnostics::registerPrivateValue,
+    ) { identity ->
+        supportDiagnostics.setActiveAccountIdentity(identity)
+        supportIntake.setActiveAccountIdentity(identity)
+    }
     private val sessionPublicationGuard = DesktopSessionPublicationGuard()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
@@ -3665,70 +3672,76 @@ class DesktopNextcloudServices(
         )
     }
 
-    override fun loadSession(): NextcloudSession? {
-        return sessionPublicationGuard.serialize {
-            val server = preferences.get(KEY_SERVER, null)
-            val login = preferences.get(KEY_LOGIN, null)
-            if (server == null || login == null) {
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-                return@serialize null
-            }
-            val password = secretStore.load(desktopSessionSecretReference(server, login))
-                ?.decodeToString()
-                ?.takeIf(String::isNotBlank)
-            if (password == null) {
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-                return@serialize null
-            }
-            listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
-            NextcloudSession(server, login, password).also { session ->
-                restoreDesktopAccountRegistry(preferences, session, supportDiagnostics::record)
-                val accountIdentity = desktopFileCacheAccountId(session)
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            }
+    override fun loadSession(): NextcloudSession? = sessionPublicationGuard.serialize {
+        val session = accountCredentials.loadActiveSession()
+        if (session == null) {
+            supportDiagnostics.setActiveAccountIdentity(null)
+            supportIntake.setActiveAccountIdentity(null)
+        } else {
+            accountSessionPublication.publish(session)
         }
+        session
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         sessionPublicationGuard.serialize {
-            val encodedRegistry = prepareDesktopAccountRegistry(session)
-            listOf(session.serverUrl, session.loginName, session.appPassword)
-                .forEach(supportDiagnostics::registerPrivateValue)
-            try {
-                secretStore.save(
-                    reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
-                    username = session.loginName,
-                    secret = session.appPassword.encodeToByteArray(),
-                )
-            } catch (failure: Throwable) {
-                recordSupportDiagnostic(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "credentials.save",
-                        outcome = "failed",
-                        code = if (failure is DesktopSecretStoreUnavailableException) {
-                            "DESKTOP_SECRET_STORE_UNAVAILABLE"
-                        } else {
-                            "DESKTOP_SECRET_STORE_FAILED"
-                        },
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-                throw failure
-            }
-            persistDesktopAccountRegistry(preferences, encodedRegistry)
-            preferences.put(KEY_SERVER, session.serverUrl)
-            preferences.put(KEY_LOGIN, session.loginName)
-            val accountIdentity = desktopFileCacheAccountId(session)
-            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-            supportIntake.setActiveAccountIdentity(accountIdentity)
+            accountCredentials.saveSession(session)
+            accountSessionPublication.publish(session)
         }
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
+
+    override fun listAccounts() = sessionPublicationGuard.serialize(accountCredentials::listAccounts)
+
+    override fun activeAccountId() = sessionPublicationGuard.serialize(accountCredentials::activeAccountId)
+
+    override fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
+        sessionPublicationGuard.serialize {
+            accountCredentials.loadSession(accountId)?.also { session ->
+                accountSessionPublication.register(session)
+            }
+        }
+
+    override suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
+        withContext(Dispatchers.IO) {
+            if (activeAccountId() == accountId) return@withContext loadSession(accountId)
+            val hasLiveAccountResources = synchronized(fileRangeSessionLock) {
+                activeFileRangeSessions.isNotEmpty()
+            } || synchronized(virtualFolderHydrationJobs) {
+                virtualFolderHydrationJobs.values.any { job -> job.isActive }
+            } || synchronized(virtualFileProviderLock) {
+                linuxVirtualFileSystem != null ||
+                    windowsCloudFilesProvider != null ||
+                    virtualFileCacheTierMutations.isNotEmpty()
+            }
+            if (hasLiveAccountResources) {
+                recordSupportDiagnostic(desktopAccountSelectionBlockedDiagnostic())
+                return@withContext null
+            }
+            val syncJob = synchronized(this@DesktopNextcloudServices) {
+                backgroundFileSyncJob.also { backgroundFileSyncJob = null }
+            }
+            syncJob?.cancel()
+            syncJob?.join()
+            val selected = sessionPublicationGuard.serialize {
+                accountCredentials.selectAccount(accountId)?.also { session ->
+                    accountSessionPublication.publish(session)
+                }
+            }
+            startDesktopSyncLifecycle()
+            selected
+        }
+
+    override suspend fun removeAccount(accountId: NextcloudAccountId): Boolean {
+        if (activeAccountId() == accountId) {
+            clearSession()
+            return true
+        }
+        return withContext(Dispatchers.IO) {
+            sessionPublicationGuard.serialize { accountCredentials.removeAccount(accountId) }
+        }
+    }
+
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
         val userHome = File(System.getProperty("user.home"))
         val rangeSessions = synchronized(fileRangeSessionLock) {
@@ -3737,7 +3750,13 @@ class DesktopNextcloudServices(
         }
         var cleared = false
         try {
-            val accountId = desktopStoredSessionAccountId(preferences)
+            val activeAccountId = activeAccountId()
+            val activeSession = activeAccountId?.let(::loadSession)
+            val activeRecord = activeAccountId?.let { id ->
+                listAccounts().firstOrNull { account -> account.id == id }
+            }
+            val accountId = activeSession?.let(::desktopFileCacheAccountId)
+                ?: activeRecord?.let(::desktopFileCacheAccountId)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3841,27 +3860,10 @@ class DesktopNextcloudServices(
             mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
                 phase = DesktopFileSyncTrayPhase.Idle,
             )
-            val server = preferences.get(KEY_SERVER, null)
-            val login = preferences.get(KEY_LOGIN, null)
-            runCatching {
-                if (server != null && login != null) secretStore.clear(desktopSessionSecretReference(server, login))
-            }.onFailure { failure ->
-                supportDiagnostics.record(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "credentials.clear",
-                        outcome = "failed",
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-                if (failure is DesktopSecretDeletionRecoveryUnavailableException ||
-                    failure is DesktopSecretLegacyCleanupUnavailableException) throw failure
-            }
             sessionPublicationGuard.serialize {
-                preferences.remove(KEY_SERVER)
-                preferences.remove(KEY_LOGIN)
-                clearDesktopAccountRegistry(preferences)
+                if (activeAccountId != null) {
+                    check(accountCredentials.removeAccount(activeAccountId))
+                }
                 supportDiagnostics.setActiveAccountIdentity(null)
                 supportIntake.setActiveAccountIdentity(null)
             }
@@ -5942,8 +5944,6 @@ class DesktopNextcloudServices(
         const val APP_ID = "dev.obiente.nextcloudnative"
         const val KEY_THEME = "theme"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
-        const val KEY_SERVER = "server"
-        const val KEY_LOGIN = "login"
         const val KEY_FILE_SYNC_PAUSED = "file_sync_paused"
         const val KEY_START_ON_LOGIN = "start_on_login"
         const val KEY_KEEP_RUNNING_IN_BACKGROUND = "keep_running_in_background"
