@@ -143,7 +143,9 @@ internal fun DesktopFileSyncRemoteTree.reconcilePublishedReplacement(
     val expectedBackupEtag = ownedReplacementBackupEtags[uploadId] ?: return null
     val destination = resolvePhysical(relativePath, shouldContinue) ?: return null
     if (destination.isDirectory) return null
-    if (expectedSizeBytes == null || expectedContentHash == null) return false
+    // Older checkpoints predate durable size/hash evidence. Let the caller fall back to the
+    // recorded stage ETag so it can restore the protected directory without trusting the file.
+    if (expectedSizeBytes == null || expectedContentHash == null) return null
     if (destination.entry.size != expectedSizeBytes) {
         return discardReplacementBackup(relativePath, uploadId, assembledStageEtag = null, shouldContinue)
     }

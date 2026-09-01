@@ -157,6 +157,46 @@ class DesktopFileSyncReplacementPublicationTest {
     }
 
     @Test
+    fun `legacy checkpoint restores its directory backup using the recorded stage etag`() {
+        val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            when (chain.request().method) {
+                "PROPFIND" -> response(chain.request(), 207, publishedListing(uploadId, sizeBytes = 5))
+                "DELETE" -> response(chain.request(), if (".upload" in chain.request().url.encodedPath) 404 else 204)
+                "MOVE" -> response(chain.request(), 201)
+                else -> error("Legacy recovery must not ${chain.request().method} either generation")
+            }
+        }.build()
+        val tree = DesktopFileSyncRemoteTree(
+            NextcloudSession("https://cloud.example.test", "alice", "secret"),
+            "alice",
+            "Vault",
+            client,
+            ownedUploadIds = setOf(uploadId),
+            ownedUploadPaths = mapOf(uploadId to "archive.bin"),
+            ownedReplacementBackupEtags = mapOf(uploadId to "directory-etag"),
+        )
+
+        val cleaned = tree.resumableUploadRemote(shouldContinue = { true }).discardOwnedUpload(
+            uploadId = uploadId,
+            relativePath = "archive.bin",
+            assembledStageEtag = "published-etag",
+            expectedStageSizeBytes = null,
+            expectedStageContentHash = null,
+            publicationInFlight = true,
+        )
+
+        assertTrue(cleaned)
+        assertTrue(requests.any { it.method == "DELETE" && it.url.encodedPath.endsWith("/archive.bin") })
+        val restore = requests.single { it.method == "MOVE" }
+        assertTrue(restore.url.encodedPath.endsWith(".nextcloud-native-backup-$uploadId"))
+        assertTrue(restore.header("Destination").orEmpty().endsWith("/archive.bin"))
+        assertTrue(requests.none { it.method == "GET" })
+    }
+
+    @Test
     fun `recovery scan traverses an owned backup at its physical path`() {
         val uploadId = "01234567-89ab-cdef-0123-456789abcdef"
         val requestedPaths = mutableListOf<String>()
