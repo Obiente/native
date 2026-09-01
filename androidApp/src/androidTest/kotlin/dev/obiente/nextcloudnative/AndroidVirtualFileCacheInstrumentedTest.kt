@@ -129,6 +129,35 @@ class AndroidVirtualFileCacheInstrumentedTest {
     }
 
     @Test
+    fun processRestoredWritebackBlocksDestructiveMutationUntilRecovery() {
+        val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
+        val stage = File(recovery, "writeback-restored.stage").apply { writeText("local edit") }
+        File(recovery, stage.name + ".json").writeText(
+            JSONObject()
+                .put("version", 1)
+                .put("account", NextcloudDocumentIds.accountKey(session))
+                .put("path", "Projects/Active/notes.txt")
+                .put("etag", "\"v1\"")
+                .put("displayName", "notes.txt")
+                .put("stage", stage.name)
+                .put("startedAt", 10L)
+                .put("ready", true)
+                .toString(),
+        )
+
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            withNoBlockingAndroidDocumentWriteback(context, session, "Projects/Active") {
+                error("The blocked mutation must not run.")
+            }
+        }
+        var unrelatedMutationRan = false
+        withNoBlockingAndroidDocumentWriteback(context, session, "Projects/Archive") {
+            unrelatedMutationRan = true
+        }
+        org.junit.Assert.assertTrue(unrelatedMutationRan)
+    }
+
+    @Test
     fun providerStartupDiscardsIncompleteWritebacksAndKeepsReadyRecovery() {
         val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
         fun writeTransaction(name: String, ready: Boolean) {

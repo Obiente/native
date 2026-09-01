@@ -56,6 +56,31 @@ class AndroidVirtualFileProxyCallbackTest {
     }
 
     @Test
+    fun `process restored writeback blocks destructive mutations until recovery`() {
+        assertTrue(
+            androidDocumentWritebacksBlockMutation(
+                emptySequence(),
+                sequenceOf("Projects/Active/notes.txt"),
+                "Projects/Active",
+            ),
+        )
+        assertTrue(
+            androidDocumentWritebacksBlockMutation(
+                emptySequence(),
+                sequenceOf("Projects/Active/notes.txt"),
+                "Projects/Active/notes.txt",
+            ),
+        )
+        assertFalse(
+            androidDocumentWritebacksBlockMutation(
+                emptySequence(),
+                sequenceOf("Projects/Active/notes.txt"),
+                "Projects/Archive",
+            ),
+        )
+    }
+
+    @Test
     fun `writable proxy capacity preserves the free space reserve`() {
         assertTrue(androidDocumentWriteFitsCapacity(40L, 50L, 110L, reserveBytes = 100L))
         assertFalse(androidDocumentWriteFitsCapacity(40L, 51L, 110L, reserveBytes = 100L))
