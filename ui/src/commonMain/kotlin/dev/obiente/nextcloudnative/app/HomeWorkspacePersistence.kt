@@ -16,10 +16,18 @@ internal class HomeWorkspaceLayoutRepository(
     private val encodeSnapshot: (HomeWorkspaceLayout) -> String =
         ::encodeHomeWorkspaceLayoutSnapshot,
 ) {
-    fun load(scope: HomeWorkspaceScope): HomeWorkspaceLayout {
+    fun load(scope: HomeWorkspaceScope, legacyAccountScopeDigest: String? = null): HomeWorkspaceLayout {
         val encoded = runCatching { storage.read(scope.persistenceKey) }.getOrNull()
+        if (encoded != null) return decodeHomeWorkspaceLayoutSnapshot(scope, encoded)
+        val legacyScope = legacyAccountScopeDigest?.let { digest ->
+            HomeWorkspaceScope(digest, scope.formFactor)
+        } ?: return defaultHomeWorkspaceLayout(scope)
+        val legacyEncoded = runCatching { storage.read(legacyScope.persistenceKey) }.getOrNull()
             ?: return defaultHomeWorkspaceLayout(scope)
-        return decodeHomeWorkspaceLayoutSnapshot(scope, encoded)
+        val legacyLayout = decodeHomeWorkspaceLayoutSnapshot(legacyScope, legacyEncoded)
+        val migrated = HomeWorkspaceLayout(scope, legacyLayout.sections)
+        save(migrated)
+        return migrated
     }
 
     /**

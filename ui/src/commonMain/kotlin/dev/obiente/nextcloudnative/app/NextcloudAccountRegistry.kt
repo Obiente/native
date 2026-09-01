@@ -3,6 +3,9 @@ package dev.obiente.nextcloudnative.app
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /** Credential-free metadata for one locally known account. */
 data class NextcloudAccountRecord(
@@ -72,6 +75,7 @@ enum class NextcloudAccountRegistrySource {
 
 enum class NextcloudAccountRegistryRecoveryReason(val diagnosticCode: String) {
     MalformedRegistry("ACCOUNT_REGISTRY_MALFORMED"),
+    UnsupportedRegistryVersion("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"),
     ActiveSessionMismatch("ACCOUNT_REGISTRY_ACTIVE_SESSION_MISMATCH"),
 }
 
@@ -81,7 +85,8 @@ data class RestoredNextcloudAccountRegistry(
     val recoveryReason: NextcloudAccountRegistryRecoveryReason? = null,
 ) {
     val needsPersistence: Boolean
-        get() = source == NextcloudAccountRegistrySource.LegacySession
+        get() = source == NextcloudAccountRegistrySource.LegacySession &&
+            recoveryReason != NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion
 }
 
 fun NextcloudSession.accountRecord(): NextcloudAccountRecord = NextcloudAccountRecord(
@@ -97,7 +102,8 @@ fun restoreNextcloudAccountRegistry(
     encoded: String?,
     legacySession: NextcloudSession?,
 ): RestoredNextcloudAccountRegistry {
-    val persisted = encoded?.let(::decodeNextcloudAccountRegistry)
+    val decoded = encoded?.let(::decodeNextcloudAccountRegistryResult)
+    val persisted = (decoded as? NextcloudAccountRegistryDecodeResult.Valid)?.registry
     if (persisted != null) {
         val legacyAccount = legacySession?.accountRecord()
         if (legacyAccount == null) {
@@ -118,6 +124,17 @@ fun restoreNextcloudAccountRegistry(
             registry = persisted.upsertAndSelect(legacyAccount),
             source = NextcloudAccountRegistrySource.LegacySession,
             recoveryReason = NextcloudAccountRegistryRecoveryReason.ActiveSessionMismatch,
+        )
+    }
+    if (decoded == NextcloudAccountRegistryDecodeResult.UnsupportedVersion) {
+        return RestoredNextcloudAccountRegistry(
+            registry = legacySession?.let(::singleAccountRegistry) ?: NextcloudAccountRegistry.Empty,
+            source = if (legacySession == null) {
+                NextcloudAccountRegistrySource.Empty
+            } else {
+                NextcloudAccountRegistrySource.LegacySession
+            },
+            recoveryReason = NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion,
         )
     }
     if (legacySession != null) {
@@ -153,11 +170,20 @@ fun encodeNextcloudAccountRegistry(registry: NextcloudAccountRegistry): String =
         }
     }
 
-fun decodeNextcloudAccountRegistry(encoded: String): NextcloudAccountRegistry? {
-    if (encoded.encodeToByteArray().size > MAX_ACCOUNT_REGISTRY_BYTES) return null
+fun decodeNextcloudAccountRegistry(encoded: String): NextcloudAccountRegistry? =
+    (decodeNextcloudAccountRegistryResult(encoded) as? NextcloudAccountRegistryDecodeResult.Valid)?.registry
+
+private fun decodeNextcloudAccountRegistryResult(encoded: String): NextcloudAccountRegistryDecodeResult {
+    if (encoded.encodeToByteArray().size > MAX_ACCOUNT_REGISTRY_BYTES) {
+        return NextcloudAccountRegistryDecodeResult.Malformed
+    }
+    val version = runCatching {
+        accountRegistryJson.parseToJsonElement(encoded).jsonObject["version"]?.jsonPrimitive?.intOrNull
+    }.getOrNull() ?: return NextcloudAccountRegistryDecodeResult.Malformed
+    if (version > ACCOUNT_REGISTRY_VERSION) return NextcloudAccountRegistryDecodeResult.UnsupportedVersion
+    if (version != ACCOUNT_REGISTRY_VERSION) return NextcloudAccountRegistryDecodeResult.Malformed
     return runCatching {
         val persisted = accountRegistryJson.decodeFromString<PersistedNextcloudAccountRegistry>(encoded)
-        require(persisted.version == ACCOUNT_REGISTRY_VERSION)
         NextcloudAccountRegistry(
             accounts = persisted.accounts.map { account ->
                 NextcloudAccountRecord(
@@ -168,7 +194,18 @@ fun decodeNextcloudAccountRegistry(encoded: String): NextcloudAccountRegistry? {
             },
             activeAccountId = persisted.activeAccountId?.let(::NextcloudAccountId),
         )
-    }.getOrNull()
+    }.fold(
+        onSuccess = NextcloudAccountRegistryDecodeResult::Valid,
+        onFailure = { NextcloudAccountRegistryDecodeResult.Malformed },
+    )
+}
+
+private sealed interface NextcloudAccountRegistryDecodeResult {
+    data class Valid(val registry: NextcloudAccountRegistry) : NextcloudAccountRegistryDecodeResult
+
+    data object Malformed : NextcloudAccountRegistryDecodeResult
+
+    data object UnsupportedVersion : NextcloudAccountRegistryDecodeResult
 }
 
 @Serializable

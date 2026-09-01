@@ -21,8 +21,8 @@ internal fun restoreDesktopAccountRegistry(
     }
     if (restored.needsPersistence) {
         runCatching {
-            preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodeNextcloudAccountRegistry(restored.registry))
-        }.onFailure {
+            persistDesktopAccountRegistry(preferences, prepareDesktopAccountRegistry(restored.registry))
+        }.onFailure { failure ->
             recordDiagnostic(
                 SupportDiagnosticEventDraft(
                     severity = SupportDiagnosticSeverity.Warning,
@@ -30,6 +30,7 @@ internal fun restoreDesktopAccountRegistry(
                     operation = "account-registry.migrate",
                     outcome = "failed",
                     code = "ACCOUNT_REGISTRY_MIGRATION_FAILED",
+                    exception = failure.toNonSecretSupportDiagnosticExceptionDraft(),
                 ),
             )
         }
@@ -37,10 +38,22 @@ internal fun restoreDesktopAccountRegistry(
 }
 
 internal fun persistDesktopAccountRegistry(preferences: Preferences, session: NextcloudSession) {
-    preferences.put(
-        DESKTOP_ACCOUNT_REGISTRY_KEY,
-        encodeNextcloudAccountRegistry(singleAccountRegistry(session)),
-    )
+    persistDesktopAccountRegistry(preferences, prepareDesktopAccountRegistry(singleAccountRegistry(session)))
+}
+
+internal fun prepareDesktopAccountRegistry(session: NextcloudSession): String =
+    prepareDesktopAccountRegistry(singleAccountRegistry(session))
+
+internal fun prepareDesktopAccountRegistry(registry: NextcloudAccountRegistry): String =
+    encodeNextcloudAccountRegistry(registry).also { encoded ->
+        require(encoded.length <= Preferences.MAX_VALUE_LENGTH) {
+            "The account registry exceeds the desktop preference value limit."
+        }
+    }
+
+internal fun persistDesktopAccountRegistry(preferences: Preferences, encodedRegistry: String) {
+    require(encodedRegistry.length <= Preferences.MAX_VALUE_LENGTH)
+    preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodedRegistry)
 }
 
 internal fun clearDesktopAccountRegistry(preferences: Preferences) {

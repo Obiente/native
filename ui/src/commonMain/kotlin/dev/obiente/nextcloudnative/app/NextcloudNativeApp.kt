@@ -1258,9 +1258,10 @@ private fun AuthenticatedApp(
     var lastOpenedAppId by remember(session) { mutableStateOf(services.loadLastOpenedAppId()) }
     val appPinsStorage = rememberHomeWorkspaceLayoutStorage()
     val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
-    val appPinsAccountScope = remember(session) { previewCacheDigest(session) }
-    val loadedAppPins = remember(appPinsAccountScope) {
-        appPinsRepository.loadWithProvenance(appPinsAccountScope)
+    val appPinsPersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
+    val appPinsAccountScope = appPinsPersistenceScopes.current
+    val loadedAppPins = remember(appPinsPersistenceScopes) {
+        appPinsRepository.loadWithProvenance(appPinsAccountScope, appPinsPersistenceScopes.legacy)
     }
     var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
     var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
