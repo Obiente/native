@@ -6,15 +6,28 @@ import kotlinx.coroutines.sync.withLock
 internal class DesktopAccountOperationGuard {
     private val accountMutationMutex = Mutex()
     private val syncRunMutex = Mutex()
+    private val resourceActivationMonitor = Any()
+    private var accountMutationActive = false
 
     suspend fun <Result> serialize(action: suspend () -> Result): Result =
-        accountMutationMutex.withLock { action() }
+        accountMutationMutex.withLock {
+            synchronized(resourceActivationMonitor) { accountMutationActive = true }
+            try {
+                action()
+            } finally {
+                synchronized(resourceActivationMonitor) { accountMutationActive = false }
+            }
+        }
 
     suspend fun <Result> serializeWhenSyncIdle(action: suspend () -> Result): Result = serialize {
         withSyncRunLock(action)
     }
 
     suspend fun <Result> serializeResourceActivation(action: suspend () -> Result): Result = serialize(action)
+
+    fun tryActivateResource(action: () -> Boolean): Boolean = synchronized(resourceActivationMonitor) {
+        !accountMutationActive && action()
+    }
 
     suspend fun <Result> withSyncRunLock(action: suspend () -> Result): Result = syncRunMutex.withLock { action() }
 }

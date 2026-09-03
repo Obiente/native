@@ -68,13 +68,24 @@ internal data class RestoredAndroidAccountCredentialState(
     val state: AndroidAccountCredentialState?,
     val needsPersistence: Boolean = false,
     val diagnosticCode: String? = null,
+    val unsupportedVersion: Int? = null,
 )
 
 internal fun restoreAndroidAccountCredentialState(
     encoded: String,
     persistMigrated: (String) -> Unit,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
-): AndroidAccountCredentialState? {
+): AndroidAccountCredentialState? = restoreAndroidAccountCredentialStore(
+    encoded = encoded,
+    persistMigrated = persistMigrated,
+    recordDiagnostic = recordDiagnostic,
+).state
+
+internal fun restoreAndroidAccountCredentialStore(
+    encoded: String,
+    persistMigrated: (String) -> Unit,
+    recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
+): RestoredAndroidAccountCredentialState {
     val restored = decodeAndroidAccountCredentialState(encoded)
     restored.diagnosticCode?.let { code -> recordAccountCredentialDiagnostic(code, recordDiagnostic) }
     if (restored.needsPersistence && restored.state != null) {
@@ -87,7 +98,7 @@ internal fun restoreAndroidAccountCredentialState(
                 )
             }
     }
-    return restored.state
+    return restored
 }
 
 internal fun decodeAndroidAccountCredentialState(encoded: String): RestoredAndroidAccountCredentialState {
@@ -99,7 +110,15 @@ internal fun decodeAndroidAccountCredentialState(encoded: String): RestoredAndro
         if (!json.has(KEY_VERSION)) {
             restoreLegacyAndroidAccountCredentialState(json)
         } else {
-            require(json.getInt(KEY_VERSION) == ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION)
+            val version = json.getInt(KEY_VERSION)
+            if (version > ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION) {
+                return RestoredAndroidAccountCredentialState(
+                    state = null,
+                    diagnosticCode = "ACCOUNT_CREDENTIAL_STORE_VERSION_UNSUPPORTED",
+                    unsupportedVersion = version,
+                )
+            }
+            require(version == ANDROID_ACCOUNT_CREDENTIAL_STORE_VERSION)
             val registry = requireNotNull(decodeNextcloudAccountRegistry(json.getString(KEY_ACCOUNT_REGISTRY)))
             val encodedSessions = json.getJSONArray(KEY_CREDENTIALS)
             require(encodedSessions.length() <= MAX_ANDROID_ACCOUNT_CREDENTIALS)

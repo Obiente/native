@@ -8,9 +8,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class DesktopAccountOperationGuardTest {
     @Test
@@ -60,13 +64,71 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun synchronousRangeRegistrationCannotEnterDuringAccountMutation() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val mutationEntered = CompletableDeferred<Unit>()
+        val releaseMutation = CompletableDeferred<Unit>()
+        val mutation = async {
+            guard.serialize {
+                mutationEntered.complete(Unit)
+                releaseMutation.await()
+            }
+        }
+        mutationEntered.await()
+
+        assertFalse(guard.tryActivateResource { true })
+
+        releaseMutation.complete(Unit)
+        mutation.await()
+        assertTrue(guard.tryActivateResource { true })
+    }
+
+    @Test
+    fun accountMutationObservesAResourceRegisteredJustBeforeItStarts() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val registrationEntered = CountDownLatch(1)
+        val releaseRegistration = CountDownLatch(1)
+        val mutationEntered = CompletableDeferred<Unit>()
+        val registration = thread {
+            assertTrue(
+                guard.tryActivateResource {
+                    registrationEntered.countDown()
+                    check(releaseRegistration.await(5, TimeUnit.SECONDS))
+                    true
+                },
+            )
+        }
+        check(registrationEntered.await(5, TimeUnit.SECONDS))
+
+        val mutation = async(Dispatchers.Default) {
+            guard.serialize { mutationEntered.complete(Unit) }
+        }
+        yield()
+        assertFalse(mutationEntered.isCompleted)
+
+        releaseRegistration.countDown()
+        registration.join()
+        mutation.await()
+        assertTrue(mutationEntered.isCompleted)
+    }
+
+    @Test
     fun resourceActivationRejectsAStaleAccountAfterWaitingForTheGuard() {
         val first = NextcloudSession("https://first.example.test", "alice", "one")
         val second = NextcloudSession("https://second.example.test", "bob", "two")
+        val guard = DesktopAccountOperationGuard()
+        var hydrationRegistered = false
 
         assertTrue(desktopResourceActivationMatchesActiveAccount(first.accountId, first.accountId))
         assertFalse(desktopResourceActivationMatchesActiveAccount(second.accountId, first.accountId))
         assertFalse(desktopResourceActivationMatchesActiveAccount(null, first.accountId))
+        assertFalse(
+            guard.tryActivateResource {
+                desktopResourceActivationMatchesActiveAccount(second.accountId, first.accountId) &&
+                    true.also { hydrationRegistered = true }
+            },
+        )
+        assertFalse(hydrationRegistered)
     }
 
     @Test

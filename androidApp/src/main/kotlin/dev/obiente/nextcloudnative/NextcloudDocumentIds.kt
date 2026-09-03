@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.security.MessageDigest
 import java.util.Base64
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal data class NextcloudDocumentReference(
     val accountKey: String,
@@ -18,14 +19,18 @@ internal object NextcloudDocumentIds {
     private val decoder = Base64.getUrlDecoder()
 
     fun accountKey(session: NextcloudSession): String {
-        return accountDigest(session)
+        return accountKey(session.serverUrl, session.loginName)
+    }
+
+    fun accountKey(serverUrl: String, loginName: String): String {
+        return accountDigest(serverUrl, loginName)
             .take(16)
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
     /** Full digest for private caches which require a canonical SHA-256 directory key. */
     fun cacheAccountId(session: NextcloudSession): String =
-        accountDigest(session)
+        accountDigest(session.serverUrl, session.loginName)
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     fun rootId(session: NextcloudSession): String = documentId(session, "")
@@ -56,8 +61,13 @@ internal object NextcloudDocumentIds {
             require(reference.accountKey == accountKey(session)) { "Document belongs to another account." }
         }
 
-    private fun accountDigest(session: NextcloudSession): ByteArray {
-        val identity = session.serverUrl.trimEnd('/') + "\n" + session.loginName
+    private fun accountDigest(serverUrl: String, loginName: String): ByteArray {
+        val url = serverUrl.trim().toHttpUrlOrNull()
+        requireNotNull(url) { "The account server address is invalid." }
+        require(url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null) {
+            "The account server address contains unsupported URL components."
+        }
+        val identity = url.toString().trimEnd('/') + "\n" + loginName
         return MessageDigest.getInstance("SHA-256").digest(identity.encodeToByteArray())
     }
 

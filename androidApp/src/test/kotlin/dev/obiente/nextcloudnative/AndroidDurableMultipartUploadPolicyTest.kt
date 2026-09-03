@@ -17,6 +17,19 @@ import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
     @Test
+    fun `removing an account deletes only its queued upload recovery rows`() {
+        val storage = FakeDurableUploadEncryptedStorage()
+        val store = AndroidDurableMultipartUploadStore(storage, FakeDurableUploadCipher())
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        store.add(first)
+        store.add(second)
+
+        assertEquals(listOf(first), store.removeForAccount(ACCOUNT_A))
+        assertEquals(listOf(second), store.list())
+    }
+
+    @Test
     fun `encrypted queue read and decryption failures preserve recoverable jobs`() {
         listOf("read", "decrypt").forEach { failureMode ->
             val storage = FakeDurableUploadEncryptedStorage()

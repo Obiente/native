@@ -89,6 +89,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCenterSnapshot
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionChoice
 import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
+import dev.obiente.nextcloudnative.app.FileSyncRejectionScope
 import dev.obiente.nextcloudnative.app.IncomingShareRecoveryPage
 import dev.obiente.nextcloudnative.app.IncomingShareUploadPresentation
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
@@ -469,6 +470,7 @@ internal class AndroidNextcloudServices(
     )
     private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
+    private val durableUploadAccountCleanup = AndroidDurableUploadAccountCleanup(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
     private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
     private val supportBundleExporter = AndroidSupportBundleExporter(
@@ -494,6 +496,7 @@ internal class AndroidNextcloudServices(
         clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
         resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
+        removeQueuedUploads = durableUploadAccountCleanup::removeForAccount,
     )
 
     init {
@@ -1711,9 +1714,19 @@ internal class AndroidNextcloudServices(
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
-        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
-            fileSyncEngine.runPair(session, userId, pairId)
-        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-run", fields, result) }
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            val current = loadSession()
+            if (current == null || !androidAccountOperationSessionIsCurrent(accountIdentity, current)) {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before folder sync could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            } else {
+                diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-run", fields) {
+                    fileSyncEngine.runPair(current, userId, pairId)
+                }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-run", fields, result) }
+            }
+        }
     }
 
     override suspend fun resolveFileSyncConflict(
@@ -1733,9 +1746,19 @@ internal class AndroidNextcloudServices(
             ),
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
-        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
-            fileSyncEngine.resolveConflictAndRun(session, userId, pairId, workId, choice)
-        }.also { result -> recordFileSyncResult(accountIdentity, "sync.conflict-resolve", fields, result) }
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            val current = loadSession()
+            if (current == null || !androidAccountOperationSessionIsCurrent(accountIdentity, current)) {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before conflict resolution could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            } else {
+                diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.conflict-resolve", fields) {
+                    fileSyncEngine.resolveConflictAndRun(current, userId, pairId, workId, choice)
+                }.also { result -> recordFileSyncResult(accountIdentity, "sync.conflict-resolve", fields, result) }
+            }
+        }
     }
 
     override suspend fun resolveFileSyncConflicts(
@@ -1749,15 +1772,25 @@ internal class AndroidNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
             SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
         )
-        diagnoseSupportFailure(
-            accountIdentity,
-            SupportDiagnosticComponent.Sync,
-            "sync.conflict-resolve-batch",
-            fields,
-        ) {
-            fileSyncEngine.resolveConflictsAndRun(session, userId, pairId, resolutions)
-        }.also { result ->
-            recordFileSyncResult(accountIdentity, "sync.conflict-resolve-batch", fields, result)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            val current = loadSession()
+            if (current == null || !androidAccountOperationSessionIsCurrent(accountIdentity, current)) {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before conflict resolution could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            } else {
+                diagnoseSupportFailure(
+                    accountIdentity,
+                    SupportDiagnosticComponent.Sync,
+                    "sync.conflict-resolve-batch",
+                    fields,
+                ) {
+                    fileSyncEngine.resolveConflictsAndRun(current, userId, pairId, resolutions)
+                }.also { result ->
+                    recordFileSyncResult(accountIdentity, "sync.conflict-resolve-batch", fields, result)
+                }
+            }
         }
     }
 
