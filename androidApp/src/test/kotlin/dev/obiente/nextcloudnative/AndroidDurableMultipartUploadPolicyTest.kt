@@ -4,6 +4,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
@@ -266,6 +267,32 @@ class AndroidDurableMultipartUploadPolicyTest {
         assertEquals(DurableUploadState.OutcomeUnknown, durableUploadStateForHttpResponse(425))
         assertEquals(DurableUploadState.OutcomeUnknown, durableUploadStateForHttpResponse(429))
         assertEquals(DurableUploadState.OutcomeUnknown, durableUploadStateForHttpResponse(500))
+    }
+
+    @Test
+    fun `retained background account retries instead of becoming unavailable`() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.RetryRetainedAccount,
+            durableUploadAccountMismatchOutcome(accountId, retainedSession),
+        )
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.AccountUnavailable,
+            durableUploadAccountMismatchOutcome(accountId, null),
+        )
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.AccountUnavailable,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                retainedSession.copy(loginName = "another-account"),
+            ),
+        )
     }
 
     private fun fixtureJob(
