@@ -56,6 +56,42 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun failedRegistryFlushRemovesANewlyCreatedCredentialSlot() = withStore { preferences, secrets ->
+        val session = firstSession()
+        val persistence = persistence(preferences, secrets) {
+            error("synthetic registry flush failure")
+        }
+
+        assertFailsWith<IllegalStateException> { persistence.saveSession(session) }
+
+        assertNull(preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
+        assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+    }
+
+    @Test
+    fun failedRegistryFlushRestoresThePreviousCredentialDuringReauthentication() =
+        withStore { preferences, secrets ->
+            val original = firstSession()
+            var failFlush = false
+            val persistence = persistence(preferences, secrets) {
+                if (failFlush) error("synthetic registry flush failure")
+                preferences.flush()
+            }
+            persistence.saveSession(original)
+            failFlush = true
+
+            assertFailsWith<IllegalStateException> {
+                persistence.saveSession(original.copy(appPassword = "replacement-password"))
+            }
+
+            assertEquals(
+                original.appPassword,
+                secrets.load(desktopAccountSecretReference(original.accountId))?.decodeToString(),
+            )
+            assertEquals(original, persistence(preferences, secrets).loadActiveSession())
+        }
+
+    @Test
     fun unsupportedFutureRegistryUsesLegacyCredentialWithoutOverwritingIt() = withStore { preferences, secrets ->
         val session = firstSession()
         val futureRegistry = """{"version":2,"futureAccounts":[{"id":"future"}]}"""

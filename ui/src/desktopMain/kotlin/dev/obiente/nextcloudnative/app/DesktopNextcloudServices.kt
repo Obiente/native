@@ -1515,14 +1515,20 @@ class DesktopNextcloudServices(
                     }
                 }
         }
-        val accepted = synchronized(virtualFileProviderLock) {
-            synchronized(virtualFolderHydrationJobs) {
-                if (
-                    sessionClearing ||
-                    accountId in virtualFileCacheTierMutations ||
-                    virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
-                ) false
-                else true.also { virtualFolderHydrationJobs[jobKey] = job }
+        val accepted = accountOperationGuard.tryActivateResource {
+            if (!desktopResourceActivationMatchesActiveAccount(activeAccountId(), session.accountId)) {
+                false
+            } else {
+                synchronized(virtualFileProviderLock) {
+                    synchronized(virtualFolderHydrationJobs) {
+                        if (
+                            sessionClearing ||
+                            accountId in virtualFileCacheTierMutations ||
+                            virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
+                        ) false
+                        else true.also { virtualFolderHydrationJobs[jobKey] = job }
+                    }
+                }
             }
         }
         if (accepted) job.start() else job.cancel()
@@ -4540,8 +4546,14 @@ class DesktopNextcloudServices(
                 }
             },
         )
-        val registered = synchronized(fileRangeSessionLock) {
-            if (sessionClearing) false else activeFileRangeSessions.add(rangeSession)
+        val registered = accountOperationGuard.tryActivateResource {
+            if (!desktopResourceActivationMatchesActiveAccount(activeAccountId(), session.accountId)) {
+                false
+            } else {
+                synchronized(fileRangeSessionLock) {
+                    if (sessionClearing) false else activeFileRangeSessions.add(rangeSession)
+                }
+            }
         }
         if (!registered) {
             rangeSession.close()
