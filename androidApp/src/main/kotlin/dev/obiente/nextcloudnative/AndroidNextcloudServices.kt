@@ -493,6 +493,7 @@ internal class AndroidNextcloudServices(
         },
         clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
+        resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
     )
 
     init {

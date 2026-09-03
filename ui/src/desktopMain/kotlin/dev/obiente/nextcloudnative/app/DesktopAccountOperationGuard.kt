@@ -49,3 +49,12 @@ internal inline fun <Session> reopenDesktopSessionAfterSelection(
     selected: Session?,
     reopen: () -> Unit,
 ): Session? = selected.also { if (it != null) reopen() }
+
+internal suspend inline fun <Session> restartDesktopSyncAfterSelection(
+    select: () -> Session?,
+    restart: () -> Unit,
+): Session? = try {
+    select()
+} finally {
+    restart()
+}

@@ -270,7 +270,7 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `retained background account retries instead of becoming unavailable`() {
+    fun `retained background account is deferred instead of becoming unavailable`() {
         val retainedSession = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",
             loginName = "alice",
@@ -279,7 +279,7 @@ class AndroidDurableMultipartUploadPolicyTest {
         val accountId = NextcloudDocumentIds.accountKey(retainedSession)
 
         assertEquals(
-            DurableUploadAccountMismatchOutcome.RetryRetainedAccount,
+            DurableUploadAccountMismatchOutcome.DeferRetainedAccount,
             durableUploadAccountMismatchOutcome(accountId, retainedSession),
         )
         assertEquals(
@@ -292,6 +292,23 @@ class AndroidDurableMultipartUploadPolicyTest {
                 accountId,
                 retainedSession.copy(loginName = "another-account"),
             ),
+        )
+    }
+
+    @Test
+    fun `account activation resumes only its queued uploads`() {
+        val queuedForA = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val queuedForB = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val completedForA = fixtureJob(
+            index = 3,
+            account = ACCOUNT_A,
+            cardId = 44,
+            state = DurableUploadState.Completed,
+        )
+
+        assertEquals(
+            listOf(queuedForA),
+            queuedDurableUploadsForAccount(listOf(queuedForA, queuedForB, completedForA), ACCOUNT_A),
         )
     }
 
