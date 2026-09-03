@@ -3889,10 +3889,10 @@ class DesktopNextcloudServices(
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
+        discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
         deckCardDrafts.clear(session, key)
     }
-
     override fun openExternalUrl(url: String) {
         serviceScope.launch {
             runCatching { openExternalUrlNow(url) }

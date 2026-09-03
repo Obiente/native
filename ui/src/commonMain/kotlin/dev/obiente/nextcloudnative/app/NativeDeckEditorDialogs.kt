@@ -188,6 +188,7 @@ fun DeckUiCardEditorDialog(
     card: DeckCard?,
     initialDraft: DeckUiCardDraft? = null,
     recoveredDraft: Boolean = false,
+    draftRecoveryFailed: Boolean = false,
     busy: Boolean,
     errorMessage: String?,
     quickDueDates: List<DeckUiDueDateOption>,
@@ -223,7 +224,7 @@ fun DeckUiCardEditorDialog(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(NextcloudSpacing.Large),
             verticalArrangement = Arrangement.spacedBy(NextcloudSpacing.Large),
         ) {
-            if (recoveredDraft) {
+            if (recoveredDraft || draftRecoveryFailed) {
                 item {
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
@@ -244,11 +245,19 @@ fun DeckUiCardEditorDialog(
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
                                 Text(
-                                    text = "Unsaved changes restored",
+                                    text = if (draftRecoveryFailed) {
+                                        "Saved draft could not be restored"
+                                    } else {
+                                        "Unsaved changes restored"
+                                    },
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                                 Text(
-                                    text = "This draft was recovered from this device.",
+                                    text = if (draftRecoveryFailed) {
+                                        "The saved copy remains on this device until you discard it."
+                                    } else {
+                                        "This draft was recovered from this device."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }

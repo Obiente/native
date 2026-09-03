@@ -703,6 +703,7 @@ interface NextcloudPlatformServices {
     suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
+        discardUnreadable: Boolean = false,
     ) = Unit
 
     fun openExternalUrl(url: String)

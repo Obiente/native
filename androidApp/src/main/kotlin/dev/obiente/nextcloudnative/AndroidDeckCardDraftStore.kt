@@ -37,9 +37,11 @@ internal class AndroidDeckCardDraftStore(
     @Synchronized
     fun save(session: NextcloudSession, persisted: PersistedDeckCardDraft) {
         val storedKey = storageKey(session, persisted.key)
-        storage.getString(storedKey)?.let { existing ->
+        val existing = storage.getString(storedKey)
+        existing?.let {
             requireResource(decode(existing), persisted.key)
         }
+        if (existing == null) ensureCapacityForNewDraft()
         val updatedAtEpochMillis = nowEpochMillis()
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
         val value = JSONObject()
@@ -66,10 +68,16 @@ internal class AndroidDeckCardDraftStore(
     }
 
     @Synchronized
-    fun clear(session: NextcloudSession, key: DeckCardDraftKey) {
+    fun clear(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+        discardUnreadable: Boolean = false,
+    ) {
         val storedKey = storageKey(session, key)
-        storage.getString(storedKey)?.let { existing ->
-            requireResource(decode(existing), key)
+        if (!discardUnreadable) {
+            storage.getString(storedKey)?.let { existing ->
+                requireResource(decode(existing), key)
+            }
         }
         check(storage.remove(setOf(storedKey))) {
             "The Deck card draft could not be cleared."
@@ -118,6 +126,7 @@ internal class AndroidDeckCardDraftStore(
     }
 
     private fun prune() {
+        var unreadableEntries = 0
         val metadata = storage.entries().mapNotNull { (key, rawValue) ->
             if (!key.startsWith(KEY_PREFIX)) return@mapNotNull null
             val stored = try {
@@ -130,15 +139,32 @@ internal class AndroidDeckCardDraftStore(
             } else {
                 // A Keystore or provider failure can make valid ciphertext temporarily unreadable.
                 // Leave it in place so a later app process can recover it.
+                unreadableEntries += 1
                 null
             }
         }
         val keysToRemove = DeckCardDraftRetention.keysToPrune(
             entries = metadata,
-            maximumEntries = DeckCardDraftRetention.MAX_ENTRIES,
+            maximumEntries = (DeckCardDraftRetention.MAX_ENTRIES - unreadableEntries).coerceAtLeast(0),
         )
         if (keysToRemove.isEmpty()) return
         check(storage.remove(keysToRemove)) { "Old Deck card drafts could not be pruned." }
+    }
+
+    private fun ensureCapacityForNewDraft() {
+        val draftEntries = storage.entries().filterKeys { it.startsWith(KEY_PREFIX) }
+        val overflow = draftEntries.size + 1 - DeckCardDraftRetention.MAX_ENTRIES
+        if (overflow <= 0) return
+        val readableEntries = draftEntries.values.count { rawValue ->
+            try {
+                (rawValue as? String)?.let(::decode) != null
+            } catch (_: AndroidDeckDraftRecoveryException) {
+                false
+            }
+        }
+        check(readableEntries >= overflow) {
+            "A new Deck draft cannot be saved while unreadable drafts fill the recovery limit."
+        }
     }
 
     internal fun storageKey(session: NextcloudSession, key: DeckCardDraftKey): String {

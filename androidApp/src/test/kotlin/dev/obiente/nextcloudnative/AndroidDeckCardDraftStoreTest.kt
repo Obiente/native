@@ -91,6 +91,23 @@ class AndroidDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `explicit discard removes a permanently unreadable draft`() {
+        val storage = MemoryDeckDraftStorage()
+        val store = store(storage, IdentityDeckDraftCipher)
+        val key = persisted().key
+        val storageKey = store.storageKey(session, key)
+        storage.values[storageKey] = "not-json"
+
+        assertFailsWith<AndroidDeckDraftRecoveryException> {
+            store.load(session, key)
+        }
+
+        store.clear(session, key, discardUnreadable = true)
+
+        assertNull(storage.values[storageKey])
+    }
+
+    @Test
     fun `retention prunes readable drafts without deleting unreadable recovery data`() {
         val storage = MemoryDeckDraftStorage()
         var now = 0L
@@ -108,9 +125,24 @@ class AndroidDeckCardDraftStoreTest {
         }
 
         assertEquals("not-json", storage.values[unreadableKey])
-        assertEquals(DeckCardDraftRetention.MAX_ENTRIES + 1, storage.values.size)
-        saved.take(3).forEach { assertNull(store.load(session, it.key)) }
-        saved.drop(3).forEach { assertEquals(it, store.load(session, it.key)) }
+        assertEquals(DeckCardDraftRetention.MAX_ENTRIES, storage.values.size)
+        saved.take(4).forEach { assertNull(store.load(session, it.key)) }
+        saved.drop(4).forEach { assertEquals(it, store.load(session, it.key)) }
+    }
+
+    @Test
+    fun `unreadable drafts can fill but cannot exceed the retention ceiling`() {
+        val storage = MemoryDeckDraftStorage()
+        repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
+            storage.values["${AndroidDeckCardDraftStore.KEY_PREFIX}unreadable-$index"] = "not-json"
+        }
+        val store = store(storage, IdentityDeckDraftCipher)
+
+        assertFailsWith<IllegalStateException> {
+            store.save(session, persisted())
+        }
+
+        assertEquals(DeckCardDraftRetention.MAX_ENTRIES, storage.values.size)
     }
 
     @Test
