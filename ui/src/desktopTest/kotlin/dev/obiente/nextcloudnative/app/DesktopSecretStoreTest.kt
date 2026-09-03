@@ -352,7 +352,7 @@ class DesktopSecretStoreTest {
     }
 
     @Test
-    fun failedLegacyCleanupKeepsSignOutReferenceRetryable() {
+    fun queuedLegacyCleanupCannotBlockLocalSignOut() {
         val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
         val primary = RecordingSecretStore(
             mutableMapOf(reference.targetName to "keychain-session-secret".encodeToByteArray()),
@@ -364,14 +364,66 @@ class DesktopSecretStoreTest {
         val adoption = RecordingSecretStoreAdoption()
         val store = MigratingDesktopSecretStore(primary, legacy, adoption)
 
-        assertFailsWith<DesktopSecretLegacyCleanupUnavailableException> { store.clear(reference) }
+        store.clear(reference)
+
         assertNull(primary.load(reference))
         assertTrue(legacy.values.containsKey(reference.targetName))
+        assertEquals(
+            DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup,
+            adoption.state(reference),
+        )
 
-        store.clear(reference)
+        assertNull(store.load(reference))
 
         assertNull(legacy.load(reference))
         assertEquals(2, legacy.clearAttempts)
+        assertEquals(DesktopSecretStoreAdoptionState.AdoptedAndClean, adoption.state(reference))
+    }
+
+    @Test
+    fun missingLegacyProviderCannotBlockLocalSignOut() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val primary = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "keychain-session-secret".encodeToByteArray()),
+        )
+        val adoption = RecordingSecretStoreAdoption()
+        val store = MigratingDesktopSecretStore(
+            primary,
+            SecretToolDesktopSecretStore(
+                startProcess = { throw java.io.IOException("synthetic missing executable") },
+            ),
+            adoption,
+        )
+
+        store.clear(reference)
+
+        assertNull(primary.load(reference))
+        assertEquals(
+            DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup,
+            adoption.state(reference),
+        )
+    }
+
+    @Test
+    fun unqueuedLegacyCleanupFailureRemainsActionable() {
+        val reference = desktopSessionSecretReference("https://cloud.invalid", "alice")
+        val primary = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "keychain-session-secret".encodeToByteArray()),
+        )
+        val legacy = RecordingSecretStore(
+            mutableMapOf(reference.targetName to "legacy-session-secret".encodeToByteArray()),
+            failClear = true,
+        )
+        val store = MigratingDesktopSecretStore(
+            primary,
+            legacy,
+            RecordingSecretStoreAdoption(failWrites = true),
+        )
+
+        assertFailsWith<DesktopSecretLegacyCleanupUnavailableException> { store.clear(reference) }
+
+        assertNull(primary.load(reference))
+        assertTrue(legacy.values.containsKey(reference.targetName))
     }
 
     @Test

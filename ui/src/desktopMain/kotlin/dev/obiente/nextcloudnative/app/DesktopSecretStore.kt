@@ -144,7 +144,7 @@ internal class MigratingDesktopSecretStore(
     }
 
     override fun clear(reference: DesktopSecretReference) {
-        markAdopted(reference)
+        val legacyCleanupQueued = markAdopted(reference)
         val primaryFailure = try {
             primary.clear(reference)
             null
@@ -155,7 +155,9 @@ internal class MigratingDesktopSecretStore(
         }
         retryLegacyCleanup(reference)?.let { failure ->
             primaryFailure?.let(failure::addSuppressed)
-            throw DesktopSecretLegacyCleanupUnavailableException(failure)
+            if (primaryFailure != null || !legacyCleanupQueued) {
+                throw DesktopSecretLegacyCleanupUnavailableException(failure)
+            }
         }
         primaryFailure?.let { throw it }
     }

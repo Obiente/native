@@ -2405,7 +2405,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             assertTrue(fixture.intake.cancel())
             submission.join()
             requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
