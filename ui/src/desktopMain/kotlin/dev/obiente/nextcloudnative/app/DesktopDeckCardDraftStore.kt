@@ -39,18 +39,8 @@ internal class DesktopDeckCardDraftStore(
             return null
         }
         if (!file.exists()) return null
-        if (!file.isSafeRegularFile() || file.length() !in 1..MAX_ENVELOPE_BYTES) {
-            deleteInvalid(file)
-            return null
-        }
         val encryptionKey = keyProvider.encryptionKey()
-        return decode(file.readBytes(), file.name, encryptionKey)
-            ?.takeIf { it.draft.key == key }
-            ?.draft
-            ?: run {
-                deleteInvalid(file)
-                null
-            }
+        return readAuthenticated(file, encryptionKey, key).draft
     }
 
     @Synchronized
@@ -59,10 +49,17 @@ internal class DesktopDeckCardDraftStore(
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
         val file = draftFile(session, persisted.key)
         val encryptionKey = keyProvider.encryptionKey()
+        if (file.exists()) {
+            readAuthenticated(file, encryptionKey, persisted.key)
+        }
         val plaintext = encodePlaintext(persisted, updatedAtEpochMillis)
         require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "The Deck card draft is too large." }
         val envelope = encrypt(plaintext, file.name, encryptionKey)
         require(envelope.size.toLong() <= MAX_ENVELOPE_BYTES) { "The Deck card draft is too large." }
+        val verified = decode(envelope, file.name, encryptionKey)
+        check(verified.draft == persisted && verified.updatedAtEpochMillis == updatedAtEpochMillis) {
+            "The Deck card draft could not be verified."
+        }
         ensurePrivateDirectory()
         clearQuarantineBeforeSave(file)
         publish(file, envelope)
@@ -72,6 +69,10 @@ internal class DesktopDeckCardDraftStore(
     @Synchronized
     fun clear(session: NextcloudSession, key: DeckCardDraftKey) {
         val file = draftFile(session, key)
+        if (file.exists()) {
+            val encryptionKey = keyProvider.encryptionKey()
+            readAuthenticated(file, encryptionKey, key)
+        }
         check(deleteFile(file) && deleteFile(quarantineFile(file))) {
             "The Deck card draft could not be cleared."
         }
@@ -144,11 +145,34 @@ internal class DesktopDeckCardDraftStore(
         .toString()
         .encodeToByteArray()
 
+    private fun readAuthenticated(
+        file: File,
+        encryptionKey: ByteArray,
+        expectedKey: DeckCardDraftKey? = null,
+    ): StoredDeckCardDraft = try {
+        if (!file.isSafeRegularFile() || file.length() !in 1..MAX_ENVELOPE_BYTES) {
+            throw DesktopDeckDraftRecoveryException(
+                IllegalArgumentException("The Deck draft file is invalid."),
+            )
+        }
+        val stored = decode(file.readBytes(), file.name, encryptionKey)
+        if (expectedKey != null && stored.draft.key != expectedKey) {
+            throw DesktopDeckDraftRecoveryException(
+                IllegalArgumentException("The Deck draft resource identity does not match."),
+            )
+        }
+        stored
+    } catch (failure: DesktopDeckDraftRecoveryException) {
+        throw failure
+    } catch (failure: Exception) {
+        throw DesktopDeckDraftRecoveryException(failure)
+    }
+
     private fun decode(
         envelopeBytes: ByteArray,
         fileName: String,
         encryptionKey: ByteArray,
-    ): StoredDeckCardDraft? = runCatching {
+    ): StoredDeckCardDraft = try {
         require(encryptionKey.size == AES_KEY_BYTES) { "The Deck draft encryption key is invalid." }
         val envelope = JSONObject(envelopeBytes.decodeToString())
         require(envelope.getInt("version") == ENVELOPE_FORMAT_VERSION) {
@@ -197,7 +221,9 @@ internal class DesktopDeckCardDraftStore(
             ),
             updatedAtEpochMillis = updatedAtEpochMillis,
         )
-    }.getOrNull()
+    } catch (failure: Exception) {
+        throw DesktopDeckDraftRecoveryException(failure)
+    }
 
     private fun encrypt(
         plaintext: ByteArray,
@@ -225,28 +251,21 @@ internal class DesktopDeckCardDraftStore(
     private fun prune(encryptionKey: ByteArray) {
         val files = root.listFiles().orEmpty()
             .filter { it.name.matches(DRAFT_FILE_PATTERN) }
-        val malformed = linkedSetOf<File>()
         val entries = files.mapNotNull { file ->
-            val stored = if (
-                file.isSafeRegularFile() &&
-                file.length() in 1..MAX_ENVELOPE_BYTES
-            ) {
-                decode(file.readBytes(), file.name, encryptionKey)
-            } else {
+            val stored = try {
+                readAuthenticated(file, encryptionKey)
+            } catch (_: DesktopDeckDraftRecoveryException) {
+                // A keyring or filesystem failure can make valid ciphertext temporarily unreadable.
+                // Preserve it so a later app process can authenticate and recover the draft.
                 null
             }
-            if (stored == null) {
-                malformed += file
-                null
-            } else {
-                DeckCardDraftRetention.Entry(file.name, stored.updatedAtEpochMillis)
-            }
+            stored?.let { DeckCardDraftRetention.Entry(file.name, it.updatedAtEpochMillis) }
         }
         val namesToPrune = DeckCardDraftRetention.keysToPrune(
             entries = entries,
             maximumEntries = DeckCardDraftRetention.MAX_ENTRIES,
         )
-        (malformed + files.filter { it.name in namesToPrune }).forEach(::deleteInvalid)
+        files.filter { it.name in namesToPrune }.forEach(::deleteDraft)
     }
 
     private fun ensurePrivateDirectory() {
@@ -298,9 +317,9 @@ internal class DesktopDeckCardDraftStore(
         }
     }
 
-    private fun deleteInvalid(file: File) {
+    private fun deleteDraft(file: File) {
         check(deleteFile(file)) {
-            "An invalid Deck card draft could not be removed."
+            "An old Deck card draft could not be removed."
         }
     }
 
@@ -343,6 +362,10 @@ internal class DesktopDeckCardDraftStore(
 
 private fun deleteDeckDraftFile(file: File): Boolean =
     Files.deleteIfExists(file.toPath()) || !file.exists()
+
+internal class DesktopDeckDraftRecoveryException(
+    cause: Throwable,
+) : IllegalStateException("The saved Deck card draft could not be restored safely.", cause)
 
 internal fun desktopDeckLegacySecretRequired(
     root: File,
