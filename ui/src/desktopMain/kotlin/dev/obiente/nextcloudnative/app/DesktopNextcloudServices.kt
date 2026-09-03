@@ -3684,6 +3684,10 @@ class DesktopNextcloudServices(
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         accountOperationGuard.serializeWhenSyncIdle {
+            requireDesktopSessionSaveAllowed(
+                !desktopSessionSaveSwitchesAccount(activeAccountId(), session.accountId) || !hasLiveAccountResources(),
+                ::recordSupportDiagnostic,
+            )
             sessionPublicationGuard.serialize {
                 accountCredentials.saveSession(session)
                 accountSessionPublication.publish(session)
@@ -3692,11 +3696,8 @@ class DesktopNextcloudServices(
             startDesktopSyncLifecycle()
         }
     }
-
     override fun listAccounts() = sessionPublicationGuard.serialize(accountCredentials::listAccounts)
-
     override fun activeAccountId() = sessionPublicationGuard.serialize(accountCredentials::activeAccountId)
-
     override fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
         sessionPublicationGuard.serialize {
             accountCredentials.loadSession(accountId)?.also { session ->
@@ -3708,16 +3709,7 @@ class DesktopNextcloudServices(
         withContext(Dispatchers.IO) {
             accountOperationGuard.serialize operation@{
                 if (activeAccountId() == accountId) return@operation loadSession(accountId)
-                val hasLiveAccountResources = synchronized(fileRangeSessionLock) {
-                    activeFileRangeSessions.isNotEmpty()
-                } || synchronized(virtualFolderHydrationJobs) {
-                    virtualFolderHydrationJobs.values.any { job -> job.isActive }
-                } || synchronized(virtualFileProviderLock) {
-                    linuxVirtualFileSystem != null ||
-                        windowsCloudFilesProvider != null ||
-                        virtualFileCacheTierMutations.isNotEmpty()
-                }
-                if (hasLiveAccountResources) {
+                if (hasLiveAccountResources()) {
                     recordSupportDiagnostic(desktopAccountSelectionBlockedDiagnostic())
                     return@operation null
                 }
@@ -3726,17 +3718,28 @@ class DesktopNextcloudServices(
                 }
                 syncJob?.cancel()
                 syncJob?.join()
-                val selected = accountOperationGuard.withSyncRunLock {
-                    sessionPublicationGuard.serialize {
-                        accountCredentials.selectAccount(accountId)?.also { session ->
-                            accountSessionPublication.publish(session)
+                val selected = reopenDesktopSessionAfterSelection(
+                    selected = accountOperationGuard.withSyncRunLock {
+                        sessionPublicationGuard.serialize {
+                            accountCredentials.selectAccount(accountId)?.also { session ->
+                                accountSessionPublication.publish(session)
+                            }
                         }
-                    }
-                }
+                    },
+                    reopen = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
+                )
                 startDesktopSyncLifecycle()
                 selected
             }
         }
+
+    private fun hasLiveAccountResources(): Boolean =
+        synchronized(fileRangeSessionLock) { activeFileRangeSessions.isNotEmpty() } ||
+            synchronized(virtualFolderHydrationJobs) { virtualFolderHydrationJobs.values.any { it.isActive } } ||
+            synchronized(virtualFileProviderLock) {
+                linuxVirtualFileSystem != null || windowsCloudFilesProvider != null ||
+                    virtualFileCacheTierMutations.isNotEmpty()
+            }
 
     override suspend fun removeAccount(accountId: NextcloudAccountId): Boolean = withContext(Dispatchers.IO) {
         accountOperationGuard.serialize {

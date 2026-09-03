@@ -2,13 +2,46 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 
 class DesktopAccountOperationGuardTest {
+    @Test
+    fun differentAccountSaveRequiresTheSelectionTransition() {
+        val first = NextcloudSession("https://first.example.test", "alice", "one")
+        val second = NextcloudSession("https://second.example.test", "bob", "two")
+
+        assertFalse(desktopSessionSaveSwitchesAccount(null, first.accountId))
+        assertFalse(desktopSessionSaveSwitchesAccount(first.accountId, first.accountId))
+        assertTrue(desktopSessionSaveSwitchesAccount(first.accountId, second.accountId))
+    }
+
+    @Test
+    fun blockedAccountSaveRecordsTheSelectionDiagnosticBeforeFailing() {
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+
+        assertFailsWith<IllegalStateException> {
+            requireDesktopSessionSaveAllowed(allowed = false, recordBlocked = diagnostics::add)
+        }
+
+        assertEquals(listOf("ACCOUNT_SELECTION_ACTIVE_RESOURCES"), diagnostics.map { it.code })
+    }
+
+    @Test
+    fun retainedSelectionReopensTheDesktopSessionOnlyAfterSuccess() {
+        var reopenCount = 0
+        val session = NextcloudSession("https://first.example.test", "alice", "one")
+
+        assertNull(reopenDesktopSessionAfterSelection<String>(null) { reopenCount += 1 })
+        assertEquals(session, reopenDesktopSessionAfterSelection(session) { reopenCount += 1 })
+        assertEquals(1, reopenCount)
+    }
     @Test
     fun removalCannotPassAConcurrentSelection() = runBlocking {
         val guard = DesktopAccountOperationGuard()

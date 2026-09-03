@@ -391,8 +391,13 @@ internal class AndroidFileOfflineRepository(context: Context) {
         jobId: Long,
         cancellation: DocumentRequestCancellation,
     ): AndroidOfflineExecutionOutcome {
-        val session = AndroidNextcloudServices(appContext).loadSession()
-        if (session == null || NextcloudDocumentIds.accountKey(session) != expectedAccountId) {
+        val services = AndroidNextcloudServices(appContext)
+        val session = resolveStoredAndroidAccountSession(
+            accountIdentity = expectedAccountId,
+            listAccounts = services::listAccounts,
+            loadSession = { accountId -> services.loadSession(accountId) },
+        )
+        if (session == null) {
             finish(
                 jobId,
                 FileOfflineJobResult.PermanentFailure("Sign in to this account to finish the offline download."),

@@ -80,8 +80,15 @@ internal class AndroidIncomingShareUploadWorker(
             scheduleIncomingShareRetry(applicationContext, request)
             return@withContext Result.success()
         }
-        val session = AndroidNextcloudServices(applicationContext).loadSession()
-        if (session == null || NextcloudDocumentIds.accountKey(session) != request.accountId) {
+        val services = AndroidNextcloudServices(applicationContext)
+        val session = request.accountId?.let { accountIdentity ->
+            resolveStoredAndroidAccountSession(
+                accountIdentity = accountIdentity,
+                listAccounts = services::listAccounts,
+                loadSession = { accountId -> services.loadSession(accountId) },
+            )
+        }
+        if (session == null) {
             val failed = store.transition(
                 id = requestId,
                 expected = setOf(AndroidIncomingShareState.Queued),

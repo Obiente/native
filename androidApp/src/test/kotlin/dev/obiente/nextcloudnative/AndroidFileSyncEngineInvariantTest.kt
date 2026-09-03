@@ -758,6 +758,53 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun failedSessionReplacementPreservesOldAuthorityAndSchedules() {
+        val guard = AndroidFileSyncSessionSchedulingGuard()
+        guard.restorePersistedSession(load = { "account-old" }, accountIdOf = { it })
+        val oldToken = requireNotNull(guard.capture("account-old"))
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            guard.replaceSession(
+                replacementAccountId = "account-new",
+                persist = {
+                    events += "save-new-session"
+                    error("synthetic persistence failure")
+                },
+                cancelAll = { events += "cancel-old-work" },
+                publishAccount = { events += "publish-$it" },
+                restoreSchedules = { events += "restore-$it-work" },
+            )
+        }
+
+        assertTrue(guard.runIfCurrent(oldToken) { events += "old-account-still-current" })
+        assertEquals(listOf("save-new-session", "old-account-still-current"), events)
+        assertEquals(null, guard.capture("account-new"))
+    }
+
+    @Test
+    fun failedSessionClearPreservesOldAuthorityAndSchedules() {
+        val guard = AndroidFileSyncSessionSchedulingGuard()
+        guard.restorePersistedSession(load = { "account-old" }, accountIdOf = { it })
+        val oldToken = requireNotNull(guard.capture("account-old"))
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            guard.clearSession(
+                persist = {
+                    events += "clear-session"
+                    error("synthetic persistence failure")
+                },
+                cancelAll = { events += "cancel-all" },
+                clearPublishedAccount = { events += "publish-none" },
+            )
+        }
+
+        assertTrue(guard.runIfCurrent(oldToken) { events += "old-account-still-current" })
+        assertEquals(listOf("clear-session", "old-account-still-current"), events)
+    }
+
+    @Test
     fun newSessionGenerationCanScheduleWhileOldDedupeEntryFinishes() {
         val guard = AndroidFileSyncSessionSchedulingGuard()
         val registry = DeferredFileSyncPairSchedulingRegistry()
