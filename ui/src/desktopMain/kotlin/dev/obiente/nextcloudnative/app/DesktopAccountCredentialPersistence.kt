@@ -20,8 +20,8 @@ internal class DesktopAccountCredentialPersistence(
     fun listAccounts(): List<NextcloudAccountRecord> {
         val read = readRegistry()
         if (read.registry != null) return read.registry.accounts
-        restoreLegacySession(read.encoded != null)
-        return readRegistry().registry?.accounts.orEmpty()
+        val legacy = restoreLegacySession(read.encoded != null)
+        return readRegistry().registry?.accounts ?: legacy?.let { listOf(it.accountRecord()) }.orEmpty()
     }
 
     fun activeAccountId(): NextcloudAccountId? {

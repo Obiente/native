@@ -18,6 +18,35 @@ import java.lang.reflect.Proxy
 
 class AndroidPersistedSessionTest {
     @Test
+    fun invalidCredentialStoreCanBeQuarantinedForLoginOrResetRecovery() {
+        val replacementWrites = linkedMapOf<String, String>()
+        val replacementRemovals = linkedSetOf<String>()
+        prepareInvalidAndroidAccountCredentialRecoveryEdit(
+            editor = recoveryRecordingEditor(replacementWrites, replacementRemovals),
+            suspectEncrypted = "suspect-encrypted-store",
+            replacementEncrypted = "new-encrypted-session",
+            hasExistingQuarantine = false,
+        )
+
+        assertEquals("suspect-encrypted-store", replacementWrites["encrypted_session_quarantine"])
+        assertEquals("new-encrypted-session", replacementWrites["encrypted_session"])
+        assertTrue("emulator_test_read_only" in replacementRemovals)
+
+        val resetWrites = linkedMapOf<String, String>()
+        val resetRemovals = linkedSetOf<String>()
+        prepareInvalidAndroidAccountCredentialRecoveryEdit(
+            editor = recoveryRecordingEditor(resetWrites, resetRemovals),
+            suspectEncrypted = "newer-suspect-store",
+            replacementEncrypted = null,
+            hasExistingQuarantine = true,
+        )
+
+        assertFalse("encrypted_session_quarantine" in resetWrites)
+        assertTrue("encrypted_session" in resetRemovals)
+        assertTrue("emulator_test_read_only" in resetRemovals)
+    }
+
+    @Test
     fun retainedAccountSessionResolvesWithoutSelectingIt() {
         val first = firstSession()
         val second = secondSession()
@@ -327,6 +356,29 @@ class AndroidPersistedSessionTest {
         calls += method.name
         when (method.name) {
             "commit" -> commitResult
+            "apply" -> Unit
+            else -> proxy
+        }
+    } as SharedPreferences.Editor
+
+    private fun recoveryRecordingEditor(
+        writes: MutableMap<String, String>,
+        removals: MutableSet<String>,
+    ): SharedPreferences.Editor = Proxy.newProxyInstance(
+        SharedPreferences.Editor::class.java.classLoader,
+        arrayOf(SharedPreferences.Editor::class.java),
+    ) { proxy, method, arguments ->
+        val callArguments = arguments.orEmpty()
+        when (method.name) {
+            "putString" -> {
+                writes[callArguments[0] as String] = callArguments[1] as String
+                proxy
+            }
+            "remove" -> {
+                removals += callArguments[0] as String
+                proxy
+            }
+            "commit" -> true
             "apply" -> Unit
             else -> proxy
         }

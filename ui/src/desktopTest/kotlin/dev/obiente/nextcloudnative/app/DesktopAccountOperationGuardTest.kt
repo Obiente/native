@@ -13,6 +13,42 @@ import kotlinx.coroutines.yield
 
 class DesktopAccountOperationGuardTest {
     @Test
+    fun resourceActivationCannotPassAConcurrentAccountMutation() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val mutationEntered = CompletableDeferred<Unit>()
+        val releaseMutation = CompletableDeferred<Unit>()
+        var resourceActivated = false
+
+        val mutation = async {
+            guard.serialize {
+                mutationEntered.complete(Unit)
+                releaseMutation.await()
+            }
+        }
+        mutationEntered.await()
+        val activation = async {
+            guard.serializeResourceActivation { resourceActivated = true }
+        }
+        yield()
+
+        assertFalse(resourceActivated)
+        releaseMutation.complete(Unit)
+        mutation.await()
+        activation.await()
+        assertTrue(resourceActivated)
+    }
+
+    @Test
+    fun resourceActivationRejectsAStaleAccountAfterWaitingForTheGuard() {
+        val first = NextcloudSession("https://first.example.test", "alice", "one")
+        val second = NextcloudSession("https://second.example.test", "bob", "two")
+
+        assertTrue(desktopResourceActivationMatchesActiveAccount(first.accountId, first.accountId))
+        assertFalse(desktopResourceActivationMatchesActiveAccount(second.accountId, first.accountId))
+        assertFalse(desktopResourceActivationMatchesActiveAccount(null, first.accountId))
+    }
+
+    @Test
     fun differentAccountSaveRequiresTheSelectionTransition() {
         val first = NextcloudSession("https://first.example.test", "alice", "one")
         val second = NextcloudSession("https://second.example.test", "bob", "two")
