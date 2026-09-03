@@ -3725,20 +3725,23 @@ class DesktopNextcloudServices(
                 val syncJob = synchronized(this@DesktopNextcloudServices) {
                     backgroundFileSyncJob.also { backgroundFileSyncJob = null }
                 }
-                syncJob?.cancel()
-                syncJob?.join()
-                val selected = reopenDesktopSessionAfterSelection(
-                    selected = accountOperationGuard.withSyncRunLock {
-                        sessionPublicationGuard.serialize {
-                            accountCredentials.selectAccount(accountId)?.also { session ->
-                                accountSessionPublication.publish(session)
-                            }
-                        }
+                restartDesktopSyncAfterSelection(
+                    select = {
+                        syncJob?.cancel()
+                        syncJob?.join()
+                        reopenDesktopSessionAfterSelection(
+                            selected = accountOperationGuard.withSyncRunLock {
+                                sessionPublicationGuard.serialize {
+                                    accountCredentials.selectAccount(accountId)?.also { session ->
+                                        accountSessionPublication.publish(session)
+                                    }
+                                }
+                            },
+                            reopen = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
+                        )
                     },
-                    reopen = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
+                    restart = ::startDesktopSyncLifecycle,
                 )
-                startDesktopSyncLifecycle()
-                selected
             }
         }
 

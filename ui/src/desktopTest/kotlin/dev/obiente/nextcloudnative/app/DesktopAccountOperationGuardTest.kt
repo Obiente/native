@@ -7,11 +7,32 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 
 class DesktopAccountOperationGuardTest {
+    @Test
+    fun abortedAccountSelectionAlwaysRestartsDesktopSync() = runBlocking {
+        var restartCount = 0
+
+        assertFailsWith<CancellationException> {
+            restartDesktopSyncAfterSelection<String>(
+                select = { throw CancellationException("selection cancelled") },
+                restart = { restartCount += 1 },
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            restartDesktopSyncAfterSelection<String>(
+                select = { error("credential persistence failed") },
+                restart = { restartCount += 1 },
+            )
+        }
+
+        assertEquals(2, restartCount)
+    }
+
     @Test
     fun resourceActivationCannotPassAConcurrentAccountMutation() = runBlocking {
         val guard = DesktopAccountOperationGuard()
