@@ -1,7 +1,7 @@
-category: internal
+category: fix
 issue: none
-pull: none
+pull: 442
 platforms: android
-user-facing: no
+user-facing: yes
 
 Preserve unreadable encrypted Deck card drafts until Android can restore them safely.
