@@ -14,6 +14,8 @@ internal class DesktopAccountOperationGuard {
         withSyncRunLock(action)
     }
 
+    suspend fun <Result> serializeResourceActivation(action: suspend () -> Result): Result = serialize(action)
+
     suspend fun <Result> withSyncRunLock(action: suspend () -> Result): Result = syncRunMutex.withLock { action() }
 }
 
@@ -28,6 +30,11 @@ internal fun desktopSessionSaveSwitchesAccount(
     activeAccountId: NextcloudAccountId?,
     savedAccountId: NextcloudAccountId,
 ): Boolean = activeAccountId != null && activeAccountId != savedAccountId
+
+internal fun desktopResourceActivationMatchesActiveAccount(
+    activeAccountId: NextcloudAccountId?,
+    requestedAccountId: NextcloudAccountId,
+): Boolean = activeAccountId == requestedAccountId
 
 internal fun requireDesktopSessionSaveAllowed(
     allowed: Boolean,

@@ -79,6 +79,13 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun scheduleRestorationStopsImmediateRetriesAfterTheBoundedBudget() {
+        assertEquals(BackgroundSyncWorkerDisposition.Retry, scheduleRestorationFailureDisposition(0))
+        assertEquals(BackgroundSyncWorkerDisposition.Retry, scheduleRestorationFailureDisposition(1))
+        assertEquals(BackgroundSyncWorkerDisposition.WaitForNextPeriod, scheduleRestorationFailureDisposition(2))
+    }
+
+    @Test
     fun largeFileDirectoryReplacementKeepsTheDirectoryUntilProtectedPublication() {
         val directory = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
 
