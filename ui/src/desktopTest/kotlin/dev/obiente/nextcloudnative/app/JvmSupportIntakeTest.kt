@@ -30,9 +30,6 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
 import okhttp3.OkHttpClient
 
-private fun JvmSupportIntake.submittedRecordId(): String =
-    (states().value as SupportDiagnosticsSubmissionState.Submitted).reports.single().recordId
-
 class JvmSupportIntakeTest {
     @Test
     fun supportConversationMessageBodiesCannotBeReplayed() {

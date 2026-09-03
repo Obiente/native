@@ -21,7 +21,6 @@ import dev.obiente.nextcloudnative.app.FileOfflineKey
 import dev.obiente.nextcloudnative.app.FileOfflineRequest
 import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
 import dev.obiente.nextcloudnative.app.NextcloudFile
-import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.markFileOfflineJobRunning
 import dev.obiente.nextcloudnative.app.jvmStagingStorageKey
@@ -49,24 +48,6 @@ internal fun DocumentWebDavException.isRetryableOfflineDownloadFailure(): Boolea
     error == DocumentWebDavError.Locked ||
         error == DocumentWebDavError.Throttled ||
         error == DocumentWebDavError.Server
-
-internal data class AndroidOfflineContent(
-    val file: NextcloudFile,
-    val content: File,
-    val localRevision: String,
-)
-
-internal fun AndroidOfflineContent.readVerified(maximumBytes: Long): NextcloudFileContent? {
-    require(maximumBytes > 0L)
-    if (!content.isFile || content.length() > maximumBytes) return null
-    val bytes = content.readBytes()
-    if (bytes.size.toLong() > maximumBytes) return null
-    val expectedHash = localRevision.removePrefix("sha256:")
-    if (expectedHash.length != 64 || expectedHash.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
-    val actualHash = MessageDigest.getInstance("SHA-256").digest(bytes).toHexString()
-    if (actualHash != expectedHash) return null
-    return NextcloudFileContent(bytes, file.mimeType, file.etag)
-}
 
 /**
  * Durable Android coordinator for offline pin intent, content generations, and WorkManager jobs.
@@ -751,9 +732,6 @@ private fun List<String>.sumOfKnownSizes(
     }
     return total
 }
-
-private fun ByteArray.toHexString(): String =
-    joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
 private fun AndroidFileOfflinePersistedState.folderAvailability(
     accountId: String,
