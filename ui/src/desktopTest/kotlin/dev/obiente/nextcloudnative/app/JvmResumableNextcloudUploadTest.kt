@@ -131,6 +131,130 @@ class JvmResumableNextcloudUploadTest {
     }
 
     @Test
+    fun `superseded ambiguous publication is reconciled with its durable generation evidence`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val oldHash = "sha256:" + "11".repeat(32)
+        val checkpoint = newFileSyncUploadCheckpoint(
+            UPLOAD_ID,
+            "local-1",
+            plan,
+            contentRevision = "content-1",
+            contentHash = oldHash,
+        ).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+            assembledStageEtag = "published-stage",
+        )
+        val remote = RecordingUploadRemote(collectionCreated = true)
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            jvmResumableNextcloudUpload(
+                source, "archive.bin", "local-2", "directory-etag", checkpoint,
+                newUploadId = { "fedcba98-7654-3210-fedc-ba9876543210" },
+                persistCheckpoint = persisted::add,
+                remote = remote,
+                contentRevision = "content-2",
+                contentHash = "sha256:" + "22".repeat(32),
+            )
+
+            assertEquals(
+                listOf(
+                    DiscardedUpload(
+                        assembledStageEtag = "published-stage",
+                        expectedStageSizeBytes = checkpoint.sizeBytes,
+                        expectedStageContentHash = oldHash,
+                        publicationInFlight = true,
+                    ),
+                ),
+                remote.discardedUploads,
+            )
+            assertEquals("fedcba98-7654-3210-fedc-ba9876543210", persisted.first().uploadId)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun `superseded ambiguous assembly is discarded only with its durable content evidence`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val oldHash = "sha256:" + "33".repeat(32)
+        val checkpoint = newFileSyncUploadCheckpoint(
+            UPLOAD_ID,
+            "local-1",
+            plan,
+            contentHash = oldHash,
+        ).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+        )
+        val remote = RecordingUploadRemote(collectionCreated = true)
+        try {
+            jvmResumableNextcloudUpload(
+                source, "large.bin", "local-2", null, checkpoint,
+                newUploadId = { "fedcba98-7654-3210-fedc-ba9876543210" },
+                persistCheckpoint = {},
+                remote = remote,
+                contentHash = "sha256:" + "44".repeat(32),
+            )
+
+            assertEquals(
+                listOf(
+                    DiscardedUpload(
+                        assembledStageEtag = null,
+                        expectedStageSizeBytes = checkpoint.sizeBytes,
+                        expectedStageContentHash = oldHash,
+                        publicationInFlight = false,
+                    ),
+                ),
+                remote.discardedUploads,
+            )
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
+    fun `failed superseded checkpoint cleanup blocks a replacement upload`() {
+        val source = sparseFile(25L * 1024L * 1024L)
+        val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
+        val checkpoint = newFileSyncUploadCheckpoint(
+            UPLOAD_ID,
+            "local-1",
+            plan,
+            contentHash = "sha256:" + "55".repeat(32),
+        ).copy(
+            uploadedChunks = plan.chunkCount,
+            commitInFlight = true,
+        )
+        val remote = RecordingUploadRemote(collectionCreated = true, cleanupComplete = false)
+        var allocatedReplacement = false
+        val persisted = mutableListOf<FileSyncUploadCheckpoint>()
+        try {
+            assertFailsWith<IllegalStateException> {
+                jvmResumableNextcloudUpload(
+                    source, "large.bin", "local-2", null, checkpoint,
+                    newUploadId = {
+                        allocatedReplacement = true
+                        "fedcba98-7654-3210-fedc-ba9876543210"
+                    },
+                    persistCheckpoint = persisted::add,
+                    remote = remote,
+                    contentHash = "sha256:" + "66".repeat(32),
+                )
+            }
+
+            assertFalse(allocatedReplacement)
+            assertTrue(persisted.isEmpty())
+            assertTrue(remote.uploadedChunkNumbers.isEmpty())
+            assertEquals(1, remote.discardedUploads.size)
+        } finally {
+            source.delete()
+        }
+    }
+
+    @Test
     fun `expired collection resets progress before any bytes are skipped`() {
         val source = sparseFile(25L * 1024L * 1024L)
         val plan = nextcloudUploadTransferPlan(source.length()) as NextcloudUploadTransferPlan.Chunked
@@ -480,6 +604,7 @@ class JvmResumableNextcloudUploadTest {
     ) : JvmResumableNextcloudUploadRemote {
         val uploadedChunkNumbers = mutableListOf<Int>()
         val discardedStageEtags = mutableListOf<String?>()
+        val discardedUploads = mutableListOf<DiscardedUpload>()
         val finalizationEvents = mutableListOf<String>()
         var discardCount = 0
         var resolvePublishedCount = 0
@@ -589,9 +714,22 @@ class JvmResumableNextcloudUploadTest {
         ): Boolean {
             discardCount += 1
             discardedStageEtags += assembledStageEtag
+            discardedUploads += DiscardedUpload(
+                assembledStageEtag,
+                expectedStageSizeBytes,
+                expectedStageContentHash,
+                publicationInFlight,
+            )
             return cleanupComplete
         }
     }
+
+    private data class DiscardedUpload(
+        val assembledStageEtag: String?,
+        val expectedStageSizeBytes: Long?,
+        val expectedStageContentHash: String?,
+        val publicationInFlight: Boolean,
+    )
 
     private companion object {
         const val UPLOAD_ID = "01234567-89ab-cdef-0123-456789abcdef"
