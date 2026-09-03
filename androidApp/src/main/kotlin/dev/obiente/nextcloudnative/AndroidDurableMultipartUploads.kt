@@ -151,8 +151,25 @@ internal class DeckAttachmentUploadWorker(
         }
         if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
 
-        val session = AndroidNextcloudServices(applicationContext).loadSession()
+        val accountServices = AndroidNextcloudServices(applicationContext)
+        val session = accountServices.loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
+            val retainedSession = resolveStoredAndroidAccountSession(
+                accountIdentity = initial.accountId,
+                listAccounts = accountServices::listAccounts,
+                loadSession = { accountId -> accountServices.loadSession(accountId) },
+            )
+            if (durableUploadAccountMismatchOutcome(initial.accountId, retainedSession) ==
+                DurableUploadAccountMismatchOutcome.RetryRetainedAccount
+            ) {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "account-deferred",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                return@withContext Result.retry()
+            }
             store.transition(
                 jobId,
                 expected = DurableUploadState.Queued,
@@ -283,6 +300,21 @@ internal class DeckAttachmentUploadWorker(
         const val KEY_JOB_ID = "job_id"
     }
 }
+
+internal enum class DurableUploadAccountMismatchOutcome {
+    RetryRetainedAccount,
+    AccountUnavailable,
+}
+
+internal fun durableUploadAccountMismatchOutcome(
+    expectedAccountId: String,
+    retainedSession: NextcloudSession?,
+): DurableUploadAccountMismatchOutcome =
+    if (retainedSession != null && NextcloudDocumentIds.accountKey(retainedSession) == expectedAccountId) {
+        DurableUploadAccountMismatchOutcome.RetryRetainedAccount
+    } else {
+        DurableUploadAccountMismatchOutcome.AccountUnavailable
+    }
 
 internal data class AndroidDurableMultipartUploadJob(
     val id: String,
