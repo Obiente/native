@@ -39,8 +39,11 @@ internal class DesktopHttpMutationExecutor(client: OkHttpClient) {
                     executeCall(trackedClient.newCall(trackedRequest)).use(consumeTracked)
                 }
             }
-            shouldContinue?.let { withDesktopFileSyncCallCancellation(it, execute) }
-                ?: execute { call -> call.execute() }
+            if (shouldContinue == null) {
+                execute { call -> call.execute() }
+            } else {
+                withDesktopFileSyncCallCancellation(shouldContinue, execute)
+            }
         } catch (failure: NextcloudAuthenticatedRedirectException) {
             throw failure.toDesktopFileSyncHttpStatusException("follow authenticated mutation redirect")
         } catch (cancelled: CancellationException) {

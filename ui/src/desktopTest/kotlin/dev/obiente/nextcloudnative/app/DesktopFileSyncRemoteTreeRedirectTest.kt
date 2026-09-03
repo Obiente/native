@@ -8,6 +8,7 @@ import kotlin.test.assertNotNull
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class DesktopFileSyncRemoteTreeRedirectTest {
@@ -90,6 +91,27 @@ class DesktopFileSyncRemoteTreeRedirectTest {
 
             assertEquals(302, failure.statusCode)
             assertEquals("method_may_change", failure.redirectReason)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `cancellable mutation does not replay a nullable accepted response`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().code(204).build())
+            server.start()
+            val request = Request.Builder()
+                .url(server.url("/target.bin"))
+                .put("payload".toRequestBody())
+                .build()
+
+            val result: String? = DesktopHttpMutationExecutor(OkHttpClient()).execute(
+                request = request,
+                onAmbiguousNetworkResult = {},
+                shouldContinue = { true },
+            ) { null }
+
+            assertEquals(null, result)
             assertEquals(1, server.requestCount)
         }
     }
