@@ -428,6 +428,34 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `startup scheduling keeps polling after success for later enqueue failures`() {
+        var attempts = 0
+        val waits = mutableListOf<Long>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                keepRetryingQueuedDurableUploadScheduling(
+                    retryDelaysMillis = listOf(10L, 20L),
+                    followUpDelayMillis = 100L,
+                    reconcile = {
+                        attempts += 1
+                        when (attempts) {
+                            1 -> true
+                            2 -> false
+                            3 -> true
+                            else -> throw CancellationException("Lifecycle stopped")
+                        }
+                    },
+                    wait = waits::add,
+                )
+            }
+        }
+
+        assertEquals(4, attempts)
+        assertEquals(listOf(100L, 10L, 100L), waits)
+    }
+
+    @Test
     fun `cancellation after persistence propagates without discarding restart state`() {
         val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
         val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
