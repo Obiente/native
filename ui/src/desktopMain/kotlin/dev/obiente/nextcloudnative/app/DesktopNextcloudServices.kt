@@ -1682,15 +1682,15 @@ class DesktopNextcloudServices(
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }
-                    val virtualFolderSession = loadSession()
-                    runCatching { reconcileConfiguredVirtualFolders(virtualFolderSession) }
-                        .onFailure { failure ->
-                            publishFileSyncRunFailure(
-                                virtualFolderSession?.let(::desktopFileCacheAccountId),
-                                DesktopFileSyncRunSource.Background,
-                                failure,
-                            )
-                        }
+                    reconcileDesktopBackgroundSession(
+                        ::loadSession, ::reconcileConfiguredVirtualFolders,
+                    ) { session, failure ->
+                        publishFileSyncRunFailure(
+                            session?.let(::desktopFileCacheAccountId),
+                            DesktopFileSyncRunSource.Background,
+                            failure,
+                        )
+                    }
                     delay(DESKTOP_FILE_SYNC_INTERVAL_MILLIS)
                 }
             }
@@ -3736,7 +3736,7 @@ class DesktopNextcloudServices(
         }
         var cleared = false
         try {
-            val accountId = loadSession()?.let(::desktopFileCacheAccountId)
+            val accountId = desktopStoredSessionAccountId(preferences)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3843,9 +3843,7 @@ class DesktopNextcloudServices(
             val server = preferences.get(KEY_SERVER, null)
             val login = preferences.get(KEY_LOGIN, null)
             runCatching {
-                if (server != null && login != null) {
-                    secretStore.clear(desktopSessionSecretReference(server, login))
-                }
+                if (server != null && login != null) secretStore.clear(desktopSessionSecretReference(server, login))
             }.onFailure { failure ->
                 supportDiagnostics.record(
                     SupportDiagnosticEventDraft(
@@ -3856,6 +3854,8 @@ class DesktopNextcloudServices(
                         exception = failure.toSupportDiagnosticExceptionDraft(),
                     ),
                 )
+                if (failure is DesktopSecretDeletionRecoveryUnavailableException ||
+                    failure is DesktopSecretLegacyCleanupUnavailableException) throw failure
             }
             sessionPublicationGuard.serialize {
                 preferences.remove(KEY_SERVER)
@@ -3867,7 +3867,7 @@ class DesktopNextcloudServices(
         } finally {
             if (!cleared) {
                 synchronized(fileRangeSessionLock) { sessionClearing = false }
-                if (loadSession() != null) startDesktopSyncLifecycle()
+                if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
             }
         }
     }

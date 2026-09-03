@@ -5,6 +5,7 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.WString
+import com.sun.jna.ptr.IntByReference
 import com.sun.jna.ptr.PointerByReference
 import com.sun.jna.win32.StdCallLibrary
 import com.sun.jna.win32.W32APIOptions
@@ -12,6 +13,7 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.prefs.Preferences
 
 internal data class DesktopSecretReference(
     val targetName: String,
@@ -47,26 +49,201 @@ internal interface DesktopSecretStore {
 
 internal class DesktopSecretStoreUnavailableException(
     message: String,
+    val reason: DesktopSecretStoreUnavailableReason = DesktopSecretStoreUnavailableReason.StorageLockedOrUnavailable,
     cause: Throwable? = null,
-) : IllegalStateException(message, cause)
+) : NextcloudSessionStorageUnavailableException(message, cause)
+
+internal class DesktopSecretDeletionRecoveryUnavailableException(
+    cause: Throwable,
+) : NextcloudSessionStorageUnavailableException(
+    "Secure credential cleanup could not be scheduled for retry.",
+    cause,
+)
+
+internal class DesktopSecretLegacyCleanupUnavailableException(
+    cause: Throwable,
+) : NextcloudSessionStorageUnavailableException(
+    "The legacy secure credential could not be cleared safely.",
+    cause,
+)
+
+internal enum class DesktopSecretStoreUnavailableReason {
+    StorageLockedOrUnavailable,
+    ProviderMissing,
+}
 
 internal enum class DesktopSecretStoreKind {
+    MacOsKeychain,
     SecretService,
     WindowsCredentialManager,
 }
 
 internal fun desktopSecretStoreKind(osName: String = System.getProperty("os.name", "")): DesktopSecretStoreKind =
-    if (osName.startsWith("Windows", ignoreCase = true)) {
-        DesktopSecretStoreKind.WindowsCredentialManager
-    } else {
-        DesktopSecretStoreKind.SecretService
+    when {
+        osName.startsWith("Windows", ignoreCase = true) -> DesktopSecretStoreKind.WindowsCredentialManager
+        osName.startsWith("Mac", ignoreCase = true) -> DesktopSecretStoreKind.MacOsKeychain
+        else -> DesktopSecretStoreKind.SecretService
     }
 
 internal fun defaultDesktopSecretStore(
     osName: String = System.getProperty("os.name", ""),
 ): DesktopSecretStore = when (desktopSecretStoreKind(osName)) {
+    DesktopSecretStoreKind.MacOsKeychain -> MigratingDesktopSecretStore(
+        primary = MacOsKeychainSecretStore(),
+        legacy = SecretToolDesktopSecretStore(),
+        adoption = PreferencesDesktopSecretStoreAdoption(),
+    )
     DesktopSecretStoreKind.SecretService -> SecretToolDesktopSecretStore()
     DesktopSecretStoreKind.WindowsCredentialManager -> WindowsCredentialManagerSecretStore()
+}
+
+internal interface DesktopSecretStoreAdoption {
+    fun state(reference: DesktopSecretReference): DesktopSecretStoreAdoptionState
+
+    fun markAdopted(reference: DesktopSecretReference)
+
+    fun markLegacyCleanupComplete(reference: DesktopSecretReference)
+}
+
+internal enum class DesktopSecretStoreAdoptionState {
+    NotAdopted,
+    AdoptedPendingLegacyCleanup,
+    AdoptedAndClean,
+}
+
+internal class MigratingDesktopSecretStore(
+    private val primary: DesktopSecretStore,
+    private val legacy: DesktopSecretStore,
+    private val adoption: DesktopSecretStoreAdoption,
+) : DesktopSecretStore {
+    override fun load(reference: DesktopSecretReference): ByteArray? {
+        primary.load(reference)?.let { secret ->
+            adoptAndRetryLegacyCleanupBestEffort(reference)
+            return secret
+        }
+        if (adoption.state(reference) != DesktopSecretStoreAdoptionState.NotAdopted) {
+            retryLegacyCleanup(reference)
+            return null
+        }
+        val secret = try {
+            legacy.load(reference)
+        } catch (failure: DesktopSecretStoreUnavailableException) {
+            if (failure.reason == DesktopSecretStoreUnavailableReason.ProviderMissing) {
+                throw NextcloudSessionLegacyMigrationUnavailableException(failure)
+            }
+            throw failure
+        } ?: return null
+        primary.save(reference, username = null, secret = secret)
+        adoptAndRetryLegacyCleanupBestEffort(reference)
+        return secret
+    }
+
+    override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
+        primary.save(reference, username, secret)
+        adoptAndRetryLegacyCleanupBestEffort(reference)
+    }
+
+    override fun clear(reference: DesktopSecretReference) {
+        val legacyCleanupQueued = markAdopted(reference)
+        val primaryFailure = try {
+            primary.clear(reference)
+            null
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            failure
+        }
+        retryLegacyCleanup(reference)?.let { failure ->
+            primaryFailure?.let(failure::addSuppressed)
+            if (primaryFailure != null || !legacyCleanupQueued) {
+                throw DesktopSecretLegacyCleanupUnavailableException(failure)
+            }
+        }
+        primaryFailure?.let { throw it }
+    }
+
+    private fun adoptAndRetryLegacyCleanupBestEffort(reference: DesktopSecretReference) {
+        val adoptionDurable = markAdopted(reference)
+        val legacyCleanupFailure = retryLegacyCleanup(reference)
+        if (!adoptionDurable && legacyCleanupFailure != null) {
+            throw DesktopSecretStoreUnavailableException(
+                "Keychain adoption and legacy credential cleanup are both unavailable.",
+                cause = legacyCleanupFailure,
+            )
+        }
+    }
+
+    private fun markAdopted(reference: DesktopSecretReference): Boolean =
+        try {
+            if (adoption.state(reference) == DesktopSecretStoreAdoptionState.NotAdopted) {
+                adoption.markAdopted(reference)
+            }
+            true
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+
+    private fun retryLegacyCleanup(reference: DesktopSecretReference): Exception? {
+        val alreadyClean = try {
+            adoption.state(reference) == DesktopSecretStoreAdoptionState.AdoptedAndClean
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+        if (alreadyClean) return null
+        try {
+            legacy.clear(reference)
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            return failure
+        }
+        try {
+            adoption.markLegacyCleanupComplete(reference)
+        } catch (failure: kotlinx.coroutines.CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // Legacy cleanup is already complete; only the optional durable marker is unavailable.
+        }
+        return null
+    }
+}
+
+private class PreferencesDesktopSecretStoreAdoption(
+    private val preferences: Preferences = Preferences.userRoot()
+        .node("dev/obiente/nextcloudnative/secret-store-adoption-v1"),
+) : DesktopSecretStoreAdoption {
+    override fun state(reference: DesktopSecretReference): DesktopSecretStoreAdoptionState =
+        when (preferences.get(reference.adoptionKey(), null)) {
+            ADOPTED_AND_CLEAN -> DesktopSecretStoreAdoptionState.AdoptedAndClean
+            ADOPTED_PENDING_CLEANUP, LEGACY_ADOPTED_VALUE ->
+                DesktopSecretStoreAdoptionState.AdoptedPendingLegacyCleanup
+            else -> DesktopSecretStoreAdoptionState.NotAdopted
+        }
+
+    override fun markAdopted(reference: DesktopSecretReference) {
+        preferences.put(reference.adoptionKey(), ADOPTED_PENDING_CLEANUP)
+        preferences.flush()
+    }
+
+    override fun markLegacyCleanupComplete(reference: DesktopSecretReference) {
+        check(state(reference) != DesktopSecretStoreAdoptionState.NotAdopted)
+        preferences.put(reference.adoptionKey(), ADOPTED_AND_CLEAN)
+        preferences.flush()
+    }
+
+    private fun DesktopSecretReference.adoptionKey(): String = MessageDigest.getInstance("SHA-256")
+        .digest(targetName.encodeToByteArray())
+        .toHexString()
+
+    private companion object {
+        const val LEGACY_ADOPTED_VALUE = "true"
+        const val ADOPTED_PENDING_CLEANUP = "adopted-pending-legacy-cleanup"
+        const val ADOPTED_AND_CLEAN = "adopted-and-clean"
+    }
 }
 
 internal fun desktopSessionSecretReference(serverUrl: String, loginName: String): DesktopSecretReference {
@@ -110,7 +287,13 @@ internal class SecretToolDesktopSecretStore(
     override fun load(reference: DesktopSecretReference): ByteArray? {
         val process = runCatching {
             startProcess(secretToolCommand("lookup", reference))
-        }.getOrElse { return null }
+        }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
+        }
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "nextcloud-native-secret-reader").apply { isDaemon = true }
         }
@@ -126,17 +309,21 @@ internal class SecretToolDesktopSecretStore(
             val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
             val remainingMillis = (timeoutMillis - elapsedMillis).coerceAtLeast(1L)
             val bytes = output.get(remainingMillis, TimeUnit.MILLISECONDS)
-            if (process.exitValue() != 0 || bytes.isEmpty()) return null
+            if (process.exitValue() != 0) {
+                if (!hasMatchingSecret(reference)) return null
+                throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+            }
+            if (bytes.isEmpty()) return null
             check(bytes.size <= MAX_SECRET_BYTES) { "The desktop secret service returned an oversized value." }
             return bytes.trimSingleTrailingLineBreak()
-        } catch (_: TimeoutException) {
+        } catch (failure: TimeoutException) {
             timedOut = true
             runCatching {
                 process.descendants().forEach { child -> runCatching { child.destroyForcibly() } }
             }
             process.destroyForcibly()
             output.cancel(true)
-            error("Timed out while loading a desktop secret.")
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, cause = failure)
         } finally {
             if (!timedOut) runCatching { process.inputStream.close() }
             executor.shutdownNow()
@@ -155,13 +342,17 @@ internal class SecretToolDesktopSecretStore(
             }
         }
         val process = runCatching { startProcess(command) }.getOrElse { failure ->
-            throw DesktopSecretStoreUnavailableException(MISSING_SECRET_TOOL_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
         }
         runCatching {
             process.outputStream.use { it.write(secret) }
         }.getOrElse { failure ->
             process.destroyForcibly()
-            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, failure)
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, cause = failure)
         }
         if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly()
@@ -172,11 +363,67 @@ internal class SecretToolDesktopSecretStore(
         }
     }
 
+    private fun hasMatchingSecret(reference: DesktopSecretReference): Boolean {
+        val command = buildList {
+            add("secret-tool")
+            add("search")
+            add("--all")
+            add("--unlock")
+            reference.attributes.forEach { (key, value) ->
+                add(key)
+                add(value)
+            }
+        }
+        val process = runCatching { startProcess(command) }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
+        }
+        val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "nextcloud-native-secret-search").apply { isDaemon = true }
+        }
+        val output = executor.submit<ByteArray> {
+            process.inputStream.use { it.readNBytes(MAX_SECRET_SEARCH_BYTES + 1) }
+        }
+        var timedOut = false
+        try {
+            if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) throw TimeoutException()
+            val bytes = output.get(timeoutMillis, TimeUnit.MILLISECONDS)
+            if (process.exitValue() != 0 || bytes.size > MAX_SECRET_SEARCH_BYTES) {
+                throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+            }
+            return bytes.isNotEmpty()
+        } catch (failure: TimeoutException) {
+            timedOut = true
+            process.destroyForcibly()
+            output.cancel(true)
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE, cause = failure)
+        } finally {
+            if (!timedOut) runCatching { process.inputStream.close() }
+            executor.shutdownNow()
+        }
+    }
+
     override fun clear(reference: DesktopSecretReference) {
         val process = runCatching {
             startProcess(secretToolCommand("clear", reference))
-        }.getOrElse { return }
-        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+        }.getOrElse { failure ->
+            throw DesktopSecretStoreUnavailableException(
+                MISSING_SECRET_TOOL_MESSAGE,
+                DesktopSecretStoreUnavailableReason.ProviderMissing,
+                failure,
+            )
+        }
+        if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
+            process.destroyForcibly()
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+        }
+        if (process.exitValue() != 0) {
+            if (!hasMatchingSecret(reference)) return
+            throw DesktopSecretStoreUnavailableException(KEYRING_UNAVAILABLE_MESSAGE)
+        }
     }
 
     private fun secretToolCommand(command: String, reference: DesktopSecretReference): List<String> = buildList {
@@ -187,6 +434,221 @@ internal class SecretToolDesktopSecretStore(
             add(value)
         }
     }
+}
+
+internal class MacOsKeychainSecretStore(
+    private val api: MacOsKeychainApi = MacOsKeychainApiHolder.instance,
+    private val releaseItem: (Pointer) -> Unit = MacOsCoreFoundationApiHolder::release,
+    private val deletionRecovery: MacOsKeychainDeletionRecovery = PreferencesMacOsKeychainDeletionRecovery(),
+) : DesktopSecretStore {
+    private val deletionCoordinator = MacOsKeychainDeletionCoordinator(deletionRecovery, ::deleteTarget)
+
+    init {
+        deletionCoordinator.retryAllBestEffort()
+    }
+
+    override fun load(reference: DesktopSecretReference): ByteArray? {
+        deletionCoordinator.retry(reference.targetName)
+        val secretLength = IntByReference()
+        val secretData = PointerByReference()
+        val item = PointerByReference()
+        val identity = reference.macOsIdentity()
+        val status = api.SecKeychainFindGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            secretLength,
+            secretData,
+            item,
+        )
+        if (status == ERR_SEC_ITEM_NOT_FOUND) return null
+        checkMacOsKeychainStatus(status, "load")
+        val size = secretLength.value
+        val data = secretData.value
+        val itemPointer = item.value
+        try {
+            if (size !in 1..MAX_SECRET_BYTES || data == null) {
+                clear(reference)
+                return null
+            }
+            return data.getByteArray(0, size)
+        } finally {
+            if (data != null) api.SecKeychainItemFreeContent(null, data)
+            if (itemPointer != null) releaseItem(itemPointer)
+        }
+    }
+
+    override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
+        require(secret.isNotEmpty() && secret.size <= MAX_SECRET_BYTES)
+        deletionCoordinator.retry(reference.targetName)
+        val identity = reference.macOsIdentity()
+        val item = PointerByReference()
+        val findStatus = api.SecKeychainFindGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            null,
+            null,
+            item,
+        )
+        when (findStatus) {
+            ERR_SEC_ITEM_NOT_FOUND -> add(identity, secret)
+            ERR_SEC_SUCCESS -> update(checkNotNull(item.value), secret)
+            else -> checkMacOsKeychainStatus(findStatus, "find before save")
+        }
+    }
+
+    override fun clear(reference: DesktopSecretReference) {
+        deletionCoordinator.clear(reference.targetName)
+    }
+
+    private fun deleteTarget(targetName: String) {
+        val identity = targetName.macOsIdentity()
+        val item = PointerByReference()
+        val status = api.SecKeychainFindGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            null,
+            null,
+            item,
+        )
+        if (status == ERR_SEC_ITEM_NOT_FOUND) return
+        checkMacOsKeychainStatus(status, "find before clear")
+        val itemPointer = checkNotNull(item.value) { "macOS Keychain returned an empty item." }
+        try {
+            checkMacOsKeychainStatus(api.SecKeychainItemDelete(itemPointer), "clear")
+        } finally {
+            releaseItem(itemPointer)
+        }
+    }
+
+    private fun add(identity: MacOsKeychainIdentity, secret: ByteArray) {
+        val status = api.SecKeychainAddGenericPassword(
+            null,
+            identity.service.size,
+            identity.service,
+            identity.account.size,
+            identity.account,
+            secret.size,
+            secret,
+            null,
+        )
+        if (status != ERR_SEC_DUPLICATE_ITEM) {
+            checkMacOsKeychainStatus(status, "save")
+            return
+        }
+        val item = PointerByReference()
+        checkMacOsKeychainStatus(
+            api.SecKeychainFindGenericPassword(
+                null,
+                identity.service.size,
+                identity.service,
+                identity.account.size,
+                identity.account,
+                null,
+                null,
+                item,
+            ),
+            "find after concurrent save",
+        )
+        update(checkNotNull(item.value), secret)
+    }
+
+    private fun update(item: Pointer, secret: ByteArray) {
+        try {
+            checkMacOsKeychainStatus(
+                api.SecKeychainItemModifyAttributesAndData(item, null, secret.size, secret),
+                "update",
+            )
+        } finally {
+            releaseItem(item)
+        }
+    }
+}
+
+internal interface MacOsKeychainApi : com.sun.jna.Library {
+    fun SecKeychainFindGenericPassword(
+        keychainOrArray: Pointer?,
+        serviceNameLength: Int,
+        serviceName: ByteArray,
+        accountNameLength: Int,
+        accountName: ByteArray,
+        secretLength: IntByReference?,
+        secretData: PointerByReference?,
+        itemRef: PointerByReference,
+    ): Int
+
+    fun SecKeychainAddGenericPassword(
+        keychain: Pointer?,
+        serviceNameLength: Int,
+        serviceName: ByteArray,
+        accountNameLength: Int,
+        accountName: ByteArray,
+        secretLength: Int,
+        secretData: ByteArray,
+        itemRef: PointerByReference?,
+    ): Int
+
+    fun SecKeychainItemModifyAttributesAndData(
+        itemRef: Pointer,
+        attributes: Pointer?,
+        secretLength: Int,
+        secretData: ByteArray,
+    ): Int
+
+    fun SecKeychainItemDelete(itemRef: Pointer): Int
+
+    fun SecKeychainItemFreeContent(attributes: Pointer?, secretData: Pointer?): Int
+}
+
+private data class MacOsKeychainIdentity(
+    val service: ByteArray,
+    val account: ByteArray,
+)
+
+private fun DesktopSecretReference.macOsIdentity(): MacOsKeychainIdentity = targetName.macOsIdentity()
+
+private fun String.macOsIdentity(): MacOsKeychainIdentity = MacOsKeychainIdentity(
+    service = encodeToByteArray(),
+    account = MessageDigest.getInstance("SHA-256")
+        .digest(encodeToByteArray())
+        .toHexString()
+        .encodeToByteArray(),
+)
+
+private fun checkMacOsKeychainStatus(status: Int, operation: String) {
+    if (status == ERR_SEC_SUCCESS) return
+    val reason = when (status) {
+        ERR_SEC_AUTH_FAILED -> "Keychain access was denied."
+        ERR_SEC_INTERACTION_NOT_ALLOWED -> "The login Keychain is locked or unavailable."
+        else -> "macOS Keychain failed to $operation the desktop secret (error $status)."
+    }
+    throw DesktopSecretStoreUnavailableException(reason)
+}
+
+private object MacOsKeychainApiHolder {
+    val instance: MacOsKeychainApi by lazy {
+        Native.load(MACOS_SECURITY_FRAMEWORK, MacOsKeychainApi::class.java)
+    }
+}
+
+private object MacOsCoreFoundationApiHolder {
+    private val api: MacOsCoreFoundationApi by lazy {
+        Native.load(MACOS_CORE_FOUNDATION_FRAMEWORK, MacOsCoreFoundationApi::class.java)
+    }
+
+    fun release(pointer: Pointer) = api.CFRelease(pointer)
+}
+
+private interface MacOsCoreFoundationApi : com.sun.jna.Library {
+    fun CFRelease(pointer: Pointer)
 }
 
 internal class WindowsCredentialManagerSecretStore(
@@ -318,8 +780,17 @@ private const val WINDOWS_CREDENTIAL_PREFIX = "Obiente/NextcloudNative"
 private const val CRED_TYPE_GENERIC = 1
 private const val CRED_PERSIST_LOCAL_MACHINE = 2
 private const val ERROR_NOT_FOUND = 1_168
+private const val ERR_SEC_SUCCESS = 0
+private const val ERR_SEC_AUTH_FAILED = -25_293
+private const val ERR_SEC_DUPLICATE_ITEM = -25_299
+private const val ERR_SEC_ITEM_NOT_FOUND = -25_300
+private const val ERR_SEC_INTERACTION_NOT_ALLOWED = -25_308
+private const val MACOS_SECURITY_FRAMEWORK = "/System/Library/Frameworks/Security.framework/Security"
+private const val MACOS_CORE_FOUNDATION_FRAMEWORK =
+    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 private const val MAX_SECRET_BYTES = 2_560
+private const val MAX_SECRET_SEARCH_BYTES = 256 * 1024
 private const val MISSING_SECRET_TOOL_MESSAGE =
     "Secure credential storage is unavailable. Install libsecret-tools on Debian or Ubuntu, or libsecret on Fedora or RHEL, then restart Nextcloud Native."
 private const val KEYRING_UNAVAILABLE_MESSAGE =
-    "Could not save the account securely. Make sure your desktop keyring is running and unlocked, then try again."
+    "Secure credential storage is unavailable. Make sure your desktop keyring is running and unlocked, then try again."
