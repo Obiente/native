@@ -203,3 +203,18 @@ internal class AndroidAccountCredentialController(
 internal fun requireCommittedAndroidAccountCredentialEdit(editor: SharedPreferences.Editor) {
     check(editor.commit()) { "The account credential store could not be committed." }
 }
+
+internal fun resolveStoredAndroidAccountSession(
+    accountIdentity: String,
+    listAccounts: () -> List<NextcloudAccountRecord>,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): NextcloudSession? {
+    val accountId = listAccounts().firstOrNull { account ->
+        NextcloudDocumentIds.accountKey(
+            NextcloudSession(account.serverUrl, account.loginName, appPassword = ""),
+        ) == accountIdentity
+    }?.id ?: return null
+    return loadSession(accountId)?.takeIf { session ->
+        NextcloudDocumentIds.accountKey(session) == accountIdentity
+    }
+}

@@ -69,11 +69,11 @@ internal class DesktopAccountCredentialPersistence(
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return false
         val clearLegacyCredential = legacyMetadataMatches(record)
         val updated = registry.remove(accountId)
-        persistAccountState(prepareRegistry(updated), updated.activeAccount)
         clearSecret(desktopAccountSecretReference(accountId))
         if (clearLegacyCredential) {
             clearSecret(desktopSessionSecretReference(record.serverUrl, record.loginName))
         }
+        persistAccountState(prepareRegistry(updated), updated.activeAccount)
         return true
     }
 

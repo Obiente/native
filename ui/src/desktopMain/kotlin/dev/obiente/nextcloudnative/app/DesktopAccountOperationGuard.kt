@@ -23,3 +23,22 @@ internal fun desktopAccountDiagnosticFields(accountId: String?): List<SupportDia
             SupportDiagnosticFieldDraft("account", it, SupportDiagnosticValuePrivacy.Identifier),
         )
     }.orEmpty()
+
+internal fun desktopSessionSaveSwitchesAccount(
+    activeAccountId: NextcloudAccountId?,
+    savedAccountId: NextcloudAccountId,
+): Boolean = activeAccountId != null && activeAccountId != savedAccountId
+
+internal fun requireDesktopSessionSaveAllowed(
+    allowed: Boolean,
+    recordBlocked: (SupportDiagnosticEventDraft) -> Unit,
+) {
+    if (allowed) return
+    recordBlocked(desktopAccountSelectionBlockedDiagnostic())
+    error("Close files and virtual folders before switching accounts.")
+}
+
+internal inline fun <Session> reopenDesktopSessionAfterSelection(
+    selected: Session?,
+    reopen: () -> Unit,
+): Session? = selected.also { if (it != null) reopen() }
