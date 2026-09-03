@@ -27,7 +27,7 @@ internal class AndroidAccountCredentialController(
     private val mutationMutex = Mutex()
 
     fun loadSession(): NextcloudSession? = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
-        load = { loadState()?.activeSession },
+        load = { (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state?.activeSession },
         accountIdOf = NextcloudDocumentIds::accountKey,
         publishAccount = { session, accountIdentity ->
             session?.let(registerSessionPrivateValues)
@@ -35,17 +35,31 @@ internal class AndroidAccountCredentialController(
         },
     )
 
-    fun listAccounts(): List<NextcloudAccountRecord> = loadState()?.registry?.accounts.orEmpty()
+    fun listAccounts(): List<NextcloudAccountRecord> =
+        (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state?.registry?.accounts.orEmpty()
 
-    fun activeAccountId(): NextcloudAccountId? = loadState()?.registry?.activeAccountId
+    fun activeAccountId(): NextcloudAccountId? =
+        (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state?.registry?.activeAccountId
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
-        loadState()?.sessions?.get(accountId)?.also(registerSessionPrivateValues)
+        (readStore() as? AndroidAccountCredentialStoreRead.Available)
+            ?.state
+            ?.sessions
+            ?.get(accountId)
+            ?.also(registerSessionPrivateValues)
 
     suspend fun saveSession(session: NextcloudSession) = mutationMutex.withLock {
         registerSessionPrivateValues(session)
-        val current = requireValidState()
-        replaceActiveState(current.upsertAndSelect(session), current.activeSession)
+        when (val read = readStore()) {
+            is AndroidAccountCredentialStoreRead.Available ->
+                replaceActiveState(read.state.upsertAndSelect(session), read.state.activeSession)
+            is AndroidAccountCredentialStoreRead.Invalid ->
+                replaceActiveState(
+                    replacement = AndroidAccountCredentialState.Empty.upsertAndSelect(session),
+                    previousSession = null,
+                    suspectEncrypted = read.encrypted,
+                )
+        }
     }
 
     suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? = mutationMutex.withLock {
@@ -69,7 +83,10 @@ internal class AndroidAccountCredentialController(
     }
 
     suspend fun clearSession() = mutationMutex.withLock {
-        clearSession(requireValidState())
+        when (val read = readStore()) {
+            is AndroidAccountCredentialStoreRead.Available -> clearSession(read.state)
+            is AndroidAccountCredentialStoreRead.Invalid -> clearInvalidStore(read.encrypted)
+        }
     }
 
     private suspend fun clearSession(current: AndroidAccountCredentialState) {
@@ -78,18 +95,38 @@ internal class AndroidAccountCredentialController(
         val encodedReplacement = replacement.takeUnless { state ->
             state.registry.accounts.isEmpty() && state.sessions.isEmpty()
         }?.let(::encryptState)
+        clearPersistedSession(encodedReplacement)
+        clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(activeSession))
+        notifyDocumentRootsChanged()
+    }
+
+    private suspend fun clearInvalidStore(suspectEncrypted: String) {
+        clearPersistedSession(encodedReplacement = null, suspectEncrypted = suspectEncrypted)
+        notifyDocumentRootsChanged()
+    }
+
+    private suspend fun clearPersistedSession(
+        encodedReplacement: String?,
+        suspectEncrypted: String? = null,
+    ) {
         withContext(Dispatchers.IO) { AndroidExternalFileHandoffRegistry.clear() }
         val scheduler = AndroidFileSyncScheduler(appContext)
         withContext(Dispatchers.IO) {
             ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.clearSession(
                 persist = {
-                    val editor = preferences.edit().apply {
-                        if (encodedReplacement == null) {
-                            remove(KEY_SESSION)
-                        } else {
-                            putString(KEY_SESSION, encodedReplacement)
+                    val editor = if (suspectEncrypted == null) {
+                        preferences.edit().apply {
+                            if (encodedReplacement == null) remove(KEY_SESSION)
+                            else putString(KEY_SESSION, encodedReplacement)
+                            remove(KEY_TEST_READ_ONLY)
                         }
-                        remove(KEY_TEST_READ_ONLY)
+                    } else {
+                        prepareInvalidAndroidAccountCredentialRecoveryEdit(
+                            editor = preferences.edit(),
+                            suspectEncrypted = suspectEncrypted,
+                            replacementEncrypted = encodedReplacement,
+                            hasExistingQuarantine = preferences.contains(KEY_QUARANTINED_SESSION),
+                        )
                     }
                     commitPreferences(editor)
                 },
@@ -97,13 +134,12 @@ internal class AndroidAccountCredentialController(
                 clearPublishedAccount = { publishAccountIdentity(null) },
             )
         }
-        clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(activeSession))
-        notifyDocumentRootsChanged()
     }
 
     private suspend fun replaceActiveState(
         replacement: AndroidAccountCredentialState,
         previousSession: NextcloudSession?,
+        suspectEncrypted: String? = null,
     ) {
         val session = requireNotNull(replacement.activeSession)
         val encrypted = encryptState(replacement)
@@ -113,11 +149,19 @@ internal class AndroidAccountCredentialController(
             ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
                 replacementAccountId = NextcloudDocumentIds.accountKey(session),
                 persist = {
-                    commitPreferences(
+                    val editor = if (suspectEncrypted == null) {
                         preferences.edit()
                             .putString(KEY_SESSION, encrypted)
-                            .remove(KEY_TEST_READ_ONLY),
-                    )
+                            .remove(KEY_TEST_READ_ONLY)
+                    } else {
+                        prepareInvalidAndroidAccountCredentialRecoveryEdit(
+                            editor = preferences.edit(),
+                            suspectEncrypted = suspectEncrypted,
+                            replacementEncrypted = encrypted,
+                            hasExistingQuarantine = preferences.contains(KEY_QUARANTINED_SESSION),
+                        )
+                    }
+                    commitPreferences(editor)
                 },
                 cancelAll = scheduler::cancelAll,
                 publishAccount = publishAccountIdentity,
@@ -130,12 +174,14 @@ internal class AndroidAccountCredentialController(
         notifyDocumentRootsChanged()
     }
 
-    private fun requireValidState(): AndroidAccountCredentialState = requireNotNull(loadState()) {
-        "The account credential store is invalid."
+    private fun requireValidState(): AndroidAccountCredentialState = when (val read = readStore()) {
+        is AndroidAccountCredentialStoreRead.Available -> read.state
+        is AndroidAccountCredentialStoreRead.Invalid -> error("The account credential store is invalid.")
     }
 
-    private fun loadState(): AndroidAccountCredentialState? {
-        val encrypted = preferences.getString(KEY_SESSION, null) ?: return AndroidAccountCredentialState.Empty
+    private fun readStore(): AndroidAccountCredentialStoreRead {
+        val encrypted = preferences.getString(KEY_SESSION, null)
+            ?: return AndroidAccountCredentialStoreRead.Available(AndroidAccountCredentialState.Empty)
         val encoded = try {
             sessionCipher.decrypt(encrypted)
         } catch (_: Exception) {
@@ -143,9 +189,9 @@ internal class AndroidAccountCredentialController(
                 code = "ACCOUNT_CREDENTIAL_STORE_READ_FAILED",
                 operation = "account-credentials.restore",
             )
-            return null
+            return AndroidAccountCredentialStoreRead.Invalid(encrypted)
         }
-        return restoreAndroidAccountCredentialState(
+        val state = restoreAndroidAccountCredentialState(
             encoded = encoded,
             persistMigrated = { migrated ->
                 commitPreferences(
@@ -154,6 +200,8 @@ internal class AndroidAccountCredentialController(
             },
             recordDiagnostic = recordDiagnostic,
         )
+        return state?.let { AndroidAccountCredentialStoreRead.Available(it) }
+            ?: AndroidAccountCredentialStoreRead.Invalid(encrypted)
     }
 
     private suspend fun persistState(state: AndroidAccountCredentialState) = withContext(Dispatchers.IO) {
@@ -194,10 +242,22 @@ internal class AndroidAccountCredentialController(
         )
     }
 
-    private companion object {
-        const val KEY_SESSION = "encrypted_session"
-        const val KEY_TEST_READ_ONLY = "emulator_test_read_only"
-    }
+}
+
+internal sealed interface AndroidAccountCredentialStoreRead {
+    data class Available(val state: AndroidAccountCredentialState) : AndroidAccountCredentialStoreRead
+    data class Invalid(val encrypted: String) : AndroidAccountCredentialStoreRead
+}
+
+internal fun prepareInvalidAndroidAccountCredentialRecoveryEdit(
+    editor: SharedPreferences.Editor,
+    suspectEncrypted: String,
+    replacementEncrypted: String?,
+    hasExistingQuarantine: Boolean,
+): SharedPreferences.Editor = editor.apply {
+    if (!hasExistingQuarantine) putString(KEY_QUARANTINED_SESSION, suspectEncrypted)
+    if (replacementEncrypted == null) remove(KEY_SESSION) else putString(KEY_SESSION, replacementEncrypted)
+    remove(KEY_TEST_READ_ONLY)
 }
 
 internal fun requireCommittedAndroidAccountCredentialEdit(editor: SharedPreferences.Editor) {
@@ -218,3 +278,6 @@ internal fun resolveStoredAndroidAccountSession(
         NextcloudDocumentIds.accountKey(session) == accountIdentity
     }
 }
+
+private const val KEY_SESSION = "encrypted_session"
+private const val KEY_QUARANTINED_SESSION = "encrypted_session_quarantine"
