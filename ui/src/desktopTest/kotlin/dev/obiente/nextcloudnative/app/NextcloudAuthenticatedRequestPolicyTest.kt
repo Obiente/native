@@ -50,6 +50,35 @@ class NextcloudAuthenticatedRequestPolicyTest {
     }
 
     @Test
+    fun `literal percent signs remain valid in account and DAV paths`() {
+        val percentPolicy = NextcloudAuthenticatedRequestPolicy(
+            NextcloudSession("https://cloud.example.test/cloud%25team", "alice", "secret"),
+            "policy-test",
+        )
+
+        val request = percentPolicy.requestBuilder(
+            "https://cloud.example.test/cloud%25team/remote.php/dav/files/alice/100%25.txt",
+        ).build()
+
+        assertEquals(
+            "/cloud%25team/remote.php/dav/files/alice/100%25.txt",
+            request.url.encodedPath,
+        )
+        assertEquals("Basic YWxpY2U6c2VjcmV0", request.header("Authorization"))
+        val redirected = assertIs<NextcloudAuthenticatedRedirectDecision.Follow>(
+            percentPolicy.redirectDecision(
+                request,
+                307,
+                "/cloud%25team/remote.php/dav/files/alice/100%25-copy.txt",
+            ),
+        )
+        assertEquals(
+            "/cloud%25team/remote.php/dav/files/alice/100%25-copy.txt",
+            redirected.request.url.encodedPath,
+        )
+    }
+
+    @Test
     fun `userinfo fragments and encoded traversal are rejected before credentials are attached`() {
         listOf(
             "https://mallory@cloud.example.test/cloud/dav",

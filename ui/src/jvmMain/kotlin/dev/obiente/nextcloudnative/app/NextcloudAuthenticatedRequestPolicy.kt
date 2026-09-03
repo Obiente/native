@@ -212,14 +212,15 @@ private fun containsEncodedTraversal(rawSegment: String): Boolean {
     var candidate = rawSegment
     repeat(MAX_PERCENT_DECODING_PASSES) {
         if (candidate.split('/', '\\').any { segment -> segment == "." || segment == ".." }) return true
-        val decoded = decodePercentAscii(candidate) ?: return true
+        val decoded = decodeValidPercentAscii(candidate)
         if (decoded == candidate) return false
         candidate = decoded
     }
     return true
 }
 
-private fun decodePercentAscii(value: String): String? {
+private fun decodeValidPercentAscii(value: String): String {
+    // The original raw path is syntax-validated. A non-triplet percent can be introduced by decoding %25.
     val decoded = StringBuilder(value.length)
     var index = 0
     while (index < value.length) {
@@ -229,9 +230,13 @@ private fun decodePercentAscii(value: String): String? {
             index += 1
             continue
         }
-        if (index + 2 >= value.length) return null
-        val high = value[index + 1].digitToIntOrNull(16) ?: return null
-        val low = value[index + 2].digitToIntOrNull(16) ?: return null
+        val high = value.getOrNull(index + 1)?.digitToIntOrNull(16)
+        val low = value.getOrNull(index + 2)?.digitToIntOrNull(16)
+        if (high == null || low == null) {
+            decoded.append(current)
+            index += 1
+            continue
+        }
         decoded.append(((high shl 4) or low).toChar())
         index += 3
     }
