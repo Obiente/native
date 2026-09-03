@@ -59,16 +59,22 @@ internal class AndroidFileSyncSessionSchedulingGuard {
     ) {
         synchronized(monitor) {
             val accountChanged = accountId != replacementAccountId
+            persist()
             generation += 1
-            accountId = null
+            accountId = replacementAccountId
             try {
-                persist()
-                accountId = replacementAccountId
                 publishAccount(replacementAccountId)
             } finally {
-                if (accountChanged) cancelAll()
+                if (accountChanged) {
+                    try {
+                        cancelAll()
+                    } finally {
+                        restoreSchedules(replacementAccountId)
+                    }
+                } else {
+                    restoreSchedules(replacementAccountId)
+                }
             }
-            restoreSchedules(replacementAccountId)
         }
     }
 
@@ -78,10 +84,10 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         clearPublishedAccount: () -> Unit = {},
     ) {
         synchronized(monitor) {
+            persist()
             generation += 1
             accountId = null
             try {
-                persist()
                 clearPublishedAccount()
             } finally {
                 cancelAll()
