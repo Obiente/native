@@ -116,6 +116,46 @@ class DesktopDeckCardDraftStoreTest {
         }
 
     @Test
+    fun `missing key does not replace or delete an existing encrypted draft`() =
+        withStore { root, _, store ->
+            val session = session()
+            val persisted = persisted()
+            store.save(session, persisted)
+            val file = root.resolve(store.storageFileName(session, persisted.key))
+            val missingSecrets = object : DesktopSecretStore {
+                override fun load(reference: DesktopSecretReference): ByteArray? = null
+
+                override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
+                    error("A replacement key must not be saved.")
+                }
+
+                override fun clear(reference: DesktopSecretReference) = Unit
+            }
+            val unavailable = DesktopDeckCardDraftStore(
+                root = root,
+                keyProvider = PlatformDeckDraftKeyProvider(
+                    secretStore = missingSecrets,
+                    legacySecretRequired = { desktopDeckLegacySecretRequired(root) },
+                ),
+            )
+
+            assertFailsWith<DesktopSecretStoreUnavailableException> {
+                unavailable.load(session, persisted.key)
+            }
+            assertTrue(file.isFile)
+        }
+
+    @Test
+    fun `uninspectable draft directory conservatively requires the legacy secret`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-unreadable").toFile()
+        try {
+            assertTrue(desktopDeckLegacySecretRequired(root, listFiles = { null }))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `clear removes only the requested account resource`() =
         withStore { root, _, store ->
             val session = session()

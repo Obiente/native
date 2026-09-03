@@ -534,15 +534,42 @@ fun NextcloudNativeApp(
 
     NextcloudNativeTheme(darkTheme = darkTheme) {
         NextcloudAppBackground {
-            var session by remember { mutableStateOf(services.loadSession()) }
-            if (session == null) {
+            var sessionLoadAttempt by remember { mutableStateOf(0) }
+            val sessionLoad = remember(services, sessionLoadAttempt) {
+                loadNextcloudSessionSafely(services::loadSession)
+            }
+            var session by remember(services, sessionLoadAttempt) {
+                mutableStateOf((sessionLoad as? NextcloudSessionLoadState.Loaded)?.session)
+            }
+            val signInAgain = {
+                scope.launch {
+                    try {
+                        services.clearSession()
+                        sessionLoadAttempt += 1
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (_: NextcloudSessionStorageUnavailableException) {
+                        // Keep the recoverable storage screen visible when cleanup could not be queued safely.
+                    }
+                }
+                Unit
+            }
+            if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
+                SecureSessionStorageUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = signInAgain,
+                )
+            } else if (sessionLoad == NextcloudSessionLoadState.LegacyMigrationUnavailable) {
+                LegacySessionMigrationUnavailable(
+                    onRetry = { sessionLoadAttempt += 1 },
+                    onSignInAgain = signInAgain,
+                )
+            } else if (session == null) {
                 if (pendingAppUpdateReviewRequest != null) {
                     LoggedOutAppUpdateReviewScreen(
                         services = services,
                         platformCapabilityRefreshRequest = platformCapabilityRefreshRequest,
-                        onContinueToSignIn = {
-                            handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest
-                        },
+                        onContinueToSignIn = { handledAppUpdateReviewRequest = pendingAppUpdateReviewRequest },
                     )
                 } else {
                     LoginScreen(
@@ -12365,34 +12392,6 @@ internal fun ScreenHeader(
 @Composable
 internal fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier = modifier, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-}
-
-@Composable
-internal fun LoadingMessage(message: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        CircularProgressIndicator()
-        Text(message, modifier = Modifier.padding(top = NextcloudSpacing.Large))
-    }
-}
-
-@Composable
-internal fun EmptyMessage(message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(message, modifier = Modifier.padding(NextcloudSpacing.XLarge), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-internal fun ErrorMessage(message: String, onRetry: (() -> Unit)? = null) {
-    Column(modifier = Modifier.padding(NextcloudSpacing.XLarge), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-        Text(message, color = MaterialTheme.colorScheme.error)
-        onRetry?.let { retry -> OutlinedButton(onClick = retry) { Text("Try again") } }
-    }
 }
 
 @Composable

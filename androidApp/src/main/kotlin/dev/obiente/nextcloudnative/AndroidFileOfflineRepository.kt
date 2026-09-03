@@ -499,15 +499,8 @@ internal class AndroidFileOfflineRepository(context: Context) {
                 val revision = "sha256:${digest.digest().toHex()}"
                 val destination = contentFile(job.key, revision)
                 publishGeneration(temporary, destination)
-                val committed = finish(
-                    job.id,
-                    FileOfflineJobResult.Downloaded(revision, expectedEtag),
-                )
+                val committed = commitDownloadedGeneration(started, revision, expectedEtag)
                 if (committed) notifyOfflineChanged(session, job.key.relativePath)
-                if (!committed && !generationIsReferenced(job.key, revision)) destination.delete()
-                started.record.localRevision
-                    ?.takeIf { it != revision }
-                    ?.let { contentFile(job.key, it).delete() }
                 AndroidOfflineExecutionOutcome.Complete
             } catch (failure: Throwable) {
                 temporary.delete()
@@ -567,13 +560,19 @@ internal class AndroidFileOfflineRepository(context: Context) {
         val job = started.job
         val revision = requireNotNull(job.expectedLocalRevision)
         val file = contentFile(job.key, revision)
-        if (file.exists() && !file.delete()) {
-            return retry(job.id, "Android could not remove the local copy yet.")
+        val committed = synchronized(STATE_LOCK) {
+            val current = store.load()
+            commitAndroidFileOfflineRemoval(
+                current = current,
+                startedJob = job,
+                nowEpochMillis = System.currentTimeMillis(),
+                removeLocalGeneration = { !file.exists() || file.delete() },
+            )?.also { store.save(it.state) }
         }
-        if (finish(job.id, FileOfflineJobResult.LocalRemoved)) {
+        if (committed?.completedRemoval == true) {
             notifyOfflineChanged(session, job.key.relativePath)
         }
-        return AndroidOfflineExecutionOutcome.Complete
+        return committed?.outcome ?: AndroidOfflineExecutionOutcome.Complete
     }
 
     private fun notifyOfflineChanged(session: NextcloudSession, path: String) {
@@ -614,8 +613,24 @@ internal class AndroidFileOfflineRepository(context: Context) {
         true
     }
 
-    private fun generationIsReferenced(key: FileOfflineKey, revision: String): Boolean = synchronized(STATE_LOCK) {
-        store.load().queue.record(key)?.localRevision == revision
+    private fun commitDownloadedGeneration(
+        started: StartedJob,
+        revision: String,
+        remoteEtag: String,
+    ): Boolean = synchronized(STATE_LOCK) {
+        val commit = commitAndroidFileOfflineDownload(
+            current = store.load(),
+            startedJob = started.job,
+            startedRecord = started.record,
+            downloadedLocalRevision = revision,
+            remoteEtag = remoteEtag,
+            nowEpochMillis = System.currentTimeMillis(),
+        )
+        if (commit.committed) store.save(commit.state)
+        commit.removableLocalRevisions.forEach { removableRevision ->
+            contentFile(started.job.key, removableRevision).delete()
+        }
+        commit.committed
     }
 
     private fun enqueue(job: FileOfflineJob, accountId: String, userId: String) {
