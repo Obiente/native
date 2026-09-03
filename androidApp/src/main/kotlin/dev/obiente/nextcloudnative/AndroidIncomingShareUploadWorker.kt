@@ -80,30 +80,39 @@ internal class AndroidIncomingShareUploadWorker(
             scheduleIncomingShareRetry(applicationContext, request)
             return@withContext Result.success()
         }
-        val services = AndroidNextcloudServices(applicationContext)
-        val session = request.accountId?.let { accountIdentity ->
-            resolveStoredAndroidAccountSession(
-                accountIdentity = accountIdentity,
-                listAccounts = services::listAccounts,
-                loadSession = { accountId -> services.loadSession(accountId) },
-            )
+        return@withContext uploadQueuedRequest(store, requestId, request)
+    }
+
+    private suspend fun uploadQueuedRequest(
+        store: AndroidIncomingShareStore,
+        requestId: String,
+        request: AndroidIncomingShareRequest,
+    ): Result {
+        val accountIdentity = request.accountId ?: return failUnavailableAccount(store, requestId)
+        return ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
+            performQueuedUpload(store, requestId, request, accountIdentity)
         }
+    }
+
+    private suspend fun performQueuedUpload(
+        store: AndroidIncomingShareStore,
+        requestId: String,
+        initialRequest: AndroidIncomingShareRequest,
+        accountIdentity: String,
+    ): Result {
+        var request = initialRequest
+        val services = AndroidNextcloudServices(applicationContext)
+        val session = resolveStoredAndroidAccountSession(
+            accountIdentity = accountIdentity,
+            listAccounts = services::listAccounts,
+            loadSession = { accountId -> services.loadSession(accountId) },
+        )
         if (session == null) {
-            val failed = store.transition(
-                id = requestId,
-                expected = setOf(AndroidIncomingShareState.Queued),
-                target = AndroidIncomingShareState.Failed,
-                message = "The upload account is not active.",
-            )
-            failed?.let {
-                publishTerminalNotification(it)
-                scheduleIncomingShareCleanup(applicationContext, it.id)
-            }
-            return@withContext Result.failure()
+            return failUnavailableAccount(store, requestId)
         }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         var foregroundPromotionAvailable = setForegroundIfAvailable(request)
-        request = store.beginUpload(requestId) ?: return@withContext Result.success()
+        request = store.beginUpload(requestId) ?: return Result.success()
         val remote = AndroidFileSyncRemoteTree(
             session = session,
             userId = requireNotNull(request.userId),
@@ -120,7 +129,7 @@ internal class AndroidIncomingShareUploadWorker(
         )
         val requestCancellation = CoroutineDocumentRequestCancellation(currentCoroutineContext().job)
         var mutationInFlight = false
-        try {
+        return try {
             val destinationSnapshot = remote.rootChildNames()
             val occupiedNames = destinationSnapshot.names.toMutableSet().apply {
                 addAll(request.uploadedNames)
@@ -194,12 +203,12 @@ internal class AndroidIncomingShareUploadWorker(
                         "Nextcloud asked this upload to wait before retrying."
                     },
                     retryNotBeforeEpochMillis = retryNotBefore,
-                ) ?: return@withContext Result.success()
+                ) ?: return Result.success()
                 if (retryNotBefore != null) {
                     scheduleIncomingShareRetry(applicationContext, queued)
-                    return@withContext Result.success()
+                    return Result.success()
                 }
-                return@withContext Result.retry()
+                return Result.retry()
             }
             // A transport failure after a conditional PUT starts cannot prove whether the server
             // committed it. Do not replay automatically and risk a duplicate.
@@ -227,6 +236,20 @@ internal class AndroidIncomingShareUploadWorker(
         } finally {
             requestCancellation.close()
         }
+    }
+
+    private fun failUnavailableAccount(store: AndroidIncomingShareStore, requestId: String): Result {
+        val failed = store.transition(
+            id = requestId,
+            expected = setOf(AndroidIncomingShareState.Queued),
+            target = AndroidIncomingShareState.Failed,
+            message = "The upload account is no longer available.",
+        )
+        failed?.let {
+            publishTerminalNotification(it)
+            scheduleIncomingShareCleanup(applicationContext, it.id)
+        }
+        return Result.failure()
     }
 
     private fun ensureNotCanceled(requestId: String, store: AndroidIncomingShareStore) {
