@@ -122,7 +122,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
     ): Operation =
         WorkManager.getInstance(appContext).enqueueUniqueWork(
-            "deck-attachment-${job.id}",
+            durableUploadWorkName(job.id),
             policy,
             OneTimeWorkRequestBuilder<DeckAttachmentUploadWorker>()
                 .setInputData(Data.Builder().putString(DeckAttachmentUploadWorker.KEY_JOB_ID, job.id).build())
@@ -138,6 +138,8 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
     }
 }
+
+internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
 
 internal class DeckAttachmentUploadWorker(
     appContext: Context,
@@ -452,6 +454,13 @@ internal class AndroidDurableMultipartUploadStore(
 
     fun remove(id: String) = synchronized(LOCK) {
         writeAll(readAll().filterNot { it.id == id })
+    }
+
+    fun removeForAccount(accountId: String): List<AndroidDurableMultipartUploadJob> = synchronized(LOCK) {
+        val current = readAll()
+        val removed = current.filter { job -> job.accountId == accountId }
+        if (removed.isNotEmpty()) writeAll(current.filterNot { job -> job.accountId == accountId })
+        removed
     }
 
     fun transition(

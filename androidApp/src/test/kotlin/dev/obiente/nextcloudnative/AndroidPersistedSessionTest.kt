@@ -6,6 +6,8 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -339,6 +341,29 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun unsupportedFutureCredentialStoreIsReadOnlyAndNeverMigrated() {
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        var migrated = false
+        val future = JSONObject(
+            encodeAndroidAccountCredentialState(AndroidAccountCredentialState.Empty.upsertAndSelect(firstSession())),
+        ).put("version", 3).toString()
+
+        val restored = restoreAndroidAccountCredentialStore(
+            encoded = future,
+            persistMigrated = { migrated = true },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        assertNull(restored.state)
+        assertEquals(3, restored.unsupportedVersion)
+        assertFalse(migrated)
+        assertEquals(
+            listOf("ACCOUNT_CREDENTIAL_STORE_VERSION_UNSUPPORTED"),
+            diagnostics.mapNotNull { it.code },
+        )
+    }
+
+    @Test
     fun migrationFailureUsesABoundedCauseWithoutPrivateValues() {
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 
@@ -367,6 +392,149 @@ class AndroidPersistedSessionTest {
         assertFalse(registry.contains(session.appPassword))
         assertFalse(registry.contains("appPassword"))
         assertEquals(1, payload.getJSONArray("credentials").length())
+    }
+
+    @Test
+    fun accountListingDecodesTheCredentialFreeRegistryWithoutASecretPayload() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+        val encoded = encodeNextcloudAccountRegistry(registry)
+
+        assertFalse(encoded.contains(first.appPassword))
+        assertFalse(encoded.contains(second.appPassword))
+        assertEquals(registry, decodeAndroidCredentialFreeRegistry(encoded))
+    }
+
+    @Test
+    fun malformedCredentialFreeRegistryRecoversFromTheValidatedAggregateRegistry() {
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(firstSession().accountRecord())
+        var recoveryAttempted = false
+
+        val restored = restoreAndroidCredentialFreeRegistry("{not-json") {
+            recoveryAttempted = true
+            registry
+        }
+
+        assertTrue(recoveryAttempted)
+        assertEquals(registry, restored.registry)
+        assertEquals("ACCOUNT_REGISTRY_MALFORMED", restored.diagnosticCode)
+    }
+
+    @Test
+    fun futureCredentialFreeRegistryIsNeverRebuiltFromAnOlderAggregate() {
+        var recoveryAttempted = false
+
+        val restored = restoreAndroidCredentialFreeRegistry("""{"version":99,"accounts":[]}""") {
+            recoveryAttempted = true
+            NextcloudAccountRegistry.Empty
+        }
+
+        assertFalse(recoveryAttempted)
+        assertNull(restored.registry)
+        assertEquals("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED", restored.diagnosticCode)
+    }
+
+    @Test
+    fun credentialSlotReadDecryptsOnlyTheRequestedAccount() {
+        val first = firstSession()
+        val second = secondSession()
+        val encryptedByKey = mapOf(
+            androidAccountCredentialSlotKey(first.accountId) to "encrypted-first",
+            androidAccountCredentialSlotKey(second.accountId) to "encrypted-second",
+        )
+        val requestedKeys = mutableListOf<String>()
+        val decryptedValues = mutableListOf<String>()
+
+        val restored = readAndroidAccountCredentialSlot(
+            accountId = second.accountId,
+            readEncrypted = { key ->
+                requestedKeys += key
+                encryptedByKey[key]
+            },
+            decrypt = { encrypted ->
+                decryptedValues += encrypted
+                "decoded-second"
+            },
+            decode = { decoded -> second.takeIf { decoded == "decoded-second" } },
+        )
+
+        assertEquals(second, restored)
+        assertEquals(listOf(androidAccountCredentialSlotKey(second.accountId)), requestedKeys)
+        assertEquals(listOf("encrypted-second"), decryptedValues)
+    }
+
+    @Test
+    fun credentialSlotReadRejectsASecretForAnotherAccount() {
+        val first = firstSession()
+        val second = secondSession()
+
+        val restored = readAndroidAccountCredentialSlot(
+            accountId = second.accountId,
+            readEncrypted = { "encrypted-first" },
+            decrypt = { "decoded-first" },
+            decode = { first },
+        )
+
+        assertNull(restored)
+    }
+
+    @Test
+    fun validIndependentSlotsCanRecoverAroundAMalformedAggregateStore() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+        val slots = mapOf(first.accountId to first, second.accountId to second)
+
+        val restored = reconstructAndroidAccountCredentialState(registry, slots::get)
+
+        assertEquals(slots, requireNotNull(restored).sessions)
+        assertEquals(second, restored.activeSession)
+    }
+
+    @Test
+    fun independentSlotRecoveryRejectsRegistryCredentialMismatch() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(second.accountRecord())
+
+        assertNull(reconstructAndroidAccountCredentialState(registry) { first })
+    }
+
+    @Test
+    fun queuedUploadResumeFailureDoesNotHideACommittedAccountSelection() = runBlocking {
+        val events = mutableListOf<String>()
+
+        resumeAndroidQueuedUploadsAfterSelection(
+            resume = {
+                events += "resume"
+                error("Synthetic unreadable upload queue")
+            },
+            notifyDocumentRootsChanged = { events += "notify" },
+            recordFailure = { events += "diagnose" },
+        )
+
+        assertEquals(listOf("resume", "diagnose", "notify"), events)
+    }
+
+    @Test
+    fun queuedUploadResumeCancellationNotifiesBeforePropagating() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                resumeAndroidQueuedUploadsAfterSelection(
+                    resume = { throw CancellationException("Selection owner stopped") },
+                    notifyDocumentRootsChanged = { events += "notify" },
+                    recordFailure = { events += "diagnose" },
+                )
+            }
+        }
+        assertEquals(listOf("notify"), events)
     }
 
     private fun assertDiagnosticsExcludePrivateValues(diagnostics: List<SupportDiagnosticEventDraft>) {

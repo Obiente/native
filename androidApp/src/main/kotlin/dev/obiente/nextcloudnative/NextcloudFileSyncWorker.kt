@@ -37,9 +37,7 @@ internal class NextcloudFileSyncWorker(
         val services = AndroidNextcloudServices(applicationContext)
         val session = services.loadSession()
             ?: return@withContext Result.failure()
-        if (NextcloudDocumentIds.accountKey(session) != accountId) {
-            return@withContext Result.failure()
-        }
+        if (NextcloudDocumentIds.accountKey(session) != accountId) return@withContext Result.failure()
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
         try {
             setForeground(createForegroundInfo(pairId))
@@ -50,8 +48,16 @@ internal class NextcloudFileSyncWorker(
             // WorkManager may still execute short work when the OS temporarily refuses an FGS.
         }
         val engine = AndroidFileSyncEngine(applicationContext)
-        val result = runCatching { engine.runPair(session, userId, pairId) }
-            .getOrElse { failure ->
+        val result = try {
+            ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountId) {
+                val current = services.loadSession()
+                if (current == null || !androidAccountOperationSessionIsCurrent(accountId, current)) {
+                    null
+                } else {
+                    engine.runPair(current, userId, pairId)
+                }
+            } ?: return@withContext Result.failure()
+        } catch (failure: Throwable) {
                 rethrowAndroidFileSyncCancellation(failure)
                 val disposition = backgroundSyncFailureDisposition(runAttemptCount)
                 services.recordSupportDiagnosticForAccountIdentity(
@@ -78,7 +84,7 @@ internal class NextcloudFileSyncWorker(
                     ),
                 )
                 return@withContext disposition.toWorkerResult()
-            }
+        }
         val pair = engine.loadCenter(session, userId).pairs.firstOrNull { it.id == pairId }
             ?: return@withContext Result.success()
         pair.conflicts.firstOrNull()?.let { conflict ->

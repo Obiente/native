@@ -385,7 +385,16 @@ internal class AndroidFileOfflineRepository(context: Context) {
         return update.state.folderAvailability(accountId, folder.path)
     }
 
-    fun execute(
+    suspend fun execute(
+        expectedAccountId: String,
+        userId: String,
+        jobId: Long,
+        cancellation: DocumentRequestCancellation,
+    ): AndroidOfflineExecutionOutcome = ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(expectedAccountId) {
+        executeWhileAccountRetained(expectedAccountId, userId, jobId, cancellation)
+    }
+
+    private fun executeWhileAccountRetained(
         expectedAccountId: String,
         userId: String,
         jobId: Long,
@@ -393,9 +402,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
     ): AndroidOfflineExecutionOutcome {
         val services = AndroidNextcloudServices(appContext)
         val session = resolveStoredAndroidAccountSession(
-            accountIdentity = expectedAccountId,
-            listAccounts = services::listAccounts,
-            loadSession = { accountId -> services.loadSession(accountId) },
+            expectedAccountId, services::listAccounts, services::loadSession,
         )
         if (session == null) {
             finish(

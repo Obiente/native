@@ -52,8 +52,33 @@ internal class DesktopAccountCredentialPersistence(
             ?: if (read.encoded == null) NextcloudAccountRegistry.Empty else throw invalidRegistryForMutation()
         val updatedRegistry = registry.upsertAndSelect(session.accountRecord())
         val encodedRegistry = prepareRegistry(updatedRegistry)
+        val secretReference = desktopAccountSecretReference(session.accountId)
+        val previousRecord = registry.accounts.firstOrNull { account -> account.id == session.accountId }
+        val previousSecret = loadSecretForRollback(secretReference)
         saveSecret(session)
-        persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
+        try {
+            persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
+        } catch (failure: Exception) {
+            try {
+                if (previousSecret == null) {
+                    secretStore.clear(secretReference)
+                } else {
+                    secretStore.save(
+                        secretReference,
+                        previousRecord?.loginName,
+                        previousSecret,
+                    )
+                }
+            } catch (rollbackFailure: Exception) {
+                failure.addSuppressed(rollbackFailure)
+                recordCredentialDiagnostic(
+                    "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                    "account-credentials.persist",
+                    rollbackFailure,
+                )
+            }
+            throw failure
+        }
     }
 
     fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? {
@@ -151,6 +176,17 @@ internal class DesktopAccountCredentialPersistence(
     } catch (_: Exception) {
         recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_STORE_READ_FAILED", "account-credentials.restore")
         null
+    }
+
+    private fun loadSecretForRollback(reference: DesktopSecretReference): ByteArray? = try {
+        secretStore.load(reference)
+    } catch (failure: Exception) {
+        recordCredentialDiagnostic(
+            "ACCOUNT_CREDENTIAL_STORE_READ_FAILED",
+            "account-credentials.persist",
+            failure,
+        )
+        throw failure
     }
 
     private fun clearSecret(reference: DesktopSecretReference) {
