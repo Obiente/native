@@ -63,12 +63,18 @@ class DesktopAccountCredentialPersistenceTest {
         preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, futureRegistry)
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 
-        val restored = persistence(preferences, secrets, diagnostics).loadActiveSession()
+        val persistence = persistence(preferences, secrets, diagnostics)
+        val restored = persistence.loadActiveSession()
 
         assertEquals(session, restored)
+        assertEquals(listOf(session.accountRecord()), persistence.listAccounts())
+        assertEquals(session.accountId, persistence.activeAccountId())
         assertEquals(futureRegistry, preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
         assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
-        assertEquals(listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"), diagnostics.mapNotNull { it.code })
+        assertEquals(
+            listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"),
+            diagnostics.mapNotNull { it.code }.distinct(),
+        )
     }
 
     @Test

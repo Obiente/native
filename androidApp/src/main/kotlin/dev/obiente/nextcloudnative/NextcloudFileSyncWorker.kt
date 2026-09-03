@@ -187,7 +187,7 @@ internal class AndroidFileSyncScheduleRestorationWorker(
             onSuccess = { Result.success() },
             onFailure = { failure ->
                 rethrowAndroidFileSyncCancellation(failure)
-                Result.retry()
+                scheduleRestorationFailureDisposition(runAttemptCount).toWorkerResult()
             },
         )
     }
@@ -201,6 +201,9 @@ internal fun isAndroidFileSyncScheduleRestorationCurrent(
     expectedAccountId: String,
     session: NextcloudSession,
 ): Boolean = NextcloudDocumentIds.accountKey(session) == expectedAccountId
+
+internal fun scheduleRestorationFailureDisposition(runAttemptCount: Int): BackgroundSyncWorkerDisposition =
+    backgroundSyncFailureDisposition(runAttemptCount)
 
 internal fun syncConflictNotificationDetail(conflictCount: Int): String {
     require(conflictCount > 0)
