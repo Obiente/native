@@ -4,10 +4,17 @@ import android.content.Context
 import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudAccountId
 import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistryRecoveryReason
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
+import dev.obiente.nextcloudnative.app.accountRecord
+import dev.obiente.nextcloudnative.app.decodeNextcloudAccountRegistry
+import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
+import dev.obiente.nextcloudnative.app.restoreNextcloudAccountRegistry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
@@ -24,11 +31,12 @@ internal class AndroidAccountCredentialController(
     private val clearPreviewAccount: (String) -> Unit,
     private val notifyDocumentRootsChanged: () -> Unit,
     private val resumeQueuedUploads: suspend (String) -> Unit,
+    private val removeQueuedUploads: suspend (String) -> Unit,
 ) {
     private val appContext = context.applicationContext
 
     fun loadSession(): NextcloudSession? = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
-        load = { (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state?.activeSession },
+        load = { activeAccountId()?.let { accountId -> loadSession(accountId) } },
         accountIdOf = NextcloudDocumentIds::accountKey,
         publishAccount = { session, accountIdentity ->
             session?.let(registerSessionPrivateValues)
@@ -36,30 +44,39 @@ internal class AndroidAccountCredentialController(
         },
     )
 
-    fun listAccounts(): List<NextcloudAccountRecord> =
-        (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state?.registry?.accounts.orEmpty()
+    fun listAccounts(): List<NextcloudAccountRecord> = readCredentialFreeRegistry()?.accounts.orEmpty()
 
-    fun activeAccountId(): NextcloudAccountId? =
-        (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state?.registry?.activeAccountId
+    fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
-        (readStore() as? AndroidAccountCredentialStoreRead.Available)
-            ?.state
-            ?.sessions
-            ?.get(accountId)
-            ?.also(registerSessionPrivateValues)
+        ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
+            val registry = readCredentialFreeRegistry() ?: return@serialize null
+            if (registry.accounts.none { account -> account.id == accountId }) return@serialize null
+            if (!preferences.contains(androidAccountCredentialSlotKey(accountId))) {
+                val state = (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state
+                    ?: return@serialize null
+                commitPreferences(prepareCredentialSlotEdit(preferences.edit(), state))
+            }
+            readCredentialSlot(accountId)?.also(registerSessionPrivateValues)
+        }
 
     suspend fun saveSession(session: NextcloudSession) = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
         registerSessionPrivateValues(session)
         when (val read = readStore()) {
             is AndroidAccountCredentialStoreRead.Available ->
                 replaceActiveState(read.state.upsertAndSelect(session), read.state.activeSession)
-            is AndroidAccountCredentialStoreRead.Invalid ->
+            is AndroidAccountCredentialStoreRead.Invalid -> {
+                val retained = readIndependentCredentialSlotState()
+                check(retained != null || !hasIndependentCredentialState()) {
+                    "The aggregate account credential store is invalid; reset it before signing in again."
+                }
                 replaceActiveState(
-                    replacement = AndroidAccountCredentialState.Empty.upsertAndSelect(session),
-                    previousSession = null,
+                    replacement = (retained ?: AndroidAccountCredentialState.Empty).upsertAndSelect(session),
+                    previousSession = retained?.activeSession,
                     suspectEncrypted = read.encrypted,
                 )
+            }
+            is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
         }
     }
 
@@ -81,7 +98,16 @@ internal class AndroidAccountCredentialController(
                 if (current.registry.activeAccountId == accountId) {
                     clearSession(current)
                 } else {
-                    persistState(current.remove(accountId))
+                    val replacement = current.remove(accountId)
+                    persistState(replacement)
+                    try {
+                        removeQueuedUploads(NextcloudDocumentIds.accountKey(session))
+                    } catch (failure: Exception) {
+                        runCatching { persistState(current) }
+                            .onFailure(failure::addSuppressed)
+                        throw failure
+                    }
+                    clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(session))
                 }
             }
             true
@@ -100,6 +126,7 @@ internal class AndroidAccountCredentialController(
                 }
             }
             is AndroidAccountCredentialStoreRead.Invalid -> clearInvalidStore(read.encrypted)
+            is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
         }
     }
 
@@ -109,18 +136,23 @@ internal class AndroidAccountCredentialController(
         val encodedReplacement = replacement.takeUnless { state ->
             state.registry.accounts.isEmpty() && state.sessions.isEmpty()
         }?.let(::encryptState)
-        clearPersistedSession(encodedReplacement)
+        clearPersistedSession(encodedReplacement, replacement)
         clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(activeSession))
         notifyDocumentRootsChanged()
     }
 
     private suspend fun clearInvalidStore(suspectEncrypted: String) {
-        clearPersistedSession(encodedReplacement = null, suspectEncrypted = suspectEncrypted)
+        clearPersistedSession(
+            encodedReplacement = null,
+            replacement = AndroidAccountCredentialState.Empty,
+            suspectEncrypted = suspectEncrypted,
+        )
         notifyDocumentRootsChanged()
     }
 
     private suspend fun clearPersistedSession(
         encodedReplacement: String?,
+        replacement: AndroidAccountCredentialState,
         suspectEncrypted: String? = null,
     ) {
         withContext(Dispatchers.IO) { AndroidExternalFileHandoffRegistry.clear() }
@@ -132,15 +164,17 @@ internal class AndroidAccountCredentialController(
                         preferences.edit().apply {
                             if (encodedReplacement == null) remove(KEY_SESSION)
                             else putString(KEY_SESSION, encodedReplacement)
+                            putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(replacement.registry))
                             remove(KEY_TEST_READ_ONLY)
-                        }
+                        }.let { editor -> prepareCredentialSlotEdit(editor, replacement) }
                     } else {
                         prepareInvalidAndroidAccountCredentialRecoveryEdit(
                             editor = preferences.edit(),
                             suspectEncrypted = suspectEncrypted,
                             replacementEncrypted = encodedReplacement,
                             hasExistingQuarantine = preferences.contains(KEY_QUARANTINED_SESSION),
-                        )
+                        ).putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(replacement.registry))
+                            .let { editor -> prepareCredentialSlotEdit(editor, replacement) }
                     }
                     commitPreferences(editor)
                 },
@@ -155,6 +189,23 @@ internal class AndroidAccountCredentialController(
         previousSession: NextcloudSession?,
         suspectEncrypted: String? = null,
     ) {
+        val replace = suspend {
+            replaceActiveStateWhileOperationsIdle(replacement, previousSession, suspectEncrypted)
+        }
+        if (previousSession == null) {
+            replace()
+        } else {
+            ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(previousSession)) {
+                replace()
+            }
+        }
+    }
+
+    private suspend fun replaceActiveStateWhileOperationsIdle(
+        replacement: AndroidAccountCredentialState,
+        previousSession: NextcloudSession?,
+        suspectEncrypted: String?,
+    ) {
         val session = requireNotNull(replacement.activeSession)
         val encrypted = encryptState(replacement)
         withContext(Dispatchers.IO) { AndroidExternalFileHandoffRegistry.clear() }
@@ -166,6 +217,7 @@ internal class AndroidAccountCredentialController(
                     val editor = if (suspectEncrypted == null) {
                         preferences.edit()
                             .putString(KEY_SESSION, encrypted)
+                            .putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(replacement.registry))
                             .remove(KEY_TEST_READ_ONLY)
                     } else {
                         prepareInvalidAndroidAccountCredentialRecoveryEdit(
@@ -173,9 +225,9 @@ internal class AndroidAccountCredentialController(
                             suspectEncrypted = suspectEncrypted,
                             replacementEncrypted = encrypted,
                             hasExistingQuarantine = preferences.contains(KEY_QUARANTINED_SESSION),
-                        )
+                        ).putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(replacement.registry))
                     }
-                    commitPreferences(editor)
+                    commitPreferences(prepareCredentialSlotEdit(editor, replacement))
                 },
                 cancelAll = scheduler::cancelAll,
                 publishAccount = publishAccountIdentity,
@@ -185,16 +237,64 @@ internal class AndroidAccountCredentialController(
         if (previousSession != null && previousSession.accountId != session.accountId) {
             clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(previousSession))
         }
-        withContext(NonCancellable) {
-            resumeQueuedUploads(NextcloudDocumentIds.accountKey(session))
-        }
-        notifyDocumentRootsChanged()
+        resumeAndroidQueuedUploadsAfterSelection(
+            resume = { resumeQueuedUploads(NextcloudDocumentIds.accountKey(session)) },
+            notifyDocumentRootsChanged = notifyDocumentRootsChanged,
+            recordFailure = {
+                recordCredentialFailure(
+                    code = "DURABLE_UPLOAD_RESUME_FAILED",
+                    operation = "account-selection.upload-resume",
+                    component = SupportDiagnosticComponent.Storage,
+                )
+            },
+        )
     }
 
     private fun requireValidState(): AndroidAccountCredentialState = when (val read = readStore()) {
         is AndroidAccountCredentialStoreRead.Available -> read.state
         is AndroidAccountCredentialStoreRead.Invalid -> error("The account credential store is invalid.")
+        is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
     }
+
+    private fun readCredentialFreeRegistry(): NextcloudAccountRegistry? =
+        ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
+            preferences.getString(KEY_ACCOUNT_REGISTRY, null)?.let { encoded ->
+                val restored = restoreAndroidCredentialFreeRegistry(encoded) {
+                    val state = (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state
+                        ?: return@restoreAndroidCredentialFreeRegistry null
+                    runCatching {
+                        commitPreferences(
+                            prepareCredentialSlotEdit(
+                                preferences.edit().putString(
+                                    KEY_ACCOUNT_REGISTRY,
+                                    encodeNextcloudAccountRegistry(state.registry),
+                                ),
+                                state,
+                            ),
+                        )
+                    }
+                    state.registry
+                }
+                restored.diagnosticCode?.let { code ->
+                    recordCredentialFailure(code, operation = "account-registry.restore")
+                }
+                return@serialize restored.registry
+            }
+            val state = (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state
+                ?: return@serialize null
+            runCatching {
+                commitPreferences(
+                    prepareCredentialSlotEdit(
+                        preferences.edit().putString(
+                            KEY_ACCOUNT_REGISTRY,
+                            encodeNextcloudAccountRegistry(state.registry),
+                        ),
+                        state,
+                    ),
+                )
+            }
+            state.registry
+        }
 
     private fun readStore(): AndroidAccountCredentialStoreRead = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
         val encrypted = preferences.getString(KEY_SESSION, null)
@@ -208,21 +308,80 @@ internal class AndroidAccountCredentialController(
             )
             return@serialize AndroidAccountCredentialStoreRead.Invalid(encrypted)
         }
-        val state = restoreAndroidAccountCredentialState(
+        val restored = restoreAndroidAccountCredentialStore(
             encoded = encoded,
             persistMigrated = { migrated ->
+                val migratedState = requireNotNull(decodeAndroidAccountCredentialState(migrated).state)
                 commitPreferences(
-                    preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)),
+                    prepareCredentialSlotEdit(
+                        preferences.edit()
+                            .putString(KEY_SESSION, sessionCipher.encrypt(migrated))
+                            .putString(
+                                KEY_ACCOUNT_REGISTRY,
+                                encodeNextcloudAccountRegistry(migratedState.registry),
+                            ),
+                        migratedState,
+                    ),
                 )
             },
             recordDiagnostic = recordDiagnostic,
         )
-        state?.let { AndroidAccountCredentialStoreRead.Available(it) }
-            ?: AndroidAccountCredentialStoreRead.Invalid(encrypted)
+        return@serialize when {
+            restored.unsupportedVersion != null ->
+                AndroidAccountCredentialStoreRead.Unsupported(encrypted, restored.unsupportedVersion)
+            restored.state != null -> AndroidAccountCredentialStoreRead.Available(restored.state)
+            else -> AndroidAccountCredentialStoreRead.Invalid(encrypted)
+        }
+    }
+
+    private fun readIndependentCredentialSlotState(): AndroidAccountCredentialState? {
+        val encodedRegistry = preferences.getString(KEY_ACCOUNT_REGISTRY, null) ?: return null
+        val restored = restoreNextcloudAccountRegistry(encodedRegistry, legacySession = null)
+        if (restored.recoveryReason != null) return null
+        return reconstructAndroidAccountCredentialState(restored.registry, ::readCredentialSlot)
+    }
+
+    private fun hasIndependentCredentialState(): Boolean =
+        preferences.contains(KEY_ACCOUNT_REGISTRY) ||
+            preferences.all.keys.any { key -> key.startsWith(KEY_ACCOUNT_CREDENTIAL_SLOT_PREFIX) }
+
+    private fun readCredentialSlot(accountId: NextcloudAccountId): NextcloudSession? = try {
+        readAndroidAccountCredentialSlot(
+            accountId = accountId,
+            readEncrypted = { key -> preferences.getString(key, null) },
+            decrypt = sessionCipher::decrypt,
+            decode = { encoded ->
+                restoreAndroidAccountCredentialState(
+                    encoded = encoded,
+                    persistMigrated = { migrated ->
+                        commitPreferences(
+                            preferences.edit().putString(
+                                androidAccountCredentialSlotKey(accountId),
+                                sessionCipher.encrypt(migrated),
+                            ),
+                        )
+                    },
+                    recordDiagnostic = recordDiagnostic,
+                )?.activeSession
+            },
+        )
+    } catch (_: Exception) {
+        recordCredentialFailure(
+            code = "ACCOUNT_CREDENTIAL_STORE_READ_FAILED",
+            operation = "account-credentials.restore",
+        )
+        null
     }
 
     private suspend fun persistState(state: AndroidAccountCredentialState) = withContext(Dispatchers.IO) {
-        commitPreferences(preferences.edit().putString(KEY_SESSION, encryptState(state)))
+        commitPreferences(
+            prepareCredentialSlotEdit(
+                preferences.edit()
+                    .putString(KEY_SESSION, encryptState(state))
+                    .putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(state.registry)),
+                state,
+            ),
+        )
     }
 
     private fun commitPreferences(editor: SharedPreferences.Editor) = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
@@ -247,11 +406,31 @@ internal class AndroidAccountCredentialController(
         throw failure
     }
 
-    private fun recordCredentialFailure(code: String, operation: String) {
+    private fun prepareCredentialSlotEdit(
+        editor: SharedPreferences.Editor,
+        state: AndroidAccountCredentialState,
+    ): SharedPreferences.Editor = editor.apply {
+        val retainedKeys = state.sessions.keys.mapTo(hashSetOf(), ::androidAccountCredentialSlotKey)
+        preferences.all.keys
+            .filter { key -> key.startsWith(KEY_ACCOUNT_CREDENTIAL_SLOT_PREFIX) && key !in retainedKeys }
+            .forEach(::remove)
+        state.sessions.forEach { (accountId, session) ->
+            putString(
+                androidAccountCredentialSlotKey(accountId),
+                sessionCipher.encrypt(encodeAndroidPersistedSession(session)),
+            )
+        }
+    }
+
+    private fun recordCredentialFailure(
+        code: String,
+        operation: String,
+        component: SupportDiagnosticComponent = SupportDiagnosticComponent.Authentication,
+    ) {
         recordDiagnostic(
             SupportDiagnosticEventDraft(
                 severity = SupportDiagnosticSeverity.Error,
-                component = SupportDiagnosticComponent.Authentication,
+                component = component,
                 operation = operation,
                 outcome = "failed",
                 code = code,
@@ -264,6 +443,74 @@ internal class AndroidAccountCredentialController(
 internal sealed interface AndroidAccountCredentialStoreRead {
     data class Available(val state: AndroidAccountCredentialState) : AndroidAccountCredentialStoreRead
     data class Invalid(val encrypted: String) : AndroidAccountCredentialStoreRead
+    data class Unsupported(val encrypted: String, val version: Int) : AndroidAccountCredentialStoreRead
+}
+
+private fun unsupportedCredentialStoreMutation(version: Int): Nothing =
+    error("The account credential store version $version is unsupported.")
+
+internal fun decodeAndroidCredentialFreeRegistry(encoded: String): NextcloudAccountRegistry? =
+    decodeNextcloudAccountRegistry(encoded)
+
+internal data class RestoredAndroidCredentialFreeRegistry(
+    val registry: NextcloudAccountRegistry?,
+    val diagnosticCode: String? = null,
+)
+
+internal fun restoreAndroidCredentialFreeRegistry(
+    encoded: String,
+    recoverMalformed: () -> NextcloudAccountRegistry?,
+): RestoredAndroidCredentialFreeRegistry {
+    val restored = restoreNextcloudAccountRegistry(encoded, legacySession = null)
+    val recoveryReason = restored.recoveryReason
+    return when (recoveryReason) {
+        null -> RestoredAndroidCredentialFreeRegistry(restored.registry)
+        NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion ->
+            RestoredAndroidCredentialFreeRegistry(null, recoveryReason.diagnosticCode)
+        else -> RestoredAndroidCredentialFreeRegistry(recoverMalformed(), recoveryReason.diagnosticCode)
+    }
+}
+
+internal fun androidAccountCredentialSlotKey(accountId: NextcloudAccountId): String =
+    "$KEY_ACCOUNT_CREDENTIAL_SLOT_PREFIX${accountId.storageKey}"
+
+internal fun readAndroidAccountCredentialSlot(
+    accountId: NextcloudAccountId,
+    readEncrypted: (String) -> String?,
+    decrypt: (String) -> String,
+    decode: (String) -> NextcloudSession?,
+): NextcloudSession? {
+    val encrypted = readEncrypted(androidAccountCredentialSlotKey(accountId)) ?: return null
+    return decode(decrypt(encrypted))?.takeIf { session -> session.accountId == accountId }
+}
+
+internal fun reconstructAndroidAccountCredentialState(
+    registry: NextcloudAccountRegistry,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): AndroidAccountCredentialState? {
+    val sessions = linkedMapOf<NextcloudAccountId, NextcloudSession>()
+    registry.accounts.forEach { account ->
+        val session = loadSession(account.id)?.takeIf { loaded -> loaded.accountRecord() == account }
+            ?: return null
+        sessions[account.id] = session
+    }
+    return AndroidAccountCredentialState(registry, sessions)
+}
+
+internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
+    resume: suspend () -> Unit,
+    notifyDocumentRootsChanged: () -> Unit,
+    recordFailure: () -> Unit,
+) {
+    try {
+        withContext(NonCancellable) { resume() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        recordFailure()
+    } finally {
+        notifyDocumentRootsChanged()
+    }
 }
 
 internal class AndroidAccountCredentialStoreGuard {
@@ -303,6 +550,8 @@ internal fun resolveStoredAndroidAccountSession(
 }
 
 private const val KEY_SESSION = "encrypted_session"
+private const val KEY_ACCOUNT_REGISTRY = "account_registry_v1"
+private const val KEY_ACCOUNT_CREDENTIAL_SLOT_PREFIX = "account_credential_v1:"
 private const val KEY_QUARANTINED_SESSION = "encrypted_session_quarantine"
 private val ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD = AndroidAccountCredentialStoreGuard()
 private val ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX = Mutex()

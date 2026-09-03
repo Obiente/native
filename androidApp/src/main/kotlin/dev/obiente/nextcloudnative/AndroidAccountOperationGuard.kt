@@ -28,3 +28,8 @@ internal class AndroidAccountOperationGuard {
 }
 
 internal val ANDROID_ACCOUNT_OPERATION_GUARD = AndroidAccountOperationGuard()
+
+internal fun androidAccountOperationSessionIsCurrent(
+    expectedAccountId: String,
+    currentSession: dev.obiente.nextcloudnative.app.NextcloudSession?,
+): Boolean = currentSession != null && NextcloudDocumentIds.accountKey(currentSession) == expectedAccountId
