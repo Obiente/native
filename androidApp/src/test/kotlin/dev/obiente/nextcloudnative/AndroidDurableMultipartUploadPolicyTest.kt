@@ -6,13 +6,134 @@ import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
+    @Test
+    fun `encrypted queue read and decryption failures preserve recoverable jobs`() {
+        listOf("read", "decrypt").forEach { failureMode ->
+            val storage = FakeDurableUploadEncryptedStorage()
+            val cipher = FakeDurableUploadCipher()
+            val recoverable = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+            AndroidDurableMultipartUploadStore(storage, cipher).add(recoverable)
+            val encryptedBeforeFailure = storage.value
+            if (failureMode == "read") storage.readFailure = IOException("synthetic read failure")
+            if (failureMode == "decrypt") cipher.decryptFailure = IOException("synthetic decrypt failure")
+
+            val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
+            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+                restarted.add(fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43))
+            }
+            assertEquals(encryptedBeforeFailure, storage.value)
+
+            storage.readFailure = null
+            cipher.decryptFailure = null
+            assertEquals(listOf(recoverable), AndroidDurableMultipartUploadStore(storage, cipher).list())
+        }
+    }
+
+    @Test
+    fun `corrupt encrypted queue is never replaced by a later write`() {
+        val storage = FakeDurableUploadEncryptedStorage(value = "not-json")
+        val cipher = FakeDurableUploadCipher()
+        val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
+
+        assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+        assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+            restarted.add(fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42))
+        }
+
+        assertEquals("not-json", storage.value)
+    }
+
+    @Test
+    fun `one malformed row blocks queue rewrites without dropping valid rows`() {
+        val storage = FakeDurableUploadEncryptedStorage()
+        val cipher = FakeDurableUploadCipher()
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43)
+        AndroidDurableMultipartUploadStore(storage, cipher).apply {
+            add(first)
+            add(second)
+        }
+        val validSnapshot = requireNotNull(storage.value)
+        val malformed = JSONArray(validSnapshot).also { array ->
+            array.getJSONObject(1).remove("relativePath")
+        }.toString()
+        storage.value = malformed
+        val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
+
+        assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+        assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.remove(first.id) }
+        assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+            restarted.transition(
+                first.id,
+                DurableUploadState.Queued,
+                DurableUploadState.Uploading,
+                null,
+            )
+        }
+        assertEquals(malformed, storage.value)
+
+        storage.value = validSnapshot
+        assertEquals(listOf(first, second), AndroidDurableMultipartUploadStore(storage, cipher).list())
+    }
+
+    @Test
+    fun `failed queue write leaves the previous restart snapshot readable`() {
+        val storage = FakeDurableUploadEncryptedStorage()
+        val cipher = FakeDurableUploadCipher()
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43)
+        AndroidDurableMultipartUploadStore(storage, cipher).add(first)
+        val snapshotBeforeWrite = storage.value
+        storage.failWrites = true
+
+        assertFailsWith<IllegalStateException> {
+            AndroidDurableMultipartUploadStore(storage, cipher).add(second)
+        }
+
+        assertEquals(snapshotBeforeWrite, storage.value)
+        storage.failWrites = false
+        assertEquals(listOf(first), AndroidDurableMultipartUploadStore(storage, cipher).list())
+    }
+
+    @Test
+    fun `duplicate and oversized queue snapshots block rewrites`() {
+        val storage = FakeDurableUploadEncryptedStorage()
+        val cipher = FakeDurableUploadCipher()
+        AndroidDurableMultipartUploadStore(storage, cipher).add(
+            fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42),
+        )
+        val storedRow = JSONArray(requireNotNull(storage.value)).getJSONObject(0)
+        val invalidSnapshots = listOf(
+            JSONArray().put(storedRow).put(storedRow).toString(),
+            JSONArray().also { array ->
+                repeat(AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS + 1) {
+                    array.put(storedRow)
+                }
+            }.toString(),
+        )
+
+        invalidSnapshots.forEach { invalidSnapshot ->
+            storage.value = invalidSnapshot
+            val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
+
+            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+                restarted.add(fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43))
+            }
+            assertEquals(invalidSnapshot, storage.value)
+        }
+    }
+
     @Test
     fun `deck attachment resource binds board stack card and request path`() {
         val scope = DurableUploadScope("deck-attachment", "42")
@@ -188,5 +309,34 @@ class AndroidDurableMultipartUploadPolicyTest {
     private companion object {
         const val ACCOUNT_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         const val ACCOUNT_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+}
+
+private class FakeDurableUploadEncryptedStorage(
+    var value: String? = null,
+) : AndroidDurableMultipartUploadEncryptedStorage {
+    var readFailure: IOException? = null
+    var failWrites: Boolean = false
+
+    override fun read(): String? {
+        readFailure?.let { throw it }
+        return value
+    }
+
+    override fun write(value: String): Boolean {
+        if (failWrites) return false
+        this.value = value
+        return true
+    }
+}
+
+private class FakeDurableUploadCipher : AndroidDurableMultipartUploadCipher {
+    var decryptFailure: IOException? = null
+
+    override fun encrypt(value: String): String = value
+
+    override fun decrypt(value: String): String {
+        decryptFailure?.let { throw it }
+        return value
     }
 }
