@@ -18,6 +18,34 @@ import java.lang.reflect.Proxy
 
 class AndroidPersistedSessionTest {
     @Test
+    fun retainedAccountSessionResolvesWithoutSelectingIt() {
+        val first = firstSession()
+        val second = secondSession()
+        val sessions = mapOf(first.accountId to first, second.accountId to second)
+
+        val resolved = resolveStoredAndroidAccountSession(
+            accountIdentity = NextcloudDocumentIds.accountKey(second),
+            listAccounts = { listOf(first.accountRecord(), second.accountRecord()) },
+            loadSession = sessions::get,
+        )
+
+        assertEquals(second, resolved)
+    }
+
+    @Test
+    fun retainedAccountResolutionRejectsMismatchedCredential() {
+        val first = firstSession()
+        val second = secondSession()
+
+        val resolved = resolveStoredAndroidAccountSession(
+            accountIdentity = NextcloudDocumentIds.accountKey(second),
+            listAccounts = { listOf(second.accountRecord()) },
+            loadSession = { first },
+        )
+
+        assertNull(resolved)
+    }
+    @Test
     fun accountCredentialEditsUseCheckedSynchronousCommit() {
         val successfulCalls = mutableListOf<String>()
         requireCommittedAndroidAccountCredentialEdit(recordingEditor(commitResult = true, successfulCalls))

@@ -101,7 +101,14 @@ internal class AndroidIncomingShareChunkCleanupWorker(
         val chunk = request.chunkSession ?: return@withContext Result.success()
         val claimed = store.claimChunkSessionForCleanup(requestId, chunk.uploadId)
             ?: return@withContext Result.success()
-        val session = AndroidNextcloudServices(applicationContext).loadSession()
+        val services = AndroidNextcloudServices(applicationContext)
+        val session = request.accountId?.let { accountIdentity ->
+            resolveStoredAndroidAccountSession(
+                accountIdentity = accountIdentity,
+                listAccounts = services::listAccounts,
+                loadSession = { accountId -> services.loadSession(accountId) },
+            )
+        }
         if (session == null) {
             return@withContext retryOrReleaseIncomingShareChunkCleanup(
                 store,
@@ -111,7 +118,6 @@ internal class AndroidIncomingShareChunkCleanupWorker(
             )
         }
         if (
-            request.accountId != NextcloudDocumentIds.accountKey(session) ||
             request.userId.isNullOrBlank()
         ) {
             return@withContext retryOrReleaseIncomingShareChunkCleanup(

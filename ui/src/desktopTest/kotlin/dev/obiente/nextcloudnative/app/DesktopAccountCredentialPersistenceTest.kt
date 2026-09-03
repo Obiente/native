@@ -181,6 +181,54 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun failedCredentialDeletionKeepsTheAccountRegisteredForRetry() = withStore { preferences, secrets ->
+        val first = firstSession()
+        val second = secondSession()
+        val persistence = persistence(preferences, secrets)
+        persistence.saveSession(first)
+        persistence.saveSession(second)
+        secrets.failClears = true
+
+        assertFailsWith<IllegalStateException> {
+            persistence.removeAccount(second.accountId)
+        }
+
+        assertEquals(second.accountId, persistence.activeAccountId())
+        assertEquals(setOf(first.accountRecord(), second.accountRecord()), persistence.listAccounts().toSet())
+        assertNotNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+
+        secrets.failClears = false
+        assertTrue(persistence.removeAccount(second.accountId))
+        assertNull(persistence(preferences, secrets).activeAccountId())
+        assertNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+    }
+
+    @Test
+    fun failedRegistryFlushAfterCredentialDeletionKeepsADeletionRetryPath() =
+        withStore { preferences, secrets ->
+            val first = firstSession()
+            val second = secondSession()
+            var flushAttempts = 0
+            val persistence = persistence(preferences, secrets) {
+                flushAttempts += 1
+                if (flushAttempts == 3) error("synthetic removal flush failure")
+                preferences.flush()
+            }
+            persistence.saveSession(first)
+            persistence.saveSession(second)
+
+            assertFailsWith<IllegalStateException> {
+                persistence.removeAccount(second.accountId)
+            }
+
+            assertEquals(second.accountId, persistence.activeAccountId())
+            assertEquals(setOf(first.accountRecord(), second.accountRecord()), persistence.listAccounts().toSet())
+            assertNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+            assertTrue(persistence.removeAccount(second.accountId))
+            assertNull(persistence(preferences, secrets).activeAccountId())
+        }
+
+    @Test
     fun oversizedRegistryFailsBeforeCredentialOrMetadataWrites() = withStore { preferences, secrets ->
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test/" + "a".repeat(8_050),
@@ -274,6 +322,7 @@ class DesktopAccountCredentialPersistenceTest {
     private class MemorySecretStore : DesktopSecretStore {
         private val values = mutableMapOf<String, ByteArray>()
         var failSaves = false
+        var failClears = false
 
         override fun load(reference: DesktopSecretReference): ByteArray? = values[reference.targetName]?.copyOf()
 
@@ -283,6 +332,7 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
         override fun clear(reference: DesktopSecretReference) {
+            if (failClears) error("synthetic secret deletion failure")
             values.remove(reference.targetName)
         }
     }
