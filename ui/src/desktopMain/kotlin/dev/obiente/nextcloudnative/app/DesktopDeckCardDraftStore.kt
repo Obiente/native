@@ -51,6 +51,8 @@ internal class DesktopDeckCardDraftStore(
         val encryptionKey = keyProvider.encryptionKey()
         if (file.exists()) {
             readAuthenticated(file, encryptionKey, persisted.key)
+        } else {
+            ensureCapacityForNewDraft(encryptionKey)
         }
         val plaintext = encodePlaintext(persisted, updatedAtEpochMillis)
         require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "The Deck card draft is too large." }
@@ -67,11 +69,18 @@ internal class DesktopDeckCardDraftStore(
     }
 
     @Synchronized
-    fun clear(session: NextcloudSession, key: DeckCardDraftKey) {
+    fun clear(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+        discardUnreadable: Boolean = false,
+    ) {
         val file = draftFile(session, key)
-        if (file.exists()) {
+        if (file.exists() && !discardUnreadable) {
             val encryptionKey = keyProvider.encryptionKey()
             readAuthenticated(file, encryptionKey, key)
+        }
+        check(!Files.isSymbolicLink(root.toPath())) {
+            "Desktop Deck draft storage must not be a symbolic link."
         }
         check(deleteFile(file) && deleteFile(quarantineFile(file))) {
             "The Deck card draft could not be cleared."
@@ -263,9 +272,28 @@ internal class DesktopDeckCardDraftStore(
         }
         val namesToPrune = DeckCardDraftRetention.keysToPrune(
             entries = entries,
-            maximumEntries = DeckCardDraftRetention.MAX_ENTRIES,
+            maximumEntries = (DeckCardDraftRetention.MAX_ENTRIES - (files.size - entries.size))
+                .coerceAtLeast(0),
         )
         files.filter { it.name in namesToPrune }.forEach(::deleteDraft)
+    }
+
+    private fun ensureCapacityForNewDraft(encryptionKey: ByteArray) {
+        val files = root.listFiles().orEmpty()
+            .filter { it.name.matches(DRAFT_FILE_PATTERN) }
+        val overflow = files.size + 1 - DeckCardDraftRetention.MAX_ENTRIES
+        if (overflow <= 0) return
+        val readableFiles = files.count { file ->
+            try {
+                readAuthenticated(file, encryptionKey)
+                true
+            } catch (_: DesktopDeckDraftRecoveryException) {
+                false
+            }
+        }
+        check(readableFiles >= overflow) {
+            "A new Deck draft cannot be saved while unreadable drafts fill the recovery limit."
+        }
     }
 
     private fun ensurePrivateDirectory() {

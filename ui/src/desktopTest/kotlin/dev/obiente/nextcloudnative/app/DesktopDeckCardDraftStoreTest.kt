@@ -83,6 +83,56 @@ class DesktopDeckCardDraftStoreTest {
         }
 
     @Test
+    fun `explicit discard removes permanently unreadable ciphertext`() =
+        withStore { root, _, store ->
+            val session = session()
+            val damaged = persisted()
+            store.save(session, damaged)
+            val damagedFile = root.resolve(store.storageFileName(session, damaged.key))
+            damagedFile.writeText("not-an-envelope")
+
+            assertFailsWith<DesktopDeckDraftRecoveryException> {
+                store.load(session, damaged.key)
+            }
+
+            store.clear(session, damaged.key, discardUnreadable = true)
+
+            assertFalse(damagedFile.exists())
+        }
+
+    @Test
+    fun `unreadable drafts count toward the retention ceiling`() =
+        withStore { root, _, store ->
+            val session = session()
+            val damaged = persisted(cardId = 1L)
+            store.save(session, damaged)
+            root.resolve(store.storageFileName(session, damaged.key)).writeText("not-an-envelope")
+
+            (2L..(DeckCardDraftRetention.MAX_ENTRIES + 3L)).forEach { cardId ->
+                store.save(session, persisted(cardId = cardId))
+            }
+
+            assertEquals(DeckCardDraftRetention.MAX_ENTRIES, root.listFiles().orEmpty().size)
+            assertTrue(root.resolve(store.storageFileName(session, damaged.key)).exists())
+        }
+
+    @Test
+    fun `unreadable drafts cannot grow beyond the retention ceiling`() =
+        withStore { root, _, store ->
+            val session = session()
+            repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
+                root.resolve("${DesktopDeckCardDraftStore.FILE_PREFIX}${index.toString(16).padStart(64, '0')}" +
+                    DesktopDeckCardDraftStore.FILE_SUFFIX).writeText("not-an-envelope")
+            }
+
+            assertFailsWith<IllegalStateException> {
+                store.save(session, persisted())
+            }
+
+            assertEquals(DeckCardDraftRetention.MAX_ENTRIES, root.listFiles().orEmpty().size)
+        }
+
+    @Test
     fun `retention keeps only the newest bounded draft set`() {
         val root = Files.createTempDirectory("desktop-deck-drafts").toFile()
         val key = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { it.toByte() }
