@@ -15,8 +15,39 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.json.JSONObject
 import java.lang.reflect.Proxy
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class AndroidPersistedSessionTest {
+    @Test
+    fun credentialStoreGuardKeepsMigrationAndMutationWritesOrdered() {
+        val guard = AndroidAccountCredentialStoreGuard()
+        val migrationEntered = CountDownLatch(1)
+        val releaseMigration = CountDownLatch(1)
+        val mutationAttempted = CountDownLatch(1)
+        val mutationEntered = CountDownLatch(1)
+
+        val migration = thread {
+            guard.serialize {
+                migrationEntered.countDown()
+                check(releaseMigration.await(5, TimeUnit.SECONDS))
+            }
+        }
+        check(migrationEntered.await(5, TimeUnit.SECONDS))
+        val mutation = thread {
+            mutationAttempted.countDown()
+            guard.serialize { mutationEntered.countDown() }
+        }
+        check(mutationAttempted.await(5, TimeUnit.SECONDS))
+
+        assertFalse(mutationEntered.await(100, TimeUnit.MILLISECONDS))
+        releaseMigration.countDown()
+        migration.join()
+        mutation.join()
+        assertEquals(0L, mutationEntered.count)
+    }
+
     @Test
     fun invalidCredentialStoreCanBeQuarantinedForLoginOrResetRecovery() {
         val replacementWrites = linkedMapOf<String, String>()
