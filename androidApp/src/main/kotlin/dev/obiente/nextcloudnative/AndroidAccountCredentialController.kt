@@ -682,7 +682,6 @@ internal suspend fun removeAndroidAccountCredentialData(
     if (active) {
         try {
             clearActiveAccount()
-            removeQueuedUploads()
         } catch (failure: Exception) {
             withContext(NonCancellable) {
                 runCatching { rollbackActiveRemoval() }
@@ -690,12 +689,12 @@ internal suspend fun removeAndroidAccountCredentialData(
             }
             throw failure
         }
+        removeQueuedUploads()
         return
     }
 
-    persistInactiveRemoval()
     try {
-        removeQueuedUploads()
+        persistInactiveRemoval()
     } catch (failure: Exception) {
         withContext(NonCancellable) {
             runCatching { rollbackInactiveRemoval() }
@@ -703,6 +702,7 @@ internal suspend fun removeAndroidAccountCredentialData(
         }
         throw failure
     }
+    removeQueuedUploads()
 }
 
 internal suspend fun removeRecoveredAndroidAccountCredentialData(

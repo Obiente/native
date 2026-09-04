@@ -10,8 +10,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -750,7 +748,7 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
-    fun failedActiveUploadCleanupRestoresTheRemovedCredentialState() = runBlocking {
+    fun failedActiveUploadCleanupKeepsTheCredentialRemovalCommitted() = runBlocking {
         val events = mutableListOf<String>()
 
         assertFailsWith<IllegalStateException> {
@@ -767,7 +765,7 @@ class AndroidPersistedSessionTest {
             )
         }
 
-        assertEquals(listOf("clear-account", "remove-uploads", "rollback-active"), events)
+        assertEquals(listOf("clear-account", "remove-uploads"), events)
     }
 
     @Test
@@ -792,10 +790,9 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
-    fun cancelledInactiveAccountRemovalRollsBackNonCancellably() = runBlocking {
+    fun cancelledInactiveAccountCleanupKeepsTheCredentialRemovalCommitted() = runBlocking {
         val cleanupEntered = CompletableDeferred<Unit>()
         val events = mutableListOf<String>()
-        var rollbackWasActive = false
         val removal = launch {
             removeAndroidAccountCredentialData(
                 active = false,
@@ -807,18 +804,14 @@ class AndroidPersistedSessionTest {
                 clearActiveAccount = { events += "clear-account" },
                 rollbackActiveRemoval = { events += "rollback-active" },
                 persistInactiveRemoval = { events += "persist-removal" },
-                rollbackInactiveRemoval = {
-                    rollbackWasActive = currentCoroutineContext().isActive
-                    events += "rollback"
-                },
+                rollbackInactiveRemoval = { events += "rollback" },
             )
         }
         cleanupEntered.await()
 
         removal.cancelAndJoin()
 
-        assertTrue(rollbackWasActive)
-        assertEquals(listOf("persist-removal", "remove-uploads", "rollback"), events)
+        assertEquals(listOf("persist-removal", "remove-uploads"), events)
     }
 
     private fun assertDiagnosticsExcludePrivateValues(diagnostics: List<SupportDiagnosticEventDraft>) {

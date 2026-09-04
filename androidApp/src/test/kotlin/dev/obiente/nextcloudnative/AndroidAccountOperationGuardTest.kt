@@ -313,6 +313,26 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun uploadCreationRejectsARetainedCredentialAfterAnotherAccountBecomesActive() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val retained = NextcloudSession("https://first.example.test", "alice", "old-password")
+        val active = NextcloudSession("https://second.example.test", "bob", "new-password")
+        var uploadCreated = false
+
+        val accepted = guard.withExactAccountSession(
+            expectedSession = retained,
+            resolveSession = { active },
+            unavailable = { false },
+        ) {
+            uploadCreated = true
+            true
+        }
+
+        assertFalse(accepted)
+        assertFalse(uploadCreated)
+    }
+
+    @Test
     fun authenticatedMutationWaitsForSelectionAndRejectsTheStaleSession() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
