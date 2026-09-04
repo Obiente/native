@@ -448,7 +448,7 @@ internal class AndroidNextcloudServices(
     private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
-    private val fileOfflineAccountCleanup = AndroidFileOfflineAccountCleanup(appContext)
+    private val accountOwnedStateCleanup = AndroidAccountOwnedStateCleanup(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
@@ -471,8 +471,6 @@ internal class AndroidNextcloudServices(
     )
     private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
-    private val durableUploadAccountCleanup = AndroidDurableUploadAccountCleanup(appContext)
-    private val incomingShareAccountCleanup = AndroidIncomingShareAccountCleanup(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
     private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
     private val supportBundleExporter = AndroidSupportBundleExporter(
@@ -499,12 +497,8 @@ internal class AndroidNextcloudServices(
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
         resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
         prepareAccountRemoval = { session -> prepareAndroidAccountRemoval(appContext, session) },
-        removeQueuedUploads = { session ->
-            fileOfflineAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
-            incomingShareAccountCleanup.removeForAccount(session)
-            durableUploadAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
-            retireAndroidFileSyncAccountPairs(appContext, NextcloudDocumentIds.accountKey(session))
-        },
+        removeQueuedUploads = accountOwnedStateCleanup::remove,
+        retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
     )
 
     init {
@@ -3450,7 +3444,9 @@ internal class AndroidNextcloudServices(
         Unit
     }
     override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        revokeAndroidSessionAfterWritebackPreflight(androidDocumentPendingWritebacks(appContext, session).isEmpty()) {
+        revokeAndroidSessionAfterRemovalPreflight(
+            preflight = { preflightAndroidAccountRemoval(appContext, session) },
+        ) {
             request(
                 method = "DELETE",
                 url = session.serverUrl + "/ocs/v2.php/core/apppassword",

@@ -52,11 +52,14 @@ class NextcloudDocumentsContractTest {
     }
 
     @Test
-    fun `pending writeback preflight runs before remote credential revocation`() = runBlocking {
+    fun `account removal preflight runs before remote credential revocation`() = runBlocking {
         var revoked = false
 
         assertFailsWith<IllegalStateException> {
-            revokeAndroidSessionAfterWritebackPreflight(writebacksResolved = false) { revoked = true }
+            revokeAndroidSessionAfterRemovalPreflight(
+                preflight = { error("pending account-owned recovery") },
+                revoke = { revoked = true },
+            )
         }
 
         assertFalse(revoked)

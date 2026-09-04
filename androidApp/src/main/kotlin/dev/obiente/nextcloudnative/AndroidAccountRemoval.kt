@@ -16,11 +16,11 @@ internal fun requireAndroidAccountRemovalWritebacksResolved(resolved: Boolean) {
     }
 }
 
-internal suspend fun revokeAndroidSessionAfterWritebackPreflight(
-    writebacksResolved: Boolean,
+internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
+    preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
 ) {
-    requireAndroidAccountRemovalWritebacksResolved(writebacksResolved)
+    preflight()
     revoke()
 }
 
@@ -34,13 +34,33 @@ internal fun AndroidAccountDocumentGrantScope.uri(authority: String, rootId: Str
     AndroidAccountDocumentGrantScope.Tree -> DocumentsContract.buildTreeDocumentUri(authority, rootId)
 }
 
-internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
+internal suspend fun preflightAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     requireAndroidAccountRemovalWritebacksResolved(androidDocumentPendingWritebacks(context, session).isEmpty())
     requireAndroidFileSyncAccountRemovalReady(context, NextcloudDocumentIds.accountKey(session))
+}
+
+internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
+    preflightAndroidAccountRemoval(context, session)
     AndroidAccountDocumentGrantScope.entries.forEach { scope ->
         context.revokeUriPermission(
             scope.uri(nextcloudDocumentsAuthority(context.packageName), NextcloudDocumentIds.rootId(session)),
             NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS,
         )
     }
+}
+
+internal suspend fun runAndroidAccountRemovalCleanups(
+    cleanups: List<suspend () -> Unit>,
+) {
+    var firstFailure: Exception? = null
+    cleanups.forEach { cleanup ->
+        try {
+            cleanup()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (firstFailure == null) firstFailure = failure else firstFailure.addSuppressed(failure)
+        }
+    }
+    firstFailure?.let { throw it }
 }
