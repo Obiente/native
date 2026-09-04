@@ -504,7 +504,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPairConfiguration.kt": "e7022629c32b99388a03675529886ac580a6def9cf5a4cbfea565ad6cc61fe01",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPairInspector.kt": "32884a623b7331851d402434c6e5269d183f7a79b1cb89b31b3f8a1c833742ce",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPairList.kt": "357d9749aa11419a6667850eb167530e30b0e721d40c4744c643e307834b7752",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "d505d92c7851152ddeac0041385ef35822d19944e4dffa7decca661ffaa6ef43",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPlanning.kt": "a05565566bc4b78b8bfbf354360b875df88241fa7ea022bfd992d868f6dd5e57",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncPresentation.kt": "a64537a74dc68b0a969f86550e23cee7b2998230bc043c47c54794aff829d55b",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncRecovery.kt": "fd404b75cb8ead34d94d4395489ad8554b45bd671c28bf426bb8f262f1e4153c",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileSyncSelectionPicker.kt": "33242928be5d216ad664c742212994b1074d7c5d8947f18906c1feb78d922d1b",
