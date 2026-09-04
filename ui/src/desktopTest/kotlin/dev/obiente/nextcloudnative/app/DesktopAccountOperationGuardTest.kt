@@ -167,6 +167,43 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun fileSyncPairCreationWaitsForRemovalAndRejectsTheStaleSession() = runBlocking {
+        val first = NextcloudSession("https://first.example.test", "alice", "one")
+        val second = NextcloudSession("https://second.example.test", "bob", "two")
+        val guard = DesktopAccountOperationGuard()
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var current = first
+        var pairCreated = false
+        val removal = async {
+            guard.serializeWhenSyncIdle {
+                current = second
+                removalEntered.complete(Unit)
+                releaseRemoval.await()
+            }
+        }
+        removalEntered.await()
+
+        val result = async {
+            guard.serializeWhenSyncIdle {
+                if (!desktopSyncRunMatchesActiveSession(current, first)) {
+                    "rejected"
+                } else {
+                    pairCreated = true
+                    "created"
+                }
+            }
+        }
+        yield()
+
+        assertFalse(result.isCompleted)
+        releaseRemoval.complete(Unit)
+        removal.await()
+        assertEquals("rejected", result.await())
+        assertFalse(pairCreated)
+    }
+
+    @Test
     fun differentAccountSaveRequiresTheSelectionTransition() {
         val first = NextcloudSession("https://first.example.test", "alice", "one")
         val second = NextcloudSession("https://second.example.test", "bob", "two")
