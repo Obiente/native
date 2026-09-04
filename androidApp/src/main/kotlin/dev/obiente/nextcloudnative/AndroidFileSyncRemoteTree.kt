@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.JvmResumableNextcloudUploadRemote
 import dev.obiente.nextcloudnative.app.JvmExactFileComparisonOutputStream
@@ -34,6 +35,7 @@ internal class AndroidFileSyncRemoteTree(
     private val ownedStageEtags: Map<String, String> = emptyMap(),
     private val ownedUploadPaths: Map<String, String> = emptyMap(),
     private val ownedReplacementBackupEtags: Map<String, String> = emptyMap(),
+    private val documentWritebackContext: Context? = null,
 ) : JvmResumableNextcloudUploadRemote {
     private val rootPath = remoteRootPath.trim('/')
     private val ownedDestinationPaths = ownedUploadPaths.mapValues { (_, path) -> fullPath(path) }
@@ -158,7 +160,10 @@ internal class AndroidFileSyncRemoteTree(
         val current = resolve(relativePath)
         if (expectedRemoteEtag == null) {
             require(current == null) { "The server folder appeared after the sync scan." }
-            webDav.createFolder(session, userId, fullPath(relativePath))
+            val remotePath = fullPath(relativePath)
+            withDocumentWritebackMutationGuard(remotePath) {
+                webDav.createFolder(session, userId, remotePath)
+            }
         } else {
             require(current?.entry?.etag == expectedRemoteEtag) {
                 "The server folder changed after the sync scan."
@@ -169,25 +174,28 @@ internal class AndroidFileSyncRemoteTree(
 
     fun writeFile(relativePath: String, source: File, expectedRemoteEtag: String?): RemoteSyncEntry {
         val current = resolve(relativePath)
-        if (expectedRemoteEtag == null) {
-            require(current == null) { "The server file appeared after the sync scan." }
-            webDav.createFile(
-                session, userId, fullPath(relativePath), source,
-                cancellation = transferCancellation,
-            )
-        } else {
-            require(current?.entry?.etag == expectedRemoteEtag) {
-                "The server file changed after the sync scan."
+        val remotePath = fullPath(relativePath)
+        withDocumentWritebackMutationGuard(remotePath) {
+            if (expectedRemoteEtag == null) {
+                require(current == null) { "The server file appeared after the sync scan." }
+                webDav.createFile(
+                    session, userId, remotePath, source,
+                    cancellation = transferCancellation,
+                )
+            } else {
+                require(current?.entry?.etag == expectedRemoteEtag) {
+                    "The server file changed after the sync scan."
+                }
+                require(!current.isDirectory) { "The server item changed type." }
+                webDav.replaceFile(
+                    session,
+                    userId,
+                    remotePath,
+                    source,
+                    expectedRemoteEtag,
+                    transferCancellation,
+                )
             }
-            require(!current.isDirectory) { "The server item changed type." }
-            webDav.replaceFile(
-                session,
-                userId,
-                fullPath(relativePath),
-                source,
-                expectedRemoteEtag,
-                transferCancellation,
-            )
         }
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory) { "The uploaded server item is not a file." }
@@ -328,15 +336,19 @@ internal class AndroidFileSyncRemoteTree(
         require(resolveIncludingOwnedStage(backupPath) == null) { "The replacement backup already exists." }
         try {
             moveReplacementDirectory(fullPath(relativePath), fullPath(backupPath), expectedDirectoryEtag)
-            webDav.publishChunkUploadStage(
-                session,
-                userId,
-                fullPath(jvmOwnedUploadStagePath(relativePath, uploadId)),
-                fullPath(relativePath),
-                verifiedStageEtag,
-                expectedRemoteEtag = null,
-                cancellation = transferCancellation,
-            )
+            val fullStagePath = fullPath(jvmOwnedUploadStagePath(relativePath, uploadId))
+            val destinationPath = fullPath(relativePath)
+            withDocumentWritebackMutationGuard(fullStagePath, destinationPath) {
+                webDav.publishChunkUploadStage(
+                    session,
+                    userId,
+                    fullStagePath,
+                    destinationPath,
+                    verifiedStageEtag,
+                    expectedRemoteEtag = null,
+                    cancellation = transferCancellation,
+                )
+            }
             val published = requireNotNull(resolveIncludingOwnedStage(relativePath)) {
                 "The uploaded server file disappeared."
             }
@@ -374,15 +386,19 @@ internal class AndroidFileSyncRemoteTree(
         expectedRemoteEtag: String?,
     ): RemoteSyncEntry {
         val stagePath = jvmOwnedUploadStagePath(relativePath, uploadId)
-        webDav.publishChunkUploadStage(
-            session,
-            userId,
-            fullPath(stagePath),
-            fullPath(relativePath),
-            verifiedStageEtag,
-            expectedRemoteEtag,
-            transferCancellation,
-        )
+        val fullStagePath = fullPath(stagePath)
+        val destinationPath = fullPath(relativePath)
+        withDocumentWritebackMutationGuard(fullStagePath, destinationPath) {
+            webDav.publishChunkUploadStage(
+                session,
+                userId,
+                fullStagePath,
+                destinationPath,
+                verifiedStageEtag,
+                expectedRemoteEtag,
+                transferCancellation,
+            )
+        }
         val after = requireNotNull(resolve(relativePath)) { "The uploaded server file disappeared." }
         require(!after.isDirectory)
         return after.entry
@@ -587,14 +603,17 @@ internal class AndroidFileSyncRemoteTree(
         require(current.entry.etag == expectedRemoteEtag) {
             "The server item changed after the sync scan."
         }
-        webDav.delete(
-            session,
-            userId,
-            fullPath(relativePath),
-            expectedRemoteEtag,
-            isDirectory = current.isDirectory,
-            cancellation = transferCancellation,
-        )
+        val remotePath = fullPath(relativePath)
+        withDocumentWritebackMutationGuard(remotePath) {
+            webDav.delete(
+                session,
+                userId,
+                remotePath,
+                expectedRemoteEtag,
+                isDirectory = current.isDirectory,
+                cancellation = transferCancellation,
+            )
+        }
     }
 
     private fun listSyncDirectory(relativeParent: String): DocumentDirectoryResult =
@@ -715,14 +734,17 @@ internal class AndroidFileSyncRemoteTree(
             return true
         }
         if (!destination.isDirectory && assembledStageEtag != null && destination.entry.etag == assembledStageEtag) {
-            webDav.delete(
-                session,
-                userId,
-                fullPath(relativePath),
-                destination.entry.etag,
-                isDirectory = false,
-                cancellation = transferCancellation,
-            )
+            val destinationPath = fullPath(relativePath)
+            withDocumentWritebackMutationGuard(destinationPath) {
+                webDav.delete(
+                    session,
+                    userId,
+                    destinationPath,
+                    destination.entry.etag,
+                    isDirectory = false,
+                    cancellation = transferCancellation,
+                )
+            }
             moveReplacementDirectory(fullPath(backupPath), fullPath(relativePath), expectedBackupEtag)
             return true
         }
@@ -733,7 +755,16 @@ internal class AndroidFileSyncRemoteTree(
     }
 
     private fun moveReplacementDirectory(sourcePath: String, destinationPath: String, expectedEtag: String) =
-        webDav.moveDirectory(session, userId, sourcePath, destinationPath, expectedEtag, transferCancellation)
+        withDocumentWritebackMutationGuard(sourcePath, destinationPath) {
+            webDav.moveDirectory(session, userId, sourcePath, destinationPath, expectedEtag, transferCancellation)
+        }
+
+    private fun <T> withDocumentWritebackMutationGuard(
+        vararg remotePaths: String,
+        operation: () -> T,
+    ): T = documentWritebackContext?.let { context ->
+        withNoBlockingAndroidDocumentWriteback(context, session, *remotePaths, operation = operation)
+    } ?: operation()
 
     internal fun fullPath(relativePath: String): String =
         listOf(rootPath, relativePath.trim('/')).filter(String::isNotBlank).joinToString("/")
