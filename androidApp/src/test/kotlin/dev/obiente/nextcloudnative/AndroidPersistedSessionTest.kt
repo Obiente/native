@@ -742,9 +742,10 @@ class AndroidPersistedSessionTest {
             rollbackActiveRemoval = { events += "rollback-active" },
             persistInactiveRemoval = { events += "persist-inactive" },
             rollbackInactiveRemoval = { events += "rollback-inactive" },
+            completeCommittedCleanup = { events += "complete-cleanup" },
         )
 
-        assertEquals(listOf("prepare-removal", "clear-account", "remove-uploads"), events)
+        assertEquals(listOf("prepare-removal", "clear-account", "remove-uploads", "complete-cleanup"), events)
     }
 
     @Test
@@ -812,10 +813,35 @@ class AndroidPersistedSessionTest {
             rollbackActiveRemoval = { events += "rollback-active" },
             persistInactiveRemoval = { events += "persist-inactive" },
             rollbackInactiveRemoval = { events += "rollback-inactive" },
+            completeCommittedCleanup = { events += "complete-cleanup" },
             recordCommittedCleanupFailure = { events += "diagnose-cleanup" },
         )
 
         assertEquals(listOf("clear-account", "remove-uploads", "diagnose-cleanup"), events)
+    }
+
+    @Test
+    fun accountRemovalCleanupAttemptsEveryOwnerBeforeReportingFailure() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            runAndroidAccountRemovalCleanups(
+                listOf(
+                    {
+                        events += "remove-offline"
+                        error("synthetic offline cleanup failure")
+                    },
+                    { events += "remove-shares" },
+                    { events += "remove-uploads" },
+                    { events += "remove-sync-pairs" },
+                ),
+            )
+        }
+
+        assertEquals(
+            listOf("remove-offline", "remove-shares", "remove-uploads", "remove-sync-pairs"),
+            events,
+        )
     }
 
     @Test
