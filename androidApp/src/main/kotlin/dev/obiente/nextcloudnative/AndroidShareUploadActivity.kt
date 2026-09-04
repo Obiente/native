@@ -180,9 +180,10 @@ class AndroidShareUploadActivity : ComponentActivity() {
                     ?: error("Sign in to nati.ve before sharing files to it.")
                 activeAccountId = NextcloudDocumentIds.accountKey(activeSession)
                 val staged = withContext(Dispatchers.IO) {
-                    ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+                    restoreIncomingShareForActiveSession(
+                        guard = ANDROID_ACCOUNT_OPERATION_GUARD,
                         expectedSession = activeSession,
-                        resolveSession = { services.loadSession(activeSession.accountId) },
+                        resolveActiveSession = services::loadSession,
                         unavailable = { error("The account changed before the shared files could be prepared.") },
                     ) {
                         val restored = validatedRequestId?.let { requestId ->
@@ -407,6 +408,14 @@ internal fun isValidIncomingShareRequestId(value: String): Boolean =
 
 internal fun AndroidIncomingShareRequest.canReleaseForIncomingShareReplacement(): Boolean =
     chunkSession == null && state == AndroidIncomingShareState.Completed
+
+internal suspend fun <Result> restoreIncomingShareForActiveSession(
+    guard: AndroidAccountOperationGuard,
+    expectedSession: NextcloudSession,
+    resolveActiveSession: suspend () -> NextcloudSession?,
+    unavailable: suspend () -> Result,
+    restore: suspend (NextcloudSession) -> Result,
+): Result = guard.withExactAccountSession(expectedSession, resolveActiveSession, unavailable, restore)
 
 private fun AndroidShareUploadActivity.incomingShareFolderPickerOperations(
     services: AndroidNextcloudServices,

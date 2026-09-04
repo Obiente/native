@@ -3813,15 +3813,15 @@ class DesktopNextcloudServices(
                 val providerAccountId = desktopFileCacheAccountId(account)
                 requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
                 accountOperationGuard.withSyncRunLock {
-                    fileSyncEngine.removeAccountPairs(providerAccountId)
-                    sessionPublicationGuard.serialize {
+                    removeDesktopAccountBeforeSyncPairCleanup({ sessionPublicationGuard.serialize {
                         removeDesktopAccountCredential(preferences, providerAccountId) { accountCredentials.removeAccount(accountId) }
+                    } }, { fileSyncEngine.removeAccountPairs(providerAccountId) }) {
+                        recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
                     }
                 }
             }
         }
     }
-
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
         accountOperationGuard.serialize { clearSessionForAccountOperation() }
     }

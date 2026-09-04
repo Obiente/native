@@ -32,3 +32,28 @@ internal fun removeDesktopAccountCredential(
         removeCredential = removeCredential,
     )
 }
+
+internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
+    removeCredential: suspend () -> Boolean,
+    removeSyncPairs: suspend () -> Unit,
+    recordCleanupFailure: suspend (Exception) -> Unit,
+): Boolean {
+    val removed = removeCredential()
+    if (!removed) return false
+    try {
+        removeSyncPairs()
+    } catch (failure: Exception) {
+        runCatching { recordCleanupFailure(failure) }
+    }
+    return true
+}
+
+internal fun desktopAccountSyncPairCleanupFailureDiagnostic(accountId: String, failure: Exception) =
+    SupportDiagnosticEventDraft(
+        severity = SupportDiagnosticSeverity.Error,
+        component = SupportDiagnosticComponent.Sync,
+        operation = "account.remove-sync-cleanup",
+        outcome = "failed",
+        fields = desktopAccountDiagnosticFields(accountId),
+        exception = failure.toSupportDiagnosticExceptionDraft(),
+    )
