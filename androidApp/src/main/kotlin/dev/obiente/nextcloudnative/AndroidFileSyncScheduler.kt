@@ -56,6 +56,7 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         cancelAll: () -> Unit,
         publishAccount: (String) -> Unit = {},
         restoreSchedules: (String) -> Unit = {},
+        onScheduleMaintenanceFailure: (Exception) -> Unit = {},
     ) {
         synchronized(monitor) {
             val accountChanged = accountId != replacementAccountId
@@ -66,14 +67,9 @@ internal class AndroidFileSyncSessionSchedulingGuard {
                 publishAccount(replacementAccountId)
             } finally {
                 if (accountChanged) {
-                    try {
-                        cancelAll()
-                    } finally {
-                        restoreSchedules(replacementAccountId)
-                    }
-                } else {
-                    restoreSchedules(replacementAccountId)
+                    runScheduleMaintenance(onScheduleMaintenanceFailure, cancelAll)
                 }
+                runScheduleMaintenance(onScheduleMaintenanceFailure) { restoreSchedules(replacementAccountId) }
             }
         }
     }
@@ -111,6 +107,14 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         } else {
             action()
             true
+        }
+    }
+
+    private fun runScheduleMaintenance(onFailure: (Exception) -> Unit, action: () -> Unit) {
+        try {
+            action()
+        } catch (failure: Exception) {
+            runCatching { onFailure(failure) }
         }
     }
 }

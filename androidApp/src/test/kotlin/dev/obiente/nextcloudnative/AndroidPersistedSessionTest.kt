@@ -666,6 +666,19 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun recoveredInvalidStoreRemovalAlsoCleansQueuedAccountWork() = runBlocking {
+        val events = mutableListOf<String>()
+
+        removeRecoveredAndroidAccountCredentialData(
+            removeQueuedUploads = { events += "remove-queued-work" },
+            clearRecoveredAccount = { events += "clear-recovered-account" },
+            rollbackRecoveredAccount = { events += "rollback-recovered-account" },
+        )
+
+        assertEquals(listOf("clear-recovered-account", "remove-queued-work"), events)
+    }
+
+    @Test
     fun activeSignOutDeletesQueuedUploadsAfterTheCredentialIsCleared() = runBlocking {
         val events = mutableListOf<String>()
 

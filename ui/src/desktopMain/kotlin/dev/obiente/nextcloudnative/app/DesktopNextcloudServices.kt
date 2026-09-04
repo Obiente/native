@@ -2209,28 +2209,38 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
-        synchronized(virtualFileProviderLock) {
-            linuxVirtualFileSystem?.unmount()
-            linuxVirtualFileSystem = null
-            linuxVirtualMetadataBackend = null
-            linuxVirtualFileMountIdentity = null
-            linuxVirtualFileFailure = null
-            windowsCloudFilesProvider?.close()
-            windowsCloudFilesProvider = null
-            windowsCloudFilesIdentity = null
-            windowsCloudFilesFailure = null
-            preferences.putBoolean(
-                virtualFileProviderPreferenceKey(desktopFileCacheAccountId(session)),
-                false,
+        accountOperationGuard.serializeResourceActivation {
+            val activeSession = loadSession()
+            if (!desktopResourceActivationMatchesActiveSession(activeSession, session)) {
+                return@serializeResourceActivation VirtualFileStorageActionResult.Rejected(
+                    "The account changed before virtual file storage could be deactivated.",
+                )
+            }
+            val accountId = desktopFileCacheAccountId(session)
+            synchronized(virtualFileProviderLock) {
+                if (desktopResourceDeactivationTargetsCurrentProvider(activeSession, session, linuxVirtualFileMountIdentity)) {
+                    linuxVirtualFileSystem?.unmount()
+                    linuxVirtualFileSystem = null
+                    linuxVirtualMetadataBackend = null
+                    linuxVirtualFileMountIdentity = null
+                    linuxVirtualFileFailure = null
+                }
+                if (desktopResourceDeactivationTargetsCurrentProvider(activeSession, session, windowsCloudFilesIdentity)) {
+                    windowsCloudFilesProvider?.close()
+                    windowsCloudFilesProvider = null
+                    windowsCloudFilesIdentity = null
+                    windowsCloudFilesFailure = null
+                }
+                preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), false)
+            }
+            VirtualFileStorageActionResult.Completed(
+                if (isWindowsDesktop()) {
+                    "Windows Cloud Files disconnected. Placeholders, cached content, and remote files were kept."
+                } else {
+                    "Virtual files unmounted. Cached content and remote files were kept."
+                },
             )
         }
-        VirtualFileStorageActionResult.Completed(
-            if (isWindowsDesktop()) {
-                "Windows Cloud Files disconnected. Placeholders, cached content, and remote files were kept."
-            } else {
-                "Virtual files unmounted. Cached content and remote files were kept."
-            },
-        )
     }
 
     override suspend fun acknowledgeVirtualFileProviderRecovery(

@@ -138,6 +138,19 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun resourceDeactivationRejectsAStaleAccountAndAnotherAccountsProvider() {
+        val first = NextcloudSession("https://first.example.test", "alice", "one")
+        val second = NextcloudSession("https://second.example.test", "bob", "two")
+        val firstIdentity = desktopFileCacheAccountId(first)
+        val secondIdentity = desktopFileCacheAccountId(second)
+
+        assertTrue(desktopResourceDeactivationTargetsCurrentProvider(first, first.copy(), firstIdentity))
+        assertFalse(desktopResourceDeactivationTargetsCurrentProvider(second, first, secondIdentity))
+        assertFalse(desktopResourceDeactivationTargetsCurrentProvider(first, first, secondIdentity))
+        assertFalse(desktopResourceDeactivationTargetsCurrentProvider(null, first, firstIdentity))
+    }
+
+    @Test
     fun syncRunRejectsAStaleAccountAfterWaitingForSelection() {
         val first = NextcloudSession("https://first.example.test", "alice", "one")
         val second = NextcloudSession("https://second.example.test", "bob", "two")

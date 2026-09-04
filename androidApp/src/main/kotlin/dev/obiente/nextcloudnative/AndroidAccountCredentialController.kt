@@ -215,7 +215,17 @@ internal class AndroidAccountCredentialController(
         val activeSession = current.activeSession
         if (activeSession != null) {
             ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(activeSession)) {
-                persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted)
+                removeRecoveredAndroidAccountCredentialData(
+                    removeQueuedUploads = { removeQueuedUploads(activeSession) },
+                    clearRecoveredAccount = { persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted) },
+                    rollbackRecoveredAccount = {
+                        replaceActiveStateWhileOperationsIdle(
+                            replacement = current,
+                            previousSession = null,
+                            suspectEncrypted = suspectEncrypted,
+                        )
+                    },
+                )
             }
         } else {
             persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted)
@@ -314,6 +324,13 @@ internal class AndroidAccountCredentialController(
                 cancelAll = scheduler::cancelAll,
                 publishAccount = publishAccountIdentity,
                 restoreSchedules = scheduler::restorePersistedPairSchedules,
+                onScheduleMaintenanceFailure = {
+                    recordCredentialFailure(
+                        code = "FILE_SYNC_SCHEDULE_MAINTENANCE_FAILED",
+                        operation = "account-selection.schedule-maintenance",
+                        component = SupportDiagnosticComponent.Sync,
+                    )
+                },
             )
         }
         if (previousSession != null && previousSession.accountId != session.accountId) {
@@ -673,6 +690,19 @@ internal suspend fun removeAndroidAccountCredentialData(
         throw failure
     }
 }
+
+internal suspend fun removeRecoveredAndroidAccountCredentialData(
+    removeQueuedUploads: suspend () -> Unit,
+    clearRecoveredAccount: suspend () -> Unit,
+    rollbackRecoveredAccount: suspend () -> Unit,
+) = removeAndroidAccountCredentialData(
+    active = true,
+    removeQueuedUploads = removeQueuedUploads,
+    clearActiveAccount = clearRecoveredAccount,
+    rollbackActiveRemoval = rollbackRecoveredAccount,
+    persistInactiveRemoval = {},
+    rollbackInactiveRemoval = {},
+)
 
 internal class AndroidAccountCredentialStoreGuard {
     private val monitor = Any()
