@@ -157,7 +157,10 @@ private fun NextcloudAccountRegistry.reconcileLegacyActiveAccount(
     if (accounts.any { account -> account.id == legacyAccount.id } || accounts.size < MAX_LOCAL_ACCOUNTS) {
         return upsertAndSelect(legacyAccount)
     }
-    val displacedId = activeAccountId ?: accounts.maxBy { account -> account.id.storageKey }.id
+    val displacedId = accounts
+        .filterNot { account -> account.id == activeAccountId }
+        .maxBy { account -> account.id.storageKey }
+        .id
     return remove(displacedId).upsertAndSelect(legacyAccount)
 }
 
@@ -184,8 +187,20 @@ fun decodeNextcloudAccountRegistry(encoded: String): NextcloudAccountRegistry? =
     (decodeNextcloudAccountRegistryResult(encoded) as? NextcloudAccountRegistryDecodeResult.Valid)?.registry
 
 private fun decodeNextcloudAccountRegistryResult(encoded: String): NextcloudAccountRegistryDecodeResult {
+    val envelopeVersion = accountRegistryVersionEnvelope
+        .find(encoded.take(MAX_ACCOUNT_REGISTRY_VERSION_ENVELOPE_CHARACTERS))
+        ?.groupValues
+        ?.get(1)
+        ?.toIntOrNull()
+    if (envelopeVersion != null && envelopeVersion > ACCOUNT_REGISTRY_VERSION) {
+        return NextcloudAccountRegistryDecodeResult.UnsupportedVersion
+    }
     if (encoded.encodeToByteArray().size > MAX_ACCOUNT_REGISTRY_BYTES) {
-        return NextcloudAccountRegistryDecodeResult.Malformed
+        return if (envelopeVersion != null) {
+            NextcloudAccountRegistryDecodeResult.Malformed
+        } else {
+            NextcloudAccountRegistryDecodeResult.UnsupportedVersion
+        }
     }
     val version = runCatching {
         accountRegistryJson.parseToJsonElement(encoded).jsonObject["version"]?.jsonPrimitive?.intOrNull
@@ -237,8 +252,11 @@ private val accountRegistryJson = Json {
     explicitNulls = false
 }
 
+private val accountRegistryVersionEnvelope = Regex("""\A\s*\{\s*"version"\s*:\s*(-?\d+)""")
+
 private const val ACCOUNT_REGISTRY_VERSION = 1
 internal const val MAX_LOCAL_ACCOUNTS = 64
 private const val MAX_ACCOUNT_REGISTRY_BYTES = 256 * 1024
+private const val MAX_ACCOUNT_REGISTRY_VERSION_ENVELOPE_CHARACTERS = 512
 private const val MAX_ACCOUNT_SERVER_URL_LENGTH = 8 * 1024
 private const val MAX_ACCOUNT_LOGIN_NAME_LENGTH = 1024
