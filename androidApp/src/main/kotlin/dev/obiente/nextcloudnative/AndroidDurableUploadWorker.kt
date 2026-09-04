@@ -62,27 +62,14 @@ internal class DeckAttachmentUploadWorker(
         jobId: String,
     ): Result {
         val services = AndroidNextcloudServices(applicationContext)
-        val accountSnapshot = services.accountRetentionSnapshot()
-        val session = (accountSnapshot as? AndroidAccountRetentionSnapshot.Available)?.let { available ->
-            resolveDurableUploadSession(
-                expectedAccountId = initial.accountId,
-                accounts = available.accounts,
-                loadSession = services::loadSession,
-            )
-        }
+        if (!services.isDurableUploadAccountResolutionAvailable()) return Result.retry()
+        val session = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = initial.accountId,
+            listAccounts = services::listAccounts,
+            recoverRegistry = { services.loadSession() },
+            loadSession = services::loadSession,
+        )
         if (session == null) {
-            if (
-                durableUploadAccountMismatchOutcome(initial.accountId, accountSnapshot) ==
-                DurableUploadAccountMismatchOutcome.DeferAccountRecovery
-            ) {
-                recordUploadDiagnostic(
-                    severity = SupportDiagnosticSeverity.Warning,
-                    outcome = "account-deferred",
-                    accountId = initial.accountId,
-                    jobId = jobId,
-                )
-                return Result.success()
-            }
             store.transition(
                 jobId,
                 expected = DurableUploadState.Queued,

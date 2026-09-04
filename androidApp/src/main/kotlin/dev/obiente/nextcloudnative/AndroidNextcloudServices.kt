@@ -380,7 +380,7 @@ internal class AndroidNextcloudServices(
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
     private val activity = context as? Activity
-    private val preferences = appContext.getSharedPreferences("nextcloud_native", Context.MODE_PRIVATE)
+    private val preferences = appContext.getSharedPreferences(ANDROID_ACCOUNT_PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val httpClient = OkHttpClient.Builder()
         .useAndroidNextcloudCertificateTrust(appContext)
         .trackJvmNetworkFailures()
@@ -432,6 +432,11 @@ internal class AndroidNextcloudServices(
         )
     private val nativeMediaPreviewDecodeMutex = Mutex()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
+
+    internal fun isDurableUploadAccountResolutionAvailable(): Boolean =
+        androidCredentialFreeRegistryAllowsAccountResolution(
+            preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null),
+        )
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
     }
