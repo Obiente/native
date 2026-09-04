@@ -3,6 +3,8 @@ package dev.obiente.nextcloudnative.app
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -12,6 +14,25 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class HomeWorkspaceLayoutTest {
+    @Test
+    fun `coordinator defers preference reads until its effect runs`() = runBlocking {
+        val storage = RecordingHomeWorkspaceStorage()
+        val currentScope = scope(HomeFormFactor.Phone)
+        val legacyDigest = "b".repeat(64)
+        val coordinator = HomeWorkspaceLayoutLoadCoordinator {
+            HomeWorkspaceLayoutRepository(storage).loadWithMigration(currentScope, legacyDigest)
+        }
+
+        assertEquals(0, storage.readCount)
+        assertEquals(null, coordinator.state)
+
+        val loaded = coordinator.load(Dispatchers.Unconfined)
+
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), loaded.layout)
+        assertEquals(2, storage.readCount)
+        assertEquals(loaded, coordinator.state)
+    }
+
     @Test
     fun `defaults are useful and distinct for each form factor`() {
         val phone = defaultHomeWorkspaceLayout(scope(HomeFormFactor.Phone))
@@ -454,8 +475,10 @@ class HomeWorkspaceLayoutTest {
         var lastValue: String? = null
         var failedReadKey: String? = null
         var readFailure: Throwable = IllegalStateException("synthetic canonical read failure")
+        var readCount: Int = 0
 
         override fun read(persistenceKey: String): String? {
+            readCount += 1
             if (persistenceKey == failedReadKey) throw readFailure
             return values[persistenceKey]
         }
