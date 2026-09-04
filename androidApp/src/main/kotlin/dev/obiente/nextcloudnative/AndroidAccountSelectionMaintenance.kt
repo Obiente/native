@@ -28,3 +28,15 @@ internal fun clearAndroidPreviousPreviewAfterCommittedSelection(
         runCatching { recordFailure(failure) }
     }
 }
+
+internal fun clearAndroidPreviewAfterCommittedRemoval(
+    accountCacheId: String,
+    clearPreviewAccount: (String) -> Unit,
+    recordFailure: (Exception) -> Unit,
+) {
+    try {
+        clearPreviewAccount(accountCacheId)
+    } catch (failure: Exception) {
+        runCatching { recordFailure(failure) }
+    }
+}

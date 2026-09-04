@@ -1629,9 +1629,10 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = serviceScope.launch {
                 restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
-                    accountOperationGuard.serializeWhenSyncIdle {
-                        retryPendingAccountSyncPairCleanups()
-                    }
+                    recoverDesktopBackgroundAccountSyncPairCleanups(
+                        retry = { accountOperationGuard.serializeWhenSyncIdle { retryPendingAccountSyncPairCleanups() } },
+                        recordFailure = { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalFailureDiagnostic(it)) },
+                    )
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }

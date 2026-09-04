@@ -71,8 +71,7 @@ internal class DesktopAccountCredentialPersistence(
         val encodedRegistry = prepareRegistry(updatedRegistry)
         val secretReference = desktopAccountSecretReference(persistedSession.accountId)
         val previousSecret = loadSecretForRollback(secretReference)
-        val journalNewCredential = previousRecord == null
-        if (journalNewCredential) persistPendingCredentialSave(persistedSession)
+        persistPendingCredentialSave(persistedSession)
         try {
             saveSecret(persistedSession)
             persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
@@ -97,10 +96,10 @@ internal class DesktopAccountCredentialPersistence(
                     rollbackFailure,
                 )
             }
-            if (journalNewCredential && credentialRollbackCompleted) clearPendingCredentialSave()
+            if (credentialRollbackCompleted) clearPendingCredentialSave()
             throw failure
         }
-        if (journalNewCredential) clearPendingCredentialSave()
+        clearPendingCredentialSave()
         return persistedSession
     }
 
@@ -217,12 +216,25 @@ internal class DesktopAccountCredentialPersistence(
             )
             return
         }
-        val credentialCommitted = registryRead.registry
-            ?.accounts
-            ?.any { account -> account.id == accountId } == true
+        val registry = registryRead.registry
+        val credentialCommitted = registry?.accounts?.any { account -> account.id == accountId } == true
         if (!credentialCommitted) {
             try {
                 secretStore.clear(desktopAccountSecretReference(accountId))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                recordCredentialDiagnostic(
+                    "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                    "account-credentials.recover",
+                    failure,
+                )
+                return
+            }
+        } else {
+            val selected = requireNotNull(registry.select(accountId))
+            try {
+                persistAccountState(prepareRegistry(selected), selected.activeAccount)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {

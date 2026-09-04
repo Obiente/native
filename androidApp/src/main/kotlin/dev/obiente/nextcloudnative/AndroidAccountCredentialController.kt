@@ -162,7 +162,7 @@ internal class AndroidAccountCredentialController(
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
                 if (!active) {
-                    clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(session))
+                    clearRemovedAccountPreview(session)
                 }
             }
             true
@@ -286,7 +286,7 @@ internal class AndroidAccountCredentialController(
             state.registry.accounts.isEmpty() && state.sessions.isEmpty()
         }?.let(::encryptState)
         clearPersistedSession(encodedReplacement, replacement, pendingCleanup = pendingCleanup)
-        clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(activeSession))
+        clearRemovedAccountPreview(activeSession)
         notifyDocumentRootsChanged()
     }
 
@@ -349,7 +349,7 @@ internal class AndroidAccountCredentialController(
             suspectEncrypted,
             pendingCleanup,
         )
-        activeSession?.let { session -> clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(session)) }
+        activeSession?.let(::clearRemovedAccountPreview)
         notifyDocumentRootsChanged()
     }
 
@@ -773,6 +773,18 @@ internal class AndroidAccountCredentialController(
         code = "ACCOUNT_SELECTION_CACHE_CLEANUP_FAILED",
         operation = "account-selection.cache-cleanup",
         component = SupportDiagnosticComponent.Cache,
+    )
+    private fun clearRemovedAccountPreview(session: NextcloudSession) =
+        clearAndroidPreviewAfterCommittedRemoval(
+            NextcloudDocumentIds.cacheAccountId(session),
+            clearPreviewAccount,
+            ::recordAccountRemovalCacheCleanupFailure,
+        )
+    private fun recordAccountRemovalCacheCleanupFailure(failure: Exception) = recordCredentialFailure(
+        code = "ACCOUNT_REMOVAL_CACHE_CLEANUP_FAILED",
+        operation = "account.remove-cache-cleanup",
+        component = SupportDiagnosticComponent.Cache,
+        failure = failure,
     )
     private fun recordAccountHandoffCleanupFailure(failure: Exception) = recordCredentialFailure(
         code = "ACCOUNT_HANDOFF_CLEANUP_FAILED",
