@@ -3,7 +3,9 @@ package dev.obiente.nextcloudnative
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class NextcloudDocumentsContractTest {
     @Test
@@ -39,5 +41,24 @@ class NextcloudDocumentsContractTest {
         assertTrue(NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS and android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
         assertTrue(NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS and android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0)
         assertTrue(NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS and android.content.Intent.FLAG_GRANT_PREFIX_URI_PERMISSION != 0)
+    }
+
+    @Test
+    fun `account removal revokes both document and tree grant scopes`() {
+        assertEquals(
+            listOf("document", "tree"),
+            AndroidAccountDocumentGrantScope.entries.map(AndroidAccountDocumentGrantScope::pathSegment),
+        )
+    }
+
+    @Test
+    fun `pending writeback preflight runs before remote credential revocation`() = runBlocking {
+        var revoked = false
+
+        assertFailsWith<IllegalStateException> {
+            revokeAndroidSessionAfterWritebackPreflight(writebacksResolved = false) { revoked = true }
+        }
+
+        assertFalse(revoked)
     }
 }

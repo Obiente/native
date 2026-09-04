@@ -16,11 +16,30 @@ internal fun requireAndroidAccountRemovalWritebacksResolved(resolved: Boolean) {
     }
 }
 
+internal suspend fun revokeAndroidSessionAfterWritebackPreflight(
+    writebacksResolved: Boolean,
+    revoke: suspend () -> Unit,
+) {
+    requireAndroidAccountRemovalWritebacksResolved(writebacksResolved)
+    revoke()
+}
+
+internal enum class AndroidAccountDocumentGrantScope(val pathSegment: String) {
+    Document("document"),
+    Tree("tree"),
+}
+
+internal fun AndroidAccountDocumentGrantScope.uri(authority: String, rootId: String) = when (this) {
+    AndroidAccountDocumentGrantScope.Document -> DocumentsContract.buildDocumentUri(authority, rootId)
+    AndroidAccountDocumentGrantScope.Tree -> DocumentsContract.buildTreeDocumentUri(authority, rootId)
+}
+
 internal fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     requireAndroidAccountRemovalWritebacksResolved(androidDocumentPendingWritebacks(context, session).isEmpty())
-    val accountDocumentScope = DocumentsContract.buildDocumentUri(
-        nextcloudDocumentsAuthority(context.packageName),
-        NextcloudDocumentIds.rootId(session),
-    )
-    context.revokeUriPermission(accountDocumentScope, NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS)
+    AndroidAccountDocumentGrantScope.entries.forEach { scope ->
+        context.revokeUriPermission(
+            scope.uri(nextcloudDocumentsAuthority(context.packageName), NextcloudDocumentIds.rootId(session)),
+            NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS,
+        )
+    }
 }

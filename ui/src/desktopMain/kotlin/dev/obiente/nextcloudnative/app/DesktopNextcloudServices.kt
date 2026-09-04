@@ -4088,7 +4088,7 @@ class DesktopNextcloudServices(
             fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
             poll = { endpoint ->
                 networkFailure = null
-                kotlinx.coroutines.runBlocking { request(
+                request(
                     "POST",
                     endpoint,
                     body = "token=" + encodeForm(challenge.token),
@@ -4097,7 +4097,7 @@ class DesktopNextcloudServices(
                     maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
                     diagnosticIgnoredHttpStatuses = setOf(404),
                     onNetworkFailure = { networkFailure = it },
-                ) }.let { LoginPollHttpResponse(it.status, it.text) }
+                ).let { LoginPollHttpResponse(it.status, it.text) }
             },
             networkFailure = { networkFailure },
         )
@@ -5633,9 +5633,9 @@ class DesktopNextcloudServices(
             Unit
         }
 
-    override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
+    override suspend fun revokeSession(session: NextcloudSession): Unit = withContext(Dispatchers.IO) {
+        requireDesktopAccountRemovalReady(desktopFileCacheAccountId(session), isLinuxDesktop())
         request("DELETE", session.serverUrl + "/ocs/v2.php/core/apppassword", session, ocsRequest = true)
-        Unit
     }
 
     private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
