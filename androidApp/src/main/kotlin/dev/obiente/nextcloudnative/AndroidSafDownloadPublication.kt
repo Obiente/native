@@ -42,7 +42,7 @@ internal class AndroidSafDownloadPublisher<Document>(
     fun reconcile() {
         val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
         ownership.transactions(observedNames).forEach { originalTransaction ->
-            var transaction = originalTransaction
+            var transaction = authenticatePendingStageCreation(originalTransaction)
             val final = directory.documents().singleOrNull { it.displayName == transaction.finalName }
             val stage = stageDocument(transaction)
             val backup = backupDocument(transaction)
@@ -137,6 +137,9 @@ internal class AndroidSafDownloadPublisher<Document>(
             backupDocumentIdentity = currentIdentity,
             backupContentIdentity = authenticatedBackupContentIdentity,
         )
+        require(documentNamed(transaction.stageName) == null) {
+            "The local recovery stage name is already in use."
+        }
         ownership.add(transaction)
         val stage = createStage(transaction.stageName)
         val staged = directory.documents().singleOrNull { document ->
@@ -273,6 +276,14 @@ internal class AndroidSafDownloadPublisher<Document>(
 
     private fun documentNamed(name: String): AndroidSafPublicationDocument<Document>? =
         directory.documents().singleOrNull { it.displayName == name }
+
+    private fun authenticatePendingStageCreation(
+        transaction: AndroidSafOwnedDownloadTransaction,
+    ): AndroidSafOwnedDownloadTransaction {
+        if (transaction.stageDocumentIdentity != null) return transaction
+        val stage = documentNamed(transaction.stageName) ?: return transaction
+        return transaction.copy(stageDocumentIdentity = stage.documentIdentity).also(ownership::replace)
+    }
 
     private fun stageDocument(
         transaction: AndroidSafOwnedDownloadTransaction,

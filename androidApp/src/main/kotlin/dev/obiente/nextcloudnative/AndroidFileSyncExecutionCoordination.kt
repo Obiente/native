@@ -133,12 +133,11 @@ internal suspend fun removeConfiguredFileSyncPair(
     return true
 }
 
-internal fun reconcileSafDownloadsBeforeGrantRelease(
+internal fun reconcileSafDownloadsBeforePairRemoval(
     context: Context,
     localRootId: String,
-    releasesLocalGrant: Boolean,
 ): Boolean {
-    if (!releasesLocalGrant) return true
+    if (!localRootId.startsWith("content://")) return true
     val treeUri = Uri.parse(localRootId)
     val hasPersistedGrant = try {
         context.contentResolver.persistedUriPermissions.any { permission ->
@@ -149,12 +148,12 @@ internal fun reconcileSafDownloadsBeforeGrantRelease(
     } catch (_: Exception) {
         return false
     }
-    return reconcileSafDownloadsBeforeGrantRelease(hasPersistedGrant) {
+    return reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant) {
         createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads()
     }
 }
 
-internal fun reconcileSafDownloadsBeforeGrantRelease(
+internal fun reconcileSafDownloadsBeforePairRemoval(
     hasPersistedGrant: Boolean,
     reconcile: () -> Unit,
 ): Boolean {

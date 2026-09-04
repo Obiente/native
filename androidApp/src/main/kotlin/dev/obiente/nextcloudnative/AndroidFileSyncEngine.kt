@@ -306,7 +306,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             var remoteCleanupRejected = false
             val removed = removeConfiguredFileSyncPair(
                 reconcileLocalDownloads = {
-                    reconcileSafDownloadsBeforeGrantRelease(appContext, pair.localRootId, releasesLocalGrant)
+                    reconcileSafDownloadsBeforePairRemoval(appContext, pair.localRootId)
                 },
                 cleanRemoteUploads = {
                     val cleanupResult = cleanupJvmFileSyncOwnedUploads(
