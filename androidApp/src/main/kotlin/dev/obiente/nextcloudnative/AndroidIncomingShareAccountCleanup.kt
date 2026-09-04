@@ -23,18 +23,24 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
     private val appContext = context.applicationContext
     private val store = AndroidIncomingShareStore(appContext)
 
-    suspend fun removeForAccount(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        val accountId = NextcloudDocumentIds.accountKey(session)
+    suspend fun removeForAccount(session: NextcloudSession) =
+        removeForAccount(NextcloudDocumentIds.accountKey(session), session)
+
+    suspend fun removeForAccount(accountId: String) = removeForAccount(accountId, session = null)
+
+    private suspend fun removeForAccount(accountId: String, session: NextcloudSession?) = withContext(Dispatchers.IO) {
         val workManager = WorkManager.getInstance(appContext)
-        val webDav = NextcloudDocumentWebDav(
-            client = OkHttpClient.Builder()
-                .followRedirects(false)
-                .followSslRedirects(false)
-                .retryOnConnectionFailure(false)
-                .useAndroidNextcloudCertificateTrust(appContext)
-                .build(),
-            cloudMutationsAllowed = appContext.cloudMutationGate(),
-        )
+        val webDav = session?.let {
+            NextcloudDocumentWebDav(
+                client = OkHttpClient.Builder()
+                    .followRedirects(false)
+                    .followSslRedirects(false)
+                    .retryOnConnectionFailure(false)
+                    .useAndroidNextcloudCertificateTrust(appContext)
+                    .build(),
+                cloudMutationsAllowed = appContext.cloudMutationGate(),
+            )
+        }
         removeAndroidIncomingShareRequests(
             requests = store.listForAccount(accountId),
             cancelWork = { requestId ->
@@ -43,6 +49,7 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
                 }
             },
             releaseChunk = { request, uploadId ->
+                if (session == null || webDav == null) return@removeAndroidIncomingShareRequests
                 val userId = requireNotNull(request.userId?.takeIf(String::isNotBlank)) {
                     "The staged share chunk is missing its account owner."
                 }
