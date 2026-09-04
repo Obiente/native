@@ -82,7 +82,8 @@ class AndroidFileSyncEngineInvariantTest {
     fun scheduleRestorationStopsImmediateRetriesAfterTheBoundedBudget() {
         assertEquals(BackgroundSyncWorkerDisposition.Retry, scheduleRestorationFailureDisposition(0))
         assertEquals(BackgroundSyncWorkerDisposition.Retry, scheduleRestorationFailureDisposition(1))
-        assertEquals(BackgroundSyncWorkerDisposition.WaitForNextPeriod, scheduleRestorationFailureDisposition(2))
+        assertEquals(BackgroundSyncWorkerDisposition.Retry, scheduleRestorationFailureDisposition(2))
+        assertEquals(BackgroundSyncWorkerDisposition.Retry, scheduleRestorationFailureDisposition(20))
     }
 
     @Test
