@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
+import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.ByteArrayInputStream
@@ -16,6 +18,45 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class AndroidSafDownloadPublicationTest {
+    @Test
+    fun `recovery names stay bounded independently of the final filename`() {
+        val finalName = "a".repeat(1_024)
+        val transaction = AndroidSafOwnedDownloadTransaction(finalName, TOKEN)
+
+        assertTrue(transaction.stageName.length < 80)
+        assertTrue(transaction.backupName.length < 80)
+        assertTrue(finalName !in transaction.stageName)
+        assertTrue(finalName !in transaction.backupName)
+    }
+
+    @Test
+    fun `replacement scope uses direct file lookup and bounded directory ranges`() {
+        val paths = listOf("Archive", "Archive/a", "Archive/nested/b", "Archive-2/c", "Other").sorted()
+
+        assertEquals(
+            listOf("Archive/nested/b"),
+            androidSafReplacementScopedPaths(paths, "Archive/nested/b", SyncEntryKind.File),
+        )
+        assertEquals(
+            listOf("Archive", "Archive/a", "Archive/nested/b"),
+            androidSafReplacementScopedPaths(paths, "Archive", SyncEntryKind.Directory),
+        )
+    }
+
+    @Test
+    fun `local deletions retain strengthened replacement evidence`() {
+        val protected = androidFileSyncProtectedReplacementPaths(
+            operations = listOf(
+                FileSyncOperation.NeedsDecision("removed", FileSyncDecisionReason.RemoteDeletion),
+                FileSyncOperation.NeedsDecision("collision", FileSyncDecisionReason.FirstSyncCollision),
+                FileSyncOperation.Download("download", expectedLocalRevision = "local-1"),
+            ),
+            localPaths = setOf("removed", "collision", "download"),
+        )
+
+        assertEquals(setOf("removed", "collision", "download"), protected)
+    }
+
     @Test
     fun `scan-time content identity rejects a same-size edit with unchanged SAF metadata`() {
         val expected = LocalSyncEntry(
@@ -88,6 +129,7 @@ class AndroidSafDownloadPublicationTest {
         val before = androidSafReplacementRevision(listOf(folder, child))
         val edited = listOf(folder, child.copy(contentHash = "sha256:${"1".repeat(64)}"))
 
+        requireExpectedAndroidSafReplacement(folder.entry.copy(revision = before), listOf(folder, child))
         assertNotEquals(before, androidSafReplacementRevision(edited))
         assertFailsWith<IllegalArgumentException> {
             requireExpectedAndroidSafReplacement(folder.entry.copy(revision = before), edited)
@@ -392,9 +434,10 @@ class AndroidSafDownloadPublicationTest {
             failBeforeRenameTo = transaction.backupName
             cancelNextDocumentsAfterRenameFailure = cancellation
         }
+        val originalDocument = directory.documentNamed("Archive")
 
         val thrown = assertFailsWith<CancellationException> {
-            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+            publisher(directory).publish("Archive", originalDocument) { output ->
                 output.write(byteArrayOf(3, 4))
             }
         }
@@ -402,7 +445,20 @@ class AndroidSafDownloadPublicationTest {
         assertEquals(cancellation, thrown)
         assertTrue(thrown.suppressedExceptions.single() is IOException)
         assertEquals(setOf("Archive", transaction.stageName), directory.names().toSet())
-        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertEquals(
+            listOf(
+                transaction.copy(
+                    backupProtected = true,
+                    backupDocumentIdentity = originalDocument.toString(),
+                ),
+            ),
+            directory.ownership.transactions(),
+        )
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
     }
 
     @Test
@@ -593,10 +649,89 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
+    fun `restart finds a normalized backup after its document identity also changes`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val providerBackupName = "provider-backup-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames[initial.backupName] = providerBackupName
+            replaceIdentityAfterRenameTo = initial.backupName
+            cancelAfterRenameTo = initial.backupName
+        }
+        val originalIdentity = directory.documentNamed("Archive").toString()
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(22, 23))
+            }
+        }
+
+        val interrupted = directory.ownership.transactions().single()
+        assertEquals(originalIdentity, interrupted.backupDocumentIdentity)
+        assertNotEquals(originalIdentity, directory.documentNamed(providerBackupName).toString())
+        assertEquals(setOf(providerBackupName, interrupted.stageName), directory.names().toSet())
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `restart preserves recovery when neither backup name nor document identity is discoverable`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val providerBackupName = "provider-backup"
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames[initial.backupName] = providerBackupName
+            replaceIdentityAfterRenameTo = initial.backupName
+            cancelAfterRenameTo = initial.backupName
+        }
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(26, 27))
+            }
+        }
+
+        val interrupted = directory.ownership.transactions().single()
+        publisher(directory).reconcile()
+
+        assertEquals(setOf(providerBackupName, interrupted.stageName), directory.names().toSet())
+        assertEquals(listOf(interrupted), directory.ownership.transactions())
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
+    }
+
+    @Test
+    fun `ambiguous exact restore clears protection before persisting another backup name`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory()
+        val backup = directory.addDirectory(initial.backupName)
+        val transaction = initial.copy(
+            backupProtected = true,
+            backupDocumentIdentity = backup.toString(),
+        )
+        directory.ownership.add(transaction)
+        directory.addFile(transaction.stageName, byteArrayOf(24, 25))
+        directory.throwAfterRenameTo = transaction.finalName
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
     fun `file ownership survives recreation and follows its recovery token after a parent move`() {
         val root = Files.createTempDirectory("saf-download-ownership-").toFile()
         try {
-            val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+            val transaction = AndroidSafOwnedDownloadTransaction(
+                finalName = "Archive",
+                token = TOKEN,
+                backupDocumentIdentity = "content://provider/document/original",
+            )
             AndroidSafDownloadOwnershipStore(root).forDirectory("content://provider/tree/root/document/one")
                 .add(transaction)
 
@@ -707,6 +842,8 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     private var nextDocument = 1
 
     var throwAfterRenameTo: String? = null
+    var cancelAfterRenameTo: String? = null
+    var replaceIdentityAfterRenameTo: String? = null
     var failBeforeRenameTo: String? = null
     var replaceStageWithUnrelatedFinalBeforeRenameTo: String? = null
     var replaceBackupWithUnrelatedFinalBeforeRenameTo: String? = null
@@ -794,11 +931,21 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
         val actualDisplayName = normalizedRenameNames.remove(displayName) ?: displayName
         require(entries.values.none { it.document != document && it.displayName == actualDisplayName })
         entries.getValue(document).displayName = actualDisplayName
+        var renamedDocument = document
+        if (replaceIdentityAfterRenameTo == displayName) {
+            replaceIdentityAfterRenameTo = null
+            val renamed = entries.remove(document) ?: error("renamed document disappeared")
+            renamedDocument = add(renamed.displayName, renamed.kind, renamed.bytes)
+        }
         if (throwAfterRenameTo == displayName) {
             throwAfterRenameTo = null
             throw IOException("rename result was lost")
         }
-        return document
+        if (cancelAfterRenameTo == displayName) {
+            cancelAfterRenameTo = null
+            throw CancellationException("process stopped after rename")
+        }
+        return renamedDocument
     }
 
     override fun delete(document: Int): Boolean {

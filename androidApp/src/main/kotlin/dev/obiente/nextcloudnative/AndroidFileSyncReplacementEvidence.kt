@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
+import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncWorkItem
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
@@ -117,23 +118,27 @@ internal fun strengthenAndroidSafReplacementEntries(
     contentHash: (AndroidLocalSyncDocument) -> String,
 ): List<AndroidLocalSyncDocument> {
     val scanned = documents.associateBy { it.entry.relativePath }
+    val sortedPaths = scanned.keys.sorted()
     val strengthened = scanned.toMutableMap()
+    val computedHashes = mutableMapOf<String, String>()
     protectedPaths.sorted().forEach { path ->
         val root = scanned[path] ?: return@forEach
-        val scopedPaths = scanned.keys.filter { candidate ->
-            candidate == path ||
-                root.entry.kind == SyncEntryKind.Directory && candidate.startsWith("$path/")
+        val scopedPaths = androidSafReplacementScopedPaths(sortedPaths, path, root.entry.kind)
+        fun exactHash(document: AndroidLocalSyncDocument): String {
+            return document.entry.contentHash ?: computedHashes.getOrPut(document.entry.relativePath) {
+                contentHash(document)
+            }
         }
         if (root.entry.kind == SyncEntryKind.File) {
             strengthened[path] = root.copy(
-                entry = root.entry.copy(contentHash = root.entry.contentHash ?: contentHash(root)),
+                entry = root.entry.copy(contentHash = exactHash(root)),
             )
         } else {
             val evidence = scopedPaths.map { scopedPath ->
                 val document = requireNotNull(scanned[scopedPath])
                 document.androidSafReplacementEvidence(
                     contentHash = if (document.entry.kind == SyncEntryKind.File) {
-                        document.entry.contentHash ?: contentHash(document)
+                        exactHash(document)
                     } else {
                         null
                     },
@@ -147,6 +152,50 @@ internal fun strengthenAndroidSafReplacementEntries(
     return documents.map { document -> requireNotNull(strengthened[document.entry.relativePath]) }
 }
 
+internal fun androidSafReplacementScopedPaths(
+    sortedPaths: List<String>,
+    rootPath: String,
+    rootKind: SyncEntryKind,
+): List<String> {
+    if (rootKind == SyncEntryKind.File) return listOf(rootPath)
+    val prefix = "$rootPath/"
+    var low = 0
+    var high = sortedPaths.size
+    while (low < high) {
+        val middle = (low + high).ushr(1)
+        if (sortedPaths[middle] < prefix) low = middle + 1 else high = middle
+    }
+    return buildList {
+        add(rootPath)
+        var index = low
+        while (index < sortedPaths.size && sortedPaths[index].startsWith(prefix)) {
+            add(sortedPaths[index])
+            index += 1
+        }
+    }
+}
+
+internal fun androidFileSyncProtectedReplacementPaths(
+    operations: List<FileSyncOperation>,
+    localPaths: Set<String>,
+): Set<String> = operations.mapNotNullTo(mutableSetOf()) { operation ->
+    operation.relativePath.takeIf { path ->
+        path in localPaths && when (operation) {
+            is FileSyncOperation.Download -> operation.expectedLocalRevision != null
+            is FileSyncOperation.DeleteLocal -> true
+            is FileSyncOperation.NeedsDecision -> when (operation.reason) {
+                FileSyncDecisionReason.FirstSyncCollision,
+                FileSyncDecisionReason.SimultaneousEdit,
+                FileSyncDecisionReason.TypeChanged,
+                FileSyncDecisionReason.RemoteDeletion,
+                -> true
+                FileSyncDecisionReason.LocalDeletion -> false
+            }
+            else -> false
+        }
+    }
+}
+
 internal fun strengthenAndroidFileSyncReplacementEntries(
     local: AndroidFileSyncLocalTree,
     documents: List<AndroidLocalSyncDocument>,
@@ -156,20 +205,15 @@ internal fun strengthenAndroidFileSyncReplacementEntries(
     shouldContinue: () -> Boolean,
 ): List<AndroidLocalSyncDocument> {
     val localPaths = documents.mapTo(mutableSetOf()) { it.entry.relativePath }
-    val protectedPaths = planFileSync(
-        documents.map(AndroidLocalSyncDocument::entry),
-        remoteEntries,
-        baselines,
-        configuration,
-    ).operations.mapNotNullTo(mutableSetOf()) { operation ->
-        operation.relativePath.takeIf { path ->
-            path in localPaths && when (operation) {
-                is FileSyncOperation.Download -> operation.expectedLocalRevision != null
-                is FileSyncOperation.NeedsDecision -> true
-                else -> false
-            }
-        }
-    }
+    val protectedPaths = androidFileSyncProtectedReplacementPaths(
+        operations = planFileSync(
+            documents.map(AndroidLocalSyncDocument::entry),
+            remoteEntries,
+            baselines,
+            configuration,
+        ).operations,
+        localPaths = localPaths,
+    )
     return local.strengthenReplacementEntries(documents, protectedPaths, shouldContinue)
 }
 
@@ -204,4 +248,18 @@ internal fun downloadAndroidFileSyncOperation(
             },
         )
     }
+}
+
+internal fun deleteAndroidFileSyncOperation(
+    local: AndroidFileSyncLocalTree,
+    remote: AndroidFileSyncRemoteTree,
+    operation: FileSyncOperation.DeleteLocal,
+    work: FileSyncWorkItem,
+) {
+    local.deleteForSync(
+        path = operation.relativePath,
+        expectedLocalRevision = operation.expectedLocalRevision,
+        expectedContentHash = work.observedLocal?.contentHash,
+        shouldContinue = remote::shouldContinueTransfer,
+    )
 }

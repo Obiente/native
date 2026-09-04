@@ -747,7 +747,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 synchronizedResult(operation.relativePath, local, remote, contentReadBudget)
             }
             is FileSyncOperation.DeleteLocal -> {
-                local.delete(operation.relativePath, operation.expectedLocalRevision)
+                deleteAndroidFileSyncOperation(local, remote, operation, work)
                 require(local.resolve(operation.relativePath) == null)
                 require(remote.resolve(operation.relativePath) == null)
                 FileSyncExecutionSuccess(removedRelativePaths = listOf(operation.relativePath))

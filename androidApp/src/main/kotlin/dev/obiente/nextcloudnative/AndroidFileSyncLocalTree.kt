@@ -108,6 +108,17 @@ internal interface AndroidFileSyncLocalTree {
         writeFileFromStream(path, expectedLocalRevision, write)
     }
     fun delete(path: String, expectedLocalRevision: String)
+    fun deleteForSync(
+        path: String,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ) {
+        if (!shouldContinue()) {
+            throw kotlinx.coroutines.CancellationException("The local deletion was cancelled.")
+        }
+        delete(path, expectedLocalRevision)
+    }
     fun resolve(path: String): AndroidLocalSyncDocument?
     fun reconcileOwnedDownloads() = Unit
 }
@@ -398,12 +409,37 @@ internal class AndroidSafFileSyncLocalTree(
     }
 
     override fun delete(path: String, expectedLocalRevision: String) {
+        deleteForSync(
+            path = path,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = null,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+        )
+    }
+
+    override fun deleteForSync(
+        path: String,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ) {
+        requireDeletionContinuation(shouldContinue)
         val current = requireNotNull(resolve(path)) { "The local item was already removed." }
-        require(current.entry.revision == expectedLocalRevision) {
-            "The local item changed after the sync scan."
-        }
+        authenticatedReplacementSnapshot(
+            document = current,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = expectedContentHash,
+            shouldContinue = shouldContinue,
+        )
+        requireDeletionContinuation(shouldContinue)
         require(DocumentsContract.deleteDocument(resolver, current.uri)) {
             "The local item could not be removed."
+        }
+    }
+
+    private fun requireDeletionContinuation(shouldContinue: () -> Boolean) {
+        if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+            throw kotlinx.coroutines.CancellationException("The local deletion was cancelled.")
         }
     }
 
