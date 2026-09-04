@@ -275,6 +275,7 @@ fun currentFileSyncContentVerificationResults(
             remote?.kind == SyncEntryKind.File &&
             local.revision == candidate.localRevision &&
             remote.etag == candidate.remoteEtag &&
+            (local.contentHash == null || local.contentHash == result.localContentHash) &&
             (candidate.expectedSizeBytes == null || (
                 local.size == candidate.expectedSizeBytes &&
                     remote.size == candidate.expectedSizeBytes

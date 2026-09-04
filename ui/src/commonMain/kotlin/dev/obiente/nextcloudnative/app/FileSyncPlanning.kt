@@ -76,7 +76,11 @@ data class LocalSyncEntry(
             "The local sync content hash is invalid."
         }
         require(!contentIdentityUnverified || kind == SyncEntryKind.File)
-        require(!replacementContentIdentityUnavailable || contentIdentityUnverified)
+        require(
+            !replacementContentIdentityUnavailable ||
+                kind == SyncEntryKind.Directory ||
+                contentIdentityUnverified,
+        )
         require(!replacementContentIdentityUnavailable || contentHash == null)
     }
 }
@@ -337,6 +341,9 @@ private fun planSyncPath(
     baseline: FileSyncBaseline?,
     configuration: FileSyncConfiguration,
 ): FileSyncOperation? {
+    if (local?.replacementContentIdentityUnavailable == true) {
+        return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.UnverifiedLocalContent)
+    }
     if (local != null && remote != null && local.kind != remote.kind) {
         return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.TypeChanged)
     }
@@ -345,13 +352,6 @@ private fun planSyncPath(
     }
     if (baseline != null && remote != null && remote.kind != baseline.kind) {
         return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.TypeChanged)
-    }
-    if (
-        local?.kind == SyncEntryKind.File &&
-        remote?.kind == SyncEntryKind.File &&
-        local.replacementContentIdentityUnavailable
-    ) {
-        return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.UnverifiedLocalContent)
     }
     if (
         local?.kind == SyncEntryKind.File &&

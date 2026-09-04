@@ -35,6 +35,12 @@ internal fun LocalSyncEntry.withAndroidSafReplacementContentHash(contentHash: St
     replacementContentIdentityUnavailable = contentHash == null,
 )
 
+internal fun LocalSyncEntry.withUnavailableAndroidSafReplacementIdentity(): LocalSyncEntry = copy(
+    contentHash = null,
+    contentIdentityUnverified = kind == SyncEntryKind.File,
+    replacementContentIdentityUnavailable = true,
+)
+
 internal fun requireUnchangedAndroidSafReplacement(
     expected: List<AndroidSafReplacementEvidence>?,
     actual: List<AndroidSafReplacementEvidence>?,
@@ -62,6 +68,46 @@ internal fun androidSafReplacementRevision(
         }
     }
     return "saf-tree-sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+}
+
+internal fun androidSafReplacementContentIdentity(
+    evidence: List<AndroidSafReplacementEvidence>,
+): String {
+    require(evidence.isNotEmpty()) { "The local replacement evidence is empty." }
+    val rootPath = requireNotNull(
+        evidence.minWithOrNull(
+            compareBy<AndroidSafReplacementEvidence> { item -> item.entry.relativePath.count { it == '/' } }
+                .thenBy { item -> item.entry.relativePath.length },
+        ),
+    ).entry.relativePath
+    val digest = MessageDigest.getInstance("SHA-256")
+    evidence.sortedBy { it.entry.relativePath }.forEach { item ->
+        val relativePath = when (item.entry.relativePath) {
+            rootPath -> ""
+            else -> item.entry.relativePath.removePrefix("$rootPath/").also { relative ->
+                require(relative != item.entry.relativePath) {
+                    "The local replacement evidence contains an unrelated path."
+                }
+            }
+        }
+        val contentHash = if (item.entry.kind == SyncEntryKind.File) {
+            requireNotNull(item.contentHash) {
+                "The local replacement content identity is incomplete."
+            }
+        } else {
+            ""
+        }
+        listOf(
+            relativePath,
+            item.entry.kind.name,
+            item.entry.size?.toString().orEmpty(),
+            contentHash,
+        ).forEach { value ->
+            digest.update(value.encodeToByteArray())
+            digest.update(0.toByte())
+        }
+    }
+    return "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
 }
 
 internal fun requireExpectedAndroidSafReplacement(
@@ -179,6 +225,9 @@ internal fun strengthenAndroidSafReplacementEntries(
                         computedHashes[document.entry.relativePath] == null
                 }
             if (!contentReadBudget.reserveCompleteReplacementContent(documentsToHash.map { it.entry.size })) {
+                strengthened[path] = root.copy(
+                    entry = root.entry.withUnavailableAndroidSafReplacementIdentity(),
+                )
                 return@forEach
             }
             documentsToHash.forEach { document ->
@@ -250,6 +299,18 @@ internal fun androidFileSyncProtectedReplacementPaths(
     }
 }
 
+internal fun unavailableAndroidSafDirectoryReplacementPaths(
+    localEntries: List<LocalSyncEntry>,
+    protectedPaths: Set<String>,
+    configuration: FileSyncConfiguration,
+): Set<String> {
+    if (configuration.selectedPaths.isEmpty() && configuration.ignoredPatterns.isEmpty()) return emptySet()
+    val localByPath = localEntries.associateBy(LocalSyncEntry::relativePath)
+    return protectedPaths.filterTo(mutableSetOf()) { path ->
+        localByPath[path]?.kind == SyncEntryKind.Directory
+    }
+}
+
 internal fun strengthenAndroidFileSyncReplacementEntries(
     local: AndroidFileSyncLocalTree,
     documents: List<AndroidLocalSyncDocument>,
@@ -269,12 +330,25 @@ internal fun strengthenAndroidFileSyncReplacementEntries(
         ).operations,
         localPaths = localPaths,
     )
-    return local.strengthenReplacementEntries(
-        documents,
+    val unavailableDirectoryPaths = unavailableAndroidSafDirectoryReplacementPaths(
+        documents.map(AndroidLocalSyncDocument::entry),
         protectedPaths,
+        configuration,
+    )
+    val strengthened = local.strengthenReplacementEntries(
+        documents,
+        protectedPaths - unavailableDirectoryPaths,
         contentReadBudget,
         shouldContinue,
     )
+    if (unavailableDirectoryPaths.isEmpty()) return strengthened
+    return strengthened.map { document ->
+        if (document.entry.relativePath in unavailableDirectoryPaths) {
+            document.copy(entry = document.entry.withUnavailableAndroidSafReplacementIdentity())
+        } else {
+            document
+        }
+    }
 }
 
 internal fun downloadAndroidFileSyncOperation(

@@ -58,7 +58,7 @@ class AndroidSafDownloadStageIdentityTest {
     }
 
     private fun publisher(directory: FakeSafDirectory) =
-        AndroidSafDownloadPublisher(directory, directory.ownership) { TOKEN }
+        AndroidSafDownloadPublisher(directory, directory.ownership, { TOKEN }, directory::contentIdentity)
 
     private companion object {
         const val TOKEN = "01234567-89ab-cdef-0123-456789abcdef"

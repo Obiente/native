@@ -342,19 +342,20 @@ internal class AndroidSafFileSyncLocalTree(
             )
         }
         val parent = ensureParent(path)
+        val parentPath = path.substringBeforeLast('/', "")
         val finalName = path.substringAfterLast('/')
         if (existing == null) {
             createAndroidSafDirectoryAfterCancellationCheck(shouldContinue) {
                 createDirectoryDocument(parent, finalName)
             }
         } else {
-            val directory = publicationDirectory(parent, path.substringBeforeLast('/', ""))
-            AndroidSafDownloadPublisher(
-                directory = directory,
-                ownership = downloadOwnershipStore.forDirectory(parent.toString()),
-            ).publish(
+            val directory = publicationDirectory(parent, parentPath)
+            downloadPublisher(parent, parentPath, shouldContinue).publish(
                 finalName = finalName,
                 currentDocument = existing.uri,
+                backupContentIdentity = requireNotNull(replacementSnapshot).let(
+                    ::androidSafReplacementContentIdentity,
+                ),
                 createStage = directory::createDirectory,
                 revalidateCurrent = {
                     requireUnchangedReplacement(path, replacementSnapshot, shouldContinue)
@@ -407,14 +408,13 @@ internal class AndroidSafFileSyncLocalTree(
             )
         }
         val parentUri = ensureParent(path)
+        val parentPath = path.substringBeforeLast('/', "")
         val finalName = path.substringAfterLast('/')
-        AndroidSafDownloadPublisher(
-            directory = publicationDirectory(parentUri, path.substringBeforeLast('/', "")),
-            ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
-        )
+        downloadPublisher(parentUri, parentPath, shouldContinue)
             .publish(
                 finalName = finalName,
                 currentDocument = current?.uri,
+                backupContentIdentity = replacementSnapshot?.let(::androidSafReplacementContentIdentity),
                 revalidateCurrent = {
                     requireUnchangedReplacement(path, replacementSnapshot, shouldContinue)
                 },
@@ -487,35 +487,13 @@ internal class AndroidSafFileSyncLocalTree(
     private fun replacementSnapshot(
         document: AndroidLocalSyncDocument,
         shouldContinue: () -> Boolean,
-    ): List<AndroidSafReplacementEvidence> {
-        val result = arrayListOf(replacementEvidence(document, shouldContinue))
-        val pending = ArrayDeque<AndroidLocalSyncDocument>()
-        if (document.entry.kind == SyncEntryKind.Directory) pending += document
-        while (pending.isNotEmpty()) {
-            val parent = pending.removeFirst()
-            require(parent.entry.relativePath.count { it == '/' } < MAX_DEPTH) {
-                "The local replacement folder is nested too deeply."
-            }
-            rawChildren(parent.uri, parent.entry.relativePath).forEach { child ->
-                require(result.size < MAX_ENTRIES) {
-                    "The local replacement folder contains too many entries."
-                }
-                result += replacementEvidence(child, shouldContinue)
-                if (child.entry.kind == SyncEntryKind.Directory) pending += child
-            }
-        }
-        return result.sortedBy { it.entry.relativePath }
-    }
-
-    private fun replacementEvidence(
-        document: AndroidLocalSyncDocument,
-        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
-    ): AndroidSafReplacementEvidence = document.androidSafReplacementEvidence(
-        contentHash = if (document.entry.kind == SyncEntryKind.File) {
-            replacementContentHash(document, shouldContinue)
-        } else {
-            null
-        },
+    ): List<AndroidSafReplacementEvidence> = collectAndroidSafReplacementEvidence(
+        document = document,
+        shouldContinue = shouldContinue,
+        maximumDepth = MAX_DEPTH,
+        maximumEntries = MAX_ENTRIES,
+        listChildren = { parent -> rawChildren(parent.uri, parent.entry.relativePath) },
+        contentHash = { file -> replacementContentHash(file, shouldContinue) },
     )
 
     private fun replacementContentHash(
@@ -597,10 +575,23 @@ internal class AndroidSafFileSyncLocalTree(
     private fun downloadPublisher(
         parentUri: Uri,
         parentPath: String,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
     ): AndroidSafDownloadPublisher<Uri> = AndroidSafDownloadPublisher(
         directory = publicationDirectory(parentUri, parentPath),
         ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
+        contentIdentity = { document ->
+            replacementContentIdentity(parentUri, parentPath, document, shouldContinue)
+        },
     )
+
+    private fun replacementContentIdentity(
+        parentUri: Uri,
+        parentPath: String,
+        document: Uri,
+        shouldContinue: () -> Boolean,
+    ): String? = rawChildren(parentUri, parentPath)
+        .singleOrNull { child -> child.uri == document }
+        ?.let { child -> androidSafReplacementContentIdentity(replacementSnapshot(child, shouldContinue)) }
 
     private fun rawChildren(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
         val parentId = DocumentsContract.getDocumentId(parentUri)

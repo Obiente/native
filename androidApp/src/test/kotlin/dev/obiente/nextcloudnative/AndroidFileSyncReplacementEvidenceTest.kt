@@ -11,7 +11,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AndroidFileSyncReplacementEvidenceTest {
     @Test
@@ -71,6 +73,113 @@ class AndroidFileSyncReplacementEvidenceTest {
 
         assertFalse(reserved)
         assertEquals(8L, budget.remainingBytes)
+    }
+
+    @Test
+    fun `directory without complete evidence becomes an explicit preservation decision`() {
+        val local = LocalSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.Directory,
+            revision = "weak-directory-revision",
+        ).withUnavailableAndroidSafReplacementIdentity()
+        val remote = RemoteSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.File,
+            etag = "remote-1",
+            size = 4L,
+        )
+
+        val operation = planFileSync(
+            localEntries = listOf(local),
+            remoteEntries = listOf(remote),
+            baselines = emptyList(),
+            configuration = FileSyncConfiguration(deviceLabel = "Test device"),
+        ).operations.single()
+
+        assertTrue(local.replacementContentIdentityUnavailable)
+        assertEquals(
+            FileSyncDecisionReason.UnverifiedLocalContent,
+            (operation as FileSyncOperation.NeedsDecision).reason,
+        )
+    }
+
+    @Test
+    fun `partial sync view disables destructive directory evidence`() {
+        val directory = LocalSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.Directory,
+            revision = "weak-directory-revision",
+        )
+        val file = LocalSyncEntry(
+            relativePath = "Archive/visible.bin",
+            kind = SyncEntryKind.File,
+            revision = "file-revision",
+            size = 1L,
+        )
+
+        assertEquals(
+            setOf("Archive"),
+            unavailableAndroidSafDirectoryReplacementPaths(
+                localEntries = listOf(directory, file),
+                protectedPaths = setOf("Archive", "Archive/visible.bin"),
+                configuration = FileSyncConfiguration(
+                    deviceLabel = "Test device",
+                    ignoredPatterns = listOf("Archive/private/**"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `replacement content identity survives a recovery rename and detects an edit`() {
+        val before = listOf(
+            evidence("Archive", SyncEntryKind.Directory, contentHash = null),
+            evidence("Archive/item.bin", SyncEntryKind.File, contentHash = hash('0')),
+        )
+        val renamed = listOf(
+            evidence("recovery-name", SyncEntryKind.Directory, contentHash = null),
+            evidence("recovery-name/item.bin", SyncEntryKind.File, contentHash = hash('0')),
+        )
+        val edited = renamed.map { item ->
+            if (item.entry.kind == SyncEntryKind.File) item.copy(contentHash = hash('1')) else item
+        }
+
+        assertEquals(
+            androidSafReplacementContentIdentity(before),
+            androidSafReplacementContentIdentity(renamed),
+        )
+        assertNotEquals(
+            androidSafReplacementContentIdentity(before),
+            androidSafReplacementContentIdentity(edited),
+        )
+    }
+
+    @Test
+    fun `directory listing observes cancellation before and after provider work`() {
+        var listingCalls = 0
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            listAndroidSafReplacementChildrenAfterCancellationCheck(
+                shouldContinue = { false },
+                listChildren = {
+                    listingCalls += 1
+                    emptyList<Int>()
+                },
+            )
+        }
+        assertEquals(0, listingCalls)
+
+        var checks = 0
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            listAndroidSafReplacementChildrenAfterCancellationCheck(
+                shouldContinue = { ++checks == 1 },
+                listChildren = {
+                    listingCalls += 1
+                    emptyList<Int>()
+                },
+            )
+        }
+        assertEquals(1, listingCalls)
+        assertEquals(2, checks)
     }
 
     @Test

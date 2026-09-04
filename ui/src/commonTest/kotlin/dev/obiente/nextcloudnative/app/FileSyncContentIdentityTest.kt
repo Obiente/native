@@ -164,6 +164,20 @@ class FileSyncContentIdentityTest {
     }
 
     @Test
+    fun `cached mismatch is discarded when an exact local hash changes under weak metadata`() {
+        val oldDigest = "sha256:" + "ab".repeat(32)
+        val newDigest = "sha256:" + "cd".repeat(32)
+        val result = verificationResult("current", "local-1", "remote-1", 42L, oldDigest)
+        val local = fileOnDevice("current", "local-1", 42L).copy(contentHash = newDigest)
+        val remote = fileOnServer("current", "remote-1", 42L)
+
+        assertEquals(
+            emptyList(),
+            currentFileSyncContentVerificationResults(listOf(local), listOf(remote), listOf(result)),
+        )
+    }
+
+    @Test
     fun `automatic verification is bounded per file and per scan`() {
         val candidates = listOf(
             FileSyncContentVerificationCandidate("a", "local-a", "remote-a", 40L),

@@ -37,6 +37,7 @@ internal class AndroidSafDownloadPublisher<Document>(
     private val directory: AndroidSafPublicationDirectory<Document>,
     private val ownership: AndroidSafDownloadOwnership,
     private val newToken: () -> String = { UUID.randomUUID().toString() },
+    private val contentIdentity: (Document) -> String? = { null },
 ) {
     fun reconcile() {
         val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
@@ -46,6 +47,7 @@ internal class AndroidSafDownloadPublisher<Document>(
             val stage = stageDocument(transaction)
             val backup = backupDocument(transaction)
             var publicationFailureAccountedFor = false
+            var ownershipReleased = false
             if (
                 backup != null &&
                 (!transaction.backupProtected || backup.displayName != transaction.backupName) &&
@@ -61,9 +63,19 @@ internal class AndroidSafDownloadPublisher<Document>(
             if (backup == null && originalDocumentIsFinal(transaction, final)) {
                 transaction = clearRestoredBackupName(transaction)
             }
+            if (
+                !transaction.publicationCompleted &&
+                transaction.publicationAttempted &&
+                transaction.stageDocumentIdentity != null &&
+                stage == null &&
+                final?.documentIdentity == transaction.stageDocumentIdentity
+            ) {
+                transaction = markPublished(transaction)
+            }
             when {
-                transaction.publicationCompleted && backup != null && stage == null ->
-                    deleteBestEffort(backup.document)
+                transaction.publicationCompleted && backup != null && stage == null -> {
+                    ownershipReleased = cleanupPublishedBackup(transaction, backup)
+                }
                 backup != null && stage != null && final == null -> {
                     transaction = restoreBackup(transaction, backup)
                     deleteBestEffort(stage.document)
@@ -75,7 +87,9 @@ internal class AndroidSafDownloadPublisher<Document>(
                     publicationFailureAccountedFor = final == null && stageDocument(transaction) == null
                 }
             }
-            retireRecoveredOwnershipBestEffort(transaction, publicationFailureAccountedFor)
+            if (!ownershipReleased) {
+                retireRecoveredOwnershipBestEffort(transaction, publicationFailureAccountedFor)
+            }
         }
     }
 
@@ -89,11 +103,13 @@ internal class AndroidSafDownloadPublisher<Document>(
     fun publish(
         finalName: String,
         currentDocument: Document?,
+        backupContentIdentity: String? = null,
         revalidateCurrent: () -> Unit = {},
         write: (OutputStream) -> Unit,
     ) = publish(
         finalName = finalName,
         currentDocument = currentDocument,
+        backupContentIdentity = backupContentIdentity,
         createStage = directory::createFile,
         revalidateCurrent = revalidateCurrent,
         prepareStage = { stage -> directory.writeFile(stage, write) },
@@ -102,12 +118,14 @@ internal class AndroidSafDownloadPublisher<Document>(
     fun publish(
         finalName: String,
         currentDocument: Document?,
+        backupContentIdentity: String? = null,
         createStage: (displayName: String) -> Document,
         revalidateCurrent: () -> Unit = {},
         prepareStage: (Document) -> Unit,
     ) {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
         reconcileForSync()
+        val authenticatedBackupContentIdentity = backupContentIdentity ?: currentDocument?.let(contentIdentity)
         val currentIdentity = currentDocument?.let { current ->
             requireNotNull(directory.documents().singleOrNull { it.document == current }) {
                 "The local item identity could not be resolved before replacement."
@@ -117,6 +135,7 @@ internal class AndroidSafDownloadPublisher<Document>(
             finalName = finalName,
             token = requireValidToken(newToken()),
             backupDocumentIdentity = currentIdentity,
+            backupContentIdentity = authenticatedBackupContentIdentity,
         )
         ownership.add(transaction)
         val stage = createStage(transaction.stageName)
@@ -198,8 +217,9 @@ internal class AndroidSafDownloadPublisher<Document>(
             if (failure is CancellationException && renamedStage == null) throw failure
             if (isPublished(transaction, stage, renamedStage)) {
                 transaction = markPublished(transaction)
-                backup?.let(::deleteBestEffort)
-                retireRecoveredOwnershipBestEffort(transaction)
+                val ownershipReleased = backupDocument(transaction)
+                    ?.let { cleanupPublishedBackup(transaction, it) } == true
+                if (!ownershipReleased) retireRecoveredOwnershipBestEffort(transaction)
                 if (failure is CancellationException) throw failure
                 return
             }
@@ -214,8 +234,9 @@ internal class AndroidSafDownloadPublisher<Document>(
                 }
             throw failure
         }
-        backup?.let(::deleteBestEffort)
-        retireRecoveredOwnershipBestEffort(transaction)
+        val ownershipReleased = backupDocument(transaction)
+            ?.let { cleanupPublishedBackup(transaction, it) } == true
+        if (!ownershipReleased) retireRecoveredOwnershipBestEffort(transaction)
     }
 
     fun visibleDocuments(
@@ -392,6 +413,41 @@ internal class AndroidSafDownloadPublisher<Document>(
         return attempted
     }
 
+    private fun cleanupPublishedBackup(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        backup: AndroidSafPublicationDocument<Document>,
+    ): Boolean {
+        val expectedIdentity = transaction.backupContentIdentity
+            ?: return preserveChangedBackup(transaction, backup)
+        val currentIdentity = contentIdentity(backup.document) ?: return false
+        if (currentIdentity == expectedIdentity) {
+            if (contentIdentity(backup.document) != expectedIdentity) {
+                return preserveChangedBackup(transaction, backup)
+            }
+            deleteBestEffort(backup.document)
+            return false
+        }
+        return preserveChangedBackup(transaction, backup)
+    }
+
+    private fun preserveChangedBackup(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        backup: AndroidSafPublicationDocument<Document>,
+    ): Boolean {
+        val preservedDocument = requireNotNull(directory.rename(backup.document, transaction.changedBackupName)) {
+            "The changed local backup could not be preserved as a conflict."
+        }
+        val preserved = requireNotNull(
+            directory.documents().singleOrNull { document -> document.document == preservedDocument },
+        ) { "The changed local backup could not be resolved after preservation." }
+        require(
+            preserved.displayName != transaction.finalName &&
+                preserved.displayName != transaction.stageName
+        ) { "The changed local backup was not preserved under a safe name." }
+        ownership.remove(transaction)
+        return true
+    }
+
     private fun deleteBestEffort(document: Document) {
         try {
             directory.delete(document)
@@ -456,10 +512,12 @@ internal data class AndroidSafOwnedDownloadTransaction(
     val backupProtected: Boolean = backupDisplayName != null,
     val backupDocumentIdentity: String? = null,
     val stageDocumentIdentity: String? = null,
+    val backupContentIdentity: String? = null,
 ) {
     val stageName: String = ".nextcloud-native-download-$token"
     val generatedBackupName: String = ".nextcloud-native-backup-$token"
     val backupName: String = backupDisplayName ?: generatedBackupName
+    val changedBackupName: String = "Nextcloud recovered local ${token.take(8)}"
 
     init {
         require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
@@ -468,6 +526,7 @@ internal data class AndroidSafOwnedDownloadTransaction(
         require(backupDisplayName == null || backupProtected)
         require(backupDocumentIdentity == null || backupDocumentIdentity.isNotBlank())
         require(stageDocumentIdentity == null || stageDocumentIdentity.isNotBlank())
+        require(backupContentIdentity == null || backupContentIdentity.isNotBlank())
         require(
             backupDisplayName == null ||
                 backupDisplayName.isNotBlank() &&

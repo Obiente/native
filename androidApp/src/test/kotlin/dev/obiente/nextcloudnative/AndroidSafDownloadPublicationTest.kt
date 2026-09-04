@@ -476,25 +476,6 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
-    fun `verified publication never restores stale backup after final deletion`() {
-        val transaction = AndroidSafOwnedDownloadTransaction(
-            finalName = "Archive",
-            token = TOKEN,
-            publicationAttempted = true,
-            publicationCompleted = true,
-        )
-        val directory = FakeSafDirectory().apply {
-            ownership.add(transaction)
-            addDirectory(transaction.backupName)
-        }
-
-        publisher(directory).reconcile()
-
-        assertEquals(emptyList(), directory.names())
-        assertEquals(emptyList(), directory.ownership.transactions())
-    }
-
-    @Test
     fun `restart after publication rename never restores an attempted backup`() {
         val transaction = AndroidSafOwnedDownloadTransaction(
             finalName = "Archive",
@@ -580,6 +561,7 @@ class AndroidSafDownloadPublicationTest {
                     backupProtected = true,
                     backupDocumentIdentity = originalDocument.toString(),
                     stageDocumentIdentity = directory.documentNamed(transaction.stageName).toString(),
+                    backupContentIdentity = directory.contentIdentity(originalDocument),
                 ),
             ),
             directory.ownership.transactions(),
@@ -909,6 +891,7 @@ class AndroidSafDownloadPublicationTest {
                 token = TOKEN,
                 backupDocumentIdentity = "content://provider/document/original",
                 stageDocumentIdentity = "content://provider/document/stage",
+                backupContentIdentity = "sha256:${"a".repeat(64)}",
             )
             AndroidSafDownloadOwnershipStore(root).forDirectory("content://provider/tree/root/document/one")
                 .add(transaction)
@@ -999,7 +982,7 @@ class AndroidSafDownloadPublicationTest {
     }
 
     private fun publisher(directory: FakeSafDirectory) =
-        AndroidSafDownloadPublisher(directory, directory.ownership) { TOKEN }
+        AndroidSafDownloadPublisher(directory, directory.ownership, { TOKEN }, directory::contentIdentity)
 
     private companion object {
         const val TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
@@ -1036,6 +1019,7 @@ internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var cancelNextDocumentsAfterRenameFailure: CancellationException? = null
     private var documentsCancellation: CancellationException? = null
     var deleteCalls: Int = 0
+    var mutateNextBackupBeforeContentIdentity: ByteArray? = null
     val ownership = FakeSafDownloadOwnership()
 
     fun addDirectory(displayName: String): Int = add(displayName, FakeSafKind.Directory)
@@ -1056,6 +1040,17 @@ internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     fun entryNamed(displayName: String): FakeSafEntry = entries.values.single { it.displayName == displayName }
 
     fun names(): List<String> = entries.values.map { it.displayName }.sorted()
+
+    fun contentIdentity(document: Int): String {
+        val entry = entries.getValue(document)
+        if (".nextcloud-native-backup-" in entry.displayName) {
+            mutateNextBackupBeforeContentIdentity?.let { bytes ->
+                mutateNextBackupBeforeContentIdentity = null
+                entry.bytes = bytes
+            }
+        }
+        return "${entry.kind.name}:${entry.bytes.joinToString(",") { byte -> byte.toUByte().toString() }}"
+    }
 
     fun replaceDocumentIdentity(displayName: String) {
         val previous = entryNamed(displayName)

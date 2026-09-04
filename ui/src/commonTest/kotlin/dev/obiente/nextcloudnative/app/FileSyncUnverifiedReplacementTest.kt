@@ -60,6 +60,46 @@ class FileSyncUnverifiedReplacementTest {
         )
     }
 
+    @Test
+    fun `unverified directory replacement offers no destructive device choice`() {
+        val local = LocalSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.Directory,
+            revision = "weak-directory-revision",
+            replacementContentIdentityUnavailable = true,
+        )
+        val remote = RemoteSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.File,
+            etag = "remote-1",
+            size = 4L,
+        )
+
+        val bidirectional = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local),
+            listOf(remote),
+            nowEpochMillis = 1L,
+        )
+        assertEquals(
+            setOf(FileSyncDecisionChoice.UseLocal, FileSyncDecisionChoice.Skip),
+            bidirectional.pair().workItems.single().decision?.choices,
+        )
+
+        val downloadOnly = scanFileSyncPair(
+            state(FileSyncConfiguration(direction = FileSyncDirection.DownloadOnly, deviceLabel = "Test device")),
+            PAIR_ID,
+            listOf(local),
+            listOf(remote),
+            nowEpochMillis = 1L,
+        )
+        assertEquals(
+            setOf(FileSyncDecisionChoice.Skip),
+            downloadOnly.pair().workItems.single().decision?.choices,
+        )
+    }
+
     private fun state(
         configuration: FileSyncConfiguration = FileSyncConfiguration(deviceLabel = "Test device"),
     ) = FileSyncCoordinatorState(
