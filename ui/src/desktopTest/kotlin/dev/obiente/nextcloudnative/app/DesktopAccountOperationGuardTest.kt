@@ -119,12 +119,18 @@ class DesktopAccountOperationGuardTest {
         val guard = DesktopAccountOperationGuard()
         var hydrationRegistered = false
 
-        assertTrue(desktopResourceActivationMatchesActiveAccount(first.accountId, first.accountId))
-        assertFalse(desktopResourceActivationMatchesActiveAccount(second.accountId, first.accountId))
-        assertFalse(desktopResourceActivationMatchesActiveAccount(null, first.accountId))
+        assertTrue(desktopResourceActivationMatchesActiveSession(first, first.copy()))
+        assertFalse(desktopResourceActivationMatchesActiveSession(second, first))
+        assertFalse(desktopResourceActivationMatchesActiveSession(null, first))
+        assertFalse(
+            desktopResourceActivationMatchesActiveSession(
+                first.copy(appPassword = "rotated"),
+                first,
+            ),
+        )
         assertFalse(
             guard.tryActivateResource {
-                desktopResourceActivationMatchesActiveAccount(second.accountId, first.accountId) &&
+                desktopResourceActivationMatchesActiveSession(second, first) &&
                     true.also { hydrationRegistered = true }
             },
         )
@@ -251,5 +257,32 @@ class DesktopAccountOperationGuardTest {
         sync.await()
         mutation.await()
         assertEquals(listOf("account-mutated"), events)
+    }
+
+    @Test
+    fun pairRemovalWaitsForTheSelectionSyncBoundary() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val selectionEntered = CompletableDeferred<Unit>()
+        val releaseSelection = CompletableDeferred<Unit>()
+        var removalEntered = false
+        val selection = async {
+            guard.serialize {
+                guard.withSyncRunLock {
+                    selectionEntered.complete(Unit)
+                    releaseSelection.await()
+                }
+            }
+        }
+        selectionEntered.await()
+        val removal = async {
+            guard.withSyncRunLock { removalEntered = true }
+        }
+        yield()
+
+        assertFalse(removalEntered)
+        releaseSelection.complete(Unit)
+        selection.await()
+        removal.await()
+        assertTrue(removalEntered)
     }
 }

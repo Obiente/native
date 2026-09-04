@@ -1516,7 +1516,7 @@ class DesktopNextcloudServices(
                 }
         }
         val accepted = accountOperationGuard.tryActivateResource {
-            if (!desktopResourceActivationMatchesActiveAccount(activeAccountId(), session.accountId)) {
+            if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
                 false
             } else {
                 synchronized(virtualFileProviderLock) {
@@ -1957,7 +1957,7 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): VirtualFileStorageActionResult {
-        if (!desktopResourceActivationMatchesActiveAccount(activeAccountId(), session.accountId)) {
+        if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
             return VirtualFileStorageActionResult.Rejected(
                 "The account changed before virtual file storage could be activated.",
             )
@@ -2879,7 +2879,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
-            fileSyncEngine.removePair(session, userId, pairId)
+            accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync pair could be removed.",
+                    )
+                }
+                fileSyncEngine.removePair(session, userId, pairId)
+            }
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {
@@ -4561,7 +4568,7 @@ class DesktopNextcloudServices(
             },
         )
         val registered = accountOperationGuard.tryActivateResource {
-            if (!desktopResourceActivationMatchesActiveAccount(activeAccountId(), session.accountId)) {
+            if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
                 false
             } else {
                 synchronized(fileRangeSessionLock) {

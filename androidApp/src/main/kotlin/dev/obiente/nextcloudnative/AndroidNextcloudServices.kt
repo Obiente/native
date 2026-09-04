@@ -500,6 +500,7 @@ internal class AndroidNextcloudServices(
         removeQueuedUploads = { session ->
             incomingShareAccountCleanup.removeForAccount(session)
             durableUploadAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
+            retireAndroidFileSyncAccountPairs(appContext, NextcloudDocumentIds.accountKey(session))
         },
     )
 
