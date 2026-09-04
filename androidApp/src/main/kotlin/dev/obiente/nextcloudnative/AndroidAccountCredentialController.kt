@@ -334,9 +334,12 @@ internal class AndroidAccountCredentialController(
                 },
             )
         }
-        if (previousSession != null && previousSession.accountId != session.accountId) {
-            clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(previousSession))
-        }
+        clearAndroidPreviousPreviewAfterCommittedSelection(
+            previousSession = previousSession,
+            selectedSession = session,
+            clearPreviewAccount = clearPreviewAccount,
+            recordFailure = { recordAccountSelectionCacheCleanupFailure() },
+        )
         resumeAndroidQueuedUploadsAfterSelection(
             resume = { resumeQueuedUploads(NextcloudDocumentIds.accountKey(session)) },
             notifyDocumentRootsChanged = notifyDocumentRootsChanged,
@@ -565,11 +568,15 @@ internal class AndroidAccountCredentialController(
             ),
         )
     }
-
     private fun recordAccountRemovalCleanupFailure() = recordCredentialFailure(
         code = "ACCOUNT_REMOVAL_CLEANUP_FAILED",
         operation = "account.remove-cleanup",
         component = SupportDiagnosticComponent.Sync,
+    )
+    private fun recordAccountSelectionCacheCleanupFailure() = recordCredentialFailure(
+        code = "ACCOUNT_SELECTION_CACHE_CLEANUP_FAILED",
+        operation = "account-selection.cache-cleanup",
+        component = SupportDiagnosticComponent.Cache,
     )
 
 }
