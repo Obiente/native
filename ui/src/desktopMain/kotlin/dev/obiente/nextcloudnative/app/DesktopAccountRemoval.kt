@@ -48,6 +48,24 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     return true
 }
 
+internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
+    accountId: String?,
+    commitRemoval: suspend () -> Unit,
+    removeSyncPairs: suspend (String) -> Unit,
+    recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
+) {
+    removeDesktopAccountBeforeSyncPairCleanup(
+        removeCredential = {
+            commitRemoval()
+            true
+        },
+        removeSyncPairs = { accountId?.let { removeSyncPairs(it) } },
+        recordCleanupFailure = { failure ->
+            accountId?.let { recordDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(it, failure)) }
+        },
+    )
+}
+
 internal fun desktopAccountSyncPairCleanupFailureDiagnostic(accountId: String, failure: Exception) =
     SupportDiagnosticEventDraft(
         severity = SupportDiagnosticSeverity.Error,

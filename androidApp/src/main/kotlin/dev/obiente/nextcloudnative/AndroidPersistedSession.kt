@@ -192,6 +192,41 @@ internal fun restoreAndroidPersistedSession(
 internal fun encodeAndroidPersistedSession(session: NextcloudSession): String =
     encodeAndroidAccountCredentialState(AndroidAccountCredentialState.Empty.upsertAndSelect(session))
 
+internal fun decodeAndroidCredentialFreeRegistry(encoded: String): NextcloudAccountRegistry? =
+    decodeNextcloudAccountRegistry(encoded)
+
+internal data class RestoredAndroidCredentialFreeRegistry(
+    val registry: NextcloudAccountRegistry?,
+    val diagnosticCode: String? = null,
+    val credentialRecoveryRequired: Boolean = false,
+)
+
+internal fun restoreAndroidCredentialFreeRegistry(
+    encoded: String,
+): RestoredAndroidCredentialFreeRegistry {
+    val restored = restoreNextcloudAccountRegistry(encoded, legacySession = null)
+    val recoveryReason = restored.recoveryReason
+    return when (recoveryReason) {
+        null -> RestoredAndroidCredentialFreeRegistry(restored.registry)
+        NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion ->
+            RestoredAndroidCredentialFreeRegistry(null, recoveryReason.diagnosticCode)
+        else -> RestoredAndroidCredentialFreeRegistry(
+            registry = null,
+            diagnosticCode = recoveryReason.diagnosticCode,
+            credentialRecoveryRequired = true,
+        )
+    }
+}
+
+internal fun recoverAndroidCredentialFreeRegistryForCredentialLoad(
+    restored: RestoredAndroidCredentialFreeRegistry?,
+    recover: () -> NextcloudAccountRegistry?,
+): NextcloudAccountRegistry? = when {
+    restored?.registry != null -> restored.registry
+    restored == null || restored.credentialRecoveryRequired -> recover()
+    else -> null
+}
+
 private fun restoreLegacyAndroidAccountCredentialState(
     json: JSONObject,
 ): RestoredAndroidAccountCredentialState {
