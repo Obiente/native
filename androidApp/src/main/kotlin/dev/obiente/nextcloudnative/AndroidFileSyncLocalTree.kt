@@ -23,20 +23,6 @@ internal data class AndroidLocalSyncDocument(
     val displayName: String,
 )
 
-internal data class AndroidSafReplacementEvidence(
-    val entry: LocalSyncEntry,
-    val documentIdentity: String,
-    val displayName: String,
-    val contentHash: String?,
-)
-
-internal fun requireUnchangedAndroidSafReplacement(
-    expected: List<AndroidSafReplacementEvidence>?,
-    actual: List<AndroidSafReplacementEvidence>?,
-) {
-    require(actual == expected) { "The local item changed while replacement content was staged." }
-}
-
 internal data class AndroidFileSyncContentHashRead(
     val contentHash: String?,
     val bytesRead: Long,
@@ -50,6 +36,11 @@ internal interface AndroidFileSyncLocalTree {
     fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
     ): List<AndroidLocalSyncDocument>
+    fun strengthenReplacementEntries(
+        documents: List<AndroidLocalSyncDocument>,
+        protectedPaths: Set<String>,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidLocalSyncDocument> = documents
     fun contentHash(
         path: String,
         expectedLocalRevision: String,
@@ -79,6 +70,17 @@ internal interface AndroidFileSyncLocalTree {
         shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
     ): LocalSyncEntry
     fun createDirectory(path: String, expectedLocalRevision: String?)
+    fun createDirectoryForDownload(
+        path: String,
+        expectedLocalRevision: String?,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ) {
+        if (!shouldContinue()) {
+            throw kotlinx.coroutines.CancellationException("The local download was cancelled.")
+        }
+        createDirectory(path, expectedLocalRevision)
+    }
     fun writeFile(path: String, source: File, expectedLocalRevision: String?)
     fun writeFileFromStream(
         path: String,
@@ -92,6 +94,18 @@ internal interface AndroidFileSyncLocalTree {
         } finally {
             temporary.delete()
         }
+    }
+    fun writeFileFromStreamForDownload(
+        path: String,
+        expectedLocalRevision: String?,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+        write: (OutputStream) -> Unit,
+    ) {
+        if (!shouldContinue()) {
+            throw kotlinx.coroutines.CancellationException("The local download was cancelled.")
+        }
+        writeFileFromStream(path, expectedLocalRevision, write)
     }
     fun delete(path: String, expectedLocalRevision: String)
     fun resolve(path: String): AndroidLocalSyncDocument?
@@ -142,6 +156,16 @@ internal class AndroidSafFileSyncLocalTree(
         }
         return result.sortedBy { it.entry.relativePath }
     }
+
+    override fun strengthenReplacementEntries(
+        documents: List<AndroidLocalSyncDocument>,
+        protectedPaths: Set<String>,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidLocalSyncDocument> = strengthenAndroidSafReplacementEntries(
+        documents = documents,
+        protectedPaths = protectedPaths,
+        contentHash = { document -> replacementContentHash(document, shouldContinue) },
+    )
 
     override fun reconcileOwnedDownloads() {
         val pending = ArrayDeque<Pair<String, Uri>>()
@@ -263,16 +287,35 @@ internal class AndroidSafFileSyncLocalTree(
     }
 
     override fun createDirectory(path: String, expectedLocalRevision: String?) {
+        createDirectoryForDownload(
+            path = path,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = null,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+        )
+    }
+
+    override fun createDirectoryForDownload(
+        path: String,
+        expectedLocalRevision: String?,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ) {
         val existing = resolve(path)
         if (expectedLocalRevision == null) {
             require(existing == null) { "The local folder appeared after the sync scan." }
         } else {
-            require(existing?.entry?.revision == expectedLocalRevision) {
-                "The local folder changed after the sync scan."
-            }
+            requireNotNull(existing) { "The local item disappeared after the sync scan." }
             if (existing.entry.kind == SyncEntryKind.Directory) return
         }
-        val replacementSnapshot = existing?.let(::replacementSnapshot)
+        val replacementSnapshot = existing?.let { document ->
+            authenticatedReplacementSnapshot(
+                document = document,
+                expectedLocalRevision = requireNotNull(expectedLocalRevision),
+                expectedContentHash = expectedContentHash,
+                shouldContinue = shouldContinue,
+            )
+        }
         val parent = ensureParent(path)
         val finalName = path.substringAfterLast('/')
         if (existing == null) {
@@ -288,7 +331,9 @@ internal class AndroidSafFileSyncLocalTree(
                 finalName = finalName,
                 currentDocument = existing.uri,
                 createStage = directory::createDirectory,
-                revalidateCurrent = { requireUnchangedReplacement(path, replacementSnapshot) },
+                revalidateCurrent = {
+                    requireUnchangedReplacement(path, replacementSnapshot, shouldContinue)
+                },
                 prepareStage = {},
             )
         }
@@ -306,15 +351,36 @@ internal class AndroidSafFileSyncLocalTree(
         expectedLocalRevision: String?,
         write: (OutputStream) -> Unit,
     ) {
+        writeFileFromStreamForDownload(
+            path = path,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = null,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+            write = write,
+        )
+    }
+
+    override fun writeFileFromStreamForDownload(
+        path: String,
+        expectedLocalRevision: String?,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+        write: (OutputStream) -> Unit,
+    ) {
         val current = resolve(path)
         if (expectedLocalRevision == null) {
             require(current == null) { "The local file appeared after the sync scan." }
         } else {
-            require(current?.entry?.revision == expectedLocalRevision) {
-                "The local file changed after the sync scan."
-            }
+            requireNotNull(current) { "The local item disappeared after the sync scan." }
         }
-        val replacementSnapshot = current?.let(::replacementSnapshot)
+        val replacementSnapshot = current?.let { document ->
+            authenticatedReplacementSnapshot(
+                document = document,
+                expectedLocalRevision = requireNotNull(expectedLocalRevision),
+                expectedContentHash = expectedContentHash,
+                shouldContinue = shouldContinue,
+            )
+        }
         val parentUri = ensureParent(path)
         val finalName = path.substringAfterLast('/')
         AndroidSafDownloadPublisher(
@@ -324,7 +390,9 @@ internal class AndroidSafFileSyncLocalTree(
             .publish(
                 finalName = finalName,
                 currentDocument = current?.uri,
-                revalidateCurrent = { requireUnchangedReplacement(path, replacementSnapshot) },
+                revalidateCurrent = {
+                    requireUnchangedReplacement(path, replacementSnapshot, shouldContinue)
+                },
                 write = write,
             )
     }
@@ -364,8 +432,11 @@ internal class AndroidSafFileSyncLocalTree(
         return null
     }
 
-    private fun replacementSnapshot(document: AndroidLocalSyncDocument): List<AndroidSafReplacementEvidence> {
-        val result = arrayListOf(replacementEvidence(document))
+    private fun replacementSnapshot(
+        document: AndroidLocalSyncDocument,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidSafReplacementEvidence> {
+        val result = arrayListOf(replacementEvidence(document, shouldContinue))
         val pending = ArrayDeque<AndroidLocalSyncDocument>()
         if (document.entry.kind == SyncEntryKind.Directory) pending += document
         while (pending.isNotEmpty()) {
@@ -377,55 +448,60 @@ internal class AndroidSafFileSyncLocalTree(
                 require(result.size < MAX_ENTRIES) {
                     "The local replacement folder contains too many entries."
                 }
-                result += replacementEvidence(child)
+                result += replacementEvidence(child, shouldContinue)
                 if (child.entry.kind == SyncEntryKind.Directory) pending += child
             }
         }
         return result.sortedBy { it.entry.relativePath }
     }
 
-    private fun replacementEvidence(document: AndroidLocalSyncDocument): AndroidSafReplacementEvidence =
-        AndroidSafReplacementEvidence(
-            entry = document.entry,
-            documentIdentity = document.uri.toString(),
-            displayName = document.displayName,
-            contentHash = if (document.entry.kind == SyncEntryKind.File) {
-                replacementContentHash(document)
-            } else {
-                null
-            },
-        )
+    private fun replacementEvidence(
+        document: AndroidLocalSyncDocument,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    ): AndroidSafReplacementEvidence = document.androidSafReplacementEvidence(
+        contentHash = if (document.entry.kind == SyncEntryKind.File) {
+            replacementContentHash(document, shouldContinue)
+        } else {
+            null
+        },
+    )
 
-    private fun replacementContentHash(document: AndroidLocalSyncDocument): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        var bytesRead = 0L
-        requireNotNull(resolver.openInputStream(document.uri)) {
+    private fun replacementContentHash(
+        document: AndroidLocalSyncDocument,
+        shouldContinue: () -> Boolean,
+    ): String {
+        return requireNotNull(resolver.openInputStream(document.uri)) {
             "The local replacement item could not be opened for verification."
         }.use { input ->
-            val buffer = ByteArray(BUFFER_BYTES)
-            while (true) {
-                if (Thread.currentThread().isInterrupted) {
-                    throw kotlinx.coroutines.CancellationException("Local replacement verification cancelled.")
-                }
-                val count = input.read(buffer)
-                if (count < 0) break
-                bytesRead = Math.addExact(bytesRead, count.toLong())
-                digest.update(buffer, 0, count)
-            }
+            hashAndroidSafReplacementContent(input, document.entry.size, shouldContinue)
         }
-        require(document.entry.size == null || document.entry.size == bytesRead) {
-            "The local replacement item changed during content verification."
-        }
-        return "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
     private fun requireUnchangedReplacement(
         path: String,
         expected: List<AndroidSafReplacementEvidence>?,
+        shouldContinue: () -> Boolean,
     ) {
         val current = resolveRaw(path)
-        val actual = current?.let(::replacementSnapshot)
+        val actual = current?.let { replacementSnapshot(it, shouldContinue) }
         requireUnchangedAndroidSafReplacement(expected, actual)
+    }
+
+    private fun authenticatedReplacementSnapshot(
+        document: AndroidLocalSyncDocument,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ): List<AndroidSafReplacementEvidence> {
+        val snapshot = replacementSnapshot(document, shouldContinue)
+        requireExpectedAndroidSafReplacement(
+            expected = document.entry.copy(
+                revision = expectedLocalRevision,
+                contentHash = expectedContentHash,
+            ),
+            actual = snapshot,
+        )
+        return snapshot
     }
 
     private fun ensureParent(path: String): Uri {

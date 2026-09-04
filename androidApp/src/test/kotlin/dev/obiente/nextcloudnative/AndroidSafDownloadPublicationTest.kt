@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -11,9 +12,103 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class AndroidSafDownloadPublicationTest {
+    @Test
+    fun `scan-time content identity rejects a same-size edit with unchanged SAF metadata`() {
+        val expected = LocalSyncEntry(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "saf-unchanged-metadata",
+            size = 2L,
+            contentHash = "sha256:${"0".repeat(64)}",
+        )
+        val edited = listOf(
+            AndroidSafReplacementEvidence(
+                entry = expected.copy(contentHash = null),
+                documentIdentity = "content://provider/archive",
+                displayName = "Archive.bin",
+                contentHash = "sha256:${"1".repeat(64)}",
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            requireExpectedAndroidSafReplacement(expected, edited)
+        }
+    }
+
+    @Test
+    fun `replacement fails closed when scan-time file content is unavailable`() {
+        val scanned = LocalSyncEntry(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "saf-unchanged-metadata",
+            size = 2L,
+        )
+        val current = listOf(
+            AndroidSafReplacementEvidence(
+                entry = scanned,
+                documentIdentity = "content://provider/archive",
+                displayName = "Archive.bin",
+                contentHash = "sha256:${"0".repeat(64)}",
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            requireExpectedAndroidSafReplacement(scanned, current)
+        }
+    }
+
+    @Test
+    fun `scan-time folder identity includes descendant content`() {
+        val folder = AndroidSafReplacementEvidence(
+            entry = LocalSyncEntry(
+                relativePath = "Archive",
+                kind = SyncEntryKind.Directory,
+                revision = "saf-folder-metadata",
+            ),
+            documentIdentity = "content://provider/archive",
+            displayName = "Archive",
+            contentHash = null,
+        )
+        val child = AndroidSafReplacementEvidence(
+            entry = LocalSyncEntry(
+                relativePath = "Archive/item.bin",
+                kind = SyncEntryKind.File,
+                revision = "saf-child-metadata",
+                size = 2L,
+            ),
+            documentIdentity = "content://provider/archive/item",
+            displayName = "item.bin",
+            contentHash = "sha256:${"0".repeat(64)}",
+        )
+
+        val before = androidSafReplacementRevision(listOf(folder, child))
+        val edited = listOf(folder, child.copy(contentHash = "sha256:${"1".repeat(64)}"))
+
+        assertNotEquals(before, androidSafReplacementRevision(edited))
+        assertFailsWith<IllegalArgumentException> {
+            requireExpectedAndroidSafReplacement(folder.entry.copy(revision = before), edited)
+        }
+    }
+
+    @Test
+    fun `replacement hashing observes coroutine cancellation without thread interruption`() {
+        var checks = 0
+
+        assertFailsWith<CancellationException> {
+            hashAndroidSafReplacementContent(
+                input = ByteArrayInputStream(ByteArray(128 * 1024)),
+                expectedBytes = 128L * 1024L,
+                shouldContinue = { ++checks < 2 },
+            )
+        }
+
+        assertEquals(2, checks)
+    }
+
     @Test
     fun `same-size SAF metadata cannot hide replacement content changes`() {
         val weakMetadata = LocalSyncEntry(

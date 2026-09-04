@@ -422,7 +422,19 @@ internal class AndroidFileSyncEngine(context: Context) {
         val remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
         val local = createAndroidFileSyncLocalTree(appContext, initialPair.localRootId)
         val contentReadBudget = AndroidFileSyncContentReadBudget()
-        val scannedLocalEntries = local.scan(includes).map(AndroidLocalSyncDocument::entry)
+        val scannedLocalDocuments = local.scan(includes)
+        val strengthenedLocalDocuments = strengthenAndroidFileSyncReplacementEntries(
+            local = local,
+            documents = scannedLocalDocuments,
+            remoteEntries = remoteEntries,
+            baselines = initialPair.baselines,
+            configuration = configuration,
+            shouldContinue = remote::shouldContinueTransfer,
+        )
+        val scanContentHashes = strengthenedLocalDocuments.mapNotNull { document ->
+            document.entry.contentHash?.let { hash -> document.entry.relativePath to hash }
+        }.toMap()
+        val scannedLocalEntries = strengthenedLocalDocuments.map(AndroidLocalSyncDocument::entry)
         val localEntries = verifyAndroidRemoteDeletionContent(
             localEntries = scannedLocalEntries,
             remoteEntries = remoteEntries,
@@ -480,7 +492,9 @@ internal class AndroidFileSyncEngine(context: Context) {
             applyFileSyncContentVerificationResults(localEntries, remoteEntries, verificationResults),
             pendingCandidates,
         )
-        val reconciledLocalEntries = contentIdentity.localEntries
+        val reconciledLocalEntries = contentIdentity.localEntries.map { entry ->
+            scanContentHashes[entry.relativePath]?.let { hash -> entry.copy(contentHash = hash) } ?: entry
+        }
         val reconciledRemoteEntries = contentIdentity.remoteEntries
         persisted = persisted.copy(
             coordinator = scanFileSyncPair(
@@ -729,24 +743,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 synchronizedResult(operation.relativePath, local, remote, contentReadBudget)
             }
             is FileSyncOperation.Download -> {
-                val source = requireNotNull(work.observedRemote)
-                if (source.kind == SyncEntryKind.Directory) {
-                    local.createDirectory(operation.relativePath, operation.expectedLocalRevision)
-                } else {
-                    streamAndroidFileSyncDownload(
-                        declaredByteCount = source.size,
-                        writeLocal = { write ->
-                            local.writeFileFromStream(
-                                operation.relativePath,
-                                operation.expectedLocalRevision,
-                                write,
-                            )
-                        },
-                        readRemote = { destination, maximumBytes ->
-                            remote.streamDownload(operation.relativePath, source.etag, destination, maximumBytes)
-                        },
-                    )
-                }
+                downloadAndroidFileSyncOperation(local, remote, operation, work)
                 synchronizedResult(operation.relativePath, local, remote, contentReadBudget)
             }
             is FileSyncOperation.DeleteLocal -> {
@@ -803,7 +800,14 @@ internal class AndroidFileSyncEngine(context: Context) {
                 local.writeFile(operation.localConflictPath, localBytes, expectedLocalRevision = null)
                 remote.writeFile(operation.remoteConflictPath, remoteBytes, expectedRemoteEtag = null)
                 local.writeFile(operation.remoteConflictPath, remoteBytes, expectedLocalRevision = null)
-                local.writeFile(operation.relativePath, remoteBytes, localSource.revision)
+                local.writeFileFromStreamForDownload(
+                    path = operation.relativePath,
+                    expectedLocalRevision = localSource.revision,
+                    expectedContentHash = localSource.contentHash,
+                    shouldContinue = remote::shouldContinueTransfer,
+                ) { output ->
+                    remoteBytes.inputStream().use { input -> input.copyTo(output) }
+                }
             }
         }
         return FileSyncExecutionSuccess(
