@@ -257,7 +257,7 @@ internal class DeckAttachmentUploadWorker(
             localUploadPicker = picker,
             accountMutationLeaseHeld = true,
         )
-        val outcome = runCatching {
+        val outcome = captureDurableUploadRequestOutcome {
             uploadServices.executeNextcloudMultipartUpload(session, started.request)
         }
         outcome.onSuccess { response ->
