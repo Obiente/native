@@ -2883,7 +2883,6 @@ internal class AndroidNextcloudServices(
     override fun releaseLocalUploadFile(file: LocalUploadFile) {
         localUploadPicker?.release(file)
     }
-
     override suspend fun executeNextcloudMultipartUpload(
         session: NextcloudSession,
         request: NextcloudMultipartUploadRequest,
@@ -2934,7 +2933,6 @@ internal class AndroidNextcloudServices(
             }
         }
     }
-
     override suspend fun enqueueDurableMultipartUpload(
         session: NextcloudSession,
         scope: DurableUploadScope,
