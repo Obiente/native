@@ -652,6 +652,25 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun previewCleanupFailureDoesNotHideACommittedAccountSelection() {
+        val previous = firstSession()
+        val selected = secondSession()
+        val events = mutableListOf<String>()
+
+        clearAndroidPreviousPreviewAfterCommittedSelection(
+            previousSession = previous,
+            selectedSession = selected,
+            clearPreviewAccount = {
+                events += "clear-preview"
+                error("synthetic preview cleanup failure")
+            },
+            recordFailure = { events += "diagnose-cleanup" },
+        )
+
+        assertEquals(listOf("clear-preview", "diagnose-cleanup"), events)
+    }
+
+    @Test
     fun queuedUploadResumeCancellationNotifiesBeforePropagating() {
         val events = mutableListOf<String>()
 
