@@ -3796,7 +3796,12 @@ class DesktopNextcloudServices(
                 clearSessionForAccountOperation()
                 true
             } else {
-                sessionPublicationGuard.serialize { accountCredentials.removeAccount(accountId) }
+                val account = listAccounts().firstOrNull { record -> record.id == accountId }
+                    ?: return@serialize false
+                accountOperationGuard.withSyncRunLock {
+                    fileSyncEngine.removeAccountPairs(desktopFileCacheAccountId(account))
+                    sessionPublicationGuard.serialize { accountCredentials.removeAccount(accountId) }
+                }
             }
         }
     }
@@ -3908,6 +3913,7 @@ class DesktopNextcloudServices(
                 mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
                     phase = DesktopFileSyncTrayPhase.Idle,
                 )
+                accountId?.let { fileSyncEngine.removeAccountPairs(it) }
                 sessionPublicationGuard.serialize {
                     if (activeAccountId != null) {
                         check(accountCredentials.removeAccount(activeAccountId))

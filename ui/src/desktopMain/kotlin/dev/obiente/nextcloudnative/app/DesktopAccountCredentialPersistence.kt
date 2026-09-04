@@ -20,18 +20,15 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun listAccounts(): List<NextcloudAccountRecord> {
-        retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry != null) return read.registry.accounts
-        val legacy = restoreLegacySession(read.encoded != null)
-        return readRegistry().registry?.accounts ?: legacy?.let { listOf(it.accountRecord()) }.orEmpty()
+        return readLegacyAccountRecord()?.let(::listOf).orEmpty()
     }
 
     fun activeAccountId(): NextcloudAccountId? {
-        retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry != null) return read.registry.activeAccountId
-        return restoreLegacySession(read.encoded != null)?.accountId
+        return readLegacyAccountRecord()?.id
     }
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? {
@@ -154,6 +151,12 @@ internal class DesktopAccountCredentialPersistence(
         val login = preferences.get(KEY_LOGIN, null) ?: return null
         val password = loadSecret(desktopSessionSecretReference(server, login)) ?: return null
         return NextcloudSession(server, login, password)
+    }
+
+    private fun readLegacyAccountRecord(): NextcloudAccountRecord? {
+        val server = preferences.get(KEY_SERVER, null) ?: return null
+        val login = preferences.get(KEY_LOGIN, null) ?: return null
+        return runCatching { NextcloudSession(server, login, appPassword = "").accountRecord() }.getOrNull()
     }
 
     private fun migrateLegacyCredential(session: NextcloudSession) {

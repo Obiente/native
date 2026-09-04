@@ -23,7 +23,6 @@ internal class DesktopFileSyncEngine(
 ) {
     private val selectedRoots = ConcurrentHashMap<String, File>()
     private val lock = Mutex()
-
     suspend fun chooseLocalRoot(initialRootHint: String?): FileSyncLocalRoot? = withContext(Dispatchers.IO) {
         val initialDirectory = initialRootHint?.let(selectedRoots::get)?.takeIf(File::isDirectory)
         val chosen = folderPicker.choose(initialDirectory) ?: return@withContext null
@@ -216,6 +215,8 @@ internal class DesktopFileSyncEngine(
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
     }
+
+    suspend fun removeAccountPairs(accountId: String) = lock.withLock { store.removeDesktopFileSyncAccountPairs(accountId) }
 
     suspend fun runPair(
         session: NextcloudSession,
@@ -826,7 +827,6 @@ internal class DesktopFileSyncEngine(
 
     private fun filesMatch(first: File, second: File): Boolean =
         first.length() == second.length() && Files.mismatch(first.toPath(), second.toPath()) == -1L
-
     private fun synchronizedResult(
         path: String,
         local: DesktopFileSyncLocalTree,
