@@ -112,38 +112,87 @@ internal fun hashAndroidSafReplacementContent(
     return "sha256:" + digest.digest().joinToString("") { byte -> "%02x".format(byte) }
 }
 
+internal inline fun <T> readAndroidSafReplacementContentWithinBudget(
+    item: T,
+    expectedBytes: Long?,
+    budget: AndroidFileSyncContentReadBudget,
+    contentHash: (T) -> String,
+): String? = if (budget.reserve(expectedBytes)) contentHash(item) else null
+
+internal fun AndroidFileSyncContentReadBudget.reserveCompleteReplacementContent(
+    expectedByteCounts: List<Long?>,
+): Boolean {
+    val reservedBytes = mutableListOf<Long>()
+    expectedByteCounts.forEach { expectedBytes ->
+        if (!reserve(expectedBytes)) {
+            reservedBytes.forEach(::refund)
+            return false
+        }
+        reservedBytes += requireNotNull(expectedBytes)
+    }
+    return true
+}
+
 internal fun strengthenAndroidSafReplacementEntries(
     documents: List<AndroidLocalSyncDocument>,
     protectedPaths: Set<String>,
+    contentReadBudget: AndroidFileSyncContentReadBudget,
     contentHash: (AndroidLocalSyncDocument) -> String,
 ): List<AndroidLocalSyncDocument> {
     val scanned = documents.associateBy { it.entry.relativePath }
     val sortedPaths = scanned.keys.sorted()
     val strengthened = scanned.toMutableMap()
-    val computedHashes = mutableMapOf<String, String>()
+    val computedHashes = mutableMapOf<String, String?>()
     protectedPaths.sorted().forEach { path ->
         val root = scanned[path] ?: return@forEach
         val scopedPaths = androidSafReplacementScopedPaths(sortedPaths, path, root.entry.kind)
-        fun exactHash(document: AndroidLocalSyncDocument): String {
-            return document.entry.contentHash ?: computedHashes.getOrPut(document.entry.relativePath) {
-                contentHash(document)
-            }
+        fun exactHash(document: AndroidLocalSyncDocument): String? {
+            document.entry.contentHash?.let { return it }
+            val documentPath = document.entry.relativePath
+            if (documentPath in computedHashes) return computedHashes[documentPath]
+            val expectedBytes = document.entry.size
+            val hash = readAndroidSafReplacementContentWithinBudget(
+                document,
+                expectedBytes,
+                contentReadBudget,
+                contentHash,
+            )
+            computedHashes[documentPath] = hash
+            return hash
         }
         if (root.entry.kind == SyncEntryKind.File) {
+            val hash = exactHash(root)
             strengthened[path] = root.copy(
-                entry = root.entry.copy(contentHash = exactHash(root)),
+                entry = root.entry.copy(
+                    contentHash = hash,
+                    contentIdentityUnverified = hash == null,
+                ),
             )
         } else {
-            val evidence = scopedPaths.map { scopedPath ->
+            val documentsToHash = scopedPaths.map { scopedPath -> requireNotNull(scanned[scopedPath]) }
+                .filter { document ->
+                    document.entry.kind == SyncEntryKind.File &&
+                        document.entry.contentHash == null &&
+                        computedHashes[document.entry.relativePath] == null
+                }
+            if (!contentReadBudget.reserveCompleteReplacementContent(documentsToHash.map { it.entry.size })) {
+                return@forEach
+            }
+            documentsToHash.forEach { document ->
+                computedHashes[document.entry.relativePath] = contentHash(document)
+            }
+            val evidence = scopedPaths.mapNotNull { scopedPath ->
                 val document = requireNotNull(scanned[scopedPath])
+                val exactContentHash = if (document.entry.kind == SyncEntryKind.File) {
+                    exactHash(document) ?: return@mapNotNull null
+                } else {
+                    null
+                }
                 document.androidSafReplacementEvidence(
-                    contentHash = if (document.entry.kind == SyncEntryKind.File) {
-                        exactHash(document)
-                    } else {
-                        null
-                    },
+                    contentHash = exactContentHash,
                 )
             }
+            if (evidence.size != scopedPaths.size) return@forEach
             strengthened[path] = root.copy(
                 entry = root.entry.copy(revision = androidSafReplacementRevision(evidence)),
             )
@@ -183,6 +232,7 @@ internal fun androidFileSyncProtectedReplacementPaths(
         path in localPaths && when (operation) {
             is FileSyncOperation.Download -> operation.expectedLocalRevision != null
             is FileSyncOperation.DeleteLocal -> true
+            is FileSyncOperation.KeepBoth -> true
             is FileSyncOperation.NeedsDecision -> when (operation.reason) {
                 FileSyncDecisionReason.FirstSyncCollision,
                 FileSyncDecisionReason.SimultaneousEdit,
@@ -202,6 +252,7 @@ internal fun strengthenAndroidFileSyncReplacementEntries(
     remoteEntries: List<RemoteSyncEntry>,
     baselines: List<FileSyncBaseline>,
     configuration: FileSyncConfiguration,
+    contentReadBudget: AndroidFileSyncContentReadBudget,
     shouldContinue: () -> Boolean,
 ): List<AndroidLocalSyncDocument> {
     val localPaths = documents.mapTo(mutableSetOf()) { it.entry.relativePath }
@@ -214,7 +265,12 @@ internal fun strengthenAndroidFileSyncReplacementEntries(
         ).operations,
         localPaths = localPaths,
     )
-    return local.strengthenReplacementEntries(documents, protectedPaths, shouldContinue)
+    return local.strengthenReplacementEntries(
+        documents,
+        protectedPaths,
+        contentReadBudget,
+        shouldContinue,
+    )
 }
 
 internal fun downloadAndroidFileSyncOperation(

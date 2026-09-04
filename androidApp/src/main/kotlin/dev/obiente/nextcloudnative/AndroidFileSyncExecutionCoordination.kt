@@ -118,12 +118,14 @@ internal fun <T> loadFileSyncPresentationSnapshot(
 
 internal suspend fun removeConfiguredFileSyncPair(
     reconcileLocalDownloads: suspend () -> Boolean,
+    cleanRemoteUploads: suspend () -> Boolean,
     cleanLedger: suspend () -> Unit,
     persistRemoval: suspend () -> Unit,
     cancelSchedule: suspend () -> Unit,
     releaseLocalGrant: suspend () -> Unit,
 ): Boolean {
     if (!reconcileLocalDownloads()) return false
+    if (!cleanRemoteUploads()) return false
     cleanLedger()
     persistRemoval()
     cancelSchedule()

@@ -300,22 +300,22 @@ internal class AndroidFileSyncEngine(context: Context) {
                     "This folder sync pair belongs to another account.",
                 )
             }
-            val ownedUploads = fileSyncOwnedUploads(pair)
-            val remote = androidFileSyncOwnedRemoteTree(session, userId, pair, webDav, context = appContext)
-            val cleanupResult = cleanupJvmFileSyncOwnedUploads(
-                remote, current.coordinator, pairId, ownedUploads,
-            )
-            if (cleanupResult.unresolvedUploads.isNotEmpty()) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                    "A previous upload still needs safe recovery. Run this folder sync before removing it.",
-                )
-            }
-            val remaining = removeFileSyncPair(cleanupResult.state, pairId)
             val releasesLocalGrant = pair.localRootId.startsWith("content://") &&
-                remaining.pairs.none { it.localRootId == pair.localRootId }
+                current.coordinator.pairs.none { it.id != pairId && it.localRootId == pair.localRootId }
+            var cleanedCoordinator: FileSyncCoordinatorState? = null
+            var remoteCleanupRejected = false
             val removed = removeConfiguredFileSyncPair(
                 reconcileLocalDownloads = {
                     reconcileSafDownloadsBeforeGrantRelease(appContext, pair.localRootId, releasesLocalGrant)
+                },
+                cleanRemoteUploads = {
+                    val cleanupResult = cleanupJvmFileSyncOwnedUploads(
+                        androidFileSyncOwnedRemoteTree(session, userId, pair, webDav, context = appContext),
+                        current.coordinator, pairId, fileSyncOwnedUploads(pair),
+                    )
+                    remoteCleanupRejected = cleanupResult.unresolvedUploads.isNotEmpty()
+                    if (!remoteCleanupRejected) cleanedCoordinator = cleanupResult.state
+                    !remoteCleanupRejected
                 },
                 cleanLedger = {
                     val mediaStore = createAndroidMediaBackupLedgerStore(
@@ -339,6 +339,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     }
                 },
                 persistRemoval = {
+                    val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
                     store.save(
                         current.copy(
                             coordinator = remaining,
@@ -352,13 +353,12 @@ internal class AndroidFileSyncEngine(context: Context) {
                 },
             )
             if (!removed) {
-                return@withLock FileSyncCenterActionResult.Rejected(
-                    "A local download still needs safe recovery. Run this folder sync before removing it.",
-                )
+                return@withLock FileSyncCenterActionResult.Rejected(if (remoteCleanupRejected) {
+                    "A previous upload still needs safe recovery. Run this folder sync before removing it."
+                } else "A local download still needs safe recovery. Run this folder sync before removing it.")
             }
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
-
     suspend fun runPair(
         session: NextcloudSession,
         userId: String,
@@ -429,6 +429,7 @@ internal class AndroidFileSyncEngine(context: Context) {
             remoteEntries = remoteEntries,
             baselines = initialPair.baselines,
             configuration = configuration,
+            contentReadBudget = contentReadBudget,
             shouldContinue = remote::shouldContinueTransfer,
         )
         val scanContentHashes = strengthenedLocalDocuments.mapNotNull { document ->

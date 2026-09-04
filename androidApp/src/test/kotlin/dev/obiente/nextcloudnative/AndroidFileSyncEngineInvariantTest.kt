@@ -210,6 +210,7 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "reconcile"
                     true
                 },
+                cleanRemoteUploads = { events += "remote"; true },
                 cleanLedger = {
                     events += "clean"
                     error("ledger unavailable")
@@ -220,7 +221,7 @@ class AndroidFileSyncEngineInvariantTest {
             )
         }
 
-        assertEquals(listOf("reconcile", "clean"), events)
+        assertEquals(listOf("reconcile", "remote", "clean"), events)
     }
 
     @Test
@@ -232,6 +233,7 @@ class AndroidFileSyncEngineInvariantTest {
                 events += "reconcile"
                 true
             },
+            cleanRemoteUploads = { events += "remote"; true },
             cleanLedger = { events += "clean" },
             persistRemoval = { events += "persist" },
             cancelSchedule = { events += "cancel" },
@@ -239,7 +241,7 @@ class AndroidFileSyncEngineInvariantTest {
         )
 
         assertTrue(removed)
-        assertEquals(listOf("reconcile", "clean", "persist", "cancel", "release"), events)
+        assertEquals(listOf("reconcile", "remote", "clean", "persist", "cancel", "release"), events)
     }
 
     @Test
@@ -251,6 +253,7 @@ class AndroidFileSyncEngineInvariantTest {
                 events += "reconcile"
                 false
             },
+            cleanRemoteUploads = { events += "remote"; true },
             cleanLedger = { events += "clean" },
             persistRemoval = { events += "persist" },
             cancelSchedule = { events += "cancel" },
@@ -259,6 +262,29 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertFalse(removed)
         assertEquals(listOf("reconcile"), events)
+    }
+
+    @Test
+    fun pairRemovalRetainsItsStateWhenRemoteRecoveryIsUnavailable() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeConfiguredFileSyncPair(
+            reconcileLocalDownloads = {
+                events += "reconcile"
+                true
+            },
+            cleanRemoteUploads = {
+                events += "remote"
+                false
+            },
+            cleanLedger = { events += "clean" },
+            persistRemoval = { events += "persist" },
+            cancelSchedule = { events += "cancel" },
+            releaseLocalGrant = { events += "release" },
+        )
+
+        assertFalse(removed)
+        assertEquals(listOf("reconcile", "remote"), events)
     }
 
     @Test
@@ -283,6 +309,7 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "reconcile"
                     throw CancellationException("pair removal cancelled")
                 },
+                cleanRemoteUploads = { events += "remote"; true },
                 cleanLedger = { events += "clean" },
                 persistRemoval = { events += "persist" },
                 cancelSchedule = { events += "cancel" },

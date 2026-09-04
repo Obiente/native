@@ -39,6 +39,7 @@ internal interface AndroidFileSyncLocalTree {
     fun strengthenReplacementEntries(
         documents: List<AndroidLocalSyncDocument>,
         protectedPaths: Set<String>,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
         shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> = documents
     fun contentHash(
@@ -171,10 +172,12 @@ internal class AndroidSafFileSyncLocalTree(
     override fun strengthenReplacementEntries(
         documents: List<AndroidLocalSyncDocument>,
         protectedPaths: Set<String>,
+        contentReadBudget: AndroidFileSyncContentReadBudget,
         shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> = strengthenAndroidSafReplacementEntries(
         documents = documents,
         protectedPaths = protectedPaths,
+        contentReadBudget = contentReadBudget,
         contentHash = { document -> replacementContentHash(document, shouldContinue) },
     )
 
@@ -436,12 +439,14 @@ internal class AndroidSafFileSyncLocalTree(
     ) {
         requireDeletionContinuation(shouldContinue)
         val current = requireNotNull(resolve(path)) { "The local item was already removed." }
-        authenticatedReplacementSnapshot(
+        val authenticatedSnapshot = authenticatedReplacementSnapshot(
             document = current,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = expectedContentHash,
             shouldContinue = shouldContinue,
         )
+        requireDeletionContinuation(shouldContinue)
+        requireUnchangedReplacement(path, authenticatedSnapshot, shouldContinue)
         requireDeletionContinuation(shouldContinue)
         require(DocumentsContract.deleteDocument(resolver, current.uri)) {
             "The local item could not be removed."

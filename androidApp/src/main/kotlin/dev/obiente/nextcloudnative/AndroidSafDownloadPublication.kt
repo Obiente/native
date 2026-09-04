@@ -163,6 +163,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 transaction = transaction.copy(
                     backupDisplayName = protected.displayName.takeIf { it != transaction.backupName },
                     backupProtected = true,
+                    backupDocumentIdentity = protected.documentIdentity,
                 )
                 ownership.replace(transaction)
                 require(ownedDocument(transaction.backupName)?.document == renamed) {

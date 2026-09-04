@@ -877,6 +877,31 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
+    fun `exact backup rename persists its changed provider identity for restart cleanup`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            replaceIdentityAfterRenameTo = initial.backupName
+            failNextBackupDeletion = true
+        }
+        val originalIdentity = directory.documentNamed("Archive").toString()
+
+        publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+            output.write(byteArrayOf(32, 33))
+        }
+
+        val persisted = directory.ownership.transactions().single()
+        assertNotEquals(originalIdentity, persisted.backupDocumentIdentity)
+        assertEquals(directory.documentNamed(initial.backupName).toString(), persisted.backupDocumentIdentity)
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.File, directory.entryNamed("Archive").kind)
+        assertContentEquals(byteArrayOf(32, 33), directory.entryNamed("Archive").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
     fun `file ownership survives recreation and follows its recovery token after a parent move`() {
         val root = Files.createTempDirectory("saf-download-ownership-").toFile()
         try {
