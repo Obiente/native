@@ -88,6 +88,30 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun failedNewCredentialRollbackRetainsTheRecoveryJournal() = withStore { preferences, secrets ->
+        val session = firstSession()
+        var flushCount = 0
+        val persistence = persistence(preferences, secrets) {
+            flushCount += 1
+            if (flushCount == 2) error("synthetic registry flush failure")
+            preferences.flush()
+        }
+        secrets.failClears = true
+
+        assertFailsWith<IllegalStateException> { persistence.saveSession(session) }
+
+        assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertEquals(session.serverUrl, preferences.get("accountCredentialSaveServer", null))
+        assertEquals(session.loginName, preferences.get("accountCredentialSaveLogin", null))
+
+        secrets.failClears = false
+        assertNull(persistence(preferences, secrets).loadActiveSession())
+        assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertNull(preferences.get("accountCredentialSaveServer", null))
+        assertNull(preferences.get("accountCredentialSaveLogin", null))
+    }
+
+    @Test
     fun startupRecoveryRemovesANewCredentialWhoseRegistryCommitNeverCompleted() =
         withStore { preferences, secrets ->
             val session = firstSession()

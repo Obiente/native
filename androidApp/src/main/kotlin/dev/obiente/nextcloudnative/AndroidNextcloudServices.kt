@@ -2950,7 +2950,7 @@ internal class AndroidNextcloudServices(
     ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
-            resolveSession = { loadSession(session.accountId) },
+            resolveSession = ::loadSession,
             unavailable = {
                 DurableUploadEnqueueResult.Rejected("The account changed before the upload could be queued.")
             },

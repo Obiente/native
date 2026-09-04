@@ -70,6 +70,7 @@ internal class DesktopAccountCredentialPersistence(
             saveSecret(persistedSession)
             persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
         } catch (failure: Exception) {
+            var credentialRollbackCompleted = false
             try {
                 if (previousSecret == null) {
                     secretStore.clear(secretReference)
@@ -80,6 +81,7 @@ internal class DesktopAccountCredentialPersistence(
                         previousSecret,
                     )
                 }
+                credentialRollbackCompleted = true
             } catch (rollbackFailure: Exception) {
                 failure.addSuppressed(rollbackFailure)
                 recordCredentialDiagnostic(
@@ -88,7 +90,7 @@ internal class DesktopAccountCredentialPersistence(
                     rollbackFailure,
                 )
             }
-            if (journalNewCredential) clearPendingCredentialSave()
+            if (journalNewCredential && credentialRollbackCompleted) clearPendingCredentialSave()
             throw failure
         }
         if (journalNewCredential) clearPendingCredentialSave()
