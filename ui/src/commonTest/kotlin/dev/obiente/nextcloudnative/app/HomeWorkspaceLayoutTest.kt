@@ -312,6 +312,22 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
+    fun `legacy promotion cannot overwrite a newer canonical layout`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyLayout = defaultHomeWorkspaceLayout(legacyScope).hide(HomeSectionIds.PhotoBackup)
+        assertTrue(repository.save(legacyLayout))
+        val loaded = repository.loadWithMigration(currentScope, legacyScope.accountScopeDigest)
+        val newer = defaultHomeWorkspaceLayout(currentScope).hide(HomeSectionIds.Activity)
+        assertTrue(repository.save(newer))
+
+        assertFalse(repository.saveIfAbsent(loaded.layout))
+        assertEquals(newer, repository.load(currentScope))
+    }
+
+    @Test
     fun `failed canonical read never overwrites it from a stale legacy layout`() {
         val storage = RecordingHomeWorkspaceStorage()
         val repository = HomeWorkspaceLayoutRepository(storage)
@@ -428,6 +444,12 @@ class HomeWorkspaceLayoutTest {
             lastKey = persistenceKey
             lastValue = encodedSnapshot
             values[persistenceKey] = encodedSnapshot
+        }
+
+        override fun writeIfAbsent(persistenceKey: String, encodedSnapshot: String): Boolean {
+            if (persistenceKey in values) return false
+            write(persistenceKey, encodedSnapshot)
+            return true
         }
 
         fun value(persistenceKey: String): String? = values[persistenceKey]
