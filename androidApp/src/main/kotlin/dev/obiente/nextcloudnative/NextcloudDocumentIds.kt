@@ -32,7 +32,12 @@ internal object NextcloudDocumentIds {
         accountDigest(session.serverUrl, session.loginName)
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    fun rootId(session: NextcloudSession): String = documentId(session, "")
+    fun rootId(session: NextcloudSession): String = rootId(accountKey(session))
+
+    fun rootId(accountKey: String): String {
+        require(accountKeyPattern.matches(accountKey)) { "Invalid document account." }
+        return "$PREFIX:$accountKey:"
+    }
 
     fun documentId(session: NextcloudSession, path: String): String {
         val normalizedPath = normalizePath(path)

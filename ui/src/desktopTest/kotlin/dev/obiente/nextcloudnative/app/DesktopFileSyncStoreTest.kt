@@ -88,6 +88,7 @@ class DesktopFileSyncStoreTest {
             store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(owned)), roots.take(1)), owned.id)
             store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(clear)), roots.drop(1)), clear.id)
 
+            assertFails { store.requireDesktopFileSyncAccountRemovalReady("account-a") }
             assertFails { store.removeDesktopFileSyncAccountPairs("account-a") }
 
             val retained = store.load()

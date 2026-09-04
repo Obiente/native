@@ -75,6 +75,41 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun remoteRevocationKeepsMutationsBlockedUntilLocalRemovalCommits() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val remoteRevoked = CompletableDeferred<Unit>()
+        val allowLocalRemoval = CompletableDeferred<Unit>()
+        var localRemovalCommitted = false
+        var mutationObservedCommittedRemoval = false
+
+        val removal = async {
+            revokeAndroidSessionWithAccountLease(
+                accountIdentity = "account-a",
+                guard = guard,
+                preflight = {},
+                revoke = { remoteRevoked.complete(Unit) },
+                removeLocalAccount = {
+                    allowLocalRemoval.await()
+                    localRemovalCommitted = true
+                },
+            )
+        }
+        remoteRevoked.await()
+        val mutation = async {
+            guard.withAccount("account-a") {
+                mutationObservedCommittedRemoval = localRemovalCommitted
+            }
+        }
+        yield()
+
+        assertFalse(mutation.isCompleted)
+        allowLocalRemoval.complete(Unit)
+        removal.await()
+        mutation.await()
+        assertTrue(mutationObservedCommittedRemoval)
+    }
+
+    @Test
     fun fileSyncPairCreationWaitsForRemovalAndRejectsTheReauthenticatedSession() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")

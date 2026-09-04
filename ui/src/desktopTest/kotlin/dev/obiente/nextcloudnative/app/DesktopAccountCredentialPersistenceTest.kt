@@ -62,6 +62,35 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun accountRemovalJournalsBothCurrentAndLegacyCredentialCleanup() = withStore { preferences, secrets ->
+        val first = firstSession()
+        val persistence = persistence(preferences, secrets)
+        persistence.saveSession(first)
+        persistence.saveSession(secondSession())
+        secrets.save(
+            desktopSessionSecretReference(first.serverUrl, first.loginName),
+            first.loginName,
+            first.appPassword.encodeToByteArray(),
+        )
+        preferences.put("accountLegacyCleanupServer", first.serverUrl)
+        preferences.put("accountLegacyCleanupLogin", first.loginName)
+        secrets.failClears = true
+
+        assertTrue(persistence.removeAccount(first.accountId))
+        assertFalse(persistence.listAccounts().any { account -> account.id == first.accountId })
+        assertNotNull(secrets.load(desktopAccountSecretReference(first.accountId)))
+        assertNotNull(secrets.load(desktopSessionSecretReference(first.serverUrl, first.loginName)))
+        assertEquals(first.accountId.storageKey, preferences.get("accountCredentialRemovals", null))
+
+        secrets.failClears = false
+        persistence.loadActiveSession()
+        assertNull(secrets.load(desktopAccountSecretReference(first.accountId)))
+        assertNull(secrets.load(desktopSessionSecretReference(first.serverUrl, first.loginName)))
+        assertNull(preferences.get("accountLegacyCleanupServer", null))
+        assertNull(preferences.get("accountLegacyCleanupLogin", null))
+    }
+
+    @Test
     fun selectionFlushesRegistryAndLegacyMetadataBeforeReturning() = withStore { preferences, secrets ->
         var flushCount = 0
         val persistence = persistence(preferences, secrets) { flushCount += 1 }
@@ -69,7 +98,7 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(secondSession())
 
         assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
-        assertEquals(7, flushCount)
+        assertEquals(10, flushCount)
         assertEquals(firstSession().serverUrl, preferences.get("server", null))
         assertEquals(firstSession().loginName, preferences.get("login", null))
     }
@@ -417,7 +446,7 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
-    fun failedCredentialDeletionKeepsTheAccountRegisteredForRetry() = withStore { preferences, secrets ->
+    fun failedCredentialDeletionKeepsAPostCommitRetryJournal() = withStore { preferences, secrets ->
         val first = firstSession()
         val second = secondSession()
         val persistence = persistence(preferences, secrets)
@@ -425,29 +454,41 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(second)
         secrets.failClears = true
 
-        assertFailsWith<IllegalStateException> {
-            persistence.removeAccount(second.accountId)
-        }
+        assertTrue(persistence.removeAccount(second.accountId))
 
-        assertEquals(second.accountId, persistence.activeAccountId())
-        assertEquals(setOf(first.accountRecord(), second.accountRecord()), persistence.listAccounts().toSet())
+        assertNull(persistence.activeAccountId())
+        assertEquals(listOf(first.accountRecord()), persistence.listAccounts())
         assertNotNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+        assertEquals(second.accountId.storageKey, preferences.get("accountCredentialRemovals", null))
 
         secrets.failClears = false
-        assertTrue(persistence.removeAccount(second.accountId))
-        assertNull(persistence(preferences, secrets).activeAccountId())
+        assertNull(persistence(preferences, secrets).loadActiveSession())
         assertNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+        assertNull(preferences.get("accountCredentialRemovals", null))
     }
 
     @Test
-    fun failedRegistryFlushAfterCredentialDeletionKeepsADeletionRetryPath() =
+    fun removalJournalNeverDeletesAStillRegisteredCredential() = withStore { preferences, secrets ->
+        val session = firstSession()
+        val persistence = persistence(preferences, secrets)
+        persistence.saveSession(session)
+        preferences.put("accountCredentialRemovals", session.accountId.storageKey)
+        preferences.flush()
+
+        assertEquals(session, persistence.loadActiveSession())
+        assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertNull(preferences.get("accountCredentialRemovals", null))
+    }
+
+    @Test
+    fun failedRegistryFlushLeavesTheCredentialAndAccountIntact() =
         withStore { preferences, secrets ->
             val first = firstSession()
             val second = secondSession()
             var flushAttempts = 0
             val persistence = persistence(preferences, secrets) {
                 flushAttempts += 1
-                if (flushAttempts == 7) error("synthetic removal flush failure")
+                if (flushAttempts == 10) error("synthetic removal flush failure")
                 preferences.flush()
             }
             persistence.saveSession(first)
@@ -459,27 +500,27 @@ class DesktopAccountCredentialPersistenceTest {
 
             assertEquals(second.accountId, persistence.activeAccountId())
             assertEquals(setOf(first.accountRecord(), second.accountRecord()), persistence.listAccounts().toSet())
-            assertNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+            assertNotNull(secrets.load(desktopAccountSecretReference(second.accountId)))
+            assertNull(preferences.get("accountCredentialRemovals", null))
             assertTrue(persistence.removeAccount(second.accountId))
             assertNull(persistence(preferences, secrets).activeAccountId())
         }
 
     @Test
-    fun oversizedRegistryFailsBeforeCredentialOrMetadataWrites() = withStore { preferences, secrets ->
+    fun largeRegistryPersistsCredentialAndMetadataThroughPreferenceChunks() = withStore { preferences, secrets ->
         val session = NextcloudSession(
             serverUrl = "https://cloud.example.test/" + "a".repeat(8_050),
             loginName = "alice",
             appPassword = "private-app-password",
         )
 
-        assertFailsWith<IllegalArgumentException> {
-            persistence(preferences, secrets).saveSession(session)
-        }
+        assertEquals(session, persistence(preferences, secrets).saveSession(session))
 
         assertNull(preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
-        assertNull(preferences.get("server", null))
-        assertNull(preferences.get("login", null))
-        assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertEquals(session.serverUrl, preferences.get("server", null))
+        assertEquals(session.loginName, preferences.get("login", null))
+        assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertEquals(session.accountId, decodeRegistry(preferences).activeAccountId)
     }
 
     @Test
@@ -521,7 +562,9 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     private fun decodeRegistry(preferences: Preferences): NextcloudAccountRegistry = requireNotNull(
-        decodeNextcloudAccountRegistry(requireNotNull(preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))),
+        decodeNextcloudAccountRegistry(
+            requireNotNull(DesktopAccountRegistryPreferenceStore(preferences).read()),
+        ),
     )
 
     private fun assertDiagnosticsExcludePrivateValues(diagnostics: List<SupportDiagnosticEventDraft>) {

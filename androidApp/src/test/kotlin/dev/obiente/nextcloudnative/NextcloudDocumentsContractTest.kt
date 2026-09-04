@@ -54,14 +54,30 @@ class NextcloudDocumentsContractTest {
     @Test
     fun `account removal preflight runs before remote credential revocation`() = runBlocking {
         var revoked = false
+        var removed = false
 
         assertFailsWith<IllegalStateException> {
             revokeAndroidSessionAfterRemovalPreflight(
                 preflight = { error("pending account-owned recovery") },
                 revoke = { revoked = true },
+                removeLocalAccount = { removed = true },
             )
         }
 
         assertFalse(revoked)
+        assertFalse(removed)
+    }
+
+    @Test
+    fun `remote revocation and local removal share one ordered operation`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        revokeAndroidSessionAfterRemovalPreflight(
+            preflight = { events += "preflight" },
+            revoke = { events += "revoke" },
+            removeLocalAccount = { events += "remove-local" },
+        )
+
+        assertEquals(listOf("preflight", "revoke", "remove-local"), events)
     }
 }

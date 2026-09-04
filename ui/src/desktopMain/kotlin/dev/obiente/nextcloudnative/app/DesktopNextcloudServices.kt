@@ -923,70 +923,6 @@ internal fun writePrivatePendingMutationFile(
     }
 }
 
-internal suspend fun executeDesktopDynamicApiGet(
-    accountId: String,
-    requestIdentity: String,
-    cachePolicy: NextcloudApiCachePolicy,
-    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
-    loadCached: () -> NextcloudApiResponse?,
-    invalidateCached: () -> Unit,
-    executeNetwork: suspend () -> NextcloudApiResponse,
-    commit: (NextcloudApiResponse) -> Unit,
-): NextcloudApiResponse {
-    when (cachePolicy) {
-        NextcloudApiCachePolicy.PreferCache -> loadCached()?.let { return it }
-        NextcloudApiCachePolicy.RefreshNetwork ->
-            coalescer.invalidateRequest(accountId, requestIdentity) {}
-        NextcloudApiCachePolicy.ForceNetwork ->
-            coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
-    }
-    return coalescer.execute(
-        accountId = accountId,
-        requestIdentity = requestIdentity,
-        load = {
-            if (cachePolicy != NextcloudApiCachePolicy.PreferCache) {
-                executeNetwork()
-            } else {
-                loadCached() ?: executeNetwork()
-            }
-        },
-        commit = commit,
-    )
-}
-
-internal fun combinedAutomaticCacheExcess(
-    maximumBytes: Long,
-    completeFileBytes: Long,
-    rangeBytes: Long,
-    windowsCachedBytes: Long,
-    windowsPinnedBytes: Long,
-): Long {
-    require(maximumBytes > 0L)
-    require(listOf(completeFileBytes, rangeBytes, windowsCachedBytes, windowsPinnedBytes).all { it >= 0L })
-    require(windowsPinnedBytes <= windowsCachedBytes)
-    val total = listOf(
-        completeFileBytes,
-        rangeBytes,
-        windowsCachedBytes - windowsPinnedBytes,
-    ).fold(0L) { accumulated, bytes ->
-        if (bytes > Long.MAX_VALUE - accumulated) Long.MAX_VALUE else accumulated + bytes
-    }
-    return (total - maximumBytes).coerceAtLeast(0L)
-}
-
-internal class DesktopSessionPublicationGuard {
-    private val monitor = Any()
-
-    fun <Result> serialize(action: () -> Result): Result = synchronized(monitor, action)
-}
-
-internal fun closeVirtualFileProviderForReplacement(
-    provider: AutoCloseable?,
-    detach: () -> Unit,
-): Throwable? = runCatching { provider?.close() }
-    .onSuccess { detach() }
-    .exceptionOrNull()
-
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onKeepRunningInBackgroundChanged: (Boolean) -> Unit = {},
@@ -1658,6 +1594,7 @@ class DesktopNextcloudServices(
             )
         },
     )
+    private val accountSyncPairCleanupJournal = DesktopAccountSyncPairCleanupJournal(preferences)
     private val startOnLoginController = DesktopStartOnLoginController()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var backgroundFileSyncJob: Job? = null
@@ -1692,6 +1629,9 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = serviceScope.launch {
                 restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
+                    accountOperationGuard.serializeWhenSyncIdle {
+                        retryPendingAccountSyncPairCleanups()
+                    }
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }
@@ -3730,7 +3670,6 @@ class DesktopNextcloudServices(
             "${desktopFileCacheAccountId(session)}-$appId-$digest.json",
         )
     }
-
     override fun loadSession(): NextcloudSession? = sessionPublicationGuard.serialize {
         val session = accountCredentials.loadActiveSession()
         if (session == null) {
@@ -3743,6 +3682,7 @@ class DesktopNextcloudServices(
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         val persistedSession = accountOperationGuard.serializeWhenSyncIdle {
+            retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(session))
             sessionPublicationGuard.serialize {
                 val activeAccountId = accountCredentials.activeAccountId()
                 val activeSession = activeAccountId?.let(accountCredentials::loadSession)
@@ -3767,7 +3707,6 @@ class DesktopNextcloudServices(
                 accountSessionPublication.register(session)
             }
         }
-
     override suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         withContext(Dispatchers.IO) {
             accountOperationGuard.serialize operation@{
@@ -3785,6 +3724,12 @@ class DesktopNextcloudServices(
                         syncJob?.join()
                         reopenDesktopSessionAfterSelection(
                             selected = accountOperationGuard.withSyncRunLock {
+                                val selectedRecord = sessionPublicationGuard.serialize {
+                                    accountCredentials.listAccounts().firstOrNull { account -> account.id == accountId }
+                                }
+                                selectedRecord?.let { record ->
+                                    retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(record))
+                                }
                                 sessionPublicationGuard.serialize {
                                     accountCredentials.selectAccount(accountId)?.also { session ->
                                         accountSessionPublication.publish(session)
@@ -3798,7 +3743,6 @@ class DesktopNextcloudServices(
                 )
             }
         }
-
     private fun hasLiveAccountResources(): Boolean =
         synchronized(fileRangeSessionLock) { activeFileRangeSessions.isNotEmpty() } ||
             synchronized(virtualFolderHydrationJobs) { virtualFolderHydrationJobs.values.any { it.isActive } } ||
@@ -3806,7 +3750,6 @@ class DesktopNextcloudServices(
                 linuxVirtualFileSystem != null || windowsCloudFilesProvider != null ||
                     virtualFileCacheTierMutations.isNotEmpty()
             }
-
     override suspend fun removeAccount(accountId: NextcloudAccountId): Boolean = withContext(Dispatchers.IO) {
         accountOperationGuard.serialize {
             if (activeAccountId() == accountId) {
@@ -3818,9 +3761,22 @@ class DesktopNextcloudServices(
                 val providerAccountId = desktopFileCacheAccountId(account)
                 requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
                 accountOperationGuard.withSyncRunLock {
-                    removeDesktopAccountBeforeSyncPairCleanup({ sessionPublicationGuard.serialize {
-                        removeDesktopAccountCredential(preferences, providerAccountId) { accountCredentials.removeAccount(accountId) }
-                    } }, { fileSyncEngine.removeAccountPairs(providerAccountId) }) {
+                    fileSyncEngine.requireAccountRemovalReady(providerAccountId)
+                    removeDesktopAccountBeforeSyncPairCleanup(
+                        accountId = providerAccountId,
+                        prepareCleanup = accountSyncPairCleanupJournal::prepare,
+                        commitCleanup = accountSyncPairCleanupJournal::commit,
+                        clearCleanup = accountSyncPairCleanupJournal::clear,
+                        accountStillExists = ::desktopAccountExists,
+                        removeCredential = { sessionPublicationGuard.serialize {
+                            removeDesktopAccountCredential(preferences, providerAccountId, {
+                                accountCredentials.listAccounts().any { account -> account.id == accountId }
+                            }) {
+                                accountCredentials.removeAccount(accountId)
+                            }
+                        } },
+                        removeSyncPairs = { fileSyncEngine.removeAccountPairs(providerAccountId) },
+                    ) {
                         recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
                     }
                 }
@@ -3830,8 +3786,9 @@ class DesktopNextcloudServices(
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
         accountOperationGuard.serialize { clearSessionForAccountOperation() }
     }
-
-    private suspend fun clearSessionForAccountOperation() {
+    private suspend fun clearSessionForAccountOperation(
+        expectedSession: NextcloudSession? = null, revokeRemoteSession: suspend (NextcloudSession) -> Unit = {},
+    ) {
         val userHome = File(System.getProperty("user.home"))
         val rangeSessions = synchronized(fileRangeSessionLock) {
             sessionClearing = true
@@ -3841,12 +3798,14 @@ class DesktopNextcloudServices(
         try {
             val activeAccountId = activeAccountId()
             val activeSession = activeAccountId?.let(::loadSession)
+            check(expectedSession == null || activeSession == expectedSession) {
+                "The account changed before its remote session could be revoked."
+            }
             val activeRecord = activeAccountId?.let { id ->
                 listAccounts().firstOrNull { account -> account.id == id }
             }
             val accountId = activeSession?.let(::desktopFileCacheAccountId)
                 ?: activeRecord?.let(::desktopFileCacheAccountId)
-            accountId?.let { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3855,6 +3814,10 @@ class DesktopNextcloudServices(
             syncJob?.cancel()
             syncJob?.join()
             accountOperationGuard.withSyncRunLock {
+                accountId
+                    ?.also { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
+                    ?.let { fileSyncEngine.requireAccountRemovalReady(it) }
+                expectedSession?.let { session -> revokeRemoteSession(session) }
                 val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
                 rangeSessions.forEach { source -> runCatching(source::close) }
                 hydrationJobs.forEach { job -> job.join() }
@@ -3933,15 +3896,28 @@ class DesktopNextcloudServices(
                     }
                 }
                 mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(phase = DesktopFileSyncTrayPhase.Idle)
-                clearDesktopActiveAccountBeforeSyncPairCleanup(accountId, {
-                    sessionPublicationGuard.serialize {
-                        check(activeAccountId == null || removeDesktopAccountCredential(preferences, accountId) {
-                            accountCredentials.removeAccount(activeAccountId)
-                        })
-                        supportDiagnostics.setActiveAccountIdentity(null)
-                        supportIntake.setActiveAccountIdentity(null)
-                    }
-                }, fileSyncEngine::removeAccountPairs, ::recordSupportDiagnostic)
+                clearDesktopActiveAccountBeforeSyncPairCleanup(
+                    accountId,
+                    accountSyncPairCleanupJournal,
+                    ::desktopAccountExists,
+                    {
+                        sessionPublicationGuard.serialize {
+                            check(
+                                activeAccountId == null || removeDesktopAccountCredential(
+                                    preferences,
+                                    accountId,
+                                    credentialStillExists = {
+                                        accountCredentials.listAccounts().any { account -> account.id == activeAccountId }
+                                    },
+                                ) { accountCredentials.removeAccount(activeAccountId) },
+                            )
+                            supportDiagnostics.setActiveAccountIdentity(null)
+                            supportIntake.setActiveAccountIdentity(null)
+                        }
+                    },
+                    fileSyncEngine::removeAccountPairs,
+                    ::recordSupportDiagnostic,
+                )
                 cleared = true
             }
         } finally {
@@ -3952,20 +3928,44 @@ class DesktopNextcloudServices(
         }
     }
 
+    private suspend fun retryPendingAccountSyncPairCleanup(accountId: String) {
+        val cleanup = accountSyncPairCleanupJournal.pending()
+            .singleOrNull { pending -> pending.accountId == accountId }
+            ?: return
+        retryDesktopAccountSyncPairCleanup(
+            cleanup = cleanup,
+            accountStillExists = ::desktopAccountExists,
+            removeSyncPairs = fileSyncEngine::removeAccountPairs,
+            clearCleanup = accountSyncPairCleanupJournal::clear,
+        )
+    }
+
+    private suspend fun retryPendingAccountSyncPairCleanups() {
+        retryPendingDesktopAccountSyncPairCleanups(
+            cleanupJournal = accountSyncPairCleanupJournal,
+            accountStillExists = ::desktopAccountExists,
+            removeSyncPairs = fileSyncEngine::removeAccountPairs,
+            recordCleanupFailure = { accountId, failure ->
+                recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
+            },
+        )
+    }
+
+    private fun desktopAccountExists(accountId: String): Boolean = sessionPublicationGuard.serialize {
+        accountCredentials.listAccounts().any { account -> desktopFileCacheAccountId(account) == accountId }
+    }
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
         deckCardDrafts.load(session, key)
     }
-
     override suspend fun saveDeckCardDraft(
         session: NextcloudSession,
         draft: PersistedDeckCardDraft,
     ) = withContext(Dispatchers.IO) {
         deckCardDrafts.save(session, draft)
     }
-
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
@@ -3987,11 +3987,9 @@ class DesktopNextcloudServices(
             runCatching { openExternalUrlNow(url) }
         }
     }
-
     override suspend fun openLoginUrl(url: String) = withContext(Dispatchers.IO) {
         openExternalUrlNow(url)
     }
-
     private fun openExternalUrlNow(url: String) {
         try {
             externalUrlLauncher.open(url)
@@ -5622,7 +5620,6 @@ class DesktopNextcloudServices(
                 hasMoreHistory = response.status != 304 && nextCursor != null,
             )
         }
-
     override suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String) =
         withContext(Dispatchers.IO) {
             val response = request(
@@ -5636,12 +5633,15 @@ class DesktopNextcloudServices(
             check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
             Unit
         }
-
     override suspend fun revokeSession(session: NextcloudSession): Unit = withContext(Dispatchers.IO) {
-        requireDesktopAccountRemovalReady(desktopFileCacheAccountId(session), isLinuxDesktop())
-        request("DELETE", session.serverUrl + "/ocs/v2.php/core/apppassword", session, ocsRequest = true)
+        accountOperationGuard.serialize {
+            clearSessionForAccountOperation(expectedSession = session) { current ->
+                request("DELETE", current.serverUrl + "/ocs/v2.php/core/apppassword", current,
+                    ocsRequest = true, accountMutationSerialized = true,
+                )
+            }
+        }
     }
-
     private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
         val separator = if ('?' in path) '&' else '?'
         val response = request("GET", session.serverUrl + path + separator + "format=json", session, ocsRequest = true)
