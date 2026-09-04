@@ -23,7 +23,7 @@ internal data class AndroidAccountCredentialState(
 ) {
     init {
         require(sessions.size <= MAX_ANDROID_ACCOUNT_CREDENTIALS)
-        require(sessions.size == registry.accounts.size)
+        require(sessions.size <= registry.accounts.size)
         require(sessions.all { (id, session) ->
             id == session.accountId && registry.accounts.any { account -> account == session.accountRecord() }
         })
@@ -90,12 +90,19 @@ internal fun restoreAndroidAccountCredentialStore(
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
 ): RestoredAndroidAccountCredentialState {
     val restored = decodeAndroidAccountCredentialState(encoded)
-    restored.diagnosticCode?.let { code -> recordAccountCredentialDiagnostic(code, recordDiagnostic) }
+    restored.diagnosticCode?.let { code ->
+        recordAccountCredentialDiagnostic(
+            code = code,
+            outcome = restored.diagnosticOutcome(),
+            recordDiagnostic = recordDiagnostic,
+        )
+    }
     if (restored.needsPersistence && restored.state != null) {
         runCatching { persistMigrated(encodeAndroidAccountCredentialState(restored.state)) }
             .onFailure { failure ->
                 recordAccountCredentialDiagnostic(
                     code = "ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED",
+                    outcome = "failed",
                     recordDiagnostic = recordDiagnostic,
                     failure = failure,
                 )
@@ -137,7 +144,7 @@ internal fun decodeAndroidAccountCredentialState(encoded: String): RestoredAndro
                 if (claimedAccountId != session.accountId.storageKey) throw AndroidCredentialMismatchException()
                 if (sessions.put(session.accountId, session) != null) throw AndroidCredentialMismatchException()
             }
-            if (sessions.size != registry.accounts.size || sessions.any { (_, session) ->
+            if (sessions.any { (_, session) ->
                     registry.accounts.none { account -> account == session.accountRecord() }
                 }
             ) {
@@ -266,8 +273,15 @@ private fun malformedAndroidAccountCredentialState() = RestoredAndroidAccountCre
     diagnosticCode = "ACCOUNT_CREDENTIAL_STORE_MALFORMED",
 )
 
+private fun RestoredAndroidAccountCredentialState.diagnosticOutcome(): String = when {
+    unsupportedVersion != null || state?.mutationsAllowed == false -> "unsupported"
+    state == null -> "failed"
+    else -> "recovered"
+}
+
 private fun recordAccountCredentialDiagnostic(
     code: String,
+    outcome: String,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
     failure: Throwable? = null,
 ) {
@@ -276,7 +290,7 @@ private fun recordAccountCredentialDiagnostic(
             severity = SupportDiagnosticSeverity.Warning,
             component = SupportDiagnosticComponent.Authentication,
             operation = "account-credentials.restore",
-            outcome = "recovered",
+            outcome = outcome,
             code = code,
             exception = failure?.toNonSecretSupportDiagnosticExceptionDraft(),
         ),

@@ -32,6 +32,17 @@ internal class AndroidAccountCredentialController(
     private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String) -> Unit,
 ) {
     private val appContext = context.applicationContext
+    private val accountRemovalCleanupJournal = AndroidAccountRemovalCleanupJournal(
+        preferences = preferences,
+        commit = ::commitPreferences,
+        recordMalformed = {
+            recordCredentialFailure(
+                code = "ACCOUNT_REMOVAL_CLEANUP_JOURNAL_MALFORMED",
+                operation = "account.remove-cleanup.restore",
+                component = SupportDiagnosticComponent.Sync,
+            )
+        },
+    )
 
     fun loadSession(): NextcloudSession? = ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.restorePersistedSession(
         load = {
@@ -133,7 +144,7 @@ internal class AndroidAccountCredentialController(
 
     suspend fun removeAccount(accountId: NextcloudAccountId): Boolean =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
-            val current = requireValidState()
+            val current = requireValidStateForAccountRemoval(accountId)
             val session = current.sessions[accountId]
                 ?: return@withLock removeUnavailableAccount(accountId, current)
             val accountIdentity = NextcloudDocumentIds.accountKey(session)
@@ -151,14 +162,14 @@ internal class AndroidAccountCredentialController(
                             previousSession = null,
                             suspectEncrypted = null,
                         )
-                        clearPendingAccountRemovalCleanup(accountId.storageKey)
+                        accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
                     persistInactiveRemoval = { persistState(current.remove(accountId), pendingCleanup) },
                     rollbackInactiveRemoval = {
                         persistState(current)
-                        clearPendingAccountRemovalCleanup(accountId.storageKey)
+                        accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
-                    completeCommittedCleanup = { clearPendingAccountRemovalCleanup(accountId.storageKey) },
+                    completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
                 if (!active) {
@@ -184,12 +195,14 @@ internal class AndroidAccountCredentialController(
                 removeQueuedUploads = { retryQueuedUploadsCleanup(unavailableSession, accountIdentity) },
                 clearActiveAccount = {},
                 rollbackActiveRemoval = {},
-                persistInactiveRemoval = { persistState(recovered, pendingCleanup) },
-                rollbackInactiveRemoval = { clearPendingAccountRemovalCleanup(accountId.storageKey) },
-                completeCommittedCleanup = { clearPendingAccountRemovalCleanup(accountId.storageKey) },
+                persistInactiveRemoval = { persistState(recovered.remove(accountId), pendingCleanup) },
+                rollbackInactiveRemoval = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
+                completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
                 recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
             )
         }
+        clearRemovedAccountPreview(unavailableSession)
+        notifyDocumentRootsChanged()
         return true
     }
 
@@ -214,12 +227,12 @@ internal class AndroidAccountCredentialController(
                     clearActiveAccount = { clearSession(current, pendingCleanup) },
                     rollbackActiveRemoval = {
                         replaceActiveStateWhileOperationsIdle(current, previousSession = null, suspectEncrypted = null)
-                        clearPendingAccountRemovalCleanup(expectedSession.accountId.storageKey)
+                        accountRemovalCleanupJournal.clear(expectedSession.accountId.storageKey)
                     },
                     persistInactiveRemoval = {},
                     rollbackInactiveRemoval = {},
                     completeCommittedCleanup = {
-                        clearPendingAccountRemovalCleanup(expectedSession.accountId.storageKey)
+                        accountRemovalCleanupJournal.clear(expectedSession.accountId.storageKey)
                     },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
@@ -249,12 +262,12 @@ internal class AndroidAccountCredentialController(
                                     previousSession = null,
                                     suspectEncrypted = null,
                                 )
-                                clearPendingAccountRemovalCleanup(session.accountId.storageKey)
+                                accountRemovalCleanupJournal.clear(session.accountId.storageKey)
                             },
                             persistInactiveRemoval = {},
                             rollbackInactiveRemoval = {},
                             completeCommittedCleanup = {
-                                clearPendingAccountRemovalCleanup(session.accountId.storageKey)
+                                accountRemovalCleanupJournal.clear(session.accountId.storageKey)
                             },
                             recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                         )
@@ -320,10 +333,10 @@ internal class AndroidAccountCredentialController(
                             previousSession = null,
                             suspectEncrypted = suspectEncrypted,
                         )
-                        clearPendingAccountRemovalCleanup(activeSession.accountId.storageKey)
+                        accountRemovalCleanupJournal.clear(activeSession.accountId.storageKey)
                     },
                     completeCommittedCleanup = {
-                        clearPendingAccountRemovalCleanup(activeSession.accountId.storageKey)
+                        accountRemovalCleanupJournal.clear(activeSession.accountId.storageKey)
                     },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
@@ -384,7 +397,7 @@ internal class AndroidAccountCredentialController(
                                     encodeNextcloudAccountRegistry(replacement.registry),
                                 ).let { editor -> prepareCredentialSlotEdit(editor, replacement) }
                             }
-                            commitPreferences(preparePendingAccountRemovalCleanupEdit(editor, pendingCleanup))
+                            commitPreferences(accountRemovalCleanupJournal.prepareEdit(editor, pendingCleanup))
                         },
                         cancelAll = scheduler::cancelAll,
                         clearPublishedAccount = { publishAccountIdentity(null) },
@@ -487,6 +500,18 @@ internal class AndroidAccountCredentialController(
         is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
     }
 
+    private fun requireValidStateForAccountRemoval(accountId: NextcloudAccountId): AndroidAccountCredentialState =
+        when (val read = readStore()) {
+            is AndroidAccountCredentialStoreRead.Available -> read.state.also { state ->
+                requireSupportedCredentialSlots(state.registry)
+            }
+            is AndroidAccountCredentialStoreRead.Invalid,
+            AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable,
+            -> readIndependentCredentialSlotState(allowUnavailableActiveAccountId = accountId)
+                ?: error("The independent account credential slots could not be recovered.")
+            is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
+        }
+
     private fun readCredentialFreeRegistry(): NextcloudAccountRegistry? =
         ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
             val encoded = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null) ?: return@serialize null
@@ -577,13 +602,21 @@ internal class AndroidAccountCredentialController(
         return AndroidAccountCredentialStoreRead.Available(state)
     }
 
-    private fun readIndependentCredentialSlotState(): AndroidAccountCredentialState? {
+    private fun readIndependentCredentialSlotState(
+        allowUnavailableActiveAccountId: NextcloudAccountId? = null,
+    ): AndroidAccountCredentialState? {
         val encodedRegistry = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null) ?: return null
         val registry = restoreAndroidCredentialFreeRegistry(encodedRegistry).registry ?: return null
         val slots = registry.accounts.associate { account -> account.id to readCredentialSlot(account.id) }
         if (slots.values.any { slot -> slot is AndroidAccountCredentialSlotRead.Unsupported }) return null
-        return reconstructAndroidAccountCredentialState(registry) { accountId ->
-            (slots[accountId] as? AndroidAccountCredentialSlotRead.Available)?.session
+        return if (allowUnavailableActiveAccountId == null) {
+            reconstructAndroidAccountCredentialState(registry) { accountId ->
+                (slots[accountId] as? AndroidAccountCredentialSlotRead.Available)?.session
+            }
+        } else {
+            reconstructAndroidAccountCredentialStateForRemoval(registry, allowUnavailableActiveAccountId) { accountId ->
+                (slots[accountId] as? AndroidAccountCredentialSlotRead.Available)?.session
+            }
         }
     }
 
@@ -633,7 +666,7 @@ internal class AndroidAccountCredentialController(
         pendingCleanup: AndroidPendingAccountRemovalCleanup? = null,
     ) = withContext(Dispatchers.IO) {
         commitPreferences(
-            preparePendingAccountRemovalCleanupEdit(
+            accountRemovalCleanupJournal.prepareEdit(
                 prepareCredentialSlotEdit(
                     preferences.edit()
                         .putString(ANDROID_ACCOUNT_SESSION_KEY, encryptState(state))
@@ -646,10 +679,13 @@ internal class AndroidAccountCredentialController(
     }
 
     private suspend fun retryPendingAccountRemovalCleanup(session: NextcloudSession) {
-        val pending = pendingAndroidAccountRemovalCleanupForSession(session, pendingAccountRemovalCleanups()) ?: return
+        val pending = pendingAndroidAccountRemovalCleanupForSession(
+            session,
+            accountRemovalCleanupJournal.pending(),
+        ) ?: return
         try {
             retryQueuedUploadsCleanup(session, pending.workIdentity)
-            clearPendingAccountRemovalCleanup(pending.accountStorageKey)
+            accountRemovalCleanupJournal.clear(pending.accountStorageKey)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -659,42 +695,6 @@ internal class AndroidAccountCredentialController(
                 failure,
             )
         }
-    }
-
-    private fun pendingAccountRemovalCleanups(): Set<AndroidPendingAccountRemovalCleanup> =
-        preferences.getStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, emptySet())
-            ?.mapTo(linkedSetOf()) { encoded ->
-                requireNotNull(decodeAndroidPendingAccountRemovalCleanup(encoded)) {
-                    "The pending account cleanup journal is invalid."
-                }
-            }
-            .orEmpty()
-
-    private fun preparePendingAccountRemovalCleanupEdit(
-        editor: SharedPreferences.Editor,
-        pendingCleanup: AndroidPendingAccountRemovalCleanup?,
-    ): SharedPreferences.Editor = if (pendingCleanup == null) {
-        editor
-    } else {
-        val retained = pendingAccountRemovalCleanups()
-            .filterNot { cleanup -> cleanup.accountStorageKey == pendingCleanup.accountStorageKey }
-            .toSet() + pendingCleanup
-        editor.putStringSet(
-            ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
-            retained.mapTo(linkedSetOf(), ::encodeAndroidPendingAccountRemovalCleanup),
-        )
-    }
-
-    private fun clearPendingAccountRemovalCleanup(accountStorageKey: String) {
-        val remaining = pendingAccountRemovalCleanups()
-            .filterNot { cleanup -> cleanup.accountStorageKey == accountStorageKey }
-        val editor = preferences.edit()
-        if (remaining.isEmpty()) editor.remove(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY)
-        else editor.putStringSet(
-            ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
-            remaining.mapTo(linkedSetOf(), ::encodeAndroidPendingAccountRemovalCleanup),
-        )
-        commitPreferences(editor)
     }
 
     private fun commitPreferences(editor: SharedPreferences.Editor) = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
