@@ -295,9 +295,7 @@ internal class DesktopDeckCardDraftStore(
                 false
             }
         }
-        check(readableFiles >= overflow) {
-            "A new Deck draft cannot be saved while unreadable drafts fill the recovery limit."
-        }
+        if (readableFiles < overflow) throw DeckCardDraftCapacityException()
     }
 
     private fun ensurePrivateDirectory() {

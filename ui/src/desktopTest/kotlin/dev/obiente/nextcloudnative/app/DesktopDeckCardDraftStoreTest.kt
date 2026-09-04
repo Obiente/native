@@ -126,7 +126,7 @@ class DesktopDeckCardDraftStoreTest {
                     DesktopDeckCardDraftStore.FILE_SUFFIX).writeText("not-an-envelope")
             }
 
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<DeckCardDraftCapacityException> {
                 store.save(session, persisted())
             }
 
