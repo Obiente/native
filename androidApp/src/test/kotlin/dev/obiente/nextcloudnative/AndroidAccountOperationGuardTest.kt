@@ -1,7 +1,10 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import java.io.FileNotFoundException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -107,6 +110,24 @@ class AndroidAccountOperationGuardTest {
         descriptorLease.close()
         transition.await()
         assertTrue(transitionEntered)
+    }
+
+    @Test
+    fun directDocumentMutationLeaseRejectsReauthenticatedSessionAndReleasesTheGuard() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")
+
+        assertFailsWith<FileNotFoundException> {
+            acquireAndroidDocumentMutationAccountLease(
+                session = original,
+                loadCurrentSession = { original.copy(appPassword = "replacement-password") },
+                guard = guard,
+            )
+        }
+
+        withTimeout(1_000L) {
+            guard.withAccount(NextcloudDocumentIds.accountKey(original)) { }
+        }
     }
 
     @Test

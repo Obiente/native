@@ -50,10 +50,10 @@ internal fun desktopSessionSaveReplacesActiveCredential(
 ): Boolean = activeSession?.accountId == savedSession.accountId &&
     activeSession.appPassword != savedSession.appPassword
 
-internal fun desktopResourceActivationMatchesActiveAccount(
-    activeAccountId: NextcloudAccountId?,
-    requestedAccountId: NextcloudAccountId,
-): Boolean = activeAccountId == requestedAccountId
+internal fun desktopResourceActivationMatchesActiveSession(
+    activeSession: NextcloudSession?,
+    requestedSession: NextcloudSession,
+): Boolean = activeSession == requestedSession
 
 internal fun desktopSyncRunMatchesActiveSession(
     activeSession: NextcloudSession?,

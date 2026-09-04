@@ -173,11 +173,17 @@ internal class AndroidAccountCredentialController(
                     }
                 }
             }
-            is AndroidAccountCredentialStoreRead.Invalid -> clearInvalidStore(read.encrypted)
-            AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable -> {
-                clearPersistedSession(null, AndroidAccountCredentialState.Empty)
-                notifyDocumentRootsChanged()
+            is AndroidAccountCredentialStoreRead.Invalid -> {
+                val retained = readIndependentCredentialSlotState()
+                when {
+                    retained != null -> clearRecoveredInvalidStore(retained, read.encrypted)
+                    hasIndependentCredentialState() ->
+                        error("The independent account credential slots could not be recovered.")
+                    else -> clearInvalidStore(read.encrypted)
+                }
             }
+            AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable ->
+                error("The independent account credential slots could not be recovered.")
             is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
         }
     }
@@ -199,6 +205,34 @@ internal class AndroidAccountCredentialController(
             replacement = AndroidAccountCredentialState.Empty,
             suspectEncrypted = suspectEncrypted,
         )
+        notifyDocumentRootsChanged()
+    }
+
+    private suspend fun clearRecoveredInvalidStore(
+        current: AndroidAccountCredentialState,
+        suspectEncrypted: String,
+    ) {
+        val activeSession = current.activeSession
+        if (activeSession != null) {
+            ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(activeSession)) {
+                persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted)
+            }
+        } else {
+            persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted)
+        }
+    }
+
+    private suspend fun persistRecoveredInvalidStoreAfterClear(
+        current: AndroidAccountCredentialState,
+        suspectEncrypted: String,
+    ) {
+        val activeSession = current.activeSession
+        val replacement = removeActiveAndroidAccountCredentialState(current)
+        val encodedReplacement = replacement.takeUnless { state ->
+            state.registry.accounts.isEmpty() && state.sessions.isEmpty()
+        }?.let(::encryptState)
+        clearPersistedSession(encodedReplacement, replacement, suspectEncrypted)
+        activeSession?.let { session -> clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(session)) }
         notifyDocumentRootsChanged()
     }
 
@@ -585,6 +619,10 @@ internal fun restoreAndroidAccountCredentialStateWithoutAggregate(
     if (restored.recoveryReason != null) return null
     return reconstructAndroidAccountCredentialState(restored.registry, loadSession)
 }
+
+internal fun removeActiveAndroidAccountCredentialState(
+    state: AndroidAccountCredentialState,
+): AndroidAccountCredentialState = state.registry.activeAccountId?.let(state::remove) ?: state
 
 internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
     resume: suspend () -> Unit,

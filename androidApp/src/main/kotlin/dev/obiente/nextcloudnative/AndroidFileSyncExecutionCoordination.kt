@@ -229,3 +229,17 @@ internal fun releaseSafGrantAfterPairRemoval(
         // The pair is gone, so a later picker can release or replace this stale grant.
     }
 }
+
+internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String) {
+    AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+        val store = AndroidFileSyncStore(context)
+        val current = store.load()
+        val retiredPairIds = current.coordinator.pairs
+            .filter { pair -> pair.accountId == accountId }
+            .map { pair -> pair.id }
+        if (retiredPairIds.isEmpty()) return@withLock
+        store.save(removeAndroidFileSyncAccountPairs(current, accountId))
+        val scheduler = AndroidFileSyncScheduler(context)
+        retiredPairIds.forEach { pairId -> scheduler.cancel(pairId) }
+    }
+}
