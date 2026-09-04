@@ -3,6 +3,7 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -32,6 +33,36 @@ internal class AndroidDurableUploadStartCoordinator {
 }
 
 private val ANDROID_DURABLE_UPLOAD_START_COORDINATOR = AndroidDurableUploadStartCoordinator()
+
+internal class AndroidDurableUploadSchedulingRecoverySignal {
+    private val requests = Channel<Unit>(Channel.CONFLATED)
+
+    fun request() {
+        requests.trySend(Unit)
+    }
+
+    suspend fun await() {
+        requests.receive()
+    }
+}
+
+private val ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL =
+    AndroidDurableUploadSchedulingRecoverySignal()
+
+internal fun requestQueuedDurableUploadSchedulingRecovery() {
+    ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.request()
+}
+
+internal suspend fun monitorQueuedDurableUploadScheduling(
+    recover: suspend () -> Unit,
+    recoverySignal: AndroidDurableUploadSchedulingRecoverySignal =
+        ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
+) {
+    while (true) {
+        recover()
+        recoverySignal.await()
+    }
+}
 
 internal suspend fun claimQueuedDurableUploadForExecution(
     jobId: String,
@@ -137,14 +168,16 @@ internal suspend fun persistAndScheduleDurableUpload(
     job: AndroidDurableMultipartUploadJob,
     persist: (AndroidDurableMultipartUploadJob) -> Unit,
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
 ): DurableUploadEnqueueResult.Queued {
     persist(job)
     try {
         schedule(job)
     } catch (cancelled: CancellationException) {
+        runCatching(requestRecovery)
         throw cancelled
     } catch (_: Exception) {
-        // The scheduler may already own this work. Keep the journal and retry scheduling later.
+        runCatching(requestRecovery)
     }
     return DurableUploadEnqueueResult.Queued(job.status())
 }
