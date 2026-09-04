@@ -46,6 +46,7 @@ internal class AndroidSafFileSyncLocalTree(
         shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> {
         val ownershipDirectory = downloadOwnershipStore.indexed()
+        indexRecoveryLocations(ownershipDirectory, shouldContinue)
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
@@ -64,6 +65,33 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }
         return result.sortedBy { it.entry.relativePath }
+    }
+
+    private fun indexRecoveryLocations(
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
+        shouldContinue: () -> Boolean,
+    ) {
+        val pending = ArrayDeque<Pair<String, Uri>>()
+        val visited = mutableSetOf<String>()
+        var observedEntries = 0
+        pending += "" to rootUri
+        while (pending.isNotEmpty()) {
+            requireScanContinuation(shouldContinue)
+            val (parentPath, parentUri) = pending.removeFirst()
+            require(visited.add(parentUri.toString())) { "The local folder contains a directory cycle." }
+            require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
+            val documents = rawChildren(parentUri, parentPath)
+            ownershipDirectory.observeRecoveryNames(
+                parentUri.toString(),
+                documents.mapTo(mutableSetOf(), AndroidLocalSyncDocument::displayName),
+            )
+            observedEntries = Math.addExact(observedEntries, documents.size)
+            require(observedEntries <= MAX_ENTRIES) { "The local folder contains too many entries." }
+            documents.filter { document ->
+                document.entry.kind == SyncEntryKind.Directory &&
+                    !hasAndroidSafRecoveryToken(document.displayName)
+            }.forEach { document -> pending += document.entry.relativePath to document.uri }
+        }
     }
 
     override fun authenticateFileForReplacement(

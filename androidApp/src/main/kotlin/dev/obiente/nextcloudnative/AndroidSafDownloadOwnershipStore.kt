@@ -37,6 +37,7 @@ internal class AndroidSafDownloadOwnershipStore(
         private val referencesByScope = references.groupByTo(mutableMapOf()) { reference -> reference.scope }
         private val referencesByToken = references.associateByTo(mutableMapOf()) { reference -> reference.token }
         private val rowsByToken = mutableMapOf<String, StoredOwnershipRow>()
+        private val observedScopesByToken = mutableMapOf<String, MutableSet<String>>()
 
         init {
             check(referencesByToken.size == references.size) {
@@ -49,6 +50,16 @@ internal class AndroidSafDownloadOwnershipStore(
             return IndexedScopedOwnership(scopeDigest(directoryIdentity))
         }
 
+        override fun observeRecoveryNames(
+            directoryIdentity: String,
+            observedNames: Set<String>,
+        ) = synchronized(LOCK) {
+            val scope = scopeDigest(directoryIdentity)
+            observedRecoveryTokens(observedNames).forEach { token ->
+                observedScopesByToken.getOrPut(token, ::mutableSetOf).add(scope)
+            }
+        }
+
         private inner class IndexedScopedOwnership(
             private val scope: String,
         ) : AndroidSafDownloadOwnership {
@@ -57,13 +68,15 @@ internal class AndroidSafDownloadOwnershipStore(
             ): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
                 val tokens = observedRecoveryTokens(observedNames)
                 val references = buildList {
-                    addAll(referencesByScope[scope].orEmpty())
+                    referencesByScope[scope].orEmpty().filterTo(this) { reference ->
+                        val observedScopes = observedScopesByToken[reference.token].orEmpty()
+                        observedScopes.isEmpty() || scope in observedScopes
+                    }
                     tokens.mapNotNullTo(this) { token -> referencesByToken[token] }
                 }.distinctBy { reference -> reference.token }
                 references.map(::indexedRow).filter { row ->
                     row.scope == scope ||
-                        row.transaction.stageName in observedNames ||
-                        row.transaction.backupName in observedNames
+                        row.transaction.token in tokens
                 }.map(StoredOwnershipRow::transaction)
                     .sortedWith(compareBy(AndroidSafOwnedDownloadTransaction::finalName).thenBy { it.token })
             }
@@ -134,11 +147,11 @@ internal class AndroidSafDownloadOwnershipStore(
         override fun transactions(
             observedNames: Set<String>,
         ): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
-            ownershipRows(scope, observedRecoveryTokens(observedNames))
+            val tokens = observedRecoveryTokens(observedNames)
+            ownershipRows(scope, tokens)
                 .filter { row ->
                     row.scope == scope ||
-                        row.transaction.stageName in observedNames ||
-                        row.transaction.backupName in observedNames
+                        row.transaction.token in tokens
                 }
                 .map(StoredOwnershipRow::transaction)
                 .sortedWith(compareBy(AndroidSafOwnedDownloadTransaction::finalName).thenBy { it.token })
@@ -395,3 +408,10 @@ internal class AndroidSafDownloadOwnershipStore(
         val transaction: AndroidSafOwnedDownloadTransaction,
     )
 }
+
+internal fun hasAndroidSafRecoveryToken(name: String): Boolean =
+    ANDROID_SAF_RECOVERY_TOKEN_PATTERN.containsMatchIn(name)
+
+private val ANDROID_SAF_RECOVERY_TOKEN_PATTERN = Regex(
+    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+)

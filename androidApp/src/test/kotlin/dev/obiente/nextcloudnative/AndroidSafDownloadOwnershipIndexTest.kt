@@ -99,6 +99,30 @@ class AndroidSafDownloadOwnershipIndexTest {
         }
     }
 
+    @Test
+    fun `tree-wide observations defer recovery to the parent containing the token`() {
+        val root = Files.createTempDirectory("saf-download-ownership-relocated-").toFile()
+        try {
+            val originalScope = "content://provider/tree/root/document/one"
+            val relocatedScope = "content://provider/tree/root/document/two"
+            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            AndroidSafDownloadOwnershipStore(root).forDirectory(originalScope).add(transaction)
+            val index = AndroidSafDownloadOwnershipStore(root).indexed()
+            val relocatedName = "provider-stage-${transaction.token}"
+
+            index.observeRecoveryNames(originalScope, emptySet())
+            index.observeRecoveryNames(relocatedScope, setOf(relocatedName))
+
+            assertEquals(emptyList(), index.forDirectory(originalScope).transactions())
+            assertEquals(
+                listOf(transaction),
+                index.forDirectory(relocatedScope).transactions(setOf(relocatedName)),
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private companion object {
         const val FIRST_TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
         const val SECOND_TOKEN = "fedcba98-7654-3210-fedc-ba9876543210"

@@ -145,7 +145,7 @@ class FileSyncContentIdentityTest {
             verificationResult("size-changed", "local-1", "remote-1", 42L, digest),
         )
         val local = listOf(
-            fileOnDevice("current", "local-1", 42L),
+            fileOnDevice("current", "local-1", 42L).copy(contentHash = digest),
             fileOnDevice("local-changed", "local-2", 42L),
             fileOnDevice("remote-changed", "local-1", 42L),
             fileOnDevice("size-changed", "local-1", 43L),
@@ -169,6 +169,19 @@ class FileSyncContentIdentityTest {
         val newDigest = "sha256:" + "cd".repeat(32)
         val result = verificationResult("current", "local-1", "remote-1", 42L, oldDigest)
         val local = fileOnDevice("current", "local-1", 42L).copy(contentHash = newDigest)
+        val remote = fileOnServer("current", "remote-1", 42L)
+
+        assertEquals(
+            emptyList(),
+            currentFileSyncContentVerificationResults(listOf(local), listOf(remote), listOf(result)),
+        )
+    }
+
+    @Test
+    fun `cached mismatch is discarded when fresh exact local evidence is unavailable`() {
+        val digest = "sha256:" + "ab".repeat(32)
+        val result = verificationResult("current", "local-1", "remote-1", 42L, digest)
+        val local = fileOnDevice("current", "local-1", 42L).copy(contentHash = null)
         val remote = fileOnServer("current", "remote-1", 42L)
 
         assertEquals(

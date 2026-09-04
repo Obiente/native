@@ -28,6 +28,7 @@ internal interface AndroidSafDownloadOwnership {
 
 internal interface AndroidSafDownloadOwnershipDirectory {
     fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership
+    fun observeRecoveryNames(directoryIdentity: String, observedNames: Set<String>) = Unit
 }
 
 /**
@@ -263,7 +264,7 @@ internal class AndroidSafDownloadPublisher<Document>(
             listOfNotNull(
                 stageDocument(transaction, documents)?.displayName,
                 backupDocument(transaction, documents)?.displayName,
-            )
+            ) + recoveryDocuments(transaction, documents).map { document -> document.displayName }
         }
         return documents.filterNot { it.displayName in ownedNames }
     }
@@ -294,8 +295,24 @@ internal class AndroidSafDownloadPublisher<Document>(
         transaction: AndroidSafOwnedDownloadTransaction,
     ): AndroidSafOwnedDownloadTransaction {
         if (transaction.stageDocumentIdentity != null) return transaction
-        val stage = documentNamed(transaction.stageName) ?: return transaction
+        val documents = directory.documents()
+        val stage = documents.singleOrNull { it.displayName == transaction.stageName }
+            ?: recoveryDocuments(transaction, documents).singleOrNull()
+            ?: return transaction
         return transaction.copy(stageDocumentIdentity = stage.documentIdentity).also(ownership::replace)
+    }
+
+    private fun recoveryDocuments(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        documents: List<AndroidSafPublicationDocument<Document>> = directory.documents(),
+    ): List<AndroidSafPublicationDocument<Document>> = if (transaction.stageDocumentIdentity != null) {
+        emptyList()
+    } else documents.filter { document ->
+        transaction.token in document.displayName &&
+            document.displayName != transaction.finalName &&
+            document.displayName != transaction.backupName &&
+            document.displayName != transaction.generatedBackupName &&
+            document.documentIdentity != transaction.backupDocumentIdentity
     }
 
     private fun stageDocument(
@@ -491,7 +508,10 @@ internal class AndroidSafDownloadPublisher<Document>(
         ) { "The changed local backup could not be resolved after preservation." }
         require(
             preserved.displayName != transaction.finalName &&
-                preserved.displayName != transaction.stageName
+                preserved.displayName != transaction.stageName &&
+                preserved.displayName != transaction.backupName &&
+                preserved.displayName != transaction.generatedBackupName &&
+                transaction.token !in preserved.displayName
         ) { "The changed local backup was not preserved under a safe name." }
         ownership.remove(transaction)
         return true
@@ -532,6 +552,7 @@ internal class AndroidSafDownloadPublisher<Document>(
             publicationAccountedFor &&
             stageDocument(transaction) == null &&
             documentNamed(transaction.stageName) == null &&
+            recoveryDocuments(transaction).isEmpty() &&
             backupDocument(transaction) == null &&
             (!transaction.backupProtected || transaction.publicationCompleted)
         ) {

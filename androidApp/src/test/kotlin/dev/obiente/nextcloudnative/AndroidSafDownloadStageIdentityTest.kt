@@ -148,6 +148,66 @@ class AndroidSafDownloadStageIdentityTest {
     }
 
     @Test
+    fun `restart adopts a normalized stage created before identity persistence`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val normalizedStageName = "provider-stage-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(10, 11))
+            normalizedCreateNames[transaction.stageName] = normalizedStageName
+        }
+
+        assertFailsWith<IOException> {
+            publisher(directory).publish(
+                finalName = "Report.txt",
+                currentDocument = directory.documentNamed("Report.txt"),
+                createStage = { name ->
+                    directory.createFile(name)
+                    throw IOException("process stopped after normalized provider creation")
+                },
+                prepareStage = {},
+            )
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(null, pending.stageDocumentIdentity)
+        directory.failNextDeletionOfName = normalizedStageName
+
+        publisher(directory).reconcile()
+
+        val adopted = directory.ownership.transactions().single()
+        assertEquals(directory.documentNamed(normalizedStageName).toString(), adopted.stageDocumentIdentity)
+        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Report.txt"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `changed backup remains owned when provider keeps its reserved recovery name`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(8, 9))
+        }
+        val backup = directory.addFile(initial.backupName, byteArrayOf(12, 13))
+        val transaction = initial.copy(
+            publicationAttempted = true,
+            publicationCompleted = true,
+            backupProtected = true,
+            backupDocumentIdentity = backup.toString(),
+            backupContentIdentity = "File:8,9",
+        )
+        directory.ownership.add(transaction)
+        directory.normalizedRenameNames[transaction.changedBackupName] = transaction.backupName
+
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcile() }
+
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
+    }
+
+    @Test
     fun `preexisting exact stage name prevents ownership and provider mutation`() {
         val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
         val directory = FakeSafDirectory().apply {
