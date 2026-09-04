@@ -1,7 +1,9 @@
 package dev.obiente.nextcloudnative
 
+import android.os.ParcelFileDescriptor
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -12,6 +14,33 @@ import org.json.JSONObject
 
 internal const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = Long.MAX_VALUE
 internal const val MIN_ANDROID_DOCUMENT_FREE_BYTES = 512L * 1024L * 1024L
+
+internal fun descriptorMode(mode: String): Int = when (mode) {
+    "w" -> ParcelFileDescriptor.MODE_WRITE_ONLY
+    "wt" -> ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_TRUNCATE
+    "wa" -> ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_APPEND
+    "rw" -> ParcelFileDescriptor.MODE_READ_WRITE
+    "rwt" -> ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_TRUNCATE
+    else -> error("Unsupported writable mode: $mode")
+}
+
+internal fun acquireAndroidDocumentWritebackAccountLease(
+    session: NextcloudSession,
+    remotePath: String,
+    loadCurrentSession: () -> NextcloudSession?,
+): AndroidAccountOperationLease {
+    val lease = ANDROID_ACCOUNT_OPERATION_GUARD.acquireBlocking(NextcloudDocumentIds.accountKey(session))
+    return try {
+        if (!androidDocumentWritebackSessionIsCurrent(session, loadCurrentSession())) {
+            throw FileNotFoundException("The active Nextcloud account changed before the document could be opened.")
+        }
+        reserveAndroidDocumentWritebackPath(session, remotePath)
+        lease
+    } catch (failure: Throwable) {
+        lease.close()
+        throw failure
+    }
+}
 
 internal fun requireAndroidDocumentWritebackCapacity(remoteSize: Long, availableBytes: Long) {
     require(remoteSize >= 0L && availableBytes >= 0L)

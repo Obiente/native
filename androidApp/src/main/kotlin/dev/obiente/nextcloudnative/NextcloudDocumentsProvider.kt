@@ -552,7 +552,11 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         mode: String,
         signal: CancellationSignal?,
     ): ParcelFileDescriptor {
-        reserveAndroidDocumentWritebackPath(session, file.path)
+        val accountLease = acquireAndroidDocumentWritebackAccountLease(
+            session,
+            file.path,
+            services::loadSession,
+        )
         val recovered: AndroidDocumentPendingWriteback?
         val writeback: AndroidDocumentPendingWriteback
         try {
@@ -619,6 +623,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                     retainFailedWriteback(writeback, failure)
                 } finally {
                     writeback.releaseActive()
+                    accountLease.close()
                 }
             }
             return try {
@@ -632,17 +637,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             if (writeback.manifest.isFile) {
                 if (recovered == null) writeback.discard() else writeback.releaseActive()
             }
+            accountLease.close()
             throw failure
         }
-    }
-
-    private fun descriptorMode(mode: String): Int = when (mode) {
-        "w" -> ParcelFileDescriptor.MODE_WRITE_ONLY
-        "wt" -> ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_TRUNCATE
-        "wa" -> ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_APPEND
-        "rw" -> ParcelFileDescriptor.MODE_READ_WRITE
-        "rwt" -> ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_TRUNCATE
-        else -> error("Unsupported writable mode: $mode")
     }
 
     private fun createLocalStagingFile(): File {

@@ -13,6 +13,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 
 class AndroidIncomingShareStateTest {
@@ -755,6 +756,50 @@ class AndroidIncomingShareStateTest {
             ),
             incomingShareAccountWorkNames(staged.id).toSet(),
         )
+    }
+
+    @Test
+    fun accountRemovalPurgesLocalShareAfterRemoteChunkCleanupFails() = runBlocking {
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+        val events = mutableListOf<String>()
+
+        removeAndroidIncomingShareRequests(
+            requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+            cancelWork = { events += "cancel" },
+            releaseChunk = { _, _ -> error("synthetic offline cleanup failure") },
+            recordChunkReleaseFailure = { events += "release-failed" },
+            removeRequest = { events += "remove" },
+        )
+
+        assertEquals(listOf("cancel", "release-failed", "remove"), events)
+    }
+
+    @Test
+    fun accountRemovalPreservesChunkCleanupCancellation() = runBlocking {
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+        var removed = false
+
+        assertFailsWith<CancellationException> {
+            removeAndroidIncomingShareRequests(
+                requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+                cancelWork = {},
+                releaseChunk = { _, _ -> throw CancellationException("synthetic cancellation") },
+                removeRequest = { removed = true },
+            )
+        }
+        assertFalse(removed)
     }
 
     private fun request(state: AndroidIncomingShareState) = AndroidIncomingShareRequest(

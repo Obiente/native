@@ -212,15 +212,11 @@ internal class AndroidAccountCredentialController(
         previousSession: NextcloudSession?,
         suspectEncrypted: String? = null,
     ) {
-        val replace = suspend {
+        val replacementSession = requireNotNull(replacement.activeSession)
+        val affectedAccountIds = listOfNotNull(previousSession, replacementSession)
+            .map(NextcloudDocumentIds::accountKey)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccounts(affectedAccountIds) {
             replaceActiveStateWhileOperationsIdle(replacement, previousSession, suspectEncrypted)
-        }
-        if (previousSession == null) {
-            replace()
-        } else {
-            ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(previousSession)) {
-                replace()
-            }
         }
     }
 
