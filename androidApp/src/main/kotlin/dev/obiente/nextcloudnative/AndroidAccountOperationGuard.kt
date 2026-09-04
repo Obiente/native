@@ -21,6 +21,20 @@ internal class AndroidAccountOperationGuard {
         }
     }
 
+    suspend fun <Result> withAccountSession(
+        accountId: String,
+        resolveSession: suspend () -> dev.obiente.nextcloudnative.app.NextcloudSession?,
+        unavailable: suspend () -> Result,
+        action: suspend (dev.obiente.nextcloudnative.app.NextcloudSession) -> Result,
+    ): Result = withAccount(accountId) {
+        val session = resolveSession()
+        if (androidAccountOperationSessionIsCurrent(accountId, session)) {
+            action(requireNotNull(session))
+        } else {
+            unavailable()
+        }
+    }
+
     private class AccountLease(
         val mutex: Mutex = Mutex(),
         var references: Int = 0,
