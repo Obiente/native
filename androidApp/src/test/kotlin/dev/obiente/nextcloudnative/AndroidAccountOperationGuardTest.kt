@@ -311,4 +311,40 @@ class AndroidAccountOperationGuardTest {
         assertFalse(upload.await())
         assertFalse(uploadCreated)
     }
+
+    @Test
+    fun authenticatedMutationWaitsForSelectionAndRejectsTheStaleSession() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replacement = NextcloudSession("https://other.example.test", "bob", "new-password")
+        val selectionEntered = CompletableDeferred<Unit>()
+        val releaseSelection = CompletableDeferred<Unit>()
+        var current = original
+        var requestSent = false
+        val selection = async {
+            guard.withAccounts(
+                listOf(NextcloudDocumentIds.accountKey(original), NextcloudDocumentIds.accountKey(replacement)),
+            ) {
+                current = replacement
+                selectionEntered.complete(Unit)
+                releaseSelection.await()
+            }
+        }
+        selectionEntered.await()
+
+        val mutation = async {
+            runCatching {
+                guard.withAuthenticatedMutationSession(original, { current }) {
+                    requestSent = true
+                }
+            }
+        }
+        yield()
+
+        assertFalse(mutation.isCompleted)
+        releaseSelection.complete(Unit)
+        selection.await()
+        assertTrue(mutation.await().isFailure)
+        assertFalse(requestSent)
+    }
 }

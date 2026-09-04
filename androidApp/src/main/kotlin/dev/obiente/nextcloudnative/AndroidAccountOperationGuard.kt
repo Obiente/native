@@ -104,3 +104,14 @@ internal fun androidDocumentWritebackSessionIsCurrent(
     expectedSession: dev.obiente.nextcloudnative.app.NextcloudSession,
     currentSession: dev.obiente.nextcloudnative.app.NextcloudSession?,
 ): Boolean = currentSession == expectedSession
+
+internal suspend fun <Result> AndroidAccountOperationGuard.withAuthenticatedMutationSession(
+    expectedSession: dev.obiente.nextcloudnative.app.NextcloudSession,
+    resolveSession: suspend () -> dev.obiente.nextcloudnative.app.NextcloudSession?,
+    action: suspend (dev.obiente.nextcloudnative.app.NextcloudSession) -> Result,
+): Result = withExactAccountSession(
+    expectedSession = expectedSession,
+    resolveSession = resolveSession,
+    unavailable = { error("The account changed before the authenticated change could be sent.") },
+    action = action,
+)
