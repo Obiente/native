@@ -35,6 +35,13 @@ class AndroidAccountOperationGuardTest {
                 replacement,
             ),
         )
+        assertTrue(androidDocumentWritebackSessionIsCurrent(previous, previous))
+        assertFalse(
+            androidDocumentWritebackSessionIsCurrent(
+                previous,
+                previous.copy(appPassword = "rotated-password"),
+            ),
+        )
     }
 
     @Test
@@ -82,6 +89,49 @@ class AndroidAccountOperationGuardTest {
         assertTrue(otherAccountEntered)
         releaseUpload.complete(Unit)
         upload.await()
+    }
+
+    @Test
+    fun writableDescriptorLeaseBlocksAccountTransitionUntilClose() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val descriptorLease = guard.acquireBlocking("account-a")
+        var transitionEntered = false
+
+        val transition = async {
+            guard.withAccount("account-a") { transitionEntered = true }
+        }
+        yield()
+
+        assertFalse(transitionEntered)
+        descriptorLease.close()
+        transition.await()
+        assertTrue(transitionEntered)
+    }
+
+    @Test
+    fun replacementTransitionWaitsForBothAffectedAccounts() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val retainedWorkEntered = CompletableDeferred<Unit>()
+        val releaseRetainedWork = CompletableDeferred<Unit>()
+        var transitionEntered = false
+
+        val retainedWork = async {
+            guard.withAccount("account-b") {
+                retainedWorkEntered.complete(Unit)
+                releaseRetainedWork.await()
+            }
+        }
+        retainedWorkEntered.await()
+        val transition = async {
+            guard.withAccounts(listOf("account-b", "account-a")) { transitionEntered = true }
+        }
+        yield()
+
+        assertFalse(transitionEntered)
+        releaseRetainedWork.complete(Unit)
+        retainedWork.await()
+        transition.await()
+        assertTrue(transitionEntered)
     }
 
     @Test
