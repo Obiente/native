@@ -266,9 +266,7 @@ internal class AndroidAccountCredentialController(
                     } else {
                         prepareInvalidAndroidAccountCredentialRecoveryEdit(
                             editor = preferences.edit(),
-                            suspectEncrypted = suspectEncrypted,
                             replacementEncrypted = encodedReplacement,
-                            hasExistingQuarantine = preferences.contains(KEY_QUARANTINED_SESSION),
                         ).putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(replacement.registry))
                             .let { editor -> prepareCredentialSlotEdit(editor, replacement) }
                     }
@@ -314,9 +312,7 @@ internal class AndroidAccountCredentialController(
                     } else {
                         prepareInvalidAndroidAccountCredentialRecoveryEdit(
                             editor = preferences.edit(),
-                            suspectEncrypted = suspectEncrypted,
                             replacementEncrypted = encrypted,
-                            hasExistingQuarantine = preferences.contains(KEY_QUARANTINED_SESSION),
                         ).putString(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(replacement.registry))
                     }
                     commitPreferences(prepareCredentialSlotEdit(editor, replacement))
@@ -401,9 +397,9 @@ internal class AndroidAccountCredentialController(
         val encrypted = preferences.getString(KEY_SESSION, null) ?: return@serialize run {
             val retained = readIndependentCredentialSlotState()
             when {
-                retained != null -> AndroidAccountCredentialStoreRead.Available(retained)
+                retained != null -> availableCredentialStore(retained)
                 hasIndependentCredentialState() -> AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable
-                else -> AndroidAccountCredentialStoreRead.Available(AndroidAccountCredentialState.Empty)
+                else -> availableCredentialStore(AndroidAccountCredentialState.Empty)
             }
         }
         val encoded = try {
@@ -436,9 +432,18 @@ internal class AndroidAccountCredentialController(
         return@serialize when {
             restored.unsupportedVersion != null ->
                 AndroidAccountCredentialStoreRead.Unsupported(encrypted, restored.unsupportedVersion)
-            restored.state != null -> AndroidAccountCredentialStoreRead.Available(restored.state)
+            restored.state != null -> availableCredentialStore(restored.state)
             else -> AndroidAccountCredentialStoreRead.Invalid(encrypted)
         }
+    }
+
+    private fun availableCredentialStore(
+        state: AndroidAccountCredentialState,
+    ): AndroidAccountCredentialStoreRead.Available {
+        if (preferences.contains(KEY_QUARANTINED_SESSION)) {
+            runCatching { commitPreferences(preferences.edit().remove(KEY_QUARANTINED_SESSION)) }
+        }
+        return AndroidAccountCredentialStoreRead.Available(state)
     }
 
     private fun readIndependentCredentialSlotState(): AndroidAccountCredentialState? {
@@ -527,6 +532,7 @@ internal class AndroidAccountCredentialController(
         editor: SharedPreferences.Editor,
         state: AndroidAccountCredentialState,
     ): SharedPreferences.Editor = editor.apply {
+        remove(KEY_QUARANTINED_SESSION)
         val retainedKeys = state.sessions.keys.mapTo(hashSetOf(), ::androidAccountCredentialSlotKey)
         preferences.all.keys
             .filter { key -> key.startsWith(KEY_ACCOUNT_CREDENTIAL_SLOT_PREFIX) && key !in retainedKeys }
@@ -618,12 +624,14 @@ internal fun reconstructAndroidAccountCredentialState(
     loadSession: (NextcloudAccountId) -> NextcloudSession?,
 ): AndroidAccountCredentialState? {
     val sessions = linkedMapOf<NextcloudAccountId, NextcloudSession>()
+    val unavailableAccounts = mutableListOf<NextcloudAccountId>()
     registry.accounts.forEach { account ->
         val session = loadSession(account.id)?.takeIf { loaded -> loaded.accountRecord() == account }
-            ?: return null
-        sessions[account.id] = session
+        if (session == null) unavailableAccounts += account.id else sessions[account.id] = session
     }
-    return AndroidAccountCredentialState(registry, sessions)
+    if (registry.activeAccountId in unavailableAccounts) return null
+    val retainedRegistry = unavailableAccounts.fold(registry) { retained, accountId -> retained.remove(accountId) }
+    return AndroidAccountCredentialState(retainedRegistry, sessions)
 }
 
 internal fun restoreAndroidAccountCredentialStateWithoutAggregate(
@@ -712,11 +720,9 @@ internal class AndroidAccountCredentialStoreGuard {
 
 internal fun prepareInvalidAndroidAccountCredentialRecoveryEdit(
     editor: SharedPreferences.Editor,
-    suspectEncrypted: String,
     replacementEncrypted: String?,
-    hasExistingQuarantine: Boolean,
 ): SharedPreferences.Editor = editor.apply {
-    if (!hasExistingQuarantine) putString(KEY_QUARANTINED_SESSION, suspectEncrypted)
+    remove(KEY_QUARANTINED_SESSION)
     if (replacementEncrypted == null) remove(KEY_SESSION) else putString(KEY_SESSION, replacementEncrypted)
     remove(KEY_TEST_READ_ONLY)
 }

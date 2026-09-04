@@ -49,6 +49,8 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(session)
         preferences.put("accountLegacyCleanupServer", session.serverUrl)
         preferences.put("accountLegacyCleanupLogin", session.loginName)
+        preferences.put("accountCredentialSaveServer", session.serverUrl)
+        preferences.put("accountCredentialSaveLogin", session.loginName)
         secrets.resetOperationCounts()
 
         assertEquals(listOf(session.accountRecord()), persistence.listAccounts())
@@ -56,6 +58,7 @@ class DesktopAccountCredentialPersistenceTest {
         assertEquals(0, secrets.loadCount)
         assertEquals(0, secrets.clearCount)
         assertEquals(session.serverUrl, preferences.get("accountLegacyCleanupServer", null))
+        assertEquals(session.serverUrl, preferences.get("accountCredentialSaveServer", null))
     }
 
     @Test
@@ -66,7 +69,7 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(secondSession())
 
         assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
-        assertEquals(3, flushCount)
+        assertEquals(7, flushCount)
         assertEquals(firstSession().serverUrl, preferences.get("server", null))
         assertEquals(firstSession().loginName, preferences.get("login", null))
     }
@@ -83,6 +86,66 @@ class DesktopAccountCredentialPersistenceTest {
         assertNull(preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
         assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
     }
+
+    @Test
+    fun startupRecoveryRemovesANewCredentialWhoseRegistryCommitNeverCompleted() =
+        withStore { preferences, secrets ->
+            val session = firstSession()
+            preferences.put("accountCredentialSaveServer", session.serverUrl)
+            preferences.put("accountCredentialSaveLogin", session.loginName)
+            secrets.save(
+                desktopAccountSecretReference(session.accountId),
+                session.loginName,
+                session.appPassword.encodeToByteArray(),
+            )
+
+            assertNull(persistence(preferences, secrets).loadActiveSession())
+
+            assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+            assertNull(preferences.get("accountCredentialSaveServer", null))
+            assertNull(preferences.get("accountCredentialSaveLogin", null))
+        }
+
+    @Test
+    fun startupRecoveryKeepsANewCredentialAfterItsRegistryCommitCompleted() =
+        withStore { preferences, secrets ->
+            val session = firstSession()
+            preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodeNextcloudAccountRegistry(
+                NextcloudAccountRegistry.Empty.upsertAndSelect(session.accountRecord()),
+            ))
+            preferences.put("accountCredentialSaveServer", session.serverUrl)
+            preferences.put("accountCredentialSaveLogin", session.loginName)
+            secrets.save(
+                desktopAccountSecretReference(session.accountId),
+                session.loginName,
+                session.appPassword.encodeToByteArray(),
+            )
+
+            assertEquals(session, persistence(preferences, secrets).loadActiveSession())
+
+            assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+            assertNull(preferences.get("accountCredentialSaveServer", null))
+            assertNull(preferences.get("accountCredentialSaveLogin", null))
+        }
+
+    @Test
+    fun startupRecoveryPreservesPendingCredentialWhenRegistryVersionIsUnreadable() =
+        withStore { preferences, secrets ->
+            val session = firstSession()
+            preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, """{"version":2,"accounts":[]}""")
+            preferences.put("accountCredentialSaveServer", session.serverUrl)
+            preferences.put("accountCredentialSaveLogin", session.loginName)
+            secrets.save(
+                desktopAccountSecretReference(session.accountId),
+                session.loginName,
+                session.appPassword.encodeToByteArray(),
+            )
+
+            assertNull(persistence(preferences, secrets).loadActiveSession())
+
+            assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+            assertEquals(session.serverUrl, preferences.get("accountCredentialSaveServer", null))
+        }
 
     @Test
     fun failedRegistryFlushRestoresThePreviousCredentialDuringReauthentication() =
@@ -359,7 +422,7 @@ class DesktopAccountCredentialPersistenceTest {
             var flushAttempts = 0
             val persistence = persistence(preferences, secrets) {
                 flushAttempts += 1
-                if (flushAttempts == 3) error("synthetic removal flush failure")
+                if (flushAttempts == 7) error("synthetic removal flush failure")
                 preferences.flush()
             }
             persistence.saveSession(first)

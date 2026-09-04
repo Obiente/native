@@ -10,6 +10,7 @@ internal class DesktopAccountCredentialPersistence(
     private val flushPreferences: () -> Unit = preferences::flush,
 ) {
     fun loadActiveSession(): NextcloudSession? {
+        retryPendingCredentialSave()
         retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry == null) {
@@ -32,6 +33,7 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? {
+        retryPendingCredentialSave()
         retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return null
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return null
@@ -48,6 +50,7 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun saveSession(session: NextcloudSession): NextcloudSession {
+        retryPendingCredentialSave()
         retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         val registry = read.registry
@@ -61,8 +64,10 @@ internal class DesktopAccountCredentialPersistence(
         val encodedRegistry = prepareRegistry(updatedRegistry)
         val secretReference = desktopAccountSecretReference(persistedSession.accountId)
         val previousSecret = loadSecretForRollback(secretReference)
-        saveSecret(persistedSession)
+        val journalNewCredential = previousRecord == null
+        if (journalNewCredential) persistPendingCredentialSave(persistedSession)
         try {
+            saveSecret(persistedSession)
             persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
         } catch (failure: Exception) {
             try {
@@ -83,12 +88,15 @@ internal class DesktopAccountCredentialPersistence(
                     rollbackFailure,
                 )
             }
+            if (journalNewCredential) clearPendingCredentialSave()
             throw failure
         }
+        if (journalNewCredential) clearPendingCredentialSave()
         return persistedSession
     }
 
     fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? {
+        retryPendingCredentialSave()
         retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return null
         val session = loadSession(accountId) ?: return null
@@ -98,6 +106,7 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun removeAccount(accountId: NextcloudAccountId): Boolean {
+        retryPendingCredentialSave()
         retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return false
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return false
@@ -167,6 +176,99 @@ internal class DesktopAccountCredentialPersistence(
 
     private fun clearLegacyCredentialAfterMigration(session: NextcloudSession) {
         retryPendingLegacyCredentialCleanup(session)
+    }
+
+    private fun retryPendingCredentialSave() {
+        val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
+        val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
+        if (server == null && login == null) return
+        if (server.isNullOrBlank() || login.isNullOrBlank()) {
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                "account-credentials.recover",
+            )
+            return
+        }
+        val accountId = try {
+            deriveNextcloudAccountId(server, login)
+        } catch (failure: Exception) {
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                "account-credentials.recover",
+                failure,
+            )
+            return
+        }
+        val registryRead = readRegistry()
+        if (registryRead.encoded != null && registryRead.registry == null) {
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                "account-credentials.recover",
+            )
+            return
+        }
+        val credentialCommitted = registryRead.registry
+            ?.accounts
+            ?.any { account -> account.id == accountId } == true
+        if (!credentialCommitted) {
+            try {
+                secretStore.clear(desktopAccountSecretReference(accountId))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                recordCredentialDiagnostic(
+                    "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                    "account-credentials.recover",
+                    failure,
+                )
+                return
+            }
+        }
+        clearPendingCredentialSave()
+    }
+
+    private fun persistPendingCredentialSave(session: NextcloudSession) {
+        val previousServer = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
+        val previousLogin = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
+        try {
+            preferences.put(KEY_PENDING_CREDENTIAL_SAVE_SERVER, session.serverUrl)
+            preferences.put(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, session.loginName)
+            flushPreferences()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_SERVER, previousServer)
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, previousLogin)
+            runCatching(flushPreferences)
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED",
+                "account-credentials.persist",
+                failure,
+            )
+            throw failure
+        }
+    }
+
+    private fun clearPendingCredentialSave() {
+        val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
+        val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
+        if (server == null && login == null) return
+        try {
+            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_SERVER)
+            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN)
+            flushPreferences()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_SERVER, server)
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, login)
+            runCatching(flushPreferences)
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+                "account-credentials.recover",
+                failure,
+            )
+        }
     }
 
     private fun retryPendingLegacyCredentialCleanup(expected: NextcloudSession? = null) {
@@ -399,6 +501,8 @@ internal class DesktopAccountCredentialPersistence(
         const val KEY_LOGIN = "login"
         const val KEY_PENDING_LEGACY_CLEANUP_SERVER = "accountLegacyCleanupServer"
         const val KEY_PENDING_LEGACY_CLEANUP_LOGIN = "accountLegacyCleanupLogin"
+        const val KEY_PENDING_CREDENTIAL_SAVE_SERVER = "accountCredentialSaveServer"
+        const val KEY_PENDING_CREDENTIAL_SAVE_LOGIN = "accountCredentialSaveLogin"
     }
 }
 

@@ -2711,7 +2711,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-add", diagnosticFields) {
-            fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
+            accountOperationGuard.serializeWhenSyncIdle addPair@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@addPair FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could be added.",
+                    )
+                }
+                fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
+            }
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.pair-add", diagnosticFields, result)
             runCatching {

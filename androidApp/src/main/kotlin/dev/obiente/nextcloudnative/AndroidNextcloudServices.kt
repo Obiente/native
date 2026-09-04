@@ -1729,7 +1729,18 @@ internal class AndroidNextcloudServices(
             SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
         )
         diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-add", fields) {
-            fileSyncEngine.addPair(session, userId, localRoot, remoteRootPath, configuration)
+            ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+                expectedSession = session,
+                resolveSession = ::loadSession,
+                unavailable = {
+                    FileSyncCenterActionResult.Rejected(
+                        "The account changed before this folder sync could be added.",
+                        FileSyncRejectionScope.Preflight,
+                    )
+                },
+            ) { current ->
+                fileSyncEngine.addPair(current, userId, localRoot, remoteRootPath, configuration)
+            }
         }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-add", fields, result) }
     }
 
