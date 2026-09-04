@@ -118,9 +118,45 @@ class NextcloudAccountRegistryTest {
     }
 
     @Test
+    fun futureRegistryVersionBeyondIntRangeRemainsUntouched() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+        val futureRegistry = """{"version":2147483648,"accounts":[]}"""
+
+        val restored = restoreNextcloudAccountRegistry(futureRegistry, session)
+
+        assertEquals(NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion, restored.recoveryReason)
+        assertEquals(session.accountRecord(), restored.registry.activeAccount)
+        assertFalse(restored.needsPersistence)
+    }
+
+    @Test
+    fun extremelyLongBoundedFutureRegistryVersionRemainsUntouched() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+        val futureRegistry = """{"version":${"9".repeat(16 * 1024)},"accounts":[]}"""
+
+        val restored = restoreNextcloudAccountRegistry(futureRegistry, session)
+
+        assertEquals(NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion, restored.recoveryReason)
+        assertEquals(session.accountRecord(), restored.registry.activeAccount)
+        assertFalse(restored.needsPersistence)
+    }
+
+    @Test
     fun oversizedFutureRegistryRemainsUntouchedAfterBoundedVersionInspection() {
         val session = session("https://cloud.example.test", "alice", "private-app-password")
         val futureRegistry = """{"version":2,"future":"${"x".repeat(300 * 1024)}"}"""
+
+        val restored = restoreNextcloudAccountRegistry(futureRegistry, session)
+
+        assertEquals(NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion, restored.recoveryReason)
+        assertEquals(session.accountRecord(), restored.registry.activeAccount)
+        assertFalse(restored.needsPersistence)
+    }
+
+    @Test
+    fun oversizedFutureRegistryBeyondIntRangeRemainsUntouched() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+        val futureRegistry = """{"version":2147483648,"future":"${"x".repeat(300 * 1024)}"}"""
 
         val restored = restoreNextcloudAccountRegistry(futureRegistry, session)
 
