@@ -10,6 +10,12 @@ internal interface HomeWorkspaceLayoutStorage {
     fun read(persistenceKey: String): String?
 
     fun write(persistenceKey: String, encodedSnapshot: String)
+
+    fun writeIfAbsent(persistenceKey: String, encodedSnapshot: String): Boolean {
+        if (read(persistenceKey) != null) return false
+        write(persistenceKey, encodedSnapshot)
+        return true
+    }
 }
 
 internal data class HomeWorkspaceLayoutLoad(
@@ -62,6 +68,18 @@ internal class HomeWorkspaceLayoutRepository(
             val encoded = encodeSnapshot(layout)
             storage.write(layout.scope.persistenceKey, encoded)
             true
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Promotes a legacy layout only while the canonical key is still absent. */
+    fun saveIfAbsent(layout: HomeWorkspaceLayout): Boolean {
+        return try {
+            val encoded = encodeSnapshot(layout)
+            storage.writeIfAbsent(layout.scope.persistenceKey, encoded)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
