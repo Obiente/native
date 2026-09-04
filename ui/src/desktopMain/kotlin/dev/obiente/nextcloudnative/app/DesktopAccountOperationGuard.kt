@@ -55,6 +55,11 @@ internal fun desktopResourceActivationMatchesActiveAccount(
     requestedAccountId: NextcloudAccountId,
 ): Boolean = activeAccountId == requestedAccountId
 
+internal fun desktopSyncRunMatchesActiveSession(
+    activeSession: NextcloudSession?,
+    requestedSession: NextcloudSession,
+): Boolean = activeSession == requestedSession
+
 internal fun requireDesktopSessionSaveAllowed(
     allowed: Boolean,
     recordBlocked: (SupportDiagnosticEventDraft) -> Unit,

@@ -119,6 +119,13 @@ internal class AndroidAccountCredentialController(
                     active = active,
                     removeQueuedUploads = { removeQueuedUploads(session) },
                     clearActiveAccount = { clearSession(current) },
+                    rollbackActiveRemoval = {
+                        replaceActiveStateWhileOperationsIdle(
+                            replacement = current,
+                            previousSession = null,
+                            suspectEncrypted = null,
+                        )
+                    },
                     persistInactiveRemoval = { persistState(current.remove(accountId)) },
                     rollbackInactiveRemoval = { persistState(current) },
                 )
@@ -554,12 +561,21 @@ internal suspend fun removeAndroidAccountCredentialData(
     active: Boolean,
     removeQueuedUploads: suspend () -> Unit,
     clearActiveAccount: suspend () -> Unit,
+    rollbackActiveRemoval: suspend () -> Unit,
     persistInactiveRemoval: suspend () -> Unit,
     rollbackInactiveRemoval: suspend () -> Unit,
 ) {
     if (active) {
-        removeQueuedUploads()
-        clearActiveAccount()
+        try {
+            clearActiveAccount()
+            removeQueuedUploads()
+        } catch (failure: Exception) {
+            withContext(NonCancellable) {
+                runCatching { rollbackActiveRemoval() }
+                    .onFailure(failure::addSuppressed)
+            }
+            throw failure
+        }
         return
     }
 
