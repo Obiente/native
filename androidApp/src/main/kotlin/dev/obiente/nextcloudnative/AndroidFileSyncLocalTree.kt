@@ -17,113 +17,6 @@ import java.io.OutputStream
 import java.nio.channels.Channels
 import java.security.MessageDigest
 
-internal data class AndroidLocalSyncDocument(
-    val entry: LocalSyncEntry,
-    val uri: Uri,
-    val displayName: String,
-)
-
-internal data class AndroidFileSyncContentHashRead(
-    val contentHash: String?,
-    val bytesRead: Long,
-) {
-    init {
-        require(bytesRead >= 0L)
-    }
-}
-
-internal interface AndroidFileSyncLocalTree {
-    fun scan(
-        includes: (relativePath: String, kind: SyncEntryKind) -> Boolean = { _, _ -> true },
-    ): List<AndroidLocalSyncDocument>
-    fun strengthenReplacementEntries(
-        documents: List<AndroidLocalSyncDocument>,
-        protectedPaths: Set<String>,
-        contentReadBudget: AndroidFileSyncContentReadBudget,
-        shouldContinue: () -> Boolean,
-    ): List<AndroidLocalSyncDocument> = documents
-    fun contentHash(
-        path: String,
-        expectedLocalRevision: String,
-        expectedBytes: Long,
-        maximumBytes: Long,
-    ): String?
-    fun contentHashRead(
-        path: String,
-        expectedLocalRevision: String,
-        expectedBytes: Long,
-        maximumBytes: Long,
-    ): AndroidFileSyncContentHashRead = AndroidFileSyncContentHashRead(
-        contentHash(path, expectedLocalRevision, expectedBytes, maximumBytes),
-        expectedBytes,
-    )
-    fun contentRangeHash(
-        path: String,
-        expectedLocalRevision: String,
-        expectedBytes: Long,
-        offset: Long,
-        length: Int,
-    ): String? = null
-    fun stageForUpload(
-        path: String,
-        destination: File,
-        maximumBytes: Long,
-        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
-    ): LocalSyncEntry
-    fun createDirectory(path: String, expectedLocalRevision: String?)
-    fun createDirectoryForDownload(
-        path: String,
-        expectedLocalRevision: String?,
-        expectedContentHash: String?,
-        shouldContinue: () -> Boolean,
-    ) {
-        if (!shouldContinue()) {
-            throw kotlinx.coroutines.CancellationException("The local download was cancelled.")
-        }
-        createDirectory(path, expectedLocalRevision)
-    }
-    fun writeFile(path: String, source: File, expectedLocalRevision: String?)
-    fun writeFileFromStream(
-        path: String,
-        expectedLocalRevision: String?,
-        write: (OutputStream) -> Unit,
-    ) {
-        val temporary = File.createTempFile("nextcloud-native-local-stream-", ".tmp")
-        try {
-            FileOutputStream(temporary).use(write)
-            writeFile(path, temporary, expectedLocalRevision)
-        } finally {
-            temporary.delete()
-        }
-    }
-    fun writeFileFromStreamForDownload(
-        path: String,
-        expectedLocalRevision: String?,
-        expectedContentHash: String?,
-        shouldContinue: () -> Boolean,
-        write: (OutputStream) -> Unit,
-    ) {
-        if (!shouldContinue()) {
-            throw kotlinx.coroutines.CancellationException("The local download was cancelled.")
-        }
-        writeFileFromStream(path, expectedLocalRevision, write)
-    }
-    fun delete(path: String, expectedLocalRevision: String)
-    fun deleteForSync(
-        path: String,
-        expectedLocalRevision: String,
-        expectedContentHash: String?,
-        shouldContinue: () -> Boolean,
-    ) {
-        if (!shouldContinue()) {
-            throw kotlinx.coroutines.CancellationException("The local deletion was cancelled.")
-        }
-        delete(path, expectedLocalRevision)
-    }
-    fun resolve(path: String): AndroidLocalSyncDocument?
-    fun reconcileOwnedDownloads() = Unit
-}
-
 /**
  * Revision-guarded adapter over one persisted Storage Access Framework tree.
  *
@@ -150,15 +43,18 @@ internal class AndroidSafFileSyncLocalTree(
 
     override fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+        shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> {
         val ownershipDirectory = downloadOwnershipStore.indexed()
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
         while (pending.isNotEmpty()) {
+            requireScanContinuation(shouldContinue)
             val (parentPath, parentUri) = pending.removeFirst()
             require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
-            for (document in children(parentUri, parentPath, ownershipDirectory)) {
+            for (document in children(parentUri, parentPath, ownershipDirectory, shouldContinue)) {
+                requireScanContinuation(shouldContinue)
                 if (!includes(document.entry.relativePath, document.entry.kind)) continue
                 require(result.size < MAX_ENTRIES) { "The local folder contains too many entries." }
                 result += document
@@ -168,6 +64,22 @@ internal class AndroidSafFileSyncLocalTree(
             }
         }
         return result.sortedBy { it.entry.relativePath }
+    }
+
+    override fun authenticateFileForReplacement(
+        path: String,
+        expectedLocalRevision: String,
+        expectedContentHash: String?,
+        shouldContinue: () -> Boolean,
+    ) {
+        val current = requireNotNull(resolve(path)) { "The local file no longer exists." }
+        require(current.entry.kind == SyncEntryKind.File) { "The local item changed type after the sync scan." }
+        authenticatedReplacementSnapshot(
+            document = current,
+            expectedLocalRevision = expectedLocalRevision,
+            expectedContentHash = expectedContentHash,
+            shouldContinue = shouldContinue,
+        )
     }
 
     override fun strengthenReplacementEntries(
@@ -566,9 +478,17 @@ internal class AndroidSafFileSyncLocalTree(
         parentUri: Uri,
         parentPath: String,
         ownershipDirectory: AndroidSafDownloadOwnershipDirectory = downloadOwnershipStore,
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
     ): List<AndroidLocalSyncDocument> {
-        val publisher = downloadPublisher(parentUri, parentPath, ownershipDirectory = ownershipDirectory)
+        requireScanContinuation(shouldContinue)
+        val publisher = downloadPublisher(
+            parentUri,
+            parentPath,
+            shouldContinue = shouldContinue,
+            ownershipDirectory = ownershipDirectory,
+        )
         publisher.reconcileForSync()
+        requireScanContinuation(shouldContinue)
         val listedChildren = rawChildren(parentUri, parentPath)
         val visibleUris = publisher.visibleDocuments(
             listedChildren.map { document ->
@@ -712,18 +632,26 @@ internal class AndroidSafFileSyncLocalTree(
     }
 }
 
+internal fun requireScanContinuation(shouldContinue: () -> Boolean) {
+    if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+        throw kotlinx.coroutines.CancellationException("The local sync scan was cancelled.")
+    }
+}
+
 internal fun knownAndroidFileSyncModifiedEpochMillis(value: Long): Long? = value.takeIf { it > 0L }
 
 internal fun sha256SyncContentHash(
     input: InputStream,
     expectedBytes: Long,
     maximumBytes: Long,
-): String? = sha256SyncContentHashRead(input, expectedBytes, maximumBytes).contentHash
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+): String? = sha256SyncContentHashRead(input, expectedBytes, maximumBytes, shouldContinue).contentHash
 
 internal fun sha256SyncContentHashRead(
     input: InputStream,
     expectedBytes: Long,
     maximumBytes: Long,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ): AndroidFileSyncContentHashRead {
     require(expectedBytes >= 0L)
     require(maximumBytes > 0L)
@@ -732,7 +660,7 @@ internal fun sha256SyncContentHashRead(
     val buffer = ByteArray(64 * 1024)
     var total = 0L
     while (true) {
-        if (Thread.currentThread().isInterrupted) {
+        if (!shouldContinue() || Thread.currentThread().isInterrupted) {
             throw kotlinx.coroutines.CancellationException("File identity verification cancelled.")
         }
         val read = input.read(buffer)

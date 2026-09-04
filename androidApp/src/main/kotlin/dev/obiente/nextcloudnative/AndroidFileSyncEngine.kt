@@ -422,7 +422,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         val remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
         val local = createAndroidFileSyncLocalTree(appContext, initialPair.localRootId)
         val contentReadBudget = AndroidFileSyncContentReadBudget()
-        val scannedLocalDocuments = local.scan(includes)
+        val scannedLocalDocuments = local.scan(includes, remote::shouldContinueTransfer)
         val strengthenedLocalDocuments = strengthenAndroidFileSyncReplacementEntries(
             local = local,
             documents = scannedLocalDocuments,
@@ -779,38 +779,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         remote: AndroidFileSyncRemoteTree,
         contentReadBudget: AndroidFileSyncContentReadBudget,
     ): FileSyncExecutionSuccess {
-        val localSource = requireNotNull(work.observedLocal)
-        val remoteSource = requireNotNull(work.observedRemote)
-        require(localSource.kind == SyncEntryKind.File && remoteSource.kind == SyncEntryKind.File) {
-            "Keep both currently supports file conflicts only."
-        }
-        withAndroidFileSyncStagingFile(stagingRoot, "keep-local") { localBytes ->
-            withAndroidFileSyncStagingFile(stagingRoot, "keep-remote") { remoteBytes ->
-                local.stageForUpload(
-                    operation.relativePath, localBytes,
-                    androidFileSyncStagingTransferLimit(stagingRoot, localSource.size),
-                    remote::shouldContinueTransfer,
-                )
-                remote.stageDownload(
-                    operation.relativePath,
-                    remoteSource.etag,
-                    remoteBytes,
-                            androidFileSyncStagingTransferLimit(stagingRoot, remoteSource.size),
-                )
-                remote.writeFile(operation.localConflictPath, localBytes, expectedRemoteEtag = null)
-                local.writeFile(operation.localConflictPath, localBytes, expectedLocalRevision = null)
-                remote.writeFile(operation.remoteConflictPath, remoteBytes, expectedRemoteEtag = null)
-                local.writeFile(operation.remoteConflictPath, remoteBytes, expectedLocalRevision = null)
-                local.writeFileFromStreamForDownload(
-                    path = operation.relativePath,
-                    expectedLocalRevision = localSource.revision,
-                    expectedContentHash = localSource.contentHash,
-                    shouldContinue = remote::shouldContinueTransfer,
-                ) { output ->
-                    remoteBytes.inputStream().use { input -> input.copyTo(output) }
-                }
-            }
-        }
+        executeAndroidFileSyncKeepBoth(operation, work, local, remote, stagingRoot)
         return FileSyncExecutionSuccess(
             synchronizedBaselines = listOf(
                 verifiedBaseline(operation.relativePath, local, remote, contentReadBudget),

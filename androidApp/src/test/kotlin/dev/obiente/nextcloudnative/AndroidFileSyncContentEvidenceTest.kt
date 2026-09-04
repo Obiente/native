@@ -199,6 +199,7 @@ class AndroidFileSyncContentEvidenceTest {
     private object NoReadLocalTree : AndroidFileSyncLocalTree {
         override fun scan(
             includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+            shouldContinue: () -> Boolean,
         ): List<AndroidLocalSyncDocument> = emptyList()
 
         override fun contentHash(
