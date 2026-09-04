@@ -94,6 +94,20 @@ internal class AppWorkspacePinsRepository(
         }
     }
 
+    /** Promotes legacy pins only while the canonical account key is still absent. */
+    fun saveIfAbsent(accountScopeDigest: String, appIds: List<String>): Boolean {
+        val validated = validatedAppWorkspacePinnedIds(appIds) ?: return false
+        return try {
+            val encoded = appWorkspacePinsJson.encodeToString(AppWorkspacePinsSnapshot(appIds = validated))
+            check(encoded.length <= MAX_APP_WORKSPACE_PINS_CHARACTERS)
+            storage.writeIfAbsent(persistenceKey(accountScopeDigest), encoded)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun persistenceKey(accountScopeDigest: String): String {
         require(accountScopeDigest.length == 64 && accountScopeDigest.all { it in '0'..'9' || it in 'a'..'f' })
         return "apps:pins:$APP_WORKSPACE_PINS_SCHEMA_VERSION:$accountScopeDigest"

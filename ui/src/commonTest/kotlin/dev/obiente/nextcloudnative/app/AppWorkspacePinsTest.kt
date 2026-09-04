@@ -56,8 +56,23 @@ class AppWorkspacePinsTest {
         assertFalse(loaded.storageAuthoritative)
         assertTrue(loaded.legacyMigrationRequired)
         assertEquals(defaultAppWorkspacePinnedIds(), repository.load(current))
-        assertTrue(repository.save(current, loaded.appIds))
+        assertTrue(repository.saveIfAbsent(current, loaded.appIds))
         assertTrue(storage.values.keys.any { key -> key.endsWith(current) })
+    }
+
+    @Test
+    fun `delayed legacy promotion does not overwrite newer canonical pins`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val current = "c".repeat(64)
+        val legacy = "d".repeat(64)
+        assertTrue(repository.save(legacy, listOf("files", "deck")))
+        val staleLegacy = repository.loadWithProvenance(current, legacy)
+
+        assertTrue(repository.save(current, listOf("files", "calendar")))
+        assertFalse(repository.saveIfAbsent(current, staleLegacy.appIds))
+
+        assertEquals(listOf("files", "calendar"), repository.load(current))
     }
 
     @Test
