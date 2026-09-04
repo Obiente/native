@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
+import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.FilterInputStream
@@ -81,5 +83,39 @@ class AndroidFileSyncKeepBothRecoveryTest {
         }
 
         assertContentEquals(byteArrayOf(1, 2), output.toByteArray())
+    }
+
+    @Test
+    fun `staged hash authenticates a differently sized conflict from replacement evidence`() {
+        val contentHash = "sha256:${"a".repeat(64)}"
+        val observed = LocalSyncEntry(
+            relativePath = "note.md",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 4L,
+            replacementAuthentication = contentHash,
+        )
+        val staged = observed.copy(contentHash = contentHash, replacementAuthentication = null)
+
+        assertEquals(contentHash, authenticatedStagedAndroidFileSyncContentHash(observed, staged))
+    }
+
+    @Test
+    fun `changed staged hash cannot use older replacement evidence`() {
+        val observed = LocalSyncEntry(
+            relativePath = "note.md",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 4L,
+            replacementAuthentication = "sha256:${"a".repeat(64)}",
+        )
+        val staged = observed.copy(
+            contentHash = "sha256:${"b".repeat(64)}",
+            replacementAuthentication = null,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            authenticatedStagedAndroidFileSyncContentHash(observed, staged)
+        }
     }
 }

@@ -271,11 +271,12 @@ fun currentFileSyncContentVerificationResults(
         val candidate = result.candidate
         val local = localByPath[candidate.relativePath]
         val remote = remoteByPath[candidate.relativePath]
+        val currentLocalContentHash = local?.contentHash ?: local?.replacementAuthentication
         local?.kind == SyncEntryKind.File &&
             remote?.kind == SyncEntryKind.File &&
             local.revision == candidate.localRevision &&
             remote.etag == candidate.remoteEtag &&
-            local.contentHash == result.localContentHash &&
+            currentLocalContentHash == result.localContentHash &&
             (candidate.expectedSizeBytes == null || (
                 local.size == candidate.expectedSizeBytes &&
                     remote.size == candidate.expectedSizeBytes

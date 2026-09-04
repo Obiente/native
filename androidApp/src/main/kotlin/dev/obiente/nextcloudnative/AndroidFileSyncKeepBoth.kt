@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncWorkItem
+import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.File
 import java.io.InputStream
@@ -34,12 +35,7 @@ internal fun executeAndroidFileSyncKeepBoth(
                 remoteBytes,
                 androidFileSyncStagingTransferLimit(stagingRoot, remoteSource.size),
             )
-            val localContentHash = requireNotNull(localSource.contentHash) {
-                "The local conflict needs exact content evidence."
-            }
-            require(stagedLocal.contentHash == localContentHash) {
-                "The local conflict changed while it was being staged."
-            }
+            val localContentHash = authenticatedStagedAndroidFileSyncContentHash(localSource, stagedLocal)
             val remoteContentHash = remoteBytes.inputStream().use { input ->
                 requireNotNull(
                     sha256SyncContentHash(
@@ -117,6 +113,23 @@ internal fun executeAndroidFileSyncKeepBoth(
             )
         }
     }
+}
+
+internal fun authenticatedStagedAndroidFileSyncContentHash(
+    observed: LocalSyncEntry,
+    staged: LocalSyncEntry,
+): String {
+    val stagedContentHash = requireNotNull(staged.contentHash) {
+        "The staged local conflict needs exact content evidence."
+    }
+    val observedContentHashes = listOfNotNull(observed.contentHash, observed.replacementAuthentication)
+    require(observedContentHashes.isNotEmpty()) {
+        "The local conflict needs exact content evidence."
+    }
+    require(observedContentHashes.all { contentHash -> contentHash == stagedContentHash }) {
+        "The local conflict changed while it was being staged."
+    }
+    return stagedContentHash
 }
 
 private fun ensureExactRemoteAndroidFileSyncConflictCopy(

@@ -54,6 +54,37 @@ class FileSyncUnverifiedReplacementTest {
     }
 
     @Test
+    fun `changed replacement authentication requires renewed review`() {
+        val firstAuthentication = "sha256:" + "ab".repeat(32)
+        val changedAuthentication = "sha256:" + "cd".repeat(32)
+        val local = LocalSyncEntry(
+            relativePath = "note.md",
+            kind = SyncEntryKind.File,
+            revision = "weak-local-revision",
+            size = 42L,
+            replacementAuthentication = firstAuthentication,
+        )
+        val remote = RemoteSyncEntry("note.md", SyncEntryKind.File, "remote-1", size = 43L)
+        var state = scanFileSyncPair(state(), PAIR_ID, listOf(local), listOf(remote), 10L)
+        val workId = state.pair().workItems.single().id
+        state = resolveFileSyncDecision(state, PAIR_ID, workId, FileSyncDecisionChoice.UseRemote)
+
+        state = scanFileSyncPair(
+            state,
+            PAIR_ID,
+            listOf(local.copy(replacementAuthentication = changedAuthentication)),
+            listOf(remote),
+            20L,
+        )
+
+        val replacement = state.pair().workItems.single()
+        assertTrue(replacement.id > workId)
+        assertEquals(FileSyncExecutionState.AwaitingDecision, replacement.state)
+        assertEquals(FileSyncDecisionState.Pending, replacement.decision?.state)
+        assertEquals(changedAuthentication, replacement.observedLocal?.replacementAuthentication)
+    }
+
+    @Test
     fun `unverified replacement offers only choices that preserve the device copy`() {
         val local = LocalSyncEntry(
             relativePath = "large.bin",

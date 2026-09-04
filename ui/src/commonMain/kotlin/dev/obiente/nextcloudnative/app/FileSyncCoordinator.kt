@@ -786,7 +786,8 @@ private fun LocalSyncEntry?.hasSameGenerationAs(other: LocalSyncEntry?): Boolean
             kind == other.kind &&
             revision == other.revision &&
             size == other.size &&
-            contentHash == other.contentHash
+            contentHash == other.contentHash &&
+            replacementAuthentication == other.replacementAuthentication
 }
 
 private fun RemoteSyncEntry?.hasSameGenerationAs(other: RemoteSyncEntry?): Boolean = when {

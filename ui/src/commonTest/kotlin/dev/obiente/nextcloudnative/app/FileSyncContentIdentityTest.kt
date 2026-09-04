@@ -191,6 +191,43 @@ class FileSyncContentIdentityTest {
     }
 
     @Test
+    fun `cached mismatches reuse fresh replacement authentication without starvation`() {
+        val firstDigest = "sha256:" + "ab".repeat(32)
+        val secondDigest = "sha256:" + "cd".repeat(32)
+        val results = listOf(
+            verificationResult("first", "local-1", "remote-1", 42L, firstDigest),
+            verificationResult("second", "local-2", "remote-2", 42L, secondDigest),
+        )
+        val local = listOf(
+            fileOnDevice("first", "local-1", 42L).copy(replacementAuthentication = firstDigest),
+            fileOnDevice("second", "local-2", 42L).copy(replacementAuthentication = secondDigest),
+        )
+        val remote = listOf(
+            fileOnServer("first", "remote-1", 42L),
+            fileOnServer("second", "remote-2", 42L),
+        )
+
+        assertEquals(results, currentFileSyncContentVerificationResults(local, remote, results))
+    }
+
+    @Test
+    fun `fresh planning hash takes precedence over older replacement authentication`() {
+        val oldDigest = "sha256:" + "ab".repeat(32)
+        val newDigest = "sha256:" + "cd".repeat(32)
+        val result = verificationResult("current", "local-1", "remote-1", 42L, oldDigest)
+        val local = fileOnDevice("current", "local-1", 42L).copy(
+            contentHash = newDigest,
+            replacementAuthentication = oldDigest,
+        )
+        val remote = fileOnServer("current", "remote-1", 42L)
+
+        assertEquals(
+            emptyList(),
+            currentFileSyncContentVerificationResults(listOf(local), listOf(remote), listOf(result)),
+        )
+    }
+
+    @Test
     fun `automatic verification is bounded per file and per scan`() {
         val candidates = listOf(
             FileSyncContentVerificationCandidate("a", "local-a", "remote-a", 40L),
