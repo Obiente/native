@@ -71,15 +71,10 @@ internal class DeckAttachmentUploadWorker(
         )
         val session = when (accountResolution) {
             is DurableUploadAccountResolution.Available -> accountResolution.session
-            DurableUploadAccountResolution.RegistryUnavailable,
-            DurableUploadAccountResolution.CredentialUnavailable,
-            -> {
+            DurableUploadAccountResolution.RegistryUnavailable -> {
                 recordUploadDiagnostic(
                     severity = SupportDiagnosticSeverity.Warning,
-                    outcome = when (accountResolution) {
-                        DurableUploadAccountResolution.RegistryUnavailable -> "account-registry-unavailable"
-                        else -> "account-resolution-deferred"
-                    },
+                    outcome = "account-registry-unavailable",
                     accountId = initial.accountId,
                     jobId = jobId,
                 )
@@ -93,6 +88,36 @@ internal class DeckAttachmentUploadWorker(
                     jobId = jobId,
                 )
                 return Result.success()
+            }
+            DurableUploadAccountResolution.CredentialUnavailable -> {
+                if (durableUploadCredentialDisposition(runAttemptCount) == DurableUploadCredentialDisposition.Retry) {
+                    recordUploadDiagnostic(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        outcome = "account-resolution-deferred",
+                        accountId = initial.accountId,
+                        jobId = jobId,
+                    )
+                    return Result.retry()
+                }
+                val failureCommitted = failDurableUploadAfterCredentialRetries(
+                    transitionToFailed = {
+                        store.transition(
+                            jobId,
+                            expected = DurableUploadState.Queued,
+                            target = DurableUploadState.Failed,
+                            message = "Sign in to this account again, then select the file again to retry.",
+                        )
+                    },
+                    releaseCapability = { job -> picker.release(job.request.file) },
+                )
+                if (!failureCommitted) return Result.success()
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "account-credential-unavailable",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                return Result.failure()
             }
             DurableUploadAccountResolution.AccountUnavailable -> {
                 return failQueuedDurableUploadForUnavailableAccount(
