@@ -13,6 +13,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class AndroidIncomingShareStateTest {
     @Test
@@ -706,6 +707,54 @@ class AndroidIncomingShareStateTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun accountRemovalCancelsEveryShareWorkerBeforeReleasingChunksAndStaging() = runBlocking {
+        val uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            userId = "alice",
+            destinationPath = "Shared",
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = uploadId,
+            ),
+        )
+        val corruptId = "fedcba98-7654-3210-fedc-ba9876543210"
+        val events = mutableListOf<String>()
+
+        removeAndroidIncomingShareRequests(
+            requests = listOf(
+                AndroidIncomingShareAccountRequest(staged.id, staged),
+                AndroidIncomingShareAccountRequest(corruptId, request = null),
+            ),
+            cancelWork = { requestId -> events += "cancel:$requestId" },
+            releaseChunk = { request, chunkId -> events += "release:${request.id}:$chunkId" },
+            removeRequest = { requestId -> events += "remove:$requestId" },
+        )
+
+        assertEquals(
+            listOf(
+                "cancel:${staged.id}",
+                "cancel:$corruptId",
+                "release:${staged.id}:$uploadId",
+                "remove:${staged.id}",
+                "remove:$corruptId",
+            ),
+            events,
+        )
+        assertEquals(
+            setOf(
+                incomingShareUploadWorkName(staged.id),
+                incomingShareRetryWorkName(staged.id),
+                incomingShareCleanupWorkName(staged.id),
+                incomingShareChunkCleanupWorkName(staged.id),
+                incomingShareReleaseWorkName(staged.id),
+                incomingShareAbandonedStagingWorkName(staged.id),
+            ),
+            incomingShareAccountWorkNames(staged.id).toSet(),
+        )
     }
 
     private fun request(state: AndroidIncomingShareState) = AndroidIncomingShareRequest(

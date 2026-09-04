@@ -44,6 +44,12 @@ internal fun desktopSessionSaveSwitchesAccount(
     savedAccountId: NextcloudAccountId,
 ): Boolean = activeAccountId != null && activeAccountId != savedAccountId
 
+internal fun desktopSessionSaveReplacesActiveCredential(
+    activeSession: NextcloudSession?,
+    savedSession: NextcloudSession,
+): Boolean = activeSession?.accountId == savedSession.accountId &&
+    activeSession.appPassword != savedSession.appPassword
+
 internal fun desktopResourceActivationMatchesActiveAccount(
     activeAccountId: NextcloudAccountId?,
     requestedAccountId: NextcloudAccountId,
@@ -55,7 +61,7 @@ internal fun requireDesktopSessionSaveAllowed(
 ) {
     if (allowed) return
     recordBlocked(desktopAccountSelectionBlockedDiagnostic())
-    error("Close files and virtual folders before switching accounts.")
+    error("Close files and virtual folders before switching accounts or replacing credentials.")
 }
 
 internal inline fun <Session> reopenDesktopSessionAfterSelection(

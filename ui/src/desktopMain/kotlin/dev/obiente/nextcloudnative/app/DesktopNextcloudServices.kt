@@ -3699,11 +3699,15 @@ class DesktopNextcloudServices(
 
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         accountOperationGuard.serializeWhenSyncIdle {
-            requireDesktopSessionSaveAllowed(
-                !desktopSessionSaveSwitchesAccount(activeAccountId(), session.accountId) || !hasLiveAccountResources(),
-                ::recordSupportDiagnostic,
-            )
             sessionPublicationGuard.serialize {
+                val activeAccountId = accountCredentials.activeAccountId()
+                val activeSession = activeAccountId?.let(accountCredentials::loadSession)
+                val invalidatesLiveResources = desktopSessionSaveSwitchesAccount(activeAccountId, session.accountId) ||
+                    desktopSessionSaveReplacesActiveCredential(activeSession, session)
+                requireDesktopSessionSaveAllowed(
+                    !invalidatesLiveResources || !hasLiveAccountResources(),
+                    ::recordSupportDiagnostic,
+                )
                 accountCredentials.saveSession(session)
                 accountSessionPublication.publish(session)
             }
