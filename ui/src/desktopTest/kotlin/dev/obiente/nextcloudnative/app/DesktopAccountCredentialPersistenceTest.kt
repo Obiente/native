@@ -43,6 +43,22 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun credentialFreeAccountReadsDoNotRetrySecretCleanup() = withStore { preferences, secrets ->
+        val session = firstSession()
+        val persistence = persistence(preferences, secrets)
+        persistence.saveSession(session)
+        preferences.put("accountLegacyCleanupServer", session.serverUrl)
+        preferences.put("accountLegacyCleanupLogin", session.loginName)
+        secrets.resetOperationCounts()
+
+        assertEquals(listOf(session.accountRecord()), persistence.listAccounts())
+        assertEquals(session.accountId, persistence.activeAccountId())
+        assertEquals(0, secrets.loadCount)
+        assertEquals(0, secrets.clearCount)
+        assertEquals(session.serverUrl, preferences.get("accountLegacyCleanupServer", null))
+    }
+
+    @Test
     fun selectionFlushesRegistryAndLegacyMetadataBeforeReturning() = withStore { preferences, secrets ->
         var flushCount = 0
         val persistence = persistence(preferences, secrets) { flushCount += 1 }
@@ -456,8 +472,13 @@ class DesktopAccountCredentialPersistenceTest {
         var failSaves = false
         var failClears = false
         var loadFailure: RuntimeException? = null
+        var loadCount = 0
+            private set
+        var clearCount = 0
+            private set
 
         override fun load(reference: DesktopSecretReference): ByteArray? {
+            loadCount += 1
             loadFailure?.let { throw it }
             return values[reference.targetName]?.copyOf()
         }
@@ -468,8 +489,14 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
         override fun clear(reference: DesktopSecretReference) {
+            clearCount += 1
             if (failClears) error("synthetic secret deletion failure")
             values.remove(reference.targetName)
+        }
+
+        fun resetOperationCounts() {
+            loadCount = 0
+            clearCount = 0
         }
     }
 }
