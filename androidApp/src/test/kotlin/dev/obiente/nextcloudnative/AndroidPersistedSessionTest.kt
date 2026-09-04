@@ -398,6 +398,16 @@ class AndroidPersistedSessionTest {
             listOf("ACCOUNT_CREDENTIAL_STORE_VERSION_UNSUPPORTED"),
             diagnostics.mapNotNull { it.code },
         )
+        assertFalse(
+            androidCredentialStoreAllowsSessionRestore(
+                AndroidAccountCredentialStoreRead.Unsupported("encrypted-future-store", 3),
+            ),
+        )
+        assertTrue(
+            androidCredentialStoreAllowsSessionRestore(
+                AndroidAccountCredentialStoreRead.Invalid("encrypted-malformed-store"),
+            ),
+        )
     }
 
     @Test
@@ -751,21 +761,20 @@ class AndroidPersistedSessionTest {
     fun failedActiveUploadCleanupKeepsTheCredentialRemovalCommitted() = runBlocking {
         val events = mutableListOf<String>()
 
-        assertFailsWith<IllegalStateException> {
-            removeAndroidAccountCredentialData(
-                active = true,
-                removeQueuedUploads = {
-                    events += "remove-uploads"
-                    error("synthetic cleanup failure")
-                },
-                clearActiveAccount = { events += "clear-account" },
-                rollbackActiveRemoval = { events += "rollback-active" },
-                persistInactiveRemoval = { events += "persist-inactive" },
-                rollbackInactiveRemoval = { events += "rollback-inactive" },
-            )
-        }
+        removeAndroidAccountCredentialData(
+            active = true,
+            removeQueuedUploads = {
+                events += "remove-uploads"
+                error("synthetic cleanup failure")
+            },
+            clearActiveAccount = { events += "clear-account" },
+            rollbackActiveRemoval = { events += "rollback-active" },
+            persistInactiveRemoval = { events += "persist-inactive" },
+            rollbackInactiveRemoval = { events += "rollback-inactive" },
+            recordCommittedCleanupFailure = { events += "diagnose-cleanup" },
+        )
 
-        assertEquals(listOf("clear-account", "remove-uploads"), events)
+        assertEquals(listOf("clear-account", "remove-uploads", "diagnose-cleanup"), events)
     }
 
     @Test

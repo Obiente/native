@@ -257,7 +257,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) {
                     ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
                         expectedSession = activeSession,
-                        resolveSession = { services.loadSession(activeSession.accountId) },
+                        resolveSession = services::loadSession,
                         unavailable = { error("The account changed before the upload could be queued.") },
                     ) { current ->
                         uploads.enqueue(current, info.userId, staged.id, destinationPath)
