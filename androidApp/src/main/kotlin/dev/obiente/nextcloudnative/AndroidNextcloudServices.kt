@@ -1806,9 +1806,20 @@ internal class AndroidNextcloudServices(
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         val fields = listOf(SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier))
-        diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
-            fileSyncEngine.removePair(session, userId, pairId)
-        }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-remove", fields, result) }
+        ANDROID_ACCOUNT_OPERATION_GUARD.withAccountSession(
+            accountId = accountIdentity,
+            resolveSession = { loadSession() },
+            unavailable = {
+                FileSyncCenterActionResult.Rejected(
+                    "The account changed before folder sync removal could start.",
+                    FileSyncRejectionScope.Preflight,
+                )
+            },
+        ) { current ->
+            diagnoseSupportFailure(accountIdentity, SupportDiagnosticComponent.Sync, "sync.pair-remove", fields) {
+                fileSyncEngine.removePair(current, userId, pairId)
+            }.also { result -> recordFileSyncResult(accountIdentity, "sync.pair-remove", fields, result) }
+        }
     }
 
     override suspend fun listMedia(

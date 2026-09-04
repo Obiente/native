@@ -7,6 +7,12 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.encodeNextcloudAccountRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -535,6 +541,50 @@ class AndroidPersistedSessionTest {
             }
         }
         assertEquals(listOf("notify"), events)
+    }
+
+    @Test
+    fun activeAccountRemovalCleansQueuedUploadsBeforeDeletingTheCredential() = runBlocking {
+        val events = mutableListOf<String>()
+
+        removeAndroidAccountCredentialData(
+            active = true,
+            removeQueuedUploads = { events += "remove-uploads" },
+            clearActiveAccount = { events += "clear-account" },
+            persistInactiveRemoval = { events += "persist-inactive" },
+            rollbackInactiveRemoval = { events += "rollback-inactive" },
+        )
+
+        assertEquals(listOf("remove-uploads", "clear-account"), events)
+    }
+
+    @Test
+    fun cancelledInactiveAccountRemovalRollsBackNonCancellably() = runBlocking {
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        var rollbackWasActive = false
+        val removal = launch {
+            removeAndroidAccountCredentialData(
+                active = false,
+                removeQueuedUploads = {
+                    events += "remove-uploads"
+                    cleanupEntered.complete(Unit)
+                    awaitCancellation()
+                },
+                clearActiveAccount = { events += "clear-account" },
+                persistInactiveRemoval = { events += "persist-removal" },
+                rollbackInactiveRemoval = {
+                    rollbackWasActive = currentCoroutineContext().isActive
+                    events += "rollback"
+                },
+            )
+        }
+        cleanupEntered.await()
+
+        removal.cancelAndJoin()
+
+        assertTrue(rollbackWasActive)
+        assertEquals(listOf("persist-removal", "remove-uploads", "rollback"), events)
     }
 
     private fun assertDiagnosticsExcludePrivateValues(diagnostics: List<SupportDiagnosticEventDraft>) {
