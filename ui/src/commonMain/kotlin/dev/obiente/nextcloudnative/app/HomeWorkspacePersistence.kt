@@ -12,34 +12,45 @@ internal interface HomeWorkspaceLayoutStorage {
     fun write(persistenceKey: String, encodedSnapshot: String)
 }
 
+internal data class HomeWorkspaceLayoutLoad(
+    val layout: HomeWorkspaceLayout,
+    val legacyMigrationRequired: Boolean = false,
+)
+
 internal class HomeWorkspaceLayoutRepository(
     private val storage: HomeWorkspaceLayoutStorage,
     private val encodeSnapshot: (HomeWorkspaceLayout) -> String =
         ::encodeHomeWorkspaceLayoutSnapshot,
 ) {
     fun load(scope: HomeWorkspaceScope, legacyAccountScopeDigest: String? = null): HomeWorkspaceLayout {
+        return loadWithMigration(scope, legacyAccountScopeDigest).layout
+    }
+
+    fun loadWithMigration(
+        scope: HomeWorkspaceScope,
+        legacyAccountScopeDigest: String? = null,
+    ): HomeWorkspaceLayoutLoad {
         val encoded = try {
             storage.read(scope.persistenceKey)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            return defaultHomeWorkspaceLayout(scope)
+            return HomeWorkspaceLayoutLoad(defaultHomeWorkspaceLayout(scope))
         }
-        if (encoded != null) return decodeHomeWorkspaceLayoutSnapshot(scope, encoded)
+        if (encoded != null) return HomeWorkspaceLayoutLoad(decodeHomeWorkspaceLayoutSnapshot(scope, encoded))
         val legacyScope = legacyAccountScopeDigest?.let { digest ->
             HomeWorkspaceScope(digest, scope.formFactor)
-        } ?: return defaultHomeWorkspaceLayout(scope)
+        } ?: return HomeWorkspaceLayoutLoad(defaultHomeWorkspaceLayout(scope))
         val legacyEncoded = try {
             storage.read(legacyScope.persistenceKey)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
             null
-        } ?: return defaultHomeWorkspaceLayout(scope)
+        } ?: return HomeWorkspaceLayoutLoad(defaultHomeWorkspaceLayout(scope))
         val legacyLayout = decodeHomeWorkspaceLayoutSnapshot(legacyScope, legacyEncoded)
         val migrated = HomeWorkspaceLayout(scope, legacyLayout.sections)
-        save(migrated)
-        return migrated
+        return HomeWorkspaceLayoutLoad(migrated, legacyMigrationRequired = true)
     }
 
     /**
@@ -47,10 +58,15 @@ internal class HomeWorkspaceLayoutRepository(
      * without crashing or pretending it was durably saved.
      */
     fun save(layout: HomeWorkspaceLayout): Boolean {
-        return runCatching {
+        return try {
             val encoded = encodeSnapshot(layout)
             storage.write(layout.scope.persistenceKey, encoded)
-        }.isSuccess
+            true
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            false
+        }
     }
 }
 

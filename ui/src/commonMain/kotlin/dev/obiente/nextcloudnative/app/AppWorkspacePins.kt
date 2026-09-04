@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -14,6 +15,7 @@ internal data class AppWorkspacePinsSnapshot(
 internal data class AppWorkspacePinsLoad(
     val appIds: List<String>,
     val storageAuthoritative: Boolean,
+    val legacyMigrationRequired: Boolean = false,
 )
 
 internal class AppWorkspacePinsRepository(
@@ -27,40 +29,53 @@ internal class AppWorkspacePinsRepository(
         accountScopeDigest: String,
         legacyAccountScopeDigest: String? = null,
     ): AppWorkspacePinsLoad {
-        val read = runCatching { storage.read(persistenceKey(accountScopeDigest)) }
-        if (read.isFailure) {
+        val encoded = try {
+            storage.read(persistenceKey(accountScopeDigest))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
             return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = false)
         }
-        var migratedFromLegacy = false
-        val encoded = read.getOrNull() ?: legacyAccountScopeDigest?.let { legacyScope ->
-            val legacyRead = runCatching { storage.read(persistenceKey(legacyScope)) }
-            if (legacyRead.isFailure) {
+        var legacyMigrationRequired = false
+        val persisted = encoded ?: legacyAccountScopeDigest?.let { legacyScope ->
+            try {
+                storage.read(persistenceKey(legacyScope))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
                 return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = false)
-            }
-            legacyRead.getOrNull()?.also { migratedFromLegacy = true }
+            }?.also { legacyMigrationRequired = true }
         }
             ?: return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
-        if (encoded.length !in 1..MAX_APP_WORKSPACE_PINS_CHARACTERS) {
+        if (persisted.length !in 1..MAX_APP_WORKSPACE_PINS_CHARACTERS) {
             return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
         }
         val snapshot = runCatching {
-            appWorkspacePinsJson.decodeFromString<AppWorkspacePinsSnapshot>(encoded)
+            appWorkspacePinsJson.decodeFromString<AppWorkspacePinsSnapshot>(persisted)
         }.getOrNull() ?: return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
         if (snapshot.schemaVersion != APP_WORKSPACE_PINS_SCHEMA_VERSION) {
             return AppWorkspacePinsLoad(defaultAppWorkspacePinnedIds(), storageAuthoritative = true)
         }
         val appIds = validatedAppWorkspacePinnedIds(snapshot.appIds) ?: defaultAppWorkspacePinnedIds()
-        val migrated = !migratedFromLegacy || save(accountScopeDigest, appIds)
-        return AppWorkspacePinsLoad(appIds, storageAuthoritative = migrated)
+        return AppWorkspacePinsLoad(
+            appIds = appIds,
+            storageAuthoritative = !legacyMigrationRequired,
+            legacyMigrationRequired = legacyMigrationRequired,
+        )
     }
 
     fun save(accountScopeDigest: String, appIds: List<String>): Boolean {
         val validated = validatedAppWorkspacePinnedIds(appIds) ?: return false
-        return runCatching {
+        return try {
             val encoded = appWorkspacePinsJson.encodeToString(AppWorkspacePinsSnapshot(appIds = validated))
             check(encoded.length <= MAX_APP_WORKSPACE_PINS_CHARACTERS)
             storage.write(persistenceKey(accountScopeDigest), encoded)
-        }.isSuccess
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun persistenceKey(accountScopeDigest: String): String {
