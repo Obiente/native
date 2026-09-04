@@ -236,4 +236,42 @@ class AndroidAccountOperationGuardTest {
         assertEquals("unavailable", cleanup.await())
         assertFalse(operationRan)
     }
+
+    @Test
+    fun uploadCreationWaitsForRemovalAndRejectsAReplacementCredential() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replacement = original.copy(appPassword = "new-password")
+        val accountIdentity = NextcloudDocumentIds.accountKey(original)
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var currentSession: NextcloudSession? = original
+        var uploadCreated = false
+        val removal = async {
+            guard.withAccount(accountIdentity) {
+                currentSession = replacement
+                removalEntered.complete(Unit)
+                releaseRemoval.await()
+            }
+        }
+        removalEntered.await()
+
+        val upload = async {
+            guard.withExactAccountSession(
+                expectedSession = original,
+                resolveSession = { currentSession },
+                unavailable = { false },
+            ) {
+                uploadCreated = true
+                true
+            }
+        }
+        yield()
+        assertFalse(upload.isCompleted)
+
+        releaseRemoval.complete(Unit)
+        removal.await()
+        assertFalse(upload.await())
+        assertFalse(uploadCreated)
+    }
 }

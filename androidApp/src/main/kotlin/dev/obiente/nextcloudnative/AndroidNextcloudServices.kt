@@ -448,6 +448,7 @@ internal class AndroidNextcloudServices(
     private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
+    private val fileOfflineAccountCleanup = AndroidFileOfflineAccountCleanup(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
@@ -498,6 +499,7 @@ internal class AndroidNextcloudServices(
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
         resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
         removeQueuedUploads = { session ->
+            fileOfflineAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
             incomingShareAccountCleanup.removeForAccount(session)
             durableUploadAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
             retireAndroidFileSyncAccountPairs(appContext, NextcloudDocumentIds.accountKey(session))
@@ -1492,7 +1494,13 @@ internal class AndroidNextcloudServices(
         file: NextcloudFile,
         available: Boolean,
     ): FileOfflineAvailability = withContext(Dispatchers.IO) {
-        fileOfflineRepository.setAvailable(session, userId, file, available)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { error("The account changed before offline storage could be updated.") },
+        ) { current ->
+            fileOfflineRepository.setAvailable(current, userId, file, available)
+        }
     }
 
     override suspend fun loadFileOfflineCenter(
@@ -1507,7 +1515,13 @@ internal class AndroidNextcloudServices(
         userId: String,
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
-        fileOfflineRepository.retryCenterItem(session, userId, key)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { FileOfflineCenterActionResult.Rejected("The account changed before this retry started.") },
+        ) { current ->
+            fileOfflineRepository.retryCenterItem(current, userId, key)
+        }
     }
 
     override suspend fun removeFileOfflineItem(
@@ -1515,7 +1529,13 @@ internal class AndroidNextcloudServices(
         userId: String,
         key: FileOfflineKey,
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
-        fileOfflineRepository.removeCenterItem(session, userId, key)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { FileOfflineCenterActionResult.Rejected("The account changed before offline storage was removed.") },
+        ) { current ->
+            fileOfflineRepository.removeCenterItem(current, userId, key)
+        }
     }
 
     override suspend fun loadVirtualFileStorage(
@@ -2911,7 +2931,15 @@ internal class AndroidNextcloudServices(
         scope: DurableUploadScope,
         request: NextcloudMultipartUploadRequest,
     ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
-        durableMultipartUploads.enqueue(session, scope, request)
+        ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = {
+                DurableUploadEnqueueResult.Rejected("The account changed before the upload could be queued.")
+            },
+        ) { current ->
+            durableMultipartUploads.enqueue(current, scope, request)
+        }
     }
 
     override suspend fun durableMultipartUploadStatuses(

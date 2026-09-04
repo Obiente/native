@@ -43,6 +43,16 @@ internal class AndroidAccountOperationGuard {
         }
     }
 
+    suspend fun <Result> withExactAccountSession(
+        expectedSession: dev.obiente.nextcloudnative.app.NextcloudSession,
+        resolveSession: suspend () -> dev.obiente.nextcloudnative.app.NextcloudSession?,
+        unavailable: suspend () -> Result,
+        action: suspend (dev.obiente.nextcloudnative.app.NextcloudSession) -> Result,
+    ): Result = withAccount(NextcloudDocumentIds.accountKey(expectedSession)) {
+        val current = resolveSession()
+        if (current == expectedSession) action(current) else unavailable()
+    }
+
     private suspend fun acquire(accountId: String): AndroidAccountOperationLease {
         require(accountId.isNotBlank())
         val lease = synchronized(monitor) {
