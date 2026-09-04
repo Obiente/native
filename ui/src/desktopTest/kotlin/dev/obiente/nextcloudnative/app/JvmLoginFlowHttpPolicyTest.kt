@@ -107,6 +107,23 @@ class JvmLoginFlowHttpPolicyTest {
     }
 
     @Test
+    fun `oversized login name is rejected before account registry construction`() {
+        val interpretation = interpretLoginPollHttpResponse(
+            status = 200,
+            body = """{
+                "server": "https://cloud.example.test",
+                "loginName": "${"x".repeat(MAX_ACCOUNT_LOGIN_NAME_LENGTH + 1)}",
+                "appPassword": "private-app-password"
+            }""".trimIndent(),
+            challenge = challenge(),
+        )
+
+        val failure = assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(interpretation.result)
+        assertEquals("LOGIN_POLL_RESPONSE_INVALID", failure.code)
+        assertNull(interpretation.approvedLoginName)
+    }
+
+    @Test
     fun `fallback diagnostic distinguishes a routed 404 from a pre exchange failure`() {
         val routed = loginPollEndpointFallbackDiagnostic(
             LoginPollFallbackReason.AdvertisedEndpointNotFound,

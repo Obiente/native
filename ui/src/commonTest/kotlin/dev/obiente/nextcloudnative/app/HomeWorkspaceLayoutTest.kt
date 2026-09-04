@@ -345,6 +345,21 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
+    fun `legacy read cancellation remains control flow`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        storage.failedReadKey = legacyScope.persistenceKey
+        storage.readFailure = CancellationException("synthetic legacy cancellation")
+
+        assertFailsWith<CancellationException> {
+            repository.load(currentScope, legacyAccountScopeDigest = legacyScope.accountScopeDigest)
+        }
+        assertEquals(null, storage.lastKey)
+    }
+
+    @Test
     fun `repository reports snapshot encoding failures without touching storage`() {
         val storage = RecordingHomeWorkspaceStorage()
         val repository = HomeWorkspaceLayoutRepository(
