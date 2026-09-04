@@ -90,34 +90,13 @@ internal class DeckAttachmentUploadWorker(
                 return Result.success()
             }
             DurableUploadAccountResolution.CredentialUnavailable -> {
-                if (durableUploadCredentialDisposition(runAttemptCount) == DurableUploadCredentialDisposition.Retry) {
-                    recordUploadDiagnostic(
-                        severity = SupportDiagnosticSeverity.Warning,
-                        outcome = "account-resolution-deferred",
-                        accountId = initial.accountId,
-                        jobId = jobId,
-                    )
-                    return Result.retry()
-                }
-                val failureCommitted = failDurableUploadAfterCredentialRetries(
-                    transitionToFailed = {
-                        store.transition(
-                            jobId,
-                            expected = DurableUploadState.Queued,
-                            target = DurableUploadState.Failed,
-                            message = "Sign in to this account again, then select the file again to retry.",
-                        )
-                    },
-                    releaseCapability = { job -> picker.release(job.request.file) },
-                )
-                if (!failureCommitted) return Result.success()
                 recordUploadDiagnostic(
                     severity = SupportDiagnosticSeverity.Warning,
-                    outcome = "account-credential-unavailable",
+                    outcome = "account-resolution-deferred",
                     accountId = initial.accountId,
                     jobId = jobId,
                 )
-                return Result.failure()
+                return Result.retry()
             }
             DurableUploadAccountResolution.AccountUnavailable -> {
                 return failQueuedDurableUploadForUnavailableAccount(
@@ -162,12 +141,14 @@ internal class DeckAttachmentUploadWorker(
             )
             return Result.failure()
         }
-        val started = store.transition(
-            jobId,
-            expected = DurableUploadState.Queued,
-            target = DurableUploadState.Uploading,
-            message = null,
-        ) ?: return Result.success()
+        val started = claimQueuedDurableUploadForExecution(jobId) {
+            store.transition(
+                jobId,
+                expected = DurableUploadState.Queued,
+                target = DurableUploadState.Uploading,
+                message = null,
+            )
+        } ?: return Result.success()
         val uploadServices = AndroidNextcloudServices(
             applicationContext,
             localUploadPicker = picker,
