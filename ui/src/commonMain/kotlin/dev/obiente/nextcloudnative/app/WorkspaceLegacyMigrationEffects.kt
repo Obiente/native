@@ -8,21 +8,37 @@ import androidx.compose.runtime.remember
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+internal data class AppWorkspacePinsCompositionState(
+    val appIds: MutableState<List<String>>,
+    val storageAuthoritative: MutableState<Boolean>,
+    val loadComplete: Boolean,
+)
+
 @Composable
-internal fun rememberMigratedAppPinsAuthority(
+internal fun rememberAppWorkspacePinsCompositionState(
     repository: AppWorkspacePinsRepository,
     accountScopeDigest: String,
-    loaded: AppWorkspacePinsLoad,
-): MutableState<Boolean> {
-    val authoritative = remember(accountScopeDigest) { mutableStateOf(loaded.storageAuthoritative) }
-    LaunchedEffect(accountScopeDigest, loaded.legacyMigrationRequired) {
-        if (loaded.legacyMigrationRequired) {
-            authoritative.value = withContext(Dispatchers.Default) {
-                repository.save(accountScopeDigest, loaded.appIds)
-            }
+    legacyAccountScopeDigest: String?,
+): AppWorkspacePinsCompositionState {
+    val coordinator = remember(repository, accountScopeDigest, legacyAccountScopeDigest) {
+        AppWorkspacePinsLoadCoordinator {
+            repository.loadWithProvenance(accountScopeDigest, legacyAccountScopeDigest)
         }
     }
-    return authoritative
+    val appIds = remember(accountScopeDigest) { mutableStateOf(defaultAppWorkspacePinnedIds()) }
+    val authoritative = remember(accountScopeDigest) { mutableStateOf(false) }
+    val loaded = remember(accountScopeDigest) { mutableStateOf<AppWorkspacePinsLoad?>(null) }
+    LaunchedEffect(coordinator) {
+        val result = coordinator.load()
+        appIds.value = result.appIds
+        authoritative.value = if (result.legacyMigrationRequired) {
+            withContext(Dispatchers.Default) { repository.save(accountScopeDigest, result.appIds) }
+        } else {
+            result.storageAuthoritative
+        }
+        loaded.value = result
+    }
+    return AppWorkspacePinsCompositionState(appIds, authoritative, loaded.value != null)
 }
 
 @Composable
