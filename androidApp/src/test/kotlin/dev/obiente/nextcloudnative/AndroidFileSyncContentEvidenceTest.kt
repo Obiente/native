@@ -138,6 +138,37 @@ class AndroidFileSyncContentEvidenceTest {
     }
 
     @Test
+    fun unavailableReplacementEvidenceIsNotRetriedDuringRemoteDeletionVerification() {
+        val localEntry = LocalSyncEntry(
+            relativePath = "offline.bin",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 4L,
+            contentIdentityUnverified = true,
+            replacementContentIdentityUnavailable = true,
+        )
+
+        val verified = verifyAndroidRemoteDeletionContent(
+            localEntries = listOf(localEntry),
+            remoteEntries = emptyList(),
+            baselines = listOf(
+                FileSyncBaseline(
+                    "offline.bin",
+                    SyncEntryKind.File,
+                    "local-1",
+                    "remote-1",
+                    contentHash = "sha256:${"0".repeat(64)}",
+                ),
+            ),
+            direction = FileSyncDirection.Bidirectional,
+            local = NoReadLocalTree,
+            budget = AndroidFileSyncContentReadBudget(),
+        ).single()
+
+        assertEquals(localEntry, verified)
+    }
+
+    @Test
     fun zeroByteReadFailureDoesNotStarveLaterDeletionEvidence() {
         val localEntries = listOf("a.txt", "b.txt").map { path ->
             LocalSyncEntry(path, SyncEntryKind.File, "local-$path", size = 4L)

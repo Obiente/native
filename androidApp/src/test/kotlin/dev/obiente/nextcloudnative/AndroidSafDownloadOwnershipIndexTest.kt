@@ -175,13 +175,13 @@ class AndroidSafDownloadOwnershipIndexTest {
             val index = store.indexed()
             val ownership = index.forDirectory("content://provider/tree/root/document/one")
             val relocated = index.forDirectory("content://provider/tree/root/document/two")
-            val initial = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            val initial = authenticatedRelocationTransaction()
             val attempted = initial.copy(publicationAttempted = true)
 
             ownership.add(initial)
-            assertEquals(listOf(initial), relocated.transactions(setOf(initial.backupName)))
+            assertEquals(listOf(initial), relocated.transactions(setOf(initial.stageName)))
             relocated.replace(attempted)
-            assertEquals(listOf(attempted), relocated.transactions(setOf(attempted.backupName)))
+            assertEquals(listOf(attempted), relocated.transactions(setOf(attempted.stageName)))
             relocated.remove(attempted)
 
             assertEquals(emptyList(), root.listFiles().orEmpty().toList())
@@ -197,7 +197,7 @@ class AndroidSafDownloadOwnershipIndexTest {
         try {
             val originalScope = "content://provider/tree/root/document/one"
             val relocatedScope = "content://provider/tree/root/document/two"
-            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            val transaction = authenticatedRelocationTransaction()
             AndroidSafDownloadOwnershipStore(root).forDirectory(originalScope).add(transaction)
             val index = AndroidSafDownloadOwnershipStore(root).indexed()
             val relocatedName = "provider-stage-${transaction.token}"
@@ -216,12 +216,39 @@ class AndroidSafDownloadOwnershipIndexTest {
     }
 
     @Test
+    fun `token-only document in another directory cannot relocate pending ownership`() {
+        val root = Files.createTempDirectory("saf-download-ownership-token-collision-").toFile()
+        try {
+            val originalScope = "content://provider/tree/root/document/original"
+            val unrelatedScope = "content://provider/tree/root/document/unrelated"
+            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            val store = AndroidSafDownloadOwnershipStore(root)
+            store.forDirectory(originalScope).add(transaction)
+            val unrelatedName = "user-file-${transaction.token}"
+
+            assertEquals(
+                emptyList(),
+                store.forDirectory(unrelatedScope).transactions(setOf(unrelatedName)),
+            )
+
+            val index = store.indexed()
+            index.observeRecoveryNames(originalScope, emptySet())
+            index.observeRecoveryNames(unrelatedScope, setOf(unrelatedName))
+
+            assertEquals(listOf(transaction), index.forDirectory(originalScope).transactions())
+            assertEquals(emptyList(), index.forDirectory(unrelatedScope).transactions(setOf(unrelatedName)))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `uuid user parent remains traversable while relocated owned recovery is pruned`() {
         val root = Files.createTempDirectory("saf-download-ownership-uuid-parent-").toFile()
         try {
             val originalScope = "content://provider/tree/root/document/original"
             val uuidParentScope = "content://provider/tree/root/document/$SECOND_TOKEN"
-            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            val transaction = authenticatedRelocationTransaction()
             AndroidSafDownloadOwnershipStore(root).forDirectory(originalScope).add(transaction)
             val index = AndroidSafDownloadOwnershipStore(root).indexed()
 
@@ -246,5 +273,12 @@ class AndroidSafDownloadOwnershipIndexTest {
     private companion object {
         const val FIRST_TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
         const val SECOND_TOKEN = "fedcba98-7654-3210-fedc-ba9876543210"
+
+        fun authenticatedRelocationTransaction() = AndroidSafOwnedDownloadTransaction(
+            finalName = "Report.txt",
+            token = FIRST_TOKEN,
+            stageDocumentIdentity = "content://provider/document/stage",
+            stageContentIdentity = "sha256:${"a".repeat(64)}",
+        )
     }
 }

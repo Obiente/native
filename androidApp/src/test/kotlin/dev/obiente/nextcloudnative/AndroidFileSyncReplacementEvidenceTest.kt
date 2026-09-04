@@ -276,7 +276,7 @@ class AndroidFileSyncReplacementEvidenceTest {
             kind = SyncEntryKind.File,
             revision = "local-1",
             size = 65L * 1024L * 1024L,
-        ).withAndroidSafReplacementContentHash(contentHash)
+        ).withAndroidSafReplacementContentAuthentication(contentHash)
         val remote = RemoteSyncEntry(
             relativePath = "Archive.bin",
             kind = SyncEntryKind.File,
@@ -294,6 +294,45 @@ class AndroidFileSyncReplacementEvidenceTest {
         assertEquals(
             FileSyncDecisionReason.UnverifiedLocalContent,
             (operation as FileSyncOperation.NeedsDecision).reason,
+        )
+    }
+
+    @Test
+    fun `file replacement authentication stays out of sync change evidence`() {
+        val authentication = hash('4')
+        val local = LocalSyncEntry(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 4L,
+        ).withAndroidSafReplacementContentAuthentication(authentication)
+        val baseline = FileSyncBaseline(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            localRevision = "local-1",
+            remoteEtag = "remote-1",
+            contentHash = null,
+        )
+
+        val operation = planFileSync(
+            localEntries = listOf(local),
+            remoteEntries = emptyList(),
+            baselines = listOf(baseline),
+            configuration = FileSyncConfiguration(
+                deviceLabel = "Test device",
+                deletionPolicy = FileSyncDeletionPolicy.Propagate,
+            ),
+        ).operations.single()
+
+        assertNull(local.contentHash)
+        assertEquals(authentication, local.replacementAuthentication)
+        assertEquals(
+            FileSyncOperation.DeleteLocal("Archive.bin", expectedLocalRevision = "local-1"),
+            operation,
+        )
+        requireExpectedAndroidSafReplacement(
+            local,
+            listOf(evidence("Archive.bin", SyncEntryKind.File, authentication).copy(entry = local)),
         )
     }
 

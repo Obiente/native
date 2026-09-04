@@ -381,7 +381,10 @@ internal class AndroidSafDownloadPublisher<Document>(
     ): AndroidSafPublicationDocument<Document>? {
         val identity = transaction.stageDocumentIdentity ?: return null
         return documents.singleOrNull { document ->
-            document.documentIdentity == identity && document.displayName != transaction.finalName
+            document.documentIdentity == identity &&
+                document.displayName != transaction.finalName &&
+                (transaction.stageContentIdentity == null ||
+                    contentIdentity(document.document) == transaction.stageContentIdentity)
         }
     }
 

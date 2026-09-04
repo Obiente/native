@@ -269,6 +269,30 @@ class AndroidSafDownloadStageIdentityTest {
     }
 
     @Test
+    fun `changed owned stage content is preserved and revealed`() {
+        val directory = FakeSafDirectory()
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val stage = directory.addFile(initial.stageName, byteArrayOf(16, 17))
+        val transaction = initial.copy(
+            stageDocumentIdentity = stage.toString(),
+            stageContentIdentity = directory.contentIdentity(stage),
+        )
+        directory.ownership.add(transaction)
+        directory.entryNamed(transaction.stageName).bytes = byteArrayOf(18, 19)
+
+        publisher(directory).reconcile()
+
+        assertEquals(0, directory.deleteCalls)
+        assertContentEquals(byteArrayOf(18, 19), directory.entryNamed(transaction.stageName).bytes)
+        assertEquals(
+            listOf(transaction.stageName),
+            publisher(directory).visibleDocuments().map { it.displayName },
+        )
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
+    }
+
+    @Test
     fun `restart retires an authenticated stage that never reached publication`() {
         val initial = AndroidSafOwnedDownloadTransaction(
             finalName = "Report.txt",

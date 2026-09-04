@@ -77,13 +77,16 @@ internal class AndroidSafDownloadOwnershipStore(
                 val references = buildList {
                     referencesByScope[scope].orEmpty().filterTo(this) { reference ->
                         val observedScopes = observedScopesByToken[reference.token].orEmpty()
-                        observedScopes.isEmpty() || scope in observedScopes
+                        observedScopes.isEmpty() ||
+                            scope in observedScopes ||
+                            !indexedRow(reference).transaction.hasAuthenticatedRelocatedStageEvidence()
                     }
                     tokens.mapNotNullTo(this) { token -> referencesByToken[token] }
                 }.distinctBy { reference -> reference.token }
                 references.map(::indexedRow).filter { row ->
                     row.scope == scope ||
-                        row.transaction.token in tokens
+                        row.transaction.token in tokens &&
+                        row.transaction.hasAuthenticatedRelocatedStageEvidence()
                 }.map(StoredOwnershipRow::transaction)
                     .sortedWith(compareBy(AndroidSafOwnedDownloadTransaction::finalName).thenBy { it.token })
             }
@@ -148,6 +151,9 @@ internal class AndroidSafDownloadOwnershipStore(
         }
     }
 
+    private fun AndroidSafOwnedDownloadTransaction.hasAuthenticatedRelocatedStageEvidence(): Boolean =
+        stageDocumentIdentity != null && stageContentIdentity != null
+
     private inner class ScopedOwnership(
         private val scope: String,
     ) : AndroidSafDownloadOwnership {
@@ -158,7 +164,8 @@ internal class AndroidSafDownloadOwnershipStore(
             ownershipRows(scope, tokens)
                 .filter { row ->
                     row.scope == scope ||
-                        row.transaction.token in tokens
+                        row.transaction.token in tokens &&
+                        row.transaction.hasAuthenticatedRelocatedStageEvidence()
                 }
                 .map(StoredOwnershipRow::transaction)
                 .sortedWith(compareBy(AndroidSafOwnedDownloadTransaction::finalName).thenBy { it.token })

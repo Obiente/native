@@ -29,9 +29,11 @@ internal fun AndroidLocalSyncDocument.androidSafReplacementEvidence(
     contentHash = contentHash,
 )
 
-internal fun LocalSyncEntry.withAndroidSafReplacementContentHash(contentHash: String?): LocalSyncEntry = copy(
-    contentHash = contentHash,
-    contentIdentityUnverified = contentHash == null,
+internal fun LocalSyncEntry.withAndroidSafReplacementContentAuthentication(
+    contentHash: String?,
+): LocalSyncEntry = copy(
+    replacementAuthentication = contentHash,
+    contentIdentityUnverified = contentIdentityUnverified || contentHash == null,
     replacementContentIdentityUnavailable = contentHash == null,
 )
 
@@ -130,10 +132,10 @@ internal fun requireExpectedAndroidSafReplacement(
             require(root.entry.revision == expected.revision) {
                 "The local file changed after the sync scan."
             }
-            requireNotNull(expected.contentHash) {
+            requireNotNull(expected.replacementAuthentication) {
                 "The local file needs exact content verification before replacement."
             }
-            require(root.contentHash == expected.contentHash) {
+            require(root.contentHash == expected.replacementAuthentication) {
                 "The local file content changed after the sync scan."
             }
         }
@@ -249,7 +251,7 @@ internal fun strengthenAndroidSafReplacementEntries(
         if (root.entry.kind == SyncEntryKind.File) {
             val hash = exactHash(root)
             strengthened[path] = root.copy(
-                entry = root.entry.withAndroidSafReplacementContentHash(hash),
+                entry = root.entry.withAndroidSafReplacementContentAuthentication(hash),
             )
         } else {
             val documentsToHash = scopedPaths.map { scopedPath -> requireNotNull(scanned[scopedPath]) }

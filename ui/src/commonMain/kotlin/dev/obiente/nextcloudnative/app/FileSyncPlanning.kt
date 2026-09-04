@@ -83,7 +83,6 @@ data class LocalSyncEntry(
                 contentIdentityUnverified,
         )
         require(!replacementContentIdentityUnavailable || contentHash == null)
-        require(replacementAuthentication == null || kind == SyncEntryKind.Directory)
         require(
             replacementAuthentication == null ||
                 replacementAuthentication.isNotBlank() &&

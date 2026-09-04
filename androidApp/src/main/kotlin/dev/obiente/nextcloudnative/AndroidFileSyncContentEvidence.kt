@@ -75,6 +75,9 @@ internal fun verifyAndroidRemoteDeletionContent(
         ) {
             return@map entry
         }
+        if (entry.replacementContentIdentityUnavailable) {
+            return@map entry
+        }
         if (baseline.contentHash == null) {
             return@map entry.copy(contentIdentityUnverified = true)
         }

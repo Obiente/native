@@ -877,6 +877,7 @@ class AndroidSafDownloadPublicationTest {
                 backupDocumentIdentity = "content://provider/document/original",
                 stageDocumentIdentity = "content://provider/document/stage",
                 backupContentIdentity = "sha256:${"a".repeat(64)}",
+                stageContentIdentity = "sha256:${"b".repeat(64)}",
             )
             AndroidSafDownloadOwnershipStore(root).forDirectory("content://provider/tree/root/document/one")
                 .add(transaction)

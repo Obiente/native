@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 class FileSyncUnverifiedReplacementTest {
     @Test
-    fun `directory replacement authentication survives coordinator persistence`() {
+    fun `replacement authentication survives coordinator persistence`() {
         val authentication = "saf-tree-sha256:${"a".repeat(64)}"
         val local = LocalSyncEntry(
             relativePath = "Archive",
@@ -33,6 +33,24 @@ class FileSyncUnverifiedReplacementTest {
 
         assertEquals(authentication, restored.pair().workItems.single().observedLocal?.replacementAuthentication)
         assertEquals("saf-directory-1", restored.pair().workItems.single().observedLocal?.revision)
+
+        val file = local.copy(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "saf-file-1",
+            size = 4L,
+            replacementAuthentication = "sha256:${"b".repeat(64)}",
+        )
+        val fileRemote = remote.copy(relativePath = "Archive.bin")
+        val fileRestored = decodeFileSyncCoordinatorSnapshot(
+            encodeFileSyncCoordinatorSnapshot(
+                scanFileSyncPair(state(), PAIR_ID, listOf(file), listOf(fileRemote), nowEpochMillis = 2L),
+            ),
+        )
+        assertEquals(
+            file.replacementAuthentication,
+            fileRestored.pair().workItems.single().observedLocal?.replacementAuthentication,
+        )
     }
 
     @Test
