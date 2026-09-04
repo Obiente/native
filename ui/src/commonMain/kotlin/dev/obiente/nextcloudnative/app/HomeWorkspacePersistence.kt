@@ -2,6 +2,9 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.runtime.Composable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -28,6 +31,19 @@ internal enum class PersistencePromotionResult {
     Saved,
     CanonicalAlreadyPresent,
     Failed,
+}
+
+internal class HomeWorkspaceLayoutLoadCoordinator(
+    private val loadLayout: () -> HomeWorkspaceLayoutLoad,
+) {
+    var state: HomeWorkspaceLayoutLoad? = null
+        private set
+
+    suspend fun load(dispatcher: CoroutineDispatcher = Dispatchers.Default): HomeWorkspaceLayoutLoad {
+        val loaded = withContext(dispatcher) { loadLayout() }
+        state = loaded
+        return loaded
+    }
 }
 
 internal class HomeWorkspaceLayoutRepository(

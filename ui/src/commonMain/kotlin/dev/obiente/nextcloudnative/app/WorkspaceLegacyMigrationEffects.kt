@@ -55,21 +55,28 @@ internal fun rememberMigratedHomeWorkspaceLayoutState(
     scope: HomeWorkspaceScope,
     legacyAccountScopeDigest: String?,
 ): HomeWorkspaceLayoutCompositionState {
-    val loaded = remember(scope, legacyAccountScopeDigest) {
-        repository.loadWithMigration(scope, legacyAccountScopeDigest)
-    }
-    val layout = remember(scope, legacyAccountScopeDigest) { mutableStateOf(loaded.layout) }
-    val authoritative = remember(scope, legacyAccountScopeDigest) {
-        mutableStateOf(loaded.storageAuthoritative)
-    }
-    LaunchedEffect(scope, loaded.legacyMigrationRequired) {
-        if (loaded.legacyMigrationRequired) {
-            val resolved = withContext(Dispatchers.Default) {
-                repository.resolveLegacyMigration(loaded)
-            }
-            layout.value = resolved.layout
-            authoritative.value = resolved.storageAuthoritative
+    val coordinator = remember(repository, scope, legacyAccountScopeDigest) {
+        HomeWorkspaceLayoutLoadCoordinator {
+            repository.loadWithMigration(scope, legacyAccountScopeDigest)
         }
+    }
+    val layout = remember(scope, legacyAccountScopeDigest) {
+        mutableStateOf(defaultHomeWorkspaceLayout(scope))
+    }
+    val authoritative = remember(scope, legacyAccountScopeDigest) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(coordinator) {
+        val initial = coordinator.load()
+        val result = if (initial.legacyMigrationRequired) {
+            withContext(Dispatchers.Default) {
+                repository.resolveLegacyMigration(initial)
+            }
+        } else {
+            initial
+        }
+        layout.value = result.layout
+        authoritative.value = result.storageAuthoritative
     }
     return HomeWorkspaceLayoutCompositionState(layout, authoritative)
 }
