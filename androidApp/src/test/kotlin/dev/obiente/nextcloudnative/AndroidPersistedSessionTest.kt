@@ -101,6 +101,24 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun clearingRecoveredIndependentStateRemovesOnlyItsActiveAccount() {
+        val first = firstSession()
+        val second = secondSession()
+        val recovered = requireNotNull(
+            AndroidAccountCredentialState.Empty
+                .upsertAndSelect(first)
+                .upsertAndSelect(second)
+                .select(first.accountId),
+        )
+
+        val cleared = removeActiveAndroidAccountCredentialState(recovered)
+
+        assertNull(cleared.activeSession)
+        assertEquals(listOf(second.accountRecord()), cleared.registry.accounts)
+        assertEquals(second, cleared.sessions[second.accountId])
+    }
+
+    @Test
     fun retainedAccountResolutionRejectsMismatchedCredential() {
         val first = firstSession()
         val second = secondSession()
