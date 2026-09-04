@@ -466,6 +466,37 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `startup scheduling retries when uploader construction is temporarily unavailable`() {
+        var constructions = 0
+        val waits = mutableListOf<Long>()
+        var diagnostics = 0
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                keepRetryingQueuedDurableUploadScheduling(
+                    followUpDelayMillis = 100L,
+                    reconcile = {
+                        constructAndReconcileQueuedDurableUploads {
+                            constructions += 1
+                            when (constructions) {
+                                1 -> throw IOException("Synthetic keystore initialization failure")
+                                2 -> suspend { true }
+                                else -> suspend { throw CancellationException("Lifecycle stopped") }
+                            }
+                        }
+                    },
+                    wait = waits::add,
+                    recordRecoveryFailure = { diagnostics += 1 },
+                )
+            }
+        }
+
+        assertEquals(3, constructions)
+        assertEquals(listOf(100L, 100L), waits)
+        assertEquals(1, diagnostics)
+    }
+
+    @Test
     fun `cancellation after persistence propagates without discarding restart state`() {
         val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
         val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()

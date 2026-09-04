@@ -4,6 +4,19 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import kotlinx.coroutines.CancellationException
 
+internal suspend fun constructAndReconcileQueuedDurableUploads(
+    createReconciler: () -> suspend () -> Boolean,
+): Boolean {
+    val reconcile = try {
+        createReconciler()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        throw AndroidDurableMultipartUploadRecoveryException(failure)
+    }
+    return reconcile()
+}
+
 internal suspend fun reconcileQueuedDurableUploads(
     jobs: List<AndroidDurableMultipartUploadJob>,
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
@@ -19,19 +32,6 @@ internal suspend fun reconcileQueuedDurableUploads(
         }
     }
     return allScheduled
-}
-
-internal suspend fun constructAndReconcileQueuedDurableUploads(
-    createReconciler: () -> suspend () -> Boolean,
-): Boolean {
-    val reconcile = try {
-        createReconciler()
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (failure: Exception) {
-        throw AndroidDurableMultipartUploadRecoveryException(failure)
-    }
-    return reconcile()
 }
 
 internal suspend fun retryQueuedDurableUploadScheduling(
@@ -65,9 +65,8 @@ internal suspend fun keepRetryingQueuedDurableUploadScheduling(
         } catch (_: AndroidDurableMultipartUploadRecoveryException) {
             false
         }
-        if (recovered) {
-            recoveryFailureReported = false
-        } else if (!recoveryFailureReported) {
+        if (recovered) return
+        if (!recoveryFailureReported) {
             runCatching(recordRecoveryFailure)
             recoveryFailureReported = true
         }
