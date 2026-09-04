@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.prefs.Preferences
+import kotlinx.coroutines.CancellationException
 
 internal fun requireDesktopAccountRemovalReady(accountId: String, linuxDesktop: Boolean) {
     if (linuxDesktop) {
@@ -42,6 +43,8 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     if (!removed) return false
     try {
         removeSyncPairs()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
         runCatching { recordCleanupFailure(failure) }
     }

@@ -203,6 +203,24 @@ class AndroidFileSyncStoreTest {
         }
     }
 
+    @Test
+    fun `owned uploads block account removal before pair deletion`() {
+        val accountPair = pair().copy(
+            pendingUploadCleanups = listOf(
+                FileSyncPendingUploadCleanup(
+                    uploadId = "01234567-89ab-cdef-0123-456789abcdef",
+                    relativePath = "Archive/large.bin",
+                ),
+            ),
+        )
+        val state = AndroidFileSyncPersistedState(FileSyncCoordinatorState(listOf(accountPair)))
+
+        assertFailsWith<IllegalArgumentException> {
+            requireAndroidFileSyncAccountRemovalReady(state, accountPair.accountId)
+        }
+        assertEquals(listOf(accountPair), state.coordinator.pairs)
+    }
+
     private fun pair() = FileSyncPair(
         id = "pair-1",
         accountId = "account-1",
