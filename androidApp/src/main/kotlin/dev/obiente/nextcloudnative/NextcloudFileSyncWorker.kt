@@ -208,8 +208,10 @@ internal fun isAndroidFileSyncScheduleRestorationCurrent(
     session: NextcloudSession,
 ): Boolean = NextcloudDocumentIds.accountKey(session) == expectedAccountId
 
-internal fun scheduleRestorationFailureDisposition(runAttemptCount: Int): BackgroundSyncWorkerDisposition =
-    backgroundSyncFailureDisposition(runAttemptCount)
+internal fun scheduleRestorationFailureDisposition(runAttemptCount: Int): BackgroundSyncWorkerDisposition {
+    require(runAttemptCount >= 0)
+    return BackgroundSyncWorkerDisposition.Retry
+}
 
 internal fun syncConflictNotificationDetail(conflictCount: Int): String {
     require(conflictCount > 0)

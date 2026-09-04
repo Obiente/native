@@ -3718,7 +3718,7 @@ class DesktopNextcloudServices(
         session
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        accountOperationGuard.serializeWhenSyncIdle {
+        val persistedSession = accountOperationGuard.serializeWhenSyncIdle {
             sessionPublicationGuard.serialize {
                 val activeAccountId = accountCredentials.activeAccountId()
                 val activeSession = activeAccountId?.let(accountCredentials::loadSession)
@@ -3728,12 +3728,12 @@ class DesktopNextcloudServices(
                     !invalidatesLiveResources || !hasLiveAccountResources(),
                     ::recordSupportDiagnostic,
                 )
-                accountCredentials.saveSession(session)
-                accountSessionPublication.publish(session)
+                accountCredentials.saveSession(session).also(accountSessionPublication::publish)
             }
-            synchronized(fileRangeSessionLock) { sessionClearing = false }
-            startDesktopSyncLifecycle()
         }
+        synchronized(fileRangeSessionLock) { sessionClearing = false }
+        startDesktopSyncLifecycle()
+        persistedSession
     }
     override fun listAccounts() = sessionPublicationGuard.serialize(accountCredentials::listAccounts)
     override fun activeAccountId() = sessionPublicationGuard.serialize(accountCredentials::activeAccountId)

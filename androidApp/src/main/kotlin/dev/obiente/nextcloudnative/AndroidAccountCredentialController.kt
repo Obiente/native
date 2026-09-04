@@ -79,25 +79,27 @@ internal class AndroidAccountCredentialController(
             session.also(registerSessionPrivateValues)
         }
 
-    suspend fun saveSession(session: NextcloudSession) = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
-        registerSessionPrivateValues(session)
-        when (val read = readStore()) {
-            is AndroidAccountCredentialStoreRead.Available ->
-                replaceActiveState(read.state.upsertAndSelect(session), read.state.activeSession)
-            is AndroidAccountCredentialStoreRead.Invalid -> {
-                val retained = readIndependentCredentialSlotState()
-                check(retained != null || !hasIndependentCredentialState()) {
-                    "The aggregate account credential store is invalid; reset it before signing in again."
+    suspend fun saveSession(session: NextcloudSession): NextcloudSession =
+        ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
+            registerSessionPrivateValues(session)
+            when (val read = readStore()) {
+                is AndroidAccountCredentialStoreRead.Available ->
+                    replaceActiveState(read.state.upsertAndSelect(session), read.state.activeSession)
+                is AndroidAccountCredentialStoreRead.Invalid -> {
+                    val retained = readIndependentCredentialSlotState()
+                    check(retained != null || !hasIndependentCredentialState()) {
+                        "The aggregate account credential store is invalid; reset it before signing in again."
+                    }
+                    replaceActiveState(
+                        replacement = (retained ?: AndroidAccountCredentialState.Empty).upsertAndSelect(session),
+                        previousSession = retained?.activeSession,
+                        suspectEncrypted = read.encrypted,
+                    )
                 }
-                replaceActiveState(
-                    replacement = (retained ?: AndroidAccountCredentialState.Empty).upsertAndSelect(session),
-                    previousSession = retained?.activeSession,
-                    suspectEncrypted = read.encrypted,
-                )
+                is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
             }
-            is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
+            requireNotNull(loadSession(session.accountId))
         }
-    }
 
     suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {

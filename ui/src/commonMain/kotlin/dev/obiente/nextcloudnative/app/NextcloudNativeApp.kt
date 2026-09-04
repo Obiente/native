@@ -574,8 +574,7 @@ fun NextcloudNativeApp(
                     LoginScreen(
                         services = services,
                         onLoggedIn = { authenticated ->
-                            services.saveSession(authenticated)
-                            session = authenticated
+                            session = services.saveSession(authenticated)
                         },
                     )
                 }

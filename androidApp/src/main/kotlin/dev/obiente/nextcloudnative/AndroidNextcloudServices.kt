@@ -951,7 +951,8 @@ internal class AndroidNextcloudServices(
             deckCardDrafts.migrateLegacyEntries(session)
         }
 
-    override suspend fun saveSession(session: NextcloudSession) = accountCredentials.saveSession(session)
+    override suspend fun saveSession(session: NextcloudSession): NextcloudSession =
+        accountCredentials.saveSession(session)
 
     override fun listAccounts() = accountCredentials.listAccounts()
 

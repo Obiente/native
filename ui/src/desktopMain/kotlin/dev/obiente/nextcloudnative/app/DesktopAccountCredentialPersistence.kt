@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.prefs.Preferences
+import kotlinx.coroutines.CancellationException
 
 internal class DesktopAccountCredentialPersistence(
     private val preferences: Preferences,
@@ -9,6 +10,7 @@ internal class DesktopAccountCredentialPersistence(
     private val flushPreferences: () -> Unit = preferences::flush,
 ) {
     fun loadActiveSession(): NextcloudSession? {
+        retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry == null) {
             return restoreLegacySession(read.encoded != null)
@@ -18,6 +20,7 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun listAccounts(): List<NextcloudAccountRecord> {
+        retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry != null) return read.registry.accounts
         val legacy = restoreLegacySession(read.encoded != null)
@@ -25,12 +28,14 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun activeAccountId(): NextcloudAccountId? {
+        retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry != null) return read.registry.activeAccountId
         return restoreLegacySession(read.encoded != null)?.accountId
     }
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? {
+        retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return null
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return null
         val secret = loadSecret(desktopAccountSecretReference(accountId))
@@ -45,7 +50,8 @@ internal class DesktopAccountCredentialPersistence(
         return legacy
     }
 
-    fun saveSession(session: NextcloudSession) {
+    fun saveSession(session: NextcloudSession): NextcloudSession {
+        retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         val registry = read.registry
             ?: restoreLegacySession(read.encoded != null)?.let { requireNotNull(readRegistry().registry) }
@@ -82,9 +88,11 @@ internal class DesktopAccountCredentialPersistence(
             }
             throw failure
         }
+        return persistedSession
     }
 
     fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? {
+        retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return null
         val session = loadSession(accountId) ?: return null
         val selected = requireNotNull(registry.select(accountId))
@@ -93,6 +101,7 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     fun removeAccount(accountId: NextcloudAccountId): Boolean {
+        retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return false
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return false
         val clearLegacyCredential = legacyMetadataMatches(record)
@@ -123,7 +132,11 @@ internal class DesktopAccountCredentialPersistence(
         try {
             val encodedRegistry = prepareRegistry(restored.registry)
             saveSecret(legacy)
-            persistAccountState(encodedRegistry, restored.registry.activeAccount)
+            persistAccountState(
+                encodedRegistry,
+                restored.registry.activeAccount,
+                pendingLegacyCleanup = legacy,
+            )
         } catch (failure: Exception) {
             recordCredentialDiagnostic(
                 code = "ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED",
@@ -144,18 +157,94 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun migrateLegacyCredential(session: NextcloudSession) {
+        persistPendingLegacyCredentialCleanup(session)
         saveSecret(session)
         clearLegacyCredentialAfterMigration(session)
     }
 
     private fun clearLegacyCredentialAfterMigration(session: NextcloudSession) {
-        try {
-            secretStore.clear(desktopSessionSecretReference(session.serverUrl, session.loginName))
+        retryPendingLegacyCredentialCleanup(session)
+    }
+
+    private fun retryPendingLegacyCredentialCleanup(expected: NextcloudSession? = null) {
+        val server = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null)
+        val login = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null)
+        if (server == null && login == null) return
+        if (server.isNullOrBlank() || login.isNullOrBlank()) {
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED",
+                "account-credentials.migrate",
+            )
+            return
+        }
+        if (expected != null && (expected.serverUrl != server || expected.loginName != login)) return
+        val replacementAvailable = try {
+            val accountId = deriveNextcloudAccountId(server, login)
+            loadSecret(desktopAccountSecretReference(accountId)) != null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED",
                 "account-credentials.migrate",
             )
+            false
+        }
+        if (!replacementAvailable) return
+        try {
+            secretStore.clear(desktopSessionSecretReference(server, login))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED",
+                "account-credentials.migrate",
+            )
+            return
+        }
+        try {
+            preferences.remove(KEY_PENDING_LEGACY_CLEANUP_SERVER)
+            preferences.remove(KEY_PENDING_LEGACY_CLEANUP_LOGIN)
+            flushPreferences()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, server)
+            preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, login)
+            try {
+                flushPreferences()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The in-memory marker remains available for another retry in this process.
+            }
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED",
+                "account-credentials.migrate",
+            )
+        }
+    }
+
+    private fun persistPendingLegacyCredentialCleanup(session: NextcloudSession) {
+        val previousServer = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null)
+        val previousLogin = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null)
+        try {
+            preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, session.serverUrl)
+            preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, session.loginName)
+            flushPreferences()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_SERVER, previousServer)
+            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_LOGIN, previousLogin)
+            try {
+                flushPreferences()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The next load will retry from the last durable marker state.
+            }
+            throw DesktopSecretDeletionRecoveryUnavailableException(failure)
         }
     }
 
@@ -176,9 +265,17 @@ internal class DesktopAccountCredentialPersistence(
         secretStore.load(reference)
             ?.decodeToString()
             ?.takeIf(String::isNotBlank)
-    } catch (_: Exception) {
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: NextcloudSessionStorageUnavailableException) {
         recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_STORE_READ_FAILED", "account-credentials.restore")
-        null
+        throw failure
+    } catch (failure: Exception) {
+        recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_STORE_READ_FAILED", "account-credentials.restore")
+        throw DesktopSecretStoreUnavailableException(
+            "The desktop secure credential store could not be read.",
+            cause = failure,
+        )
     }
 
     private fun loadSecretForRollback(reference: DesktopSecretReference): ByteArray? = try {
@@ -216,17 +313,24 @@ internal class DesktopAccountCredentialPersistence(
     private fun persistAccountState(
         encodedRegistry: String,
         activeAccount: NextcloudAccountRecord?,
+        pendingLegacyCleanup: NextcloudSession? = null,
     ) {
         require(encodedRegistry.length <= Preferences.MAX_VALUE_LENGTH)
         val previous = DesktopAccountPreferenceSnapshot(
             registry = preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null),
             server = preferences.get(KEY_SERVER, null),
             login = preferences.get(KEY_LOGIN, null),
+            pendingLegacyCleanupServer = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null),
+            pendingLegacyCleanupLogin = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null),
         )
         try {
             preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodedRegistry)
             preferences.putOrRemove(KEY_SERVER, activeAccount?.serverUrl)
             preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
+            pendingLegacyCleanup?.let { session ->
+                preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, session.serverUrl)
+                preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, session.loginName)
+            }
             flushPreferences()
         } catch (failure: Exception) {
             previous.restore(preferences)
@@ -275,17 +379,23 @@ internal class DesktopAccountCredentialPersistence(
         val registry: String?,
         val server: String?,
         val login: String?,
+        val pendingLegacyCleanupServer: String?,
+        val pendingLegacyCleanupLogin: String?,
     ) {
         fun restore(preferences: Preferences) {
             preferences.putOrRemove(DESKTOP_ACCOUNT_REGISTRY_KEY, registry)
             preferences.putOrRemove(KEY_SERVER, server)
             preferences.putOrRemove(KEY_LOGIN, login)
+            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_SERVER, pendingLegacyCleanupServer)
+            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_LOGIN, pendingLegacyCleanupLogin)
         }
     }
 
     private companion object {
         const val KEY_SERVER = "server"
         const val KEY_LOGIN = "login"
+        const val KEY_PENDING_LEGACY_CLEANUP_SERVER = "accountLegacyCleanupServer"
+        const val KEY_PENDING_LEGACY_CLEANUP_LOGIN = "accountLegacyCleanupLogin"
     }
 }
 
