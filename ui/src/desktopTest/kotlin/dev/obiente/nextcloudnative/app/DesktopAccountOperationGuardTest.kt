@@ -414,4 +414,24 @@ class DesktopAccountOperationGuardTest {
 
         assertEquals(listOf("cleared", "remove"), events)
     }
+
+    @Test
+    fun committedInactiveRemovalSurvivesSyncPairCleanupFailure() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val removed = removeDesktopAccountBeforeSyncPairCleanup(
+            removeCredential = {
+                events += "remove-credential"
+                true
+            },
+            removeSyncPairs = {
+                events += "remove-pairs"
+                error("synthetic pair cleanup failure")
+            },
+            recordCleanupFailure = { events += "diagnose-cleanup" },
+        )
+
+        assertTrue(removed)
+        assertEquals(listOf("remove-credential", "remove-pairs", "diagnose-cleanup"), events)
+    }
 }
