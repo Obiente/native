@@ -303,7 +303,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 )
             }
             val ownedUploads = fileSyncOwnedUploads(pair)
-            val remote = androidFileSyncOwnedRemoteTree(session, userId, pair, webDav)
+            val remote = androidFileSyncOwnedRemoteTree(session, userId, pair, webDav, context = appContext)
             val cleanupResult = cleanupJvmFileSyncOwnedUploads(
                 remote, current.coordinator, pairId, ownedUploads,
             )
@@ -401,7 +401,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
         val remote = androidFileSyncOwnedRemoteTree(
             session, userId, initialPair, webDav,
-            transferCancellation = transferCancellation,
+            transferCancellation = transferCancellation, context = appContext,
         )
         val cleanupResult = cleanupJvmFileSyncOwnedUploads(
             remote, persisted.coordinator, pairId, initialPair.pendingUploadCleanups,

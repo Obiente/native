@@ -7,6 +7,8 @@ import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
 import java.io.File
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -145,16 +147,65 @@ class AndroidVirtualFileCacheInstrumentedTest {
                 .toString(),
         )
 
+        var blockedMutationRan = false
         org.junit.Assert.assertThrows(IllegalStateException::class.java) {
             withNoBlockingAndroidDocumentWriteback(context, session, "Projects/Active") {
-                error("The blocked mutation must not run.")
+                blockedMutationRan = true
             }
         }
+        org.junit.Assert.assertFalse(blockedMutationRan)
         var unrelatedMutationRan = false
         withNoBlockingAndroidDocumentWriteback(context, session, "Projects/Archive") {
             unrelatedMutationRan = true
         }
         org.junit.Assert.assertTrue(unrelatedMutationRan)
+    }
+
+    @Test
+    fun processRestoredWritebackBlocksFileSyncRemoteDeletion() {
+        MockWebServer().use { server ->
+            server.start()
+            val syncSession = session.copy(serverUrl = server.url("/").toString())
+            val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
+            val stage = File(recovery, "writeback-sync-guard.stage").apply { writeText("local edit") }
+            File(recovery, stage.name + ".json").writeText(
+                JSONObject()
+                    .put("version", 1)
+                    .put("account", NextcloudDocumentIds.accountKey(syncSession))
+                    .put("path", "Projects/Active/notes.txt")
+                    .put("etag", "\"v1\"")
+                    .put("displayName", "notes.txt")
+                    .put("stage", stage.name)
+                    .put("startedAt", 10L)
+                    .put("ready", true)
+                    .toString(),
+            )
+            server.enqueue(
+                MockResponse.Builder().code(207).body(
+                    """
+                    <d:multistatus xmlns:d="DAV:"><d:response>
+                      <d:href>/remote.php/dav/files/virtual-cache-fixture/Projects/Active/notes.txt</d:href>
+                      <d:propstat><d:prop><d:displayname>notes.txt</d:displayname>
+                        <d:getetag>"v1"</d:getetag><d:getcontentlength>10</d:getcontentlength>
+                        <d:resourcetype/>
+                      </d:prop></d:propstat>
+                    </d:response></d:multistatus>
+                    """.trimIndent(),
+                ).build(),
+            )
+            val remote = AndroidFileSyncRemoteTree(
+                session = syncSession,
+                userId = "virtual-cache-fixture",
+                remoteRootPath = "",
+                webDav = NextcloudDocumentWebDav(),
+                documentWritebackContext = context,
+            )
+
+            org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+                remote.delete("Projects/Active/notes.txt", "\"v1\"")
+            }
+            assertEquals(1, server.requestCount)
+        }
     }
 
     @Test

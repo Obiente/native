@@ -346,6 +346,7 @@ internal class NextcloudDocumentWebDav(
         path: String,
         source: File,
         expectedEtag: String,
+        cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
     ): DocumentMutationResult {
         require(expectedEtag.isNotBlank()) { "An ETag is required for conflict-protected replacement." }
         val parent = NextcloudDocumentIds.parentPath(path)
@@ -353,9 +354,15 @@ internal class NextcloudDocumentWebDav(
         val stagingPath = if (parent.isBlank()) stagingName else "$parent/$stagingName"
         val stagingUrl = buildNextcloudFileUrl(session.serverUrl, userId, stagingPath)
         val destinationUrl = buildNextcloudFileUrl(session.serverUrl, userId, path)
-        val staged = createFile(session, userId, stagingPath, source)
-        val stagedEtag = staged.etag
+        var stagedEtag: String? = null
         try {
+            stagedEtag = createFile(
+                session = session,
+                userId = userId,
+                path = stagingPath,
+                source = source,
+                cancellation = cancellation,
+            ).etag
             val builder = requestBuilder(session, stagingUrl)
                 .header("Destination", destinationUrl)
                 .header("Overwrite", "T")
@@ -364,6 +371,7 @@ internal class NextcloudDocumentWebDav(
             return execute(
                 request = builder.method("MOVE", EMPTY_BODY).build(),
                 operation = "replace file",
+                cancellation = cancellation,
             )
         } catch (failure: Throwable) {
             runCatching { deleteOwnedStage(session, userId, stagingPath, stagedEtag) }
