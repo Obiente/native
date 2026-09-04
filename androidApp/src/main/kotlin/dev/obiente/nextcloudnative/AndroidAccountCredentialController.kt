@@ -95,18 +95,15 @@ internal class AndroidAccountCredentialController(
             val current = requireValidState()
             val session = current.sessions[accountId] ?: return@withLock false
             ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(session)) {
-                if (current.registry.activeAccountId == accountId) {
-                    clearSession(current)
-                } else {
-                    val replacement = current.remove(accountId)
-                    persistState(replacement)
-                    try {
-                        removeQueuedUploads(NextcloudDocumentIds.accountKey(session))
-                    } catch (failure: Exception) {
-                        runCatching { persistState(current) }
-                            .onFailure(failure::addSuppressed)
-                        throw failure
-                    }
+                val active = current.registry.activeAccountId == accountId
+                removeAndroidAccountCredentialData(
+                    active = active,
+                    removeQueuedUploads = { removeQueuedUploads(NextcloudDocumentIds.accountKey(session)) },
+                    clearActiveAccount = { clearSession(current) },
+                    persistInactiveRemoval = { persistState(current.remove(accountId)) },
+                    rollbackInactiveRemoval = { persistState(current) },
+                )
+                if (!active) {
                     clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(session))
                 }
             }
@@ -510,6 +507,31 @@ internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
         recordFailure()
     } finally {
         notifyDocumentRootsChanged()
+    }
+}
+
+internal suspend fun removeAndroidAccountCredentialData(
+    active: Boolean,
+    removeQueuedUploads: suspend () -> Unit,
+    clearActiveAccount: suspend () -> Unit,
+    persistInactiveRemoval: suspend () -> Unit,
+    rollbackInactiveRemoval: suspend () -> Unit,
+) {
+    if (active) {
+        removeQueuedUploads()
+        clearActiveAccount()
+        return
+    }
+
+    persistInactiveRemoval()
+    try {
+        removeQueuedUploads()
+    } catch (failure: Exception) {
+        withContext(NonCancellable) {
+            runCatching { rollbackInactiveRemoval() }
+                .onFailure(failure::addSuppressed)
+        }
+        throw failure
     }
 }
 
