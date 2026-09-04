@@ -367,10 +367,15 @@ internal fun linuxWritebackGrowthFitsCapacity(
 }
 
 internal fun defaultDesktopLinuxWritebackStore(session: NextcloudSession): DesktopLinuxVirtualFileWritebackStore {
+    return defaultDesktopLinuxWritebackStore(desktopFileCacheAccountId(session))
+}
+
+internal fun defaultDesktopLinuxWritebackStore(accountId: String): DesktopLinuxVirtualFileWritebackStore {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
     val xdgData = System.getenv("XDG_DATA_HOME")?.takeIf(String::isNotBlank)
     val dataRoot = xdgData?.let(::File) ?: File(System.getProperty("user.home"), ".local/share")
     return DesktopLinuxVirtualFileWritebackStore(
-        File(dataRoot, "nextcloud-native/vfs-writeback/${desktopFileCacheAccountId(session)}"),
+        File(dataRoot, "nextcloud-native/vfs-writeback/$accountId"),
     )
 }
 
