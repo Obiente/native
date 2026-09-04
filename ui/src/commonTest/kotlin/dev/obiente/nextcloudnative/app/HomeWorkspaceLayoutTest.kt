@@ -304,6 +304,7 @@ class HomeWorkspaceLayoutTest {
 
         assertEquals(currentScope, loaded.layout.scope)
         assertEquals(legacyLayout.sections, loaded.layout.sections)
+        assertFalse(loaded.storageAuthoritative)
         assertTrue(loaded.legacyMigrationRequired)
         assertEquals(defaultHomeWorkspaceLayout(currentScope), repository.load(currentScope))
         assertTrue(repository.save(loaded.layout))
@@ -323,8 +324,11 @@ class HomeWorkspaceLayoutTest {
         val newer = defaultHomeWorkspaceLayout(currentScope).hide(HomeSectionIds.Activity)
         assertTrue(repository.save(newer))
 
-        assertFalse(repository.saveIfAbsent(loaded.layout))
-        assertEquals(newer, repository.load(currentScope))
+        val resolved = repository.resolveLegacyMigration(loaded)
+
+        assertEquals(newer, resolved.layout)
+        assertTrue(resolved.storageAuthoritative)
+        assertFalse(resolved.legacyMigrationRequired)
     }
 
     @Test
@@ -376,6 +380,22 @@ class HomeWorkspaceLayoutTest {
             repository.load(currentScope, legacyAccountScopeDigest = legacyScope.accountScopeDigest)
         }
         assertEquals(null, storage.lastKey)
+    }
+
+    @Test
+    fun `failed legacy read leaves default layout non authoritative`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        storage.failedReadKey = legacyScope.persistenceKey
+
+        val loaded = repository.loadWithMigration(currentScope, legacyScope.accountScopeDigest)
+
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), loaded.layout)
+        assertFalse(loaded.storageAuthoritative)
+        assertFalse(loaded.legacyMigrationRequired)
+        assertEquals(null, storage.value(currentScope.persistenceKey))
     }
 
     @Test

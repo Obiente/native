@@ -29,32 +29,47 @@ internal fun rememberAppWorkspacePinsCompositionState(
     val authoritative = remember(accountScopeDigest) { mutableStateOf(false) }
     val loaded = remember(accountScopeDigest) { mutableStateOf<AppWorkspacePinsLoad?>(null) }
     LaunchedEffect(coordinator) {
-        val result = coordinator.load()
-        appIds.value = result.appIds
-        authoritative.value = if (result.legacyMigrationRequired) {
-            withContext(Dispatchers.Default) { repository.saveIfAbsent(accountScopeDigest, result.appIds) }
+        val initial = coordinator.load()
+        val result = if (initial.legacyMigrationRequired) {
+            withContext(Dispatchers.Default) {
+                repository.resolveLegacyMigration(accountScopeDigest, initial)
+            }
         } else {
-            result.storageAuthoritative
+            initial
         }
+        appIds.value = result.appIds
+        authoritative.value = result.storageAuthoritative
         loaded.value = result
     }
     return AppWorkspacePinsCompositionState(appIds, authoritative, loaded.value != null)
 }
 
+internal data class HomeWorkspaceLayoutCompositionState(
+    val layout: MutableState<HomeWorkspaceLayout>,
+    val storageAuthoritative: MutableState<Boolean>,
+)
+
 @Composable
-internal fun rememberMigratedHomeWorkspaceLayout(
+internal fun rememberMigratedHomeWorkspaceLayoutState(
     repository: HomeWorkspaceLayoutRepository,
     scope: HomeWorkspaceScope,
     legacyAccountScopeDigest: String?,
-): MutableState<HomeWorkspaceLayout> {
+): HomeWorkspaceLayoutCompositionState {
     val loaded = remember(scope, legacyAccountScopeDigest) {
         repository.loadWithMigration(scope, legacyAccountScopeDigest)
     }
     val layout = remember(scope, legacyAccountScopeDigest) { mutableStateOf(loaded.layout) }
+    val authoritative = remember(scope, legacyAccountScopeDigest) {
+        mutableStateOf(loaded.storageAuthoritative)
+    }
     LaunchedEffect(scope, loaded.legacyMigrationRequired) {
         if (loaded.legacyMigrationRequired) {
-            withContext(Dispatchers.Default) { repository.saveIfAbsent(loaded.layout) }
+            val resolved = withContext(Dispatchers.Default) {
+                repository.resolveLegacyMigration(loaded)
+            }
+            layout.value = resolved.layout
+            authoritative.value = resolved.storageAuthoritative
         }
     }
-    return layout
+    return HomeWorkspaceLayoutCompositionState(layout, authoritative)
 }
