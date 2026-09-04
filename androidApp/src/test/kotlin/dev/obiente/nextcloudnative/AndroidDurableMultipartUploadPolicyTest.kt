@@ -365,6 +365,49 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `credential recovery retries become terminal at the durable bound`() {
+        assertEquals(
+            DurableUploadCredentialDisposition.Retry,
+            durableUploadCredentialDisposition(runAttemptCount = 0),
+        )
+        assertEquals(
+            DurableUploadCredentialDisposition.Retry,
+            durableUploadCredentialDisposition(MAX_DURABLE_UPLOAD_CREDENTIAL_RETRIES - 1),
+        )
+        assertEquals(
+            DurableUploadCredentialDisposition.Fail,
+            durableUploadCredentialDisposition(MAX_DURABLE_UPLOAD_CREDENTIAL_RETRIES),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            durableUploadCredentialDisposition(runAttemptCount = -1)
+        }
+    }
+
+    @Test
+    fun `terminal credential recovery releases capability after durable failure`() {
+        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val events = mutableListOf<String>()
+
+        assertTrue(
+            failDurableUploadAfterCredentialRetries(
+                transitionToFailed = {
+                    events += "fail-job"
+                    job.copy(state = DurableUploadState.Failed)
+                },
+                releaseCapability = { failed -> events += "release:${failed.request.file.selectionId}" },
+            ),
+        )
+
+        assertEquals(listOf("fail-job", "release:${job.request.file.selectionId}"), events)
+        assertFalse(
+            failDurableUploadAfterCredentialRetries(
+                transitionToFailed = { null },
+                releaseCapability = { events += "unexpected-release" },
+            ),
+        )
+    }
+
+    @Test
     fun `account activation resumes only its queued uploads`() {
         val queuedForA = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
         val queuedForB = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)

@@ -17,6 +17,29 @@ internal sealed interface DurableUploadAccountRegistry {
     data object Unavailable : DurableUploadAccountRegistry
 }
 
+internal enum class DurableUploadCredentialDisposition {
+    Retry,
+    Fail,
+}
+
+internal fun durableUploadCredentialDisposition(runAttemptCount: Int): DurableUploadCredentialDisposition {
+    require(runAttemptCount >= 0)
+    return if (runAttemptCount < MAX_DURABLE_UPLOAD_CREDENTIAL_RETRIES) {
+        DurableUploadCredentialDisposition.Retry
+    } else {
+        DurableUploadCredentialDisposition.Fail
+    }
+}
+
+internal fun failDurableUploadAfterCredentialRetries(
+    transitionToFailed: () -> AndroidDurableMultipartUploadJob?,
+    releaseCapability: (AndroidDurableMultipartUploadJob) -> Unit,
+): Boolean {
+    val failed = transitionToFailed() ?: return false
+    releaseCapability(failed)
+    return true
+}
+
 internal fun queuedDurableUploadsForAccount(
     jobs: List<AndroidDurableMultipartUploadJob>,
     accountId: String,
@@ -65,3 +88,5 @@ internal fun resolveDurableUploadSessionWithRegistryRecovery(
     }
     return resolveDurableUploadSession(expectedAccountId, readRegistry(), loadSession)
 }
+
+internal const val MAX_DURABLE_UPLOAD_CREDENTIAL_RETRIES = 8
