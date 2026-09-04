@@ -200,7 +200,8 @@ internal fun reconcileSafDownloadsBeforePairRemoval(
     hasPendingRecovery: Boolean,
     reconcile: () -> Unit,
 ): Boolean {
-    if (!hasPersistedGrant) return !hasPendingRecovery
+    if (!hasPendingRecovery) return true
+    if (!hasPersistedGrant) return false
     return try {
         reconcile()
         true

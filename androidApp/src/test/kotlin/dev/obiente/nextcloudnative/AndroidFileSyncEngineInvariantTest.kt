@@ -329,6 +329,22 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun pairRemovalDoesNotTraverseALargeGrantedTreeWithoutPendingRecovery() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = true,
+            hasPendingRecovery = false,
+        ) {
+            reconciled = true
+            error("A tree without owned recovery rows must not be traversed")
+        }
+
+        assertTrue(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
     fun pairRemovalRetainsExpiredSafGrantPairWhileRecoveryIsPending() {
         var reconciled = false
 

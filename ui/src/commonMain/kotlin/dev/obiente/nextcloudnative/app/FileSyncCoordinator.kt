@@ -903,6 +903,10 @@ private fun requireBoundedWorkItem(work: FileSyncWorkItem) {
     require(work.relativePath.length <= MAX_FILE_SYNC_PATH_LENGTH)
     work.observedLocal?.let {
         require(it.revision.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH))
+        require(
+            it.replacementAuthentication == null ||
+                it.replacementAuthentication.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH),
+        )
     }
     work.observedRemote?.let {
         require(it.etag.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH))

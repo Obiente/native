@@ -63,6 +63,7 @@ data class LocalSyncEntry(
     val modifiedEpochMillis: Long? = null,
     val contentIdentityUnverified: Boolean = false,
     val replacementContentIdentityUnavailable: Boolean = false,
+    val replacementAuthentication: String? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
@@ -82,6 +83,13 @@ data class LocalSyncEntry(
                 contentIdentityUnverified,
         )
         require(!replacementContentIdentityUnavailable || contentHash == null)
+        require(replacementAuthentication == null || kind == SyncEntryKind.Directory)
+        require(
+            replacementAuthentication == null ||
+                replacementAuthentication.isNotBlank() &&
+                replacementAuthentication.length <= MAX_FILE_SYNC_REVISION_LENGTH &&
+                replacementAuthentication.none(Char::isISOControl),
+        )
     }
 }
 

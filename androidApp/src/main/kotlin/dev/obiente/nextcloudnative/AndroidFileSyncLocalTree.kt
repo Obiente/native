@@ -117,6 +117,7 @@ internal class AndroidSafFileSyncLocalTree(
             document = current,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = expectedContentHash,
+            expectedReplacementAuthentication = null,
             shouldContinue = shouldContinue,
         )
     }
@@ -273,6 +274,7 @@ internal class AndroidSafFileSyncLocalTree(
             path = path,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = null,
+            expectedReplacementAuthentication = null,
             shouldContinue = { !Thread.currentThread().isInterrupted },
         )
     }
@@ -281,6 +283,7 @@ internal class AndroidSafFileSyncLocalTree(
         path: String,
         expectedLocalRevision: String?,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
         shouldContinue: () -> Boolean,
     ) {
         val existing = resolve(path)
@@ -295,6 +298,7 @@ internal class AndroidSafFileSyncLocalTree(
                     document = requireNotNull(existing),
                     expectedLocalRevision = requireNotNull(expectedLocalRevision),
                     expectedContentHash = expectedContentHash,
+                    expectedReplacementAuthentication = expectedReplacementAuthentication,
                     shouldContinue = shouldContinue,
                 )
             }
@@ -306,6 +310,7 @@ internal class AndroidSafFileSyncLocalTree(
                 document = document,
                 expectedLocalRevision = requireNotNull(expectedLocalRevision),
                 expectedContentHash = expectedContentHash,
+                expectedReplacementAuthentication = expectedReplacementAuthentication,
                 shouldContinue = shouldContinue,
             )
         }
@@ -349,6 +354,7 @@ internal class AndroidSafFileSyncLocalTree(
             path = path,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = null,
+            expectedReplacementAuthentication = null,
             shouldContinue = { !Thread.currentThread().isInterrupted },
             write = write,
         )
@@ -358,6 +364,7 @@ internal class AndroidSafFileSyncLocalTree(
         path: String,
         expectedLocalRevision: String?,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
         shouldContinue: () -> Boolean,
         write: (OutputStream) -> Unit,
     ) {
@@ -372,6 +379,7 @@ internal class AndroidSafFileSyncLocalTree(
                 document = document,
                 expectedLocalRevision = requireNotNull(expectedLocalRevision),
                 expectedContentHash = expectedContentHash,
+                expectedReplacementAuthentication = expectedReplacementAuthentication,
                 shouldContinue = shouldContinue,
             )
         }
@@ -395,6 +403,7 @@ internal class AndroidSafFileSyncLocalTree(
             path = path,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = null,
+            expectedReplacementAuthentication = null,
             shouldContinue = { !Thread.currentThread().isInterrupted },
         )
     }
@@ -403,6 +412,7 @@ internal class AndroidSafFileSyncLocalTree(
         path: String,
         expectedLocalRevision: String,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
         shouldContinue: () -> Boolean,
     ) {
         requireDeletionContinuation(shouldContinue)
@@ -411,6 +421,7 @@ internal class AndroidSafFileSyncLocalTree(
             document = current,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = expectedContentHash,
+            expectedReplacementAuthentication = expectedReplacementAuthentication,
             shouldContinue = shouldContinue,
         )
         requireDeletionContinuation(shouldContinue)
@@ -495,6 +506,7 @@ internal class AndroidSafFileSyncLocalTree(
         document: AndroidLocalSyncDocument,
         expectedLocalRevision: String,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String?,
         shouldContinue: () -> Boolean,
     ): List<AndroidSafReplacementEvidence> {
         val snapshot = replacementSnapshot(document, shouldContinue)
@@ -502,6 +514,7 @@ internal class AndroidSafFileSyncLocalTree(
             expected = document.entry.copy(
                 revision = expectedLocalRevision,
                 contentHash = expectedContentHash,
+                replacementAuthentication = expectedReplacementAuthentication,
             ),
             actual = snapshot,
         )

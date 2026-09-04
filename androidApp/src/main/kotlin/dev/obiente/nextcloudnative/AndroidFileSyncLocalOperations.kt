@@ -93,6 +93,7 @@ internal interface AndroidFileSyncLocalTree {
         path: String,
         expectedLocalRevision: String?,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String? = null,
         shouldContinue: () -> Boolean,
     ) {
         if (!shouldContinue()) {
@@ -121,6 +122,7 @@ internal interface AndroidFileSyncLocalTree {
         path: String,
         expectedLocalRevision: String?,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String? = null,
         shouldContinue: () -> Boolean,
         write: (OutputStream) -> Unit,
     ) {
@@ -136,6 +138,7 @@ internal interface AndroidFileSyncLocalTree {
         path: String,
         expectedLocalRevision: String,
         expectedContentHash: String?,
+        expectedReplacementAuthentication: String? = null,
         shouldContinue: () -> Boolean,
     ) {
         if (!shouldContinue()) {

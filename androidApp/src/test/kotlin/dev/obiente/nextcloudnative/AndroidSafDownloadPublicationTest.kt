@@ -147,11 +147,12 @@ class AndroidSafDownloadPublicationTest {
 
         val before = androidSafReplacementRevision(listOf(folder, child))
         val edited = listOf(folder, child.copy(contentHash = "sha256:${"1".repeat(64)}"))
+        val authenticatedFolder = folder.entry.copy(replacementAuthentication = before)
 
-        requireExpectedAndroidSafReplacement(folder.entry.copy(revision = before), listOf(folder, child))
+        requireExpectedAndroidSafReplacement(authenticatedFolder, listOf(folder, child))
         assertNotEquals(before, androidSafReplacementRevision(edited))
         assertFailsWith<IllegalArgumentException> {
-            requireExpectedAndroidSafReplacement(folder.entry.copy(revision = before), edited)
+            requireExpectedAndroidSafReplacement(authenticatedFolder, edited)
         }
     }
 

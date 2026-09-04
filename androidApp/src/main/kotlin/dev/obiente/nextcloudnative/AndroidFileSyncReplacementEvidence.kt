@@ -39,7 +39,12 @@ internal fun LocalSyncEntry.withUnavailableAndroidSafReplacementIdentity(): Loca
     contentHash = null,
     contentIdentityUnverified = kind == SyncEntryKind.File,
     replacementContentIdentityUnavailable = true,
+    replacementAuthentication = null,
 )
+
+internal fun LocalSyncEntry.withAndroidSafReplacementAuthentication(
+    evidence: List<AndroidSafReplacementEvidence>,
+): LocalSyncEntry = copy(replacementAuthentication = androidSafReplacementRevision(evidence))
 
 internal fun requireUnchangedAndroidSafReplacement(
     expected: List<AndroidSafReplacementEvidence>?,
@@ -132,9 +137,15 @@ internal fun requireExpectedAndroidSafReplacement(
                 "The local file content changed after the sync scan."
             }
         }
-        SyncEntryKind.Directory -> require(
-            androidSafReplacementRevision(actual) == expected.revision,
-        ) { "The local folder content changed after the sync scan." }
+        SyncEntryKind.Directory -> {
+            require(root.entry.revision == expected.revision) {
+                "The local folder changed after the sync scan."
+            }
+            require(
+                expected.replacementAuthentication != null &&
+                    androidSafReplacementRevision(actual) == expected.replacementAuthentication,
+            ) { "The local folder content changed after the sync scan." }
+        }
     }
 }
 
@@ -143,6 +154,7 @@ internal fun hashAndroidSafReplacementContent(
     expectedBytes: Long?,
     shouldContinue: () -> Boolean,
 ): String {
+    require(expectedBytes == null || expectedBytes >= 0L)
     val digest = MessageDigest.getInstance("SHA-256")
     var bytesRead = 0L
     val buffer = ByteArray(64 * 1024)
@@ -150,9 +162,16 @@ internal fun hashAndroidSafReplacementContent(
         if (!shouldContinue() || Thread.currentThread().isInterrupted) {
             throw CancellationException("Local replacement verification cancelled.")
         }
-        val count = input.read(buffer)
+        val maximumRead = expectedBytes?.let { expected ->
+            val remaining = expected - bytesRead
+            if (remaining >= buffer.size) buffer.size else remaining.toInt() + 1
+        } ?: buffer.size
+        val count = input.read(buffer, 0, maximumRead)
         if (count < 0) break
         bytesRead = Math.addExact(bytesRead, count.toLong())
+        require(expectedBytes == null || bytesRead <= expectedBytes) {
+            "The local replacement item changed during content verification."
+        }
         digest.update(buffer, 0, count)
     }
     require(expectedBytes == null || expectedBytes == bytesRead) {
@@ -268,7 +287,7 @@ internal fun strengthenAndroidSafReplacementEntries(
             }
             if (evidence.size != scopedPaths.size) return@forEach
             strengthened[path] = root.copy(
-                entry = root.entry.copy(revision = androidSafReplacementRevision(evidence)),
+                entry = root.entry.withAndroidSafReplacementAuthentication(evidence),
             )
         }
     }
@@ -385,6 +404,7 @@ internal fun downloadAndroidFileSyncOperation(
             path = operation.relativePath,
             expectedLocalRevision = operation.expectedLocalRevision,
             expectedContentHash = work.observedLocal?.contentHash,
+            expectedReplacementAuthentication = work.observedLocal?.replacementAuthentication,
             shouldContinue = remote::shouldContinueTransfer,
         )
     } else {
@@ -395,6 +415,7 @@ internal fun downloadAndroidFileSyncOperation(
                     path = operation.relativePath,
                     expectedLocalRevision = operation.expectedLocalRevision,
                     expectedContentHash = work.observedLocal?.contentHash,
+                    expectedReplacementAuthentication = work.observedLocal?.replacementAuthentication,
                     shouldContinue = remote::shouldContinueTransfer,
                     write = write,
                 )
@@ -416,6 +437,7 @@ internal fun deleteAndroidFileSyncOperation(
         path = operation.relativePath,
         expectedLocalRevision = operation.expectedLocalRevision,
         expectedContentHash = work.observedLocal?.contentHash,
+        expectedReplacementAuthentication = work.observedLocal?.replacementAuthentication,
         shouldContinue = remote::shouldContinueTransfer,
     )
 }

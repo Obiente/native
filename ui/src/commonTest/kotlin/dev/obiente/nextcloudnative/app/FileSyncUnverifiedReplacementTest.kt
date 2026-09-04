@@ -7,6 +7,35 @@ import kotlin.test.assertTrue
 
 class FileSyncUnverifiedReplacementTest {
     @Test
+    fun `directory replacement authentication survives coordinator persistence`() {
+        val authentication = "saf-tree-sha256:${"a".repeat(64)}"
+        val local = LocalSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.Directory,
+            revision = "saf-directory-1",
+            replacementAuthentication = authentication,
+        )
+        val remote = RemoteSyncEntry(
+            relativePath = "Archive",
+            kind = SyncEntryKind.File,
+            etag = "remote-1",
+            size = 1L,
+        )
+        val scanned = scanFileSyncPair(
+            state(),
+            PAIR_ID,
+            listOf(local),
+            listOf(remote),
+            nowEpochMillis = 1L,
+        )
+
+        val restored = decodeFileSyncCoordinatorSnapshot(encodeFileSyncCoordinatorSnapshot(scanned))
+
+        assertEquals(authentication, restored.pair().workItems.single().observedLocal?.replacementAuthentication)
+        assertEquals("saf-directory-1", restored.pair().workItems.single().observedLocal?.revision)
+    }
+
+    @Test
     fun `unverified replacement offers only choices that preserve the device copy`() {
         val local = LocalSyncEntry(
             relativePath = "large.bin",

@@ -1,12 +1,15 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
+import dev.obiente.nextcloudnative.app.FileSyncDeletionPolicy
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.planFileSync
+import java.io.ByteArrayInputStream
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -87,6 +90,17 @@ class AndroidFileSyncReplacementEvidenceTest {
                 throw kotlinx.coroutines.CancellationException("cancelled")
             }
         }
+    }
+
+    @Test
+    fun `replacement hash stops after the first byte beyond the reserved size`() {
+        val input = ByteArrayInputStream(ByteArray(1_024) { 1 })
+
+        assertFailsWith<IllegalArgumentException> {
+            hashAndroidSafReplacementContent(input, expectedBytes = 4L, shouldContinue = { true })
+        }
+
+        assertEquals(1_019, input.available())
     }
 
     @Test
@@ -176,6 +190,49 @@ class AndroidFileSyncReplacementEvidenceTest {
             androidSafReplacementContentIdentity(before),
             androidSafReplacementContentIdentity(edited),
         )
+    }
+
+    @Test
+    fun `directory authentication preserves its provider revision for remote deletion planning`() {
+        val folder = evidence("Archive", SyncEntryKind.Directory, contentHash = null).copy(
+            entry = LocalSyncEntry(
+                relativePath = "Archive",
+                kind = SyncEntryKind.Directory,
+                revision = "saf-directory-1",
+            ),
+        )
+        val child = evidence("Archive/item.bin", SyncEntryKind.File, contentHash = hash('0'))
+        val strengthened = folder.entry.withAndroidSafReplacementAuthentication(listOf(folder, child))
+        val baseline = FileSyncBaseline(
+            relativePath = "Archive",
+            kind = SyncEntryKind.Directory,
+            localRevision = "saf-directory-1",
+            remoteEtag = "remote-directory-1",
+        )
+
+        val operation = planFileSync(
+            localEntries = listOf(strengthened),
+            remoteEntries = emptyList(),
+            baselines = listOf(baseline),
+            configuration = FileSyncConfiguration(
+                deviceLabel = "Test device",
+                deletionPolicy = FileSyncDeletionPolicy.Propagate,
+            ),
+        ).operations.single()
+
+        assertEquals("saf-directory-1", strengthened.revision)
+        assertTrue(strengthened.replacementAuthentication?.startsWith("saf-tree-sha256:") == true)
+        assertEquals(
+            FileSyncOperation.DeleteLocal("Archive", expectedLocalRevision = "saf-directory-1"),
+            operation,
+        )
+        requireExpectedAndroidSafReplacement(strengthened, listOf(folder, child))
+        assertFailsWith<IllegalArgumentException> {
+            requireExpectedAndroidSafReplacement(
+                strengthened,
+                listOf(folder, child.copy(contentHash = hash('1'))),
+            )
+        }
     }
 
     @Test
