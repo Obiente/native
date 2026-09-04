@@ -23,10 +23,13 @@ fun validateLoginEndpointRelationships(
     require(!poll.scheme.equals("http", ignoreCase = true) || entered.hasSameOrigin(poll)) {
         "The login polling address may use plain HTTP only on the entered server origin."
     }
+    val canonicalPollEndpoint = entered.canonicalPollEndpoint()
     return LoginEndpointRelationships(
         loginOriginMatchesEntered = entered.hasSameOrigin(login),
         pollOriginMatchesEntered = entered.hasSameOrigin(poll),
-        pollFallbackEndpoint = entered.canonicalPollEndpoint().takeUnless { entered.hasSameOrigin(poll) },
+        pollFallbackEndpoint = canonicalPollEndpoint.takeUnless {
+            poll.hasSameRequestTarget(URI(canonicalPollEndpoint))
+        },
     )
 }
 
@@ -66,6 +69,11 @@ private fun URI.hasSameOrigin(other: URI): Boolean =
         host.equals(other.host, ignoreCase = true) &&
         effectivePort() == other.effectivePort()
 
+private fun URI.hasSameRequestTarget(other: URI): Boolean =
+    hasSameOrigin(other) &&
+        rawPath.orEmpty() == other.rawPath.orEmpty() &&
+        rawQuery == other.rawQuery
+
 private fun URI.effectivePort(): Int = when {
     port >= 0 -> port
     scheme.equals("http", ignoreCase = true) -> 80
@@ -74,13 +82,5 @@ private fun URI.effectivePort(): Int = when {
 
 private fun URI.canonicalPollEndpoint(): String {
     val basePath = rawPath.orEmpty().trimEnd('/')
-    return URI(
-        scheme,
-        null,
-        host,
-        port,
-        "$basePath/index.php/login/v2/poll",
-        null,
-        null,
-    ).toASCIIString()
+    return URI("$scheme://$rawAuthority$basePath/index.php/login/v2/poll").toASCIIString()
 }

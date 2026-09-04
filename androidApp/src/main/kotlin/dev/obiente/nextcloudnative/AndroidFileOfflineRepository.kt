@@ -21,7 +21,6 @@ import dev.obiente.nextcloudnative.app.FileOfflineKey
 import dev.obiente.nextcloudnative.app.FileOfflineRequest
 import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
 import dev.obiente.nextcloudnative.app.NextcloudFile
-import dev.obiente.nextcloudnative.app.NextcloudFileContent
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.markFileOfflineJobRunning
 import dev.obiente.nextcloudnative.app.jvmStagingStorageKey
@@ -45,23 +44,10 @@ import java.util.concurrent.TimeUnit
 
 internal enum class AndroidOfflineExecutionOutcome { Complete, Retry }
 
-internal data class AndroidOfflineContent(
-    val file: NextcloudFile,
-    val content: File,
-    val localRevision: String,
-)
-
-internal fun AndroidOfflineContent.readVerified(maximumBytes: Long): NextcloudFileContent? {
-    require(maximumBytes > 0L)
-    if (!content.isFile || content.length() > maximumBytes) return null
-    val bytes = content.readBytes()
-    if (bytes.size.toLong() > maximumBytes) return null
-    val expectedHash = localRevision.removePrefix("sha256:")
-    if (expectedHash.length != 64 || expectedHash.any { it !in '0'..'9' && it !in 'a'..'f' }) return null
-    val actualHash = MessageDigest.getInstance("SHA-256").digest(bytes).toHexString()
-    if (actualHash != expectedHash) return null
-    return NextcloudFileContent(bytes, file.mimeType, file.etag)
-}
+internal fun DocumentWebDavException.isRetryableOfflineDownloadFailure(): Boolean =
+    error == DocumentWebDavError.Locked ||
+        error == DocumentWebDavError.Throttled ||
+        error == DocumentWebDavError.Server
 
 /**
  * Durable Android coordinator for offline pin intent, content generations, and WorkManager jobs.
@@ -520,16 +506,18 @@ internal class AndroidFileOfflineRepository(context: Context) {
                                 System.currentTimeMillis() + seconds * 1_000L
                             },
                         )
-                        DocumentWebDavError.Locked, DocumentWebDavError.Server ->
-                            retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
                         else -> {
-                            finish(
-                                job.id,
-                                FileOfflineJobResult.PermanentFailure(
-                                    failure.message ?: "Could not download this file for offline use.",
-                                ),
-                            )
-                            AndroidOfflineExecutionOutcome.Complete
+                            if (failure.isRetryableOfflineDownloadFailure()) {
+                                retry(job.id, failure.message ?: "Nextcloud is temporarily unavailable.")
+                            } else {
+                                finish(
+                                    job.id,
+                                    FileOfflineJobResult.PermanentFailure(
+                                        failure.message ?: "Could not download this file for offline use.",
+                                    ),
+                                )
+                                AndroidOfflineExecutionOutcome.Complete
+                            }
                         }
                     }
                     else -> {
@@ -744,9 +732,6 @@ private fun List<String>.sumOfKnownSizes(
     }
     return total
 }
-
-private fun ByteArray.toHexString(): String =
-    joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
 private fun AndroidFileOfflinePersistedState.folderAvailability(
     accountId: String,

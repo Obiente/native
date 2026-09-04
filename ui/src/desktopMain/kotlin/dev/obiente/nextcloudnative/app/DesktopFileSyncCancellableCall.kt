@@ -2,15 +2,16 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import kotlinx.coroutines.CancellationException
 import okhttp3.Call
+import okhttp3.Response
 
-/** Cancels a blocking desktop sync request promptly when the pair is paused or stopped. */
-internal fun <T> executeDesktopFileSyncCancellableCall(
-    call: Call,
+/** Cancels the active call, including redirected response consumption, when sync stops. */
+internal fun <T> withDesktopFileSyncCallCancellation(
     shouldContinue: () -> Boolean,
-    consume: (Call) -> T,
+    execute: (executeCall: (Call) -> Response) -> T,
 ): T {
     fun cancellation(cause: Throwable? = null): CancellationException =
         CancellationException("Desktop file sync paused.").also { cancelled ->
@@ -19,17 +20,25 @@ internal fun <T> executeDesktopFileSyncCancellableCall(
 
     if (!shouldContinue()) throw cancellation()
     val finished = AtomicBoolean(false)
+    val activeCall = AtomicReference<Call?>()
     val watcher = Thread({
         while (!finished.get() && shouldContinue()) {
             LockSupport.parkNanos(CANCELLATION_POLL_NANOS)
         }
-        if (!finished.get()) call.cancel()
+        if (!finished.get()) activeCall.get()?.cancel()
     }, "nextcloud-desktop-sync-call-cancellation").apply {
         isDaemon = true
         start()
     }
     return try {
-        consume(call).also {
+        execute { call ->
+            activeCall.set(call)
+            if (!shouldContinue()) {
+                call.cancel()
+                throw cancellation()
+            }
+            call.execute()
+        }.also {
             if (!shouldContinue()) throw cancellation()
         }
     } catch (failure: IOException) {

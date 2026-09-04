@@ -1,8 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
-import java.nio.charset.StandardCharsets
-import java.util.Base64
 import okhttp3.OkHttpClient
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -12,14 +10,16 @@ internal class DesktopFileSyncChunkUploadRemote(
     private val session: NextcloudSession,
     private val userId: String,
     private val rootPath: String,
-    private val client: OkHttpClient,
+    httpClient: OkHttpClient,
     private val tree: DesktopFileSyncRemoteTree,
     private val onMutationCommitted: (String) -> Unit,
     private val onAmbiguousMutationResult: (String) -> Unit,
     private val shouldContinue: () -> Boolean,
     private val replacingDirectoryEtag: String? = null,
 ) : JvmResumableNextcloudUploadRemote {
-    private val mutationExecutor = DesktopHttpMutationExecutor(client)
+    private val client = httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val requestPolicy = NextcloudAuthenticatedRequestPolicy(session, USER_AGENT)
+    private val mutationExecutor = DesktopHttpMutationExecutor(this.client)
 
     override fun uploadDirect(
         source: File,
@@ -52,32 +52,28 @@ internal class DesktopFileSyncChunkUploadRemote(
         require(!exact.isDirectory && exact.entry.etag == uploaded.etag && exact.entry.size == source.length()) {
             "The directly uploaded file changed before verification."
         }
-        val call = client.newCall(
-            requestBuilder(fileUrl(relativePath))
-                .header("Accept", "application/octet-stream")
-                .header("If-Match", safeEtag(exact.entry.etag))
-                .get()
-                .build(),
-        )
-        executeDesktopFileSyncCancellableCall(call, shouldContinue) { cancellable ->
-            cancellable.execute().use { response ->
-                if (response.code != 200) {
-                    throw DesktopFileSyncHttpStatusException(response.code, "verify direct upload")
-                }
-                val declaredBytes = response.body.contentLength()
-                require(declaredBytes == -1L || declaredBytes == source.length()) {
-                    "The directly uploaded file has an unexpected response size."
-                }
-                JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
-                    response.body.byteStream().copyBoundedNetworkResponseTo(
-                        output = comparison,
-                        maxBytes = source.length().coerceAtLeast(1L),
-                        onLimitExceeded = { error("The directly uploaded file is larger than expected.") },
-                        onNetworkReadFailure = {},
-                        shouldContinue = shouldContinue,
-                    )
-                    comparison.requireComplete()
-                }
+        val request = requestBuilder(fileUrl(relativePath))
+            .header("Accept", "application/octet-stream")
+            .header("If-Match", safeEtag(exact.entry.etag))
+            .get()
+            .build()
+        executeRequest(request) { response ->
+            if (response.code != 200) {
+                throw DesktopFileSyncHttpStatusException(response.code, "verify direct upload")
+            }
+            val declaredBytes = response.body.contentLength()
+            require(declaredBytes == -1L || declaredBytes == source.length()) {
+                "The directly uploaded file has an unexpected response size."
+            }
+            JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+                response.body.byteStream().copyBoundedNetworkResponseTo(
+                    output = comparison,
+                    maxBytes = source.length().coerceAtLeast(1L),
+                    onLimitExceeded = { error("The directly uploaded file is larger than expected.") },
+                    onNetworkReadFailure = {},
+                    shouldContinue = shouldContinue,
+                )
+                comparison.requireComplete()
             }
         }
         return exact.entry
@@ -99,25 +95,22 @@ internal class DesktopFileSyncChunkUploadRemote(
                 .method("MKCOL", EMPTY_BODY)
                 .build(),
             "start chunked upload",
+            mutationRelativePath = relativePath,
             accepted = { it in 200..299 || allowExisting && it == 405 },
         )
         return responseCode != 405
     }
 
     override fun listChunkCollection(uploadId: String): Map<Int, Long> {
-        val call = client.newCall(
-            requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
-                .header("Depth", "1")
-                .method("PROPFIND", CHUNK_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
-                .build(),
-        )
-        return executeDesktopFileSyncCancellableCall(call, shouldContinue) { cancellable ->
-            cancellable.execute().use { response ->
-                if (response.code != 207) {
-                    throw DesktopFileSyncHttpStatusException(response.code, "inspect chunked upload")
-                }
-                response.body.byteStream().readNextcloudChunkCollection()
+        val request = requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId))
+            .header("Depth", "1")
+            .method("PROPFIND", CHUNK_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
+            .build()
+        return executeRequest(request) { response ->
+            if (response.code != 207) {
+                throw DesktopFileSyncHttpStatusException(response.code, "inspect chunked upload")
             }
+            response.body.byteStream().readNextcloudChunkCollection()
         }
     }
 
@@ -148,28 +141,28 @@ internal class DesktopFileSyncChunkUploadRemote(
                 })
                 .build(),
             "upload file chunk",
+            mutationRelativePath = relativePath,
         )
     }
 
-    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? =
-        executeDesktopFileSyncCancellableCall(
-            client.newCall(
-                requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
-                    .header("Destination", fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
-                    .header("OC-Total-Length", sizeBytes.toString())
-                    .header("Overwrite", "F")
-                    .method("MOVE", EMPTY_BODY)
-                    .build(),
-            ),
-            shouldContinue,
-        ) { call ->
-            call.execute().use { response ->
-                if (response.code != 201) {
-                    throw DesktopFileSyncHttpStatusException(response.code, "assemble chunked upload")
-                }
-                response.header("ETag") ?: response.header("OC-Etag")
+    override fun commitChunksToOwnedStage(uploadId: String, relativePath: String, sizeBytes: Long): String? {
+        val request = requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId) + "/.file")
+            .header("Destination", fileUrl(jvmOwnedUploadStagePath(relativePath, uploadId)))
+            .header("OC-Total-Length", sizeBytes.toString())
+            .header("Overwrite", "F")
+            .method("MOVE", EMPTY_BODY)
+            .build()
+        return mutationExecutor.execute(
+            request = request,
+            onAmbiguousNetworkResult = { onAmbiguousMutationResult(relativePath) },
+            shouldContinue = shouldContinue,
+        ) { response ->
+            if (response.code != 201) {
+                throw DesktopFileSyncHttpStatusException(response.code, "assemble chunked upload")
             }
+            response.header("ETag") ?: response.header("OC-Etag")
         }
+    }
 
     override fun verifyOwnedStage(
         uploadId: String,
@@ -187,32 +180,28 @@ internal class DesktopFileSyncChunkUploadRemote(
         require(expectedStageEtag == null || safeEtag(stage.entry.etag) == safeEtag(expectedStageEtag)) {
             "The assembled upload stage changed before verification."
         }
-        val call = client.newCall(
-            requestBuilder(fileUrl(stagePath))
-                .header("Accept", "application/octet-stream")
-                .header("If-Match", safeEtag(stage.entry.etag))
-                .get()
-                .build(),
-        )
-        executeDesktopFileSyncCancellableCall(call, shouldContinue) { cancellable ->
-            cancellable.execute().use { response ->
-                if (response.code != 200) {
-                    throw DesktopFileSyncHttpStatusException(response.code, "verify assembled upload")
-                }
-                val declaredBytes = response.body.contentLength()
-                require(declaredBytes == -1L || declaredBytes == source.length()) {
-                    "The assembled upload stage has an unexpected response size."
-                }
-                JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
-                    response.body.byteStream().copyBoundedNetworkResponseTo(
-                        output = comparison,
-                        maxBytes = source.length().coerceAtLeast(1L),
-                        onLimitExceeded = { error("The assembled upload stage is larger than expected.") },
-                        onNetworkReadFailure = {},
-                        shouldContinue = shouldContinue,
-                    )
-                    comparison.requireComplete()
-                }
+        val request = requestBuilder(fileUrl(stagePath))
+            .header("Accept", "application/octet-stream")
+            .header("If-Match", safeEtag(stage.entry.etag))
+            .get()
+            .build()
+        executeRequest(request) { response ->
+            if (response.code != 200) {
+                throw DesktopFileSyncHttpStatusException(response.code, "verify assembled upload")
+            }
+            val declaredBytes = response.body.contentLength()
+            require(declaredBytes == -1L || declaredBytes == source.length()) {
+                "The assembled upload stage has an unexpected response size."
+            }
+            JvmExactFileComparisonOutputStream(source, source.length()).use { comparison ->
+                response.body.byteStream().copyBoundedNetworkResponseTo(
+                    output = comparison,
+                    maxBytes = source.length().coerceAtLeast(1L),
+                    onLimitExceeded = { error("The assembled upload stage is larger than expected.") },
+                    onNetworkReadFailure = {},
+                    shouldContinue = shouldContinue,
+                )
+                comparison.requireComplete()
             }
         }
         return stage.entry.etag
@@ -267,6 +256,7 @@ internal class DesktopFileSyncChunkUploadRemote(
         execute(
             requestBuilder(buildNextcloudChunkUploadUrl(session.serverUrl, userId, uploadId)).delete().build(),
             "discard chunked upload",
+            mutationRelativePath = relativePath,
             accepted = { it in 200..299 || it == 404 },
         )
         if (publicationInFlight) {
@@ -291,6 +281,7 @@ internal class DesktopFileSyncChunkUploadRemote(
                     .header("If-Match", safeEtag(assembledStageEtag))
                     .delete().build(),
                 "discard assembled upload",
+                mutationRelativePath = relativePath,
                 accepted = { it in 200..299 || it == 404 || it == 412 },
             ) != 412
         }
@@ -328,6 +319,7 @@ internal class DesktopFileSyncChunkUploadRemote(
                 .delete()
                 .build(),
             "discard verified assembled upload",
+            mutationRelativePath = relativePath,
             accepted = { it in 200..299 || it == 404 || it == 412 },
         ) != 412
     }
@@ -335,21 +327,30 @@ internal class DesktopFileSyncChunkUploadRemote(
     private fun execute(
         request: Request,
         operation: String,
+        mutationRelativePath: String? = null,
         accepted: (Int) -> Boolean = { it in 200..299 },
-    ): Int = executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
-        call.execute().use { response ->
-            if (!accepted(response.code)) throw DesktopFileSyncHttpStatusException(response.code, operation)
-            response.code
-        }
+    ): Int = mutationExecutor.execute(
+        request = request,
+        onAmbiguousNetworkResult = { mutationRelativePath?.let(onAmbiguousMutationResult) },
+        shouldContinue = shouldContinue,
+    ) { response ->
+        if (!accepted(response.code)) throw DesktopFileSyncHttpStatusException(response.code, operation)
+        response.code
     }
 
-    private fun requestBuilder(url: String): Request.Builder {
-        val authorization = Base64.getEncoder().encodeToString(
-            "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-        )
-        return Request.Builder().url(url)
-            .header("Authorization", "Basic $authorization")
-            .header("User-Agent", USER_AGENT)
+    private fun requestBuilder(url: String): Request.Builder = requestPolicy.requestBuilder(url)
+
+    private fun <T> executeRequest(request: Request, consume: (okhttp3.Response) -> T): T = try {
+        withDesktopFileSyncCallCancellation(shouldContinue) { executeCall ->
+            executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = executeCall,
+                consume = consume,
+            )
+        }
+    } catch (failure: NextcloudAuthenticatedRedirectException) {
+        throw failure.toDesktopFileSyncHttpStatusException("follow authenticated chunk upload redirect")
     }
 
     private fun fileUrl(relativePath: String): String = buildNextcloudFileUrl(

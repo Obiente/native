@@ -1,37 +1,54 @@
 package dev.obiente.nextcloudnative.app
 
-import java.nio.charset.StandardCharsets
-import java.util.Base64
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 
-/** Executes a blocking OkHttp call without allowing it to outlive its owning coroutine. */
-suspend fun <T> executeCancellableJvmHttpCall(
+/** Executes an account-bound request without allowing any redirected call to outlive its coroutine. */
+suspend fun <T> executeCancellableNextcloudAuthenticatedRequest(
     client: OkHttpClient,
-    call: Call,
-    block: (Call, shouldContinue: () -> Boolean) -> T,
+    initialRequest: Request,
+    onNetworkFailure: (Throwable) -> Unit,
+    consume: (Response, shouldContinue: () -> Boolean) -> T,
 ): T {
-    val job = currentCoroutineContext()[Job]
+    val requestClient = client.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
     return suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { call.cancel() }
+        val activeCall = AtomicReference<Call?>(null)
+        continuation.invokeOnCancellation { activeCall.get()?.cancel() }
         val execute = Runnable {
             val result = runCatching {
-                block(call) { job?.isActive != false && !call.isCanceled() }
+                executeNextcloudAuthenticatedRequest(
+                    client = requestClient,
+                    initialRequest = initialRequest,
+                    executeCall = { call ->
+                        activeCall.set(call)
+                        if (!continuation.isActive) call.cancel()
+                        try {
+                            call.execute()
+                        } catch (failure: Throwable) {
+                            onNetworkFailure(failure)
+                            throw failure
+                        }
+                    },
+                ) { response ->
+                    consume(response) {
+                        continuation.isActive && activeCall.get()?.isCanceled() == false
+                    }
+                }
             }
+            activeCall.set(null)
             continuation.resumeWith(result)
         }
-        runCatching { client.dispatcher.executorService.execute(execute) }
-            .onFailure { failure -> continuation.resumeWith(Result.failure(failure)) }
+        runCatching { requestClient.dispatcher.executorService.execute(execute) }
+            .onFailure { failure ->
+                activeCall.set(null)
+                continuation.resumeWith(Result.failure(failure))
+            }
     }
-}
-
-/** Nextcloud credentials are UTF-8 throughout the JVM transports. */
-fun nextcloudBasicAuthorization(session: NextcloudSession): String {
-    val encoded = Base64.getEncoder().encodeToString(
-        "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-    )
-    return "Basic $encoded"
 }

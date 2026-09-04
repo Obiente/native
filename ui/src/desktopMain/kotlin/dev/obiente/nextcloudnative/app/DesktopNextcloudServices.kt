@@ -3998,67 +3998,44 @@ class DesktopNextcloudServices(
 
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         var networkFailure: JvmNetworkFailureDiagnostic? = null
-        fun poll(endpoint: String): HttpResponse {
-            networkFailure = null
-            return request(
-                "POST",
-                endpoint,
-                body = "token=" + encodeForm(challenge.token),
-                contentType = "application/x-www-form-urlencoded",
-                client = loginPollHttpClient,
-                maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
-                diagnosticIgnoredHttpStatuses = setOf(404),
-                onNetworkFailure = { networkFailure = it },
-            )
-        }
-        var usedFallback = challenge.token in loginPollFallbackTokens
-        val initialEndpoint = if (usedFallback) {
-            requireNotNull(challenge.pollFallbackEndpoint)
-        } else {
-            challenge.pollEndpoint
-        }
-        val response = try {
-            poll(initialEndpoint)
-        } catch (failure: Throwable) {
-            if (failure is CancellationException) throw failure
-            val initialResult = classifyLoginPollNetworkFailure(networkFailure)
-            val fallback = challenge.pollFallbackEndpoint
-            if (
-                initialResult is LoginPollResult.RetryablePreExchangeFailure &&
-                !usedFallback &&
-                fallback != null
-            ) {
-                runCatching {
-                    recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic())
-                }
-                try {
-                    poll(fallback).also {
-                        usedFallback = true
-                        loginPollFallbackTokens += challenge.token
-                    }
-                } catch (fallbackFailure: Throwable) {
-                    if (fallbackFailure is CancellationException) throw fallbackFailure
-                    val result = classifyLoginPollNetworkFailure(networkFailure)
-                    result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-                    return@withContext result
-                }
-            } else {
-                initialResult.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-                return@withContext initialResult
+        val execution = executeLoginPollHttp(
+            challenge = challenge,
+            fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
+            poll = { endpoint ->
+                networkFailure = null
+                request(
+                    "POST",
+                    endpoint,
+                    body = "token=" + encodeForm(challenge.token),
+                    contentType = "application/x-www-form-urlencoded",
+                    client = loginPollHttpClient,
+                    maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
+                    diagnosticIgnoredHttpStatuses = setOf(404),
+                    onNetworkFailure = { networkFailure = it },
+                ).let { LoginPollHttpResponse(it.status, it.text) }
+            },
+            networkFailure = { networkFailure },
+        )
+        execution.selectedFallbackReason?.let { reason ->
+            loginPollFallbackTokens += challenge.token
+            runCatching {
+                recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic(reason, execution.interpretation.result))
             }
         }
-        val interpretation = interpretLoginPollHttpResponse(response.status, response.text, challenge)
+        val interpretation = execution.interpretation
         val result = interpretation.result
         when (result) {
             LoginPollResult.Pending -> {
                 if (loginPollPendingTokens.add(challenge.token)) {
-                    recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.responseUsedFallback))
                 }
             }
             is LoginPollResult.Approved -> {
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
-                runCatching { recordSupportDiagnostic(interpretation.toApprovedDiagnostic(usedFallback)) }
+                runCatching {
+                    recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.responseUsedFallback))
+                }
             }
             else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
         }

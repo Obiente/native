@@ -27,9 +27,11 @@ import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
 import dev.obiente.nextcloudnative.app.LoginTransportSecurity
 import dev.obiente.nextcloudnative.app.LOGIN_FLOW_RESPONSE_MAX_BYTES
+import dev.obiente.nextcloudnative.app.LoginPollHttpResponse
+import dev.obiente.nextcloudnative.app.executeLoginPollHttp
 import dev.obiente.nextcloudnative.app.interpretLoginChallengeHttpResponse
-import dev.obiente.nextcloudnative.app.interpretLoginPollHttpResponse
 import dev.obiente.nextcloudnative.app.loginPollEndpointFallbackDiagnostic
+import dev.obiente.nextcloudnative.app.normalizeServerUrl
 import dev.obiente.nextcloudnative.app.toApprovedDiagnostic
 import dev.obiente.nextcloudnative.app.toStartedDiagnostic
 import dev.obiente.nextcloudnative.app.confirmTextFileDavSave
@@ -159,7 +161,6 @@ import dev.obiente.nextcloudnative.app.toFileSyncActionDiagnosticSummary
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import dev.obiente.nextcloudnative.app.trackJvmNetworkFailures
 import dev.obiente.nextcloudnative.app.ambiguousLoginPollResponse
-import dev.obiente.nextcloudnative.app.classifyLoginPollNetworkFailure
 import dev.obiente.nextcloudnative.app.loginResultOriginMatchesEntered
 import dev.obiente.nextcloudnative.app.toLoginPollFailureDiagnostic
 import dev.obiente.nextcloudnative.app.validateLoginEndpointRelationships
@@ -246,7 +247,6 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.io.IOException
 import java.io.OutputStream
-import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -1333,66 +1333,43 @@ internal class AndroidNextcloudServices(
     override suspend fun pollLogin(challenge: LoginChallenge): LoginPollResult = withContext(Dispatchers.IO) {
         val formBody = "token=" + URLEncoder.encode(challenge.token, StandardCharsets.UTF_8.name())
         var networkFailure: JvmNetworkFailureDiagnostic? = null
-        fun poll(endpoint: String): HttpResponse {
-            networkFailure = null
-            return request(
-                method = "POST",
-                url = endpoint,
-                body = formBody,
-                contentType = "application/x-www-form-urlencoded",
-                client = loginPollHttpClient,
-                maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
-                diagnosticIgnoredHttpStatuses = setOf(404),
-                onNetworkFailure = { networkFailure = it },
-            )
-        }
-        var usedFallback = challenge.token in loginPollFallbackTokens
-        val initialEndpoint = if (usedFallback) {
-            requireNotNull(challenge.pollFallbackEndpoint)
-        } else {
-            challenge.pollEndpoint
-        }
-        val response = try {
-            poll(initialEndpoint)
-        } catch (failure: Throwable) {
-            if (failure is CancellationException) throw failure
-            val initialResult = classifyLoginPollNetworkFailure(networkFailure)
-            val fallback = challenge.pollFallbackEndpoint
-            if (
-                initialResult is LoginPollResult.RetryablePreExchangeFailure &&
-                !usedFallback &&
-                fallback != null
-            ) {
-                runCatching {
-                    recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic())
-                }
-                try {
-                    poll(fallback).also {
-                        usedFallback = true
-                        loginPollFallbackTokens += challenge.token
-                    }
-                } catch (fallbackFailure: Throwable) {
-                    if (fallbackFailure is CancellationException) throw fallbackFailure
-                    val result = classifyLoginPollNetworkFailure(networkFailure)
-                    result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-                    return@withContext result
-                }
-            } else {
-                initialResult.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
-                return@withContext initialResult
+        val execution = executeLoginPollHttp(
+            challenge = challenge,
+            fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
+            poll = { endpoint ->
+                networkFailure = null
+                request(
+                    method = "POST",
+                    url = endpoint,
+                    body = formBody,
+                    contentType = "application/x-www-form-urlencoded",
+                    client = loginPollHttpClient,
+                    maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
+                    diagnosticIgnoredHttpStatuses = setOf(404),
+                    onNetworkFailure = { networkFailure = it },
+                ).let { LoginPollHttpResponse(it.status, it.text) }
+            },
+            networkFailure = { networkFailure },
+        )
+        execution.selectedFallbackReason?.let { reason ->
+            loginPollFallbackTokens += challenge.token
+            runCatching {
+                recordSupportDiagnostic(loginPollEndpointFallbackDiagnostic(reason, execution.interpretation.result))
             }
         }
-        val interpretation = interpretLoginPollHttpResponse(response.status, response.text, challenge)
+        val interpretation = execution.interpretation
         when (val result = interpretation.result) {
             LoginPollResult.Pending -> {
                 if (loginPollPendingTokens.add(challenge.token)) {
-                    recordSupportDiagnostic(loginPollPendingDiagnostic(usedFallback))
+                    recordSupportDiagnostic(loginPollPendingDiagnostic(execution.responseUsedFallback))
                 }
             }
             is LoginPollResult.Approved -> {
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedLoginName))
                 registerSupportDiagnosticPrivateValue(requireNotNull(interpretation.approvedAppPassword))
-                runCatching { recordSupportDiagnostic(interpretation.toApprovedDiagnostic(usedFallback)) }
+                runCatching {
+                    recordSupportDiagnostic(interpretation.toApprovedDiagnostic(execution.responseUsedFallback))
+                }
             }
             else -> result.toLoginPollFailureDiagnostic()?.let(::recordSupportDiagnostic)
         }
@@ -3797,23 +3774,6 @@ internal class AndroidNextcloudServices(
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
         .replace("'", "&apos;")
-
-    private fun normalizeServerUrl(
-        value: String,
-        transportSecurity: LoginTransportSecurity = LoginTransportSecurity.Tls,
-    ): String {
-        val withScheme = value.trim().let { if ("://" in it) it else "https://$it" }
-        val uri = URI(withScheme)
-        val scheme = uri.scheme?.lowercase()
-        require(
-            scheme == "https" ||
-                (scheme == "http" && transportSecurity == LoginTransportSecurity.PlainHttp),
-        ) {
-            "Use an HTTPS server address, or explicitly approve plain HTTP before connecting."
-        }
-        require(!uri.host.isNullOrBlank()) { "Enter a valid Nextcloud server address." }
-        return withScheme.trimEnd('/').removeSuffix("/index.php")
-    }
 
     private fun loginTransportSecurity(serverUrl: String): LoginTransportSecurity =
         if (serverUrl.startsWith("http://", ignoreCase = true)) {

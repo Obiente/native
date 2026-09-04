@@ -53,7 +53,7 @@ internal data class DesktopFileSyncProgressEvent(
     val failureMessage: String? = null,
     val attemptCount: Int = 1,
     val snapshot: DesktopFileSyncSnapshotDiagnostics = DesktopFileSyncSnapshotDiagnostics.Unknown,
-    val failureKind: String? = null,
+    val failureDiagnostic: DesktopFileSyncFailureDiagnostic? = null,
 ) {
     init {
         require(pairId.isNotBlank())
@@ -66,7 +66,6 @@ internal data class DesktopFileSyncProgressEvent(
         require(attemptCount > 0)
         require((stage == DesktopFileSyncProgressStage.Failed) == (failureMessage != null))
         require(failureMessage == null || failureMessage.isNotBlank())
-        require(failureKind == null || failureKind.isNotBlank())
     }
 
     val stableId: String = "$pairId:$workId"
