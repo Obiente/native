@@ -1275,7 +1275,7 @@ internal class AndroidNextcloudServices(
             fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
             poll = { endpoint ->
                 networkFailure = null
-                kotlinx.coroutines.runBlocking { request(
+                request(
                     method = "POST",
                     url = endpoint,
                     body = formBody,
@@ -1284,7 +1284,7 @@ internal class AndroidNextcloudServices(
                     maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
                     diagnosticIgnoredHttpStatuses = setOf(404),
                     onNetworkFailure = { networkFailure = it },
-                ) }.let { LoginPollHttpResponse(it.status, it.text) }
+                ).let { LoginPollHttpResponse(it.status, it.text) }
             },
             networkFailure = { networkFailure },
         )
@@ -1497,7 +1497,7 @@ internal class AndroidNextcloudServices(
     ): FileOfflineAvailability = withContext(Dispatchers.IO) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
-            resolveSession = { loadSession(session.accountId) },
+            resolveSession = ::loadSession,
             unavailable = { error("The account changed before offline storage could be updated.") },
         ) { current ->
             fileOfflineRepository.setAvailable(current, userId, file, available)
@@ -1518,7 +1518,7 @@ internal class AndroidNextcloudServices(
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
-            resolveSession = { loadSession(session.accountId) },
+            resolveSession = ::loadSession,
             unavailable = { FileOfflineCenterActionResult.Rejected("The account changed before this retry started.") },
         ) { current ->
             fileOfflineRepository.retryCenterItem(current, userId, key)
@@ -1532,7 +1532,7 @@ internal class AndroidNextcloudServices(
     ): FileOfflineCenterActionResult = withContext(Dispatchers.IO) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
-            resolveSession = { loadSession(session.accountId) },
+            resolveSession = ::loadSession,
             unavailable = { FileOfflineCenterActionResult.Rejected("The account changed before offline storage was removed.") },
         ) { current ->
             fileOfflineRepository.removeCenterItem(current, userId, key)
@@ -3449,15 +3449,15 @@ internal class AndroidNextcloudServices(
         check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
         Unit
     }
-
     override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        request(
-            method = "DELETE",
-            url = session.serverUrl + "/ocs/v2.php/core/apppassword",
-            session = session,
-            ocsRequest = true,
-        )
-        Unit
+        revokeAndroidSessionAfterWritebackPreflight(androidDocumentPendingWritebacks(appContext, session).isEmpty()) {
+            request(
+                method = "DELETE",
+                url = session.serverUrl + "/ocs/v2.php/core/apppassword",
+                session = session,
+                ocsRequest = true,
+            )
+        }
     }
 
     private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
