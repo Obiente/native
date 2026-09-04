@@ -31,7 +31,7 @@ internal class AndroidAccountCredentialController(
     private val clearPreviewAccount: (String) -> Unit,
     private val notifyDocumentRootsChanged: () -> Unit,
     private val resumeQueuedUploads: suspend (String) -> Unit,
-    private val removeQueuedUploads: suspend (String) -> Unit,
+    private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
 ) {
     private val appContext = context.applicationContext
 
@@ -117,7 +117,7 @@ internal class AndroidAccountCredentialController(
                 val active = current.registry.activeAccountId == accountId
                 removeAndroidAccountCredentialData(
                     active = active,
-                    removeQueuedUploads = { removeQueuedUploads(NextcloudDocumentIds.accountKey(session)) },
+                    removeQueuedUploads = { removeQueuedUploads(session) },
                     clearActiveAccount = { clearSession(current) },
                     persistInactiveRemoval = { persistState(current.remove(accountId)) },
                     rollbackInactiveRemoval = { persistState(current) },

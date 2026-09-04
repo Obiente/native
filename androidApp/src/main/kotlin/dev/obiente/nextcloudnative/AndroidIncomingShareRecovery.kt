@@ -230,7 +230,7 @@ internal fun scheduleIncomingShareCleanup(context: Context, requestId: String) {
 
 internal fun scheduleIncomingShareAbandonedStagingCleanup(context: Context, requestId: String) {
     WorkManager.getInstance(context).enqueueUniqueWork(
-        "incoming-share-abandoned-staging-$requestId",
+        incomingShareAbandonedStagingWorkName(requestId),
         ExistingWorkPolicy.KEEP,
         OneTimeWorkRequestBuilder<AndroidIncomingShareAbandonedStagingCleanupWorker>()
             .setInitialDelay(ABANDONED_INCOMING_SHARE_STAGING_RETENTION_MILLIS, TimeUnit.MILLISECONDS)
@@ -268,6 +268,9 @@ internal fun scheduleIncomingShareChunkCleanup(
 internal fun incomingShareCleanupWorkName(requestId: String) = "incoming-share-cleanup-$requestId"
 
 internal fun incomingShareChunkCleanupWorkName(requestId: String) = "incoming-share-chunk-cleanup-$requestId"
+
+internal fun incomingShareAbandonedStagingWorkName(requestId: String) =
+    "incoming-share-abandoned-staging-$requestId"
 
 internal fun incomingShareRecoveryPendingIntent(context: Context, requestId: String): PendingIntent =
     PendingIntent.getActivity(

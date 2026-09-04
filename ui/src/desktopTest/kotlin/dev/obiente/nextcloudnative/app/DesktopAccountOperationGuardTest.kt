@@ -142,6 +142,26 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun activeCredentialReplacementRequiresLiveResourcesToClose() {
+        val original = NextcloudSession("https://first.example.test", "alice", "one")
+
+        assertFalse(desktopSessionSaveReplacesActiveCredential(activeSession = null, savedSession = original))
+        assertFalse(desktopSessionSaveReplacesActiveCredential(original, original.copy()))
+        assertTrue(
+            desktopSessionSaveReplacesActiveCredential(
+                original,
+                original.copy(appPassword = "replacement-password"),
+            ),
+        )
+        assertFalse(
+            desktopSessionSaveReplacesActiveCredential(
+                original,
+                NextcloudSession("https://second.example.test", "alice", "replacement-password"),
+            ),
+        )
+    }
+
+    @Test
     fun blockedAccountSaveRecordsTheSelectionDiagnosticBeforeFailing() {
         val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
 
