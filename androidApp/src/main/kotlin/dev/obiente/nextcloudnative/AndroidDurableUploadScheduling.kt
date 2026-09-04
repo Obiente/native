@@ -19,12 +19,13 @@ internal suspend fun constructAndReconcileQueuedDurableUploads(
 
 internal suspend fun reconcileQueuedDurableUploads(
     jobs: List<AndroidDurableMultipartUploadJob>,
+    schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { false },
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
 ): Boolean {
     var allScheduled = true
     jobs.filter { job -> job.state == DurableUploadState.Queued }.forEach { job ->
         try {
-            schedule(job)
+            if (!schedulerOwns(job)) schedule(job)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
