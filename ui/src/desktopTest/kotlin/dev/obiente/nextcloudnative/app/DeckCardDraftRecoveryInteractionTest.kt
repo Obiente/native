@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative.app
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -9,6 +10,7 @@ class DeckCardDraftRecoveryInteractionTest {
     @Test
     fun unreadableDraftRequiresConfirmationAndForwardsTheLatestEdit() {
         var discarded: DeckUiCardDraft? = null
+        var submitted = false
         nativeSceneTest(720, 800, content = {
             DeckUiCardEditorDialog(
                 stack = stack(),
@@ -19,10 +21,12 @@ class DeckCardDraftRecoveryInteractionTest {
                 quickDueDates = emptyList(),
                 onDismiss = {},
                 onDiscardRecoveredDraft = { discarded = it },
-                onSubmit = {},
+                onSubmit = { submitted = true },
             )
         }) {
             replaceText("Original title", "Replacement edit")
+            click("Save changes")
+            assertFalse(submitted)
             click("Discard")
 
             assertTrue(has("Discard saved draft?"))

@@ -220,7 +220,7 @@ fun DeckUiCardEditorDialog(
         onDismiss = onDismiss,
         dismissLabel = "Cancel",
         confirmLabel = if (card == null) "Create card" else "Save changes",
-        confirmEnabled = validationError == null && !busy,
+        confirmEnabled = validationError == null && !busy && !draftRecoveryFailed,
         busy = busy,
         onConfirm = { onSubmit(draft.normalized()) },
     ) {

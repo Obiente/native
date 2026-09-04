@@ -409,7 +409,7 @@ internal class PlatformDeckDraftKeyProvider(
 
     private fun missingKey(): ByteArray? {
         if (legacySecretRequired()) {
-            throw DesktopSecretStoreUnavailableException(
+            throw DeckCardDraftResetRequiredException(
                 "The Deck draft encryption key is missing while encrypted drafts still exist.",
             )
         }

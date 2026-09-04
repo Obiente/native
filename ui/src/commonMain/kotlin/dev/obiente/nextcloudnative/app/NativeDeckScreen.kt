@@ -1217,6 +1217,7 @@ fun NativeDeckScreen(
             },
         )
         is DeckUiInteraction.CardEditor -> if (cardDraftRecovery.loadedKey == cardDraftKey(overlay)) {
+            val cardDraftBusy = mutationBusy || cardDraftRecovery.recoveryBusy
             DeckUiCardEditorDialog(
             stack = overlay.stack,
             card = overlay.card,
@@ -1226,11 +1227,11 @@ fun NativeDeckScreen(
             recoveredDraft = cardDraftRecovery.recoveredNotice,
             draftRecoveryFailed = cardDraftRecovery.unreadableKey == cardDraftKey(overlay),
             draftRecoveryResetRequired = cardDraftRecovery.resetRequired,
-            busy = mutationBusy,
+            busy = cardDraftBusy,
             errorMessage = mutationError,
             quickDueDates = deckQuickDueDates(),
             onDismiss = {
-                if (!mutationBusy) {
+                if (!cardDraftBusy) {
                     val key = cardDraftKey(overlay)
                     cardDraftRecovery.clearForClosedEditor()
                     interaction = null
@@ -1247,15 +1248,8 @@ fun NativeDeckScreen(
                 if (!mutationBusy) {
                     val key = cardDraftKey(overlay)
                     val original = overlay.card.toDeckUiDraft()
-                    val pendingPersistence = cardDraftRecovery.persistenceJob
-                    cardDraftRecovery.persistenceJob = scope.launch {
-                        pendingPersistence?.cancelAndJoin()
-                        val error = cardDraftRecovery.discardAndPersistReplacement(
-                            key,
-                            draft,
-                            original,
-                        )
-                        mutationError = error
+                    cardDraftRecovery.launchRecovery(scope) {
+                        mutationError = cardDraftRecovery.discardAndPersistReplacement(key, draft, original)
                     }
                 }
             },
@@ -1263,14 +1257,8 @@ fun NativeDeckScreen(
                 if (!mutationBusy) {
                     val key = cardDraftKey(overlay)
                     val original = overlay.card.toDeckUiDraft()
-                    val pendingPersistence = cardDraftRecovery.persistenceJob
-                    cardDraftRecovery.persistenceJob = scope.launch {
-                        pendingPersistence?.cancelAndJoin()
-                        mutationError = cardDraftRecovery.resetAndPersistReplacement(
-                            key,
-                            draft,
-                            original,
-                        )
+                    cardDraftRecovery.launchRecovery(scope) {
+                        mutationError = cardDraftRecovery.resetAndPersistReplacement(key, draft, original)
                     }
                 }
             },
@@ -1290,9 +1278,10 @@ fun NativeDeckScreen(
                     }
                 }
             },
-            onSubmit = { draft ->
-                val board = checkNotNull(boardState()?.board)
+            onSubmit = submit@ { draft ->
                 val draftKey = cardDraftKey(overlay)
+                if (cardDraftRecovery.blocksPersistence(draftKey)) return@submit
+                val board = checkNotNull(boardState()?.board)
                 if (overlay.card == null) {
                     runMutation(
                         request = {

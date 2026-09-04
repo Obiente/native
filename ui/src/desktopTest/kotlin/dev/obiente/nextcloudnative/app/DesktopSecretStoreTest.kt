@@ -518,7 +518,7 @@ class DesktopSecretStoreTest {
             legacySecretRequired = { true },
         )
 
-        assertFailsWith<DesktopSecretStoreUnavailableException> { provider.encryptionKey() }
+        assertFailsWith<DeckCardDraftResetRequiredException> { provider.encryptionKey() }
         assertFalse(secrets.values.containsKey(desktopDeckDraftSecretReference().targetName))
     }
 
@@ -533,7 +533,7 @@ class DesktopSecretStoreTest {
             legacySecretRequired = { true },
         )
 
-        assertFailsWith<DesktopSecretStoreUnavailableException> { provider.encryptionKey() }
+        assertFailsWith<DeckCardDraftResetRequiredException> { provider.encryptionKey() }
         assertContentEquals("not-base64".encodeToByteArray(), secrets.values.getValue(reference.targetName))
     }
 

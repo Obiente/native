@@ -4,7 +4,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 
 internal class DeckCardDraftRecoveryCoordinator(
     private val services: DeckCardDraftPlatformServices,
@@ -19,6 +22,8 @@ internal class DeckCardDraftRecoveryCoordinator(
     var unreadableKey by mutableStateOf<DeckCardDraftKey?>(null)
         private set
     var resetRequired by mutableStateOf(false)
+        private set
+    var recoveryBusy by mutableStateOf(false)
         private set
     var persistenceJob: Job? = null
 
@@ -71,7 +76,30 @@ internal class DeckCardDraftRecoveryCoordinator(
 
     fun canClearOnClose(key: DeckCardDraftKey): Boolean = unreadableKey != key
 
-    fun blocksPersistence(key: DeckCardDraftKey): Boolean = unreadableKey == key
+    fun blocksPersistence(key: DeckCardDraftKey): Boolean = recoveryBusy || unreadableKey == key
+
+    fun beginRecovery(): Boolean {
+        if (recoveryBusy) return false
+        recoveryBusy = true
+        return true
+    }
+
+    fun finishRecovery() {
+        recoveryBusy = false
+    }
+
+    fun launchRecovery(scope: CoroutineScope, operation: suspend () -> Unit) {
+        if (!beginRecovery()) return
+        val pendingPersistence = persistenceJob
+        persistenceJob = scope.launch {
+            try {
+                pendingPersistence?.cancelAndJoin()
+                operation()
+            } finally {
+                finishRecovery()
+            }
+        }
+    }
 
     suspend fun persist(
         key: DeckCardDraftKey,
@@ -100,7 +128,12 @@ internal class DeckCardDraftRecoveryCoordinator(
         } catch (failure: CancellationException) {
             throw failure
         } catch (failure: Exception) {
-            if (failure is DeckCardDraftCapacityException) resetRequired = true
+            if (
+                failure is DeckCardDraftCapacityException ||
+                failure is DeckCardDraftResetRequiredException
+            ) {
+                resetRequired = true
+            }
             DRAFT_SAVE_FAILURE
         }
     }
@@ -110,22 +143,27 @@ internal class DeckCardDraftRecoveryCoordinator(
         draft: DeckUiCardDraft,
         original: DeckUiCardDraft,
     ): String? {
-        val preserveReplacement = unreadableKey == key || key in submittedQuarantineFailures
+        recoveryBusy = true
         try {
-            services.clearDeckCardDraft(session, key, discardUnreadable = true)
-        } catch (failure: CancellationException) {
-            throw failure
-        } catch (_: Exception) {
-            return DRAFT_DISCARD_FAILURE
-        }
-        restoredDraft = null
-        recoveredNotice = false
-        unreadableKey = null
-        submittedQuarantineFailures -= key
-        return if (preserveReplacement) {
-            persist(key, draft, original, clearWhenUnchanged = false)
-        } else {
-            null
+            val preserveReplacement = unreadableKey == key || key in submittedQuarantineFailures
+            try {
+                services.clearDeckCardDraft(session, key, discardUnreadable = true)
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                return DRAFT_DISCARD_FAILURE
+            }
+            restoredDraft = null
+            recoveredNotice = false
+            unreadableKey = null
+            submittedQuarantineFailures -= key
+            return if (preserveReplacement) {
+                persist(key, draft, original, clearWhenUnchanged = false)
+            } else {
+                null
+            }
+        } finally {
+            finishRecovery()
         }
     }
 
@@ -134,19 +172,24 @@ internal class DeckCardDraftRecoveryCoordinator(
         draft: DeckUiCardDraft,
         original: DeckUiCardDraft,
     ): String? {
+        recoveryBusy = true
         try {
-            services.discardAllDeckCardDrafts()
-        } catch (failure: CancellationException) {
-            throw failure
-        } catch (_: Exception) {
-            return DRAFT_RESET_FAILURE
+            try {
+                services.discardAllDeckCardDrafts()
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                return DRAFT_RESET_FAILURE
+            }
+            restoredDraft = null
+            recoveredNotice = false
+            unreadableKey = null
+            submittedQuarantineFailures = emptySet()
+            resetRequired = false
+            return persist(key, draft, original, clearWhenUnchanged = false)
+        } finally {
+            finishRecovery()
         }
-        restoredDraft = null
-        recoveredNotice = false
-        unreadableKey = null
-        submittedQuarantineFailures = emptySet()
-        resetRequired = false
-        return persist(key, draft, original, clearWhenUnchanged = false)
     }
 
     suspend fun quarantineSubmitted(key: DeckCardDraftKey): String? {

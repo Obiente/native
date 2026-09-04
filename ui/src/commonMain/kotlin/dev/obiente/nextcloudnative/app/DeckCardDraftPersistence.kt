@@ -34,6 +34,9 @@ data class PersistedDeckCardDraft(
 }
 
 interface DeckCardDraftPlatformServices {
+    /** Performs best-effort platform migration after authentication, off the composition path. */
+    suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) = Unit
+
     /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
     suspend fun loadDeckCardDraft(
         session: NextcloudSession,
@@ -87,6 +90,10 @@ object DeckCardDraftRetention {
 class DeckCardDraftCapacityException : IllegalStateException(
     "Unreadable Deck drafts fill the recovery limit.",
 )
+
+class DeckCardDraftResetRequiredException(
+    message: String,
+) : IllegalStateException(message)
 
 internal fun DeckUiCardDraft.hasMeaningfulChangesFrom(original: DeckUiCardDraft): Boolean =
     title != original.title ||

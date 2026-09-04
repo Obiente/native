@@ -139,7 +139,7 @@ class DesktopDeckCardDraftStoreTest {
                 ),
             )
 
-            assertFailsWith<DesktopSecretStoreUnavailableException> {
+            assertFailsWith<DeckCardDraftResetRequiredException> {
                 unavailable.load(session, persisted.key)
             }
             assertTrue(file.isFile)

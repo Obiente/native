@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,6 +49,58 @@ class DeckCardDraftRecoveryCoordinatorTest {
     }
 
     @Test
+    fun unrecoverableDesktopKeyFailureOffersAConfirmedReset() = runBlocking {
+        val services = FakeDraftServices(
+            saveFailure = DeckCardDraftResetRequiredException("Synthetic missing draft key"),
+        )
+        val recovery = DeckCardDraftRecoveryCoordinator(services, session)
+        val replacement = original.copy(title = "Draft after key reset")
+
+        assertEquals(
+            DeckCardDraftRecoveryCoordinator.DRAFT_SAVE_FAILURE,
+            recovery.persist(key, replacement, original),
+        )
+        assertTrue(recovery.resetRequired)
+        services.saveFailure = null
+
+        assertNull(recovery.resetAndPersistReplacement(key, replacement, original))
+        assertFalse(recovery.resetRequired)
+        assertEquals(listOf("save", "reset", "save"), services.operations)
+        assertEquals(replacement, services.saved?.draft)
+    }
+
+    @Test
+    fun destructiveRecoveryBlocksPersistenceUntilTheReplacementIsStored() = runBlocking {
+        val clearStarted = CompletableDeferred<Unit>()
+        val allowClear = CompletableDeferred<Unit>()
+        val services = FakeDraftServices(
+            loadFailure = true,
+            clearStarted = clearStarted,
+            allowClear = allowClear,
+        )
+        val recovery = DeckCardDraftRecoveryCoordinator(services, session)
+        assertEquals(
+            DeckCardDraftRecoveryCoordinator.UNREADABLE_DRAFT_FAILURE,
+            recovery.load(key, original),
+        )
+        val replacement = original.copy(title = "Edit held during recovery")
+
+        recovery.launchRecovery(this) {
+            assertNull(recovery.discardAndPersistReplacement(key, replacement, original))
+        }
+        assertTrue(recovery.blocksPersistence(key))
+        clearStarted.await()
+
+        assertTrue(recovery.recoveryBusy)
+        assertTrue(recovery.blocksPersistence(key))
+
+        allowClear.complete(Unit)
+        recovery.persistenceJob?.join()
+        assertFalse(recovery.recoveryBusy)
+        assertEquals(replacement, services.saved?.draft)
+    }
+
+    @Test
     fun failedSubmissionQuarantineBlocksTheDraftFromBeingLoadedAgain() = runBlocking {
         val services = FakeDraftServices(quarantineFailure = true)
         val recovery = DeckCardDraftRecoveryCoordinator(services, session)
@@ -89,6 +142,9 @@ class DeckCardDraftRecoveryCoordinatorTest {
         var loadFailure: Boolean = false,
         var capacityFailure: Boolean = false,
         var quarantineFailure: Boolean = false,
+        var saveFailure: Exception? = null,
+        val clearStarted: CompletableDeferred<Unit>? = null,
+        val allowClear: CompletableDeferred<Unit>? = null,
     ) : DeckCardDraftPlatformServices {
         val operations = mutableListOf<String>()
         var loaded: PersistedDeckCardDraft? = null
@@ -109,6 +165,7 @@ class DeckCardDraftRecoveryCoordinatorTest {
         ) {
             operations += "save"
             if (capacityFailure) throw DeckCardDraftCapacityException()
+            saveFailure?.let { throw it }
             saved = draft
         }
 
@@ -118,6 +175,8 @@ class DeckCardDraftRecoveryCoordinatorTest {
             discardUnreadable: Boolean,
         ) {
             operations += if (discardUnreadable) "clear-unreadable" else "clear"
+            clearStarted?.complete(Unit)
+            allowClear?.await()
         }
 
         override suspend fun quarantineSubmittedDeckCardDraft(

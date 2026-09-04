@@ -1347,8 +1347,8 @@ private fun AuthenticatedApp(
     val submittedSupportReports = (supportSubmissionState as? SupportDiagnosticsSubmissionState.Submitted)
         ?.reports
         .orEmpty()
-    val submittedSupportReportCodes = submittedSupportReports
-        .map(SupportDiagnosticsSubmissionState.SubmittedReport::supportCode)
+    val submittedSupportReportCodes = submittedSupportReports.map { report -> report.supportCode }
+    DeckCardDraftRecoveryPreparationEffect(services, session)
     LaunchedEffect(services, submittedSupportReportCodes) {
         if (submittedSupportReportCodes.isEmpty()) return@LaunchedEffect
         while (currentCoroutineContext().isActive) {
