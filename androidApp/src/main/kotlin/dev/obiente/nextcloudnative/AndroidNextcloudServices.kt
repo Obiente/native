@@ -470,6 +470,7 @@ internal class AndroidNextcloudServices(
     private val projectContent = AndroidProjectContentClient(appContext, activity)
     private val durableMultipartUploads = AndroidDurableMultipartUploads(appContext)
     private val durableUploadAccountCleanup = AndroidDurableUploadAccountCleanup(appContext)
+    private val incomingShareAccountCleanup = AndroidIncomingShareAccountCleanup(appContext)
     private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
     private val supportDiagnostics = AndroidSupportDiagnostics.get(appContext)
     private val supportBundleExporter = AndroidSupportBundleExporter(
@@ -495,7 +496,10 @@ internal class AndroidNextcloudServices(
         clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
         resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
-        removeQueuedUploads = durableUploadAccountCleanup::removeForAccount,
+        removeQueuedUploads = { session ->
+            incomingShareAccountCleanup.removeForAccount(session)
+            durableUploadAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
+        },
     )
 
     init {
