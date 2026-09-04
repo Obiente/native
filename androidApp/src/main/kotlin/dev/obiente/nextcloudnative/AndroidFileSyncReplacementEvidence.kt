@@ -263,3 +263,22 @@ internal fun deleteAndroidFileSyncOperation(
         shouldContinue = remote::shouldContinueTransfer,
     )
 }
+
+internal inline fun authenticateExistingAndroidSafDirectory(
+    kind: SyncEntryKind?,
+    authenticate: () -> Unit,
+): Boolean {
+    if (kind != SyncEntryKind.Directory) return false
+    authenticate()
+    return true
+}
+
+internal inline fun <Document : Any> createAndroidSafDirectoryAfterCancellationCheck(
+    shouldContinue: () -> Boolean,
+    create: () -> Document?,
+): Document {
+    if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+        throw CancellationException("The local download was cancelled.")
+    }
+    return requireNotNull(create()) { "The local folder could not be created." }
+}

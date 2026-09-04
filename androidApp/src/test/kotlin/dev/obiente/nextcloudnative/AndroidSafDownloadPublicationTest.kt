@@ -14,10 +14,45 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class AndroidSafDownloadPublicationTest {
+    @Test
+    fun `existing directories require authentication before reuse`() {
+        var authenticated = false
+
+        assertTrue(
+            authenticateExistingAndroidSafDirectory(SyncEntryKind.Directory) {
+                authenticated = true
+            },
+        )
+        assertTrue(authenticated)
+        assertFailsWith<IllegalArgumentException> {
+            authenticateExistingAndroidSafDirectory(SyncEntryKind.Directory) {
+                require(false) { "stale directory evidence" }
+            }
+        }
+    }
+
+    @Test
+    fun `cancelled directory creation never reaches the provider`() {
+        var providerCalled = false
+
+        assertFailsWith<CancellationException> {
+            createAndroidSafDirectoryAfterCancellationCheck(
+                shouldContinue = { false },
+                create = {
+                    providerCalled = true
+                    1
+                },
+            )
+        }
+
+        assertFalse(providerCalled)
+    }
+
     @Test
     fun `recovery names stay bounded independently of the final filename`() {
         val finalName = "a".repeat(1_024)
@@ -230,6 +265,103 @@ class AndroidSafDownloadPublicationTest {
         assertEquals(FakeSafKind.File, published.kind)
         assertContentEquals(byteArrayOf(3, 4, 5), published.bytes)
         assertEquals(listOf("Archive"), directory.names())
+    }
+
+    @Test
+    fun `cancellation after exact publication preserves the committed generation`() {
+        val cancellation = CancellationException("cancelled after exact provider rename")
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            cancelNextDocumentsAfterRenameTo["Archive"] = cancellation
+        }
+
+        val thrown = assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(5, 6))
+            }
+        }
+
+        assertEquals(cancellation, thrown)
+        assertContentEquals(byteArrayOf(5, 6), directory.entryNamed("Archive").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `provider normalized publication is removed before restoring the original`() {
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames["Archive"] = "provider-final"
+            replaceIdentityAfterRenameTo = "Archive"
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(6, 7))
+            }
+        }
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `provider normalized new publication is removed and ownership retires`() {
+        val directory = FakeSafDirectory().apply {
+            normalizedRenameNames["Report.txt"] = "provider-report.txt"
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            publisher(directory).publish("Report.txt", currentDocument = null) { output -> output.write(1) }
+        }
+
+        assertEquals(emptyList(), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `cancellation after normalized publication still restores the original`() {
+        val cancellation = CancellationException("cancelled after provider rename")
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames["Archive"] = "provider-final"
+            replaceIdentityAfterRenameTo = "Archive"
+            cancelNextDocumentsAfterRenameTo["Archive"] = cancellation
+        }
+
+        val thrown = assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(7, 8))
+            }
+        }
+
+        assertEquals(cancellation, thrown)
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `failed normalized publication cleanup retains all recovery state`() {
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            normalizedRenameNames["Archive"] = "provider-final"
+            replaceIdentityAfterRenameTo = "Archive"
+            failNextDeletionOfName = "provider-final"
+        }
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(8, 9))
+            }
+        }
+
+        val transaction = directory.ownership.transactions().single()
+        assertTrue(failure.suppressedExceptions.single() is IllegalStateException)
+        assertEquals(setOf("provider-final", transaction.backupName), directory.names().toSet())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed(transaction.backupName).kind)
+        assertContentEquals(byteArrayOf(8, 9), directory.entryNamed("provider-final").bytes)
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
     }
 
     @Test
@@ -704,6 +836,27 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
+    fun `persisted backup identity rejects an unrelated exact-name occupant`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory()
+        val original = directory.addDirectory("provider-backup-$TOKEN")
+        val transaction = initial.copy(
+            backupProtected = true,
+            backupDocumentIdentity = original.toString(),
+        )
+        directory.ownership.add(transaction)
+        directory.addFile(transaction.backupName, byteArrayOf(28, 29))
+        directory.addFile(transaction.stageName, byteArrayOf(30, 31))
+
+        publisher(directory).reconcile()
+
+        assertEquals(setOf("Archive", transaction.backupName), directory.names().toSet())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertContentEquals(byteArrayOf(28, 29), directory.entryNamed(transaction.backupName).bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
     fun `ambiguous exact restore clears protection before persisting another backup name`() {
         val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory()
@@ -849,6 +1002,7 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var replaceBackupWithUnrelatedFinalBeforeRenameTo: String? = null
     var removeBackupBeforeStageRenameFailureTo: String? = null
     val normalizedRenameNames = mutableMapOf<String, String>()
+    val cancelNextDocumentsAfterRenameTo = mutableMapOf<String, CancellationException>()
     var failNextBackupDeletion: Boolean = false
     var failNextStageDeletion: Boolean = false
     var failNextDeletionOfName: String? = null
@@ -944,6 +1098,9 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
         if (cancelAfterRenameTo == displayName) {
             cancelAfterRenameTo = null
             throw CancellationException("process stopped after rename")
+        }
+        cancelNextDocumentsAfterRenameTo.remove(displayName)?.let { cancellation ->
+            documentsCancellation = cancellation
         }
         return renamedDocument
     }

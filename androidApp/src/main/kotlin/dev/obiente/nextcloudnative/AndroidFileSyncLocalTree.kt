@@ -317,7 +317,18 @@ internal class AndroidSafFileSyncLocalTree(
             require(existing == null) { "The local folder appeared after the sync scan." }
         } else {
             requireNotNull(existing) { "The local item disappeared after the sync scan." }
-            if (existing.entry.kind == SyncEntryKind.Directory) return
+        }
+        if (
+            authenticateExistingAndroidSafDirectory(existing?.entry?.kind) {
+                authenticatedReplacementSnapshot(
+                    document = requireNotNull(existing),
+                    expectedLocalRevision = requireNotNull(expectedLocalRevision),
+                    expectedContentHash = expectedContentHash,
+                    shouldContinue = shouldContinue,
+                )
+            }
+        ) {
+            return
         }
         val replacementSnapshot = existing?.let { document ->
             authenticatedReplacementSnapshot(
@@ -330,8 +341,8 @@ internal class AndroidSafFileSyncLocalTree(
         val parent = ensureParent(path)
         val finalName = path.substringAfterLast('/')
         if (existing == null) {
-            requireNotNull(createDirectoryDocument(parent, finalName)) {
-                "The local folder could not be created."
+            createAndroidSafDirectoryAfterCancellationCheck(shouldContinue) {
+                createDirectoryDocument(parent, finalName)
             }
         } else {
             val directory = publicationDirectory(parent, path.substringBeforeLast('/', ""))
