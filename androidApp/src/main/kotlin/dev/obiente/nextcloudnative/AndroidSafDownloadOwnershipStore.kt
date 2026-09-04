@@ -204,6 +204,10 @@ internal class AndroidSafDownloadOwnershipStore(
             previous.backupContentIdentity == null ||
                 previous.backupContentIdentity == transaction.backupContentIdentity,
         ) { "SAF download recovery content identity cannot be changed." }
+        check(
+            previous.stageContentIdentity == null ||
+                previous.stageContentIdentity == transaction.stageContentIdentity,
+        ) { "SAF download recovery stage content identity cannot be changed." }
     }
 
     private fun ownershipRows(
@@ -257,6 +261,7 @@ internal class AndroidSafDownloadOwnershipStore(
             val backupDocumentIdentity = if (formatVersion >= 6 && input.readBoolean()) input.readUtf8() else null
             val stageDocumentIdentity = if (formatVersion >= 7 && input.readBoolean()) input.readUtf8() else null
             val backupContentIdentity = if (formatVersion >= 8 && input.readBoolean()) input.readUtf8() else null
+            val stageContentIdentity = if (formatVersion >= 9 && input.readBoolean()) input.readUtf8() else null
             val transaction = AndroidSafOwnedDownloadTransaction(
                 finalName = finalName,
                 token = token,
@@ -267,6 +272,7 @@ internal class AndroidSafDownloadOwnershipStore(
                 backupDocumentIdentity = backupDocumentIdentity,
                 stageDocumentIdentity = stageDocumentIdentity,
                 backupContentIdentity = backupContentIdentity,
+                stageContentIdentity = stageContentIdentity,
             )
             check(input.read() == -1) { "SAF download recovery storage contains trailing data." }
             transaction
@@ -296,6 +302,8 @@ internal class AndroidSafDownloadOwnershipStore(
                     transaction.stageDocumentIdentity?.let { identity -> output.writeUtf8(identity) }
                     output.writeBoolean(transaction.backupContentIdentity != null)
                     transaction.backupContentIdentity?.let { identity -> output.writeUtf8(identity) }
+                    output.writeBoolean(transaction.stageContentIdentity != null)
+                    transaction.stageContentIdentity?.let { identity -> output.writeUtf8(identity) }
                     output.flush()
                     fileOutput.fd.sync()
                 }
@@ -362,7 +370,7 @@ internal class AndroidSafDownloadOwnershipStore(
     private companion object {
         val LOCK = Any()
         const val MAGIC = 0x4E435344 // NCSD
-        const val FORMAT_VERSION = 8
+        const val FORMAT_VERSION = 9
         const val SCOPE_HEX_CHARACTERS = 64
         const val TOKEN_CHARACTERS = 36
         const val MAX_FIELD_BYTES = 4 * 1024

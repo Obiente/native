@@ -11,6 +11,57 @@ import kotlin.test.assertNotEquals
 
 class AndroidSafDownloadStageIdentityTest {
     @Test
+    fun `restart authenticates a published stage after provider changes its identity`() {
+        val cancellation = CancellationException("process stopped after identity-changing publication")
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            replaceIdentityAfterRenameTo = "Archive"
+            cancelAfterRenameTo = "Archive"
+        }
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(10, 11))
+            }
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(false, pending.publicationCompleted)
+        assertNotEquals(pending.stageDocumentIdentity, directory.documentNamed("Archive").toString())
+        assertEquals(directory.contentIdentity(directory.documentNamed("Archive")), pending.stageContentIdentity)
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertContentEquals(byteArrayOf(10, 11), directory.entryNamed("Archive").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `changed final content cannot authenticate an identity-changing publication`() {
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            replaceIdentityAfterRenameTo = "Archive"
+            cancelAfterRenameTo = "Archive"
+        }
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(12, 13))
+            }
+        }
+        val pending = directory.ownership.transactions().single()
+        directory.entryNamed("Archive").bytes = byteArrayOf(14, 15)
+
+        publisher(directory).reconcile()
+
+        assertContentEquals(byteArrayOf(14, 15), directory.entryNamed("Archive").bytes)
+        assertContentEquals(byteArrayOf(), directory.entryNamed(pending.backupName).bytes)
+        assertEquals(listOf(pending), directory.ownership.transactions())
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
+    }
+
+    @Test
     fun `normalized created stage stays owned until cleanup succeeds`() {
         val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
         val normalizedStageName = "provider-stage-$TOKEN"

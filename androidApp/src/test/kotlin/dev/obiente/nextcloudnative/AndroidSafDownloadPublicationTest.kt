@@ -562,6 +562,7 @@ class AndroidSafDownloadPublicationTest {
                     backupDocumentIdentity = originalDocument.toString(),
                     stageDocumentIdentity = directory.documentNamed(transaction.stageName).toString(),
                     backupContentIdentity = directory.contentIdentity(originalDocument),
+                    stageContentIdentity = directory.contentIdentity(directory.documentNamed(transaction.stageName)),
                 ),
             ),
             directory.ownership.transactions(),

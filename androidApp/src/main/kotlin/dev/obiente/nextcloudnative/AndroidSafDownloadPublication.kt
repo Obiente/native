@@ -41,7 +41,7 @@ internal class AndroidSafDownloadPublisher<Document>(
     private val directory: AndroidSafPublicationDirectory<Document>,
     private val ownership: AndroidSafDownloadOwnership,
     private val newToken: () -> String = { UUID.randomUUID().toString() },
-    private val contentIdentity: (Document) -> String? = { null },
+    private val contentIdentity: (Document) -> String?,
 ) {
     fun reconcile() {
         val observedNames = directory.documents().mapTo(mutableSetOf()) { it.displayName }
@@ -72,7 +72,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 transaction.publicationAttempted &&
                 transaction.stageDocumentIdentity != null &&
                 stage == null &&
-                final?.documentIdentity == transaction.stageDocumentIdentity
+                authenticatedPublishedFinal(transaction, final)
             ) {
                 transaction = markPublished(transaction)
             }
@@ -163,6 +163,12 @@ internal class AndroidSafDownloadPublisher<Document>(
 
         try {
             prepareStage(stage)
+            val stageContentIdentity = requireNotNull(contentIdentity(stage)) {
+                "The staged local content could not be authenticated before publication."
+            }
+            val authenticated = transaction.copy(stageContentIdentity = stageContentIdentity)
+            ownership.replace(authenticated)
+            transaction = authenticated
         } catch (failure: CancellationException) {
             throw failure
         } catch (failure: Throwable) {
@@ -420,12 +426,27 @@ internal class AndroidSafDownloadPublisher<Document>(
         transaction: AndroidSafOwnedDownloadTransaction,
         stage: Document,
         renamedStage: Document? = null,
-    ): Boolean =
-        directory.documents().any { document ->
-            document.displayName == transaction.finalName &&
-                (document.document == stage || document.document == renamedStage)
-        } &&
-            stageDocument(transaction) == null
+    ): Boolean {
+        val final = directory.documents().singleOrNull { document ->
+            document.displayName == transaction.finalName
+        }
+        return stageDocument(transaction) == null &&
+            (final?.document == stage || final?.document == renamedStage || authenticatedPublishedFinal(transaction, final))
+    }
+
+    private fun authenticatedPublishedFinal(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        final: AndroidSafPublicationDocument<Document>?,
+    ): Boolean {
+        if (final == null) return false
+        if (final.documentIdentity == transaction.stageDocumentIdentity) return true
+        val expectedContentIdentity = transaction.stageContentIdentity ?: return false
+        if (contentIdentity(final.document) != expectedContentIdentity) return false
+        val confirmed = directory.documents().singleOrNull { document ->
+            document.displayName == transaction.finalName && document.documentIdentity == final.documentIdentity
+        } ?: return false
+        return contentIdentity(confirmed.document) == expectedContentIdentity
+    }
 
     private fun markPublished(transaction: AndroidSafOwnedDownloadTransaction): AndroidSafOwnedDownloadTransaction {
         val published = transaction.copy(publicationAttempted = true, publicationCompleted = true)
@@ -542,6 +563,7 @@ internal data class AndroidSafOwnedDownloadTransaction(
     val backupDocumentIdentity: String? = null,
     val stageDocumentIdentity: String? = null,
     val backupContentIdentity: String? = null,
+    val stageContentIdentity: String? = null,
 ) {
     val stageName: String = ".nextcloud-native-download-$token"
     val generatedBackupName: String = ".nextcloud-native-backup-$token"
@@ -556,6 +578,7 @@ internal data class AndroidSafOwnedDownloadTransaction(
         require(backupDocumentIdentity == null || backupDocumentIdentity.isNotBlank())
         require(stageDocumentIdentity == null || stageDocumentIdentity.isNotBlank())
         require(backupContentIdentity == null || backupContentIdentity.isNotBlank())
+        require(stageContentIdentity == null || stageContentIdentity.isNotBlank())
         require(
             backupDisplayName == null ||
                 backupDisplayName.isNotBlank() &&
