@@ -1598,6 +1598,7 @@ internal class AndroidNextcloudServices(
                 cloudMutationsAllowed = appContext.cloudMutationGate(),
             )
             documentWritebacks.forEach { discovered ->
+                currentCoroutineContext().ensureActive()
                 val pending = claimAndroidDocumentPendingWritebackForRecovery(
                     appContext,
                     session,
@@ -1618,6 +1619,7 @@ internal class AndroidNextcloudServices(
                         userId = userId,
                         pending = pending,
                     )
+                    currentCoroutineContext().ensureActive()
                     if (remote.contentsMatch) {
                         virtualFileCache.invalidate(session, pending.remotePath)
                         notifyDocumentsDocumentChanged(session, pending.remotePath)
@@ -1639,7 +1641,9 @@ internal class AndroidNextcloudServices(
                     virtualFileCache.invalidate(session, pending.remotePath)
                     notifyDocumentsDocumentChanged(session, pending.remotePath)
                     pending.complete()
-                }.onFailure { pending.releaseActive() }
+                }.onFailure { failure ->
+                    handleAndroidDocumentWritebackRecoveryFailure(failure, pending::releaseActive)
+                }
             }
         }
         val pendingWritebacks = androidDocumentPendingWritebackCount(appContext, session)

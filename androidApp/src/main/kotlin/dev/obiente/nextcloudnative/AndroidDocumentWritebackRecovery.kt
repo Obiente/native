@@ -7,6 +7,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 internal const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = Long.MAX_VALUE
@@ -124,8 +125,9 @@ internal fun androidDocumentPendingWritebacks(
 ): List<AndroidDocumentPendingWriteback> = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
     val root = File(context.filesDir, "documents-recovery")
     if (!root.isDirectory) return emptyList()
+    val files = requireInspectableAndroidDocumentWritebackRecovery(root)
     val accountId = NextcloudDocumentIds.accountKey(session)
-    return root.listFiles().orEmpty().mapNotNull { manifest ->
+    return files.mapNotNull { manifest ->
         parseAndroidDocumentWriteback(root, manifest, accountId)
     }.filterNot { writeback ->
         writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
@@ -139,8 +141,9 @@ internal fun androidDocumentPendingWriteback(
 ): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
     val root = context?.let { File(it.filesDir, "documents-recovery") } ?: return null
     if (!root.isDirectory) return null
+    val files = requireInspectableAndroidDocumentWritebackRecovery(root)
     val account = NextcloudDocumentIds.accountKey(session)
-    return root.listFiles().orEmpty().asSequence()
+    return files.asSequence()
         .mapNotNull { manifest -> parseAndroidDocumentWriteback(root, manifest, account) }
         .filter { writeback -> writeback.remotePath == remotePath }
         .filterNot { writeback ->
@@ -222,15 +225,28 @@ internal fun androidDocumentWritebackPathBlocksMutation(
     vararg mutationPaths: String,
 ): Boolean = mutationPaths.any { path -> activePath == path || activePath.startsWith("$path/") }
 
-private fun parseAndroidDocumentWriteback(
+internal inline fun handleAndroidDocumentWritebackRecoveryFailure(
+    failure: Throwable,
+    release: () -> Unit,
+) {
+    release()
+    if (failure is CancellationException) throw failure
+}
+
+private data class AndroidDocumentWritebackManifest(
+    val pending: AndroidDocumentPendingWriteback,
+    val ready: Boolean,
+)
+
+private fun parseAndroidDocumentWritebackManifest(
     root: File,
     manifest: File,
     expectedAccount: String?,
-): AndroidDocumentPendingWriteback? = runCatching {
+): AndroidDocumentWritebackManifest? = runCatching {
     require(manifest.isFile && manifest.name.endsWith(".stage.json") && manifest.length() <= 64 * 1024L)
     val data = JSONObject(manifest.readText())
     val stageName = data.getString("stage")
-    require(data.getInt("version") == 1 && data.optBoolean("ready", false))
+    require(data.getInt("version") == 1)
     val account = data.getString("account")
     require(expectedAccount == null || account == expectedAccount)
     require(data.getLong("startedAt") >= 0L)
@@ -239,26 +255,67 @@ private fun parseAndroidDocumentWriteback(
     require(manifest.name == "$stageName.json")
     val stage = File(root, stageName)
     require(stage.isFile)
-    AndroidDocumentPendingWriteback(
-        staging = stage,
-        manifest = manifest,
-        accountId = account,
-        remotePath = data.getString("path"),
-        expectedRemoteEtag = data.getString("etag"),
-        conflict = data.optBoolean("conflict", false),
+    AndroidDocumentWritebackManifest(
+        pending = AndroidDocumentPendingWriteback(
+            staging = stage,
+            manifest = manifest,
+            accountId = account,
+            remotePath = data.getString("path"),
+            expectedRemoteEtag = data.getString("etag"),
+            conflict = data.optBoolean("conflict", false),
+        ),
+        ready = data.optBoolean("ready", false),
     )
 }.getOrNull()
 
+private fun parseAndroidDocumentWriteback(
+    root: File,
+    manifest: File,
+    expectedAccount: String?,
+): AndroidDocumentPendingWriteback? = parseAndroidDocumentWritebackManifest(root, manifest, expectedAccount)
+    ?.takeIf(AndroidDocumentWritebackManifest::ready)
+    ?.pending
+
+internal fun requireInspectableAndroidDocumentWritebackRecovery(root: File): List<File> {
+    if (!root.exists()) return emptyList()
+    check(root.isDirectory) { "Document writeback recovery storage is not a directory." }
+    val files = requireNotNull(root.listFiles()) { "Document writeback recovery storage could not be inspected." }
+        .filter(File::isFile)
+    val ambiguousManifest = files.firstOrNull { manifest ->
+        manifest.name.startsWith("writeback-") &&
+            manifest.name.endsWith(".stage.json") &&
+            File(root, manifest.name.removeSuffix(".json")).isFile &&
+            parseAndroidDocumentWritebackManifest(root, manifest, expectedAccount = null) == null
+    }
+    check(ambiguousManifest == null) {
+        "A retained document edit has recovery metadata that cannot be inspected safely."
+    }
+    return files
+}
+
 /** Removes writeback transactions that could not reach the close-ready state before process death. */
 internal fun cleanupIncompleteAndroidDocumentWritebacks(context: android.content.Context): Int =
+    cleanupIncompleteAndroidDocumentWritebacks(File(context.filesDir, "documents-recovery"))
+
+internal fun cleanupIncompleteAndroidDocumentWritebacks(root: File): Int =
     synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val root = File(context.filesDir, "documents-recovery")
         if (!root.isDirectory) return 0
-        val files = root.listFiles().orEmpty().filter(File::isFile)
+        val files = requireNotNull(root.listFiles()) {
+            "Document writeback recovery storage could not be inspected."
+        }.filter(File::isFile)
         val retainedNames = files.mapNotNull { manifest ->
             parseAndroidDocumentWriteback(root, manifest, expectedAccount = null)
         }.flatMapTo(hashSetOf()) { writeback ->
             listOf(writeback.staging.name, writeback.manifest.name)
+        }
+        files.filter { manifest ->
+            manifest.name.startsWith("writeback-") &&
+                manifest.name.endsWith(".stage.json") &&
+                File(root, manifest.name.removeSuffix(".json")).isFile &&
+                parseAndroidDocumentWritebackManifest(root, manifest, expectedAccount = null) == null
+        }.forEach { manifest ->
+            retainedNames += manifest.name
+            retainedNames += manifest.name.removeSuffix(".json")
         }
         return files.count { file ->
             val owned =

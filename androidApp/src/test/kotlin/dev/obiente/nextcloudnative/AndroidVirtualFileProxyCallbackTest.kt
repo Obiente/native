@@ -8,9 +8,50 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 
 class AndroidVirtualFileProxyCallbackTest {
+    @Test
+    fun `ambiguous writeback metadata preserves retained user bytes and blocks discovery`() {
+        val root = Files.createTempDirectory("document-writeback-recovery-").toFile()
+        val staging = root.resolve("writeback-retained.stage").apply {
+            writeText("retained user edit")
+        }
+        val manifest = root.resolve("${staging.name}.json").apply {
+            writeText("{\"version\":2}")
+        }
+
+        try {
+            assertEquals(0, cleanupIncompleteAndroidDocumentWritebacks(root))
+            assertTrue(staging.isFile)
+            assertEquals("retained user edit", staging.readText())
+            assertTrue(manifest.isFile)
+
+            assertFailsWith<IllegalStateException> {
+                requireInspectableAndroidDocumentWritebackRecovery(root)
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `writeback recovery releases ownership and rethrows cancellation`() {
+        val cancellation = CancellationException("recovery cancelled")
+        var releases = 0
+
+        val thrown = assertFailsWith<CancellationException> {
+            handleAndroidDocumentWritebackRecoveryFailure(cancellation) {
+                releases += 1
+            }
+        }
+
+        assertSame(cancellation, thrown)
+        assertEquals(1, releases)
+    }
+
     @Test
     fun `writeback reconciliation compares remote bytes without replacing the retained stage`() {
         val staging = Files.createTempFile("writeback-compare-", ".stage").toFile().apply {
