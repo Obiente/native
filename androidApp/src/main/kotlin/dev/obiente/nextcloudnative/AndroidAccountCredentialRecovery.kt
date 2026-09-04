@@ -74,6 +74,23 @@ internal fun decodeAndroidPendingAccountRemovalCleanup(
     return runCatching { AndroidPendingAccountRemovalCleanup(accountStorageKey, workIdentity) }.getOrNull()
 }
 
+internal data class RestoredAndroidPendingAccountRemovalCleanups(
+    val cleanups: Set<AndroidPendingAccountRemovalCleanup>,
+    val malformedEntryCount: Int,
+)
+
+internal fun restoreAndroidPendingAccountRemovalCleanups(
+    encoded: Set<String>,
+): RestoredAndroidPendingAccountRemovalCleanups {
+    val cleanups = linkedSetOf<AndroidPendingAccountRemovalCleanup>()
+    var malformedEntryCount = 0
+    encoded.forEach { entry ->
+        val cleanup = decodeAndroidPendingAccountRemovalCleanup(entry)
+        if (cleanup == null) malformedEntryCount += 1 else cleanups += cleanup
+    }
+    return RestoredAndroidPendingAccountRemovalCleanups(cleanups, malformedEntryCount)
+}
+
 internal fun pendingAndroidAccountRemovalCleanupForSession(
     session: NextcloudSession,
     cleanups: Collection<AndroidPendingAccountRemovalCleanup>,
@@ -107,8 +124,20 @@ internal fun reconstructAndroidAccountCredentialState(
         if (session == null) unavailableAccounts += account.id else sessions[account.id] = session
     }
     if (registry.activeAccountId in unavailableAccounts) return null
-    val retainedRegistry = unavailableAccounts.fold(registry) { retained, accountId -> retained.remove(accountId) }
-    return AndroidAccountCredentialState(retainedRegistry, sessions)
+    return AndroidAccountCredentialState(registry, sessions)
+}
+
+internal fun reconstructAndroidAccountCredentialStateForRemoval(
+    registry: NextcloudAccountRegistry,
+    accountId: NextcloudAccountId,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): AndroidAccountCredentialState? {
+    val recoverableRegistry = if (registry.activeAccountId == accountId) {
+        registry.copy(activeAccountId = null)
+    } else {
+        registry
+    }
+    return reconstructAndroidAccountCredentialState(recoverableRegistry, loadSession)
 }
 
 internal fun restoreAndroidAccountCredentialStateWithoutAggregate(

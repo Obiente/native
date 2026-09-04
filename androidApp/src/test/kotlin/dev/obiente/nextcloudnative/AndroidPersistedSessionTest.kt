@@ -256,6 +256,7 @@ class AndroidPersistedSessionTest {
         assertNull(restored)
         assertFalse(persisted)
         assertEquals(listOf("ACCOUNT_CREDENTIAL_STORE_MALFORMED"), diagnostics.mapNotNull { it.code })
+        assertEquals("failed", diagnostics.single().outcome)
         assertDiagnosticsExcludePrivateValues(diagnostics)
     }
 
@@ -276,6 +277,7 @@ class AndroidPersistedSessionTest {
 
         assertNull(restored)
         assertEquals(listOf("ACCOUNT_CREDENTIAL_SLOT_MISMATCH"), diagnostics.mapNotNull { it.code })
+        assertEquals("failed", diagnostics.single().outcome)
         assertDiagnosticsExcludePrivateValues(diagnostics)
     }
 
@@ -349,6 +351,7 @@ class AndroidPersistedSessionTest {
         assertEquals(firstSession(), requireNotNull(restored).activeSession)
         assertNotNull(migrated)
         assertEquals(listOf("ACCOUNT_REGISTRY_MALFORMED"), diagnostics.mapNotNull { it.code })
+        assertEquals("recovered", diagnostics.single().outcome)
         assertDiagnosticsExcludePrivateValues(diagnostics)
     }
 
@@ -371,6 +374,7 @@ class AndroidPersistedSessionTest {
         assertEquals(firstSession(), readOnly.activeSession)
         assertFalse(migrated)
         assertEquals(listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"), diagnostics.mapNotNull { it.code })
+        assertEquals("unsupported", diagnostics.single().outcome)
         assertFailsWith<IllegalStateException> { readOnly.upsertAndSelect(secondSession()) }
         assertFailsWith<IllegalStateException> { readOnly.select(firstSession().accountId) }
         assertFailsWith<IllegalStateException> { readOnly.remove(firstSession().accountId) }
@@ -398,6 +402,7 @@ class AndroidPersistedSessionTest {
             listOf("ACCOUNT_CREDENTIAL_STORE_VERSION_UNSUPPORTED"),
             diagnostics.mapNotNull { it.code },
         )
+        assertEquals("unsupported", diagnostics.single().outcome)
         assertFalse(
             androidCredentialStoreAllowsSessionRestore(
                 AndroidAccountCredentialStoreRead.Unsupported("encrypted-future-store", 3),
@@ -438,6 +443,7 @@ class AndroidPersistedSessionTest {
         assertEquals(firstSession(), requireNotNull(restored).activeSession)
         val diagnostic = diagnostics.single()
         assertEquals("ACCOUNT_CREDENTIAL_STORE_MIGRATION_FAILED", diagnostic.code)
+        assertEquals("failed", diagnostic.outcome)
         val exception = assertNotNull(diagnostic.exception)
         assertNull(exception.message)
         assertDiagnosticsExcludePrivateValues(diagnostics)
@@ -605,6 +611,18 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun malformedPendingCleanupRowsAreIsolatedFromValidRecoveryWork() {
+        val valid = pendingAndroidAccountRemovalCleanup(firstSession())
+
+        val restored = restoreAndroidPendingAccountRemovalCleanups(
+            setOf(encodeAndroidPendingAccountRemovalCleanup(valid), "truncated-row"),
+        )
+
+        assertEquals(setOf(valid), restored.cleanups)
+        assertEquals(1, restored.malformedEntryCount)
+    }
+
+    @Test
     fun damagedCredentialSlotRecoversFromTheMatchingAggregateCredential() {
         val session = firstSession()
         val aggregate = AndroidAccountCredentialState.Empty.upsertAndSelect(session)
@@ -665,8 +683,11 @@ class AndroidPersistedSessionTest {
         }
 
         assertEquals(mapOf(first.accountId to first), requireNotNull(restored).sessions)
-        assertEquals(listOf(first.accountRecord()), restored.registry.accounts)
+        assertEquals(listOf(first.accountRecord(), second.accountRecord()), restored.registry.accounts)
         assertEquals(first, restored.activeSession)
+
+        val roundTrip = decodeAndroidAccountCredentialState(encodeAndroidAccountCredentialState(restored)).state
+        assertEquals(restored, roundTrip)
     }
 
     @Test
@@ -682,6 +703,43 @@ class AndroidPersistedSessionTest {
                 first.takeIf { accountId == first.accountId }
             },
         )
+    }
+
+    @Test
+    fun corruptActiveCredentialSlotCanBeRemovedWithoutDroppingOtherAccounts() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+
+        val recovered = reconstructAndroidAccountCredentialStateForRemoval(
+            registry = registry,
+            accountId = second.accountId,
+            loadSession = { accountId -> first.takeIf { accountId == first.accountId } },
+        )
+
+        val afterRemoval = requireNotNull(recovered).remove(second.accountId)
+        assertNull(afterRemoval.activeSession)
+        assertEquals(listOf(first.accountRecord()), afterRemoval.registry.accounts)
+        assertEquals(mapOf(first.accountId to first), afterRemoval.sessions)
+    }
+
+    @Test
+    fun corruptActiveCredentialSlotCannotAuthorizeRemovingAnotherAccount() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+
+        val recovered = reconstructAndroidAccountCredentialStateForRemoval(
+            registry = registry,
+            accountId = first.accountId,
+            loadSession = { accountId -> first.takeIf { accountId == first.accountId } },
+        )
+
+        assertNull(recovered)
     }
 
     @Test
