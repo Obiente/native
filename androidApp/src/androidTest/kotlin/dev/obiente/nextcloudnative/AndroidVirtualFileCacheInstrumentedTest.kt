@@ -10,6 +10,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import org.junit.After
@@ -17,6 +18,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -162,6 +164,41 @@ class AndroidVirtualFileCacheInstrumentedTest {
             unrelatedMutationRan = true
         }
         org.junit.Assert.assertTrue(unrelatedMutationRan)
+    }
+
+    @Test
+    fun processRestoredWritebackBlocksNativeTextSaveUntilRecovery() {
+        MockWebServer().use { server ->
+            server.start()
+            val saveSession = session.copy(serverUrl = server.url("/").toString())
+            val recovery = File(context.filesDir, "documents-recovery").apply { mkdirs() }
+            val stage = File(recovery, "writeback-text-save.stage").apply { writeText("local edit") }
+            File(recovery, stage.name + ".json").writeText(
+                JSONObject()
+                    .put("version", 1)
+                    .put("account", NextcloudDocumentIds.accountKey(saveSession))
+                    .put("path", "Notes/draft.md")
+                    .put("etag", "\"v1\"")
+                    .put("displayName", "draft.md")
+                    .put("stage", stage.name)
+                    .put("startedAt", 10L)
+                    .put("ready", true)
+                    .toString(),
+            )
+
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking {
+                    AndroidNextcloudServices(context).saveTextFile(
+                        session = saveSession,
+                        userId = "virtual-cache-fixture",
+                        path = "Notes/draft.md",
+                        text = "native editor update",
+                        expectedEtag = "\"v1\"",
+                    )
+                }
+            }
+            assertEquals(0, server.requestCount)
+        }
     }
 
     @Test

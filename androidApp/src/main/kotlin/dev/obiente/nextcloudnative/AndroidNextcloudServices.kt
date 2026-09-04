@@ -35,7 +35,6 @@ import dev.obiente.nextcloudnative.app.normalizeServerUrl
 import dev.obiente.nextcloudnative.app.toApprovedDiagnostic
 import dev.obiente.nextcloudnative.app.toStartedDiagnostic
 import dev.obiente.nextcloudnative.app.confirmTextFileDavSave
-import dev.obiente.nextcloudnative.app.runCatchingPreservingCancellation
 import dev.obiente.nextcloudnative.app.textFileDavSaveRequest
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
@@ -2672,20 +2671,26 @@ internal class AndroidNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        val specification = textFileDavSaveRequest(text, expectedEtag)
-        val response = request(
-            method = "PUT",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            rawBody = specification.body,
-            contentType = specification.contentType,
-            headers = specification.headers,
-        )
-        val confirmation = confirmTextFileDavSave(response.status)
-        val etag = response.etag ?:
-            runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-        SavedTextFile(etag, confirmation.created)
+        withNoBlockingAndroidDocumentWriteback(appContext, session, path) {
+            val specification = textFileDavSaveRequest(text, expectedEtag)
+            val response = request(
+                method = "PUT",
+                url = buildNextcloudFileUrl(session.serverUrl, userId, path),
+                session = session,
+                rawBody = specification.body,
+                contentType = specification.contentType,
+                headers = specification.headers,
+            )
+            val confirmation = confirmTextFileDavSave(response.status)
+            val etag = response.etag ?: try {
+                loadFileEtag(session, userId, path)
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                null
+            }
+            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
+            SavedTextFile(etag, confirmation.created)
+        }
     }
 
     override suspend fun createTextFileIfAbsent(
