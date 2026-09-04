@@ -94,6 +94,11 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         }
     }
 
+    suspend fun reconcileQueuedUploads(): Boolean = reconcileQueuedDurableUploads(
+        jobs = store.list(),
+        schedule = { job -> schedule(job).await() },
+    )
+
     fun dismiss(session: NextcloudSession, scope: DurableUploadScope, uploadId: String): Boolean {
         val job = store.find(uploadId) ?: return false
         if (
@@ -132,6 +137,77 @@ internal class AndroidDurableMultipartUploads(context: Context) {
 
 internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
 
+internal suspend fun reconcileQueuedDurableUploads(
+    jobs: List<AndroidDurableMultipartUploadJob>,
+    schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+): Boolean {
+    var allScheduled = true
+    jobs.filter { job -> job.state == DurableUploadState.Queued }.forEach { job ->
+        try {
+            schedule(job)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            allScheduled = false
+        }
+    }
+    return allScheduled
+}
+
+internal suspend fun constructAndReconcileQueuedDurableUploads(
+    createReconciler: () -> suspend () -> Boolean,
+): Boolean {
+    val reconcile = try {
+        createReconciler()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        throw AndroidDurableMultipartUploadRecoveryException(failure)
+    }
+    return reconcile()
+}
+
+internal suspend fun retryQueuedDurableUploadScheduling(
+    retryDelaysMillis: List<Long> = listOf(1_000L, 5_000L),
+    reconcile: suspend () -> Boolean,
+    wait: suspend (Long) -> Unit,
+): Boolean {
+    if (reconcile()) return true
+    retryDelaysMillis.forEach { delayMillis ->
+        require(delayMillis >= 0L)
+        wait(delayMillis)
+        if (reconcile()) return true
+    }
+    return false
+}
+
+internal suspend fun keepRetryingQueuedDurableUploadScheduling(
+    retryDelaysMillis: List<Long> = listOf(1_000L, 5_000L),
+    followUpDelayMillis: Long = 60_000L,
+    reconcile: suspend () -> Boolean,
+    wait: suspend (Long) -> Unit,
+    recordRecoveryFailure: () -> Unit = {},
+) {
+    require(followUpDelayMillis > 0L)
+    var recoveryFailureReported = false
+    while (true) {
+        val recovered = try {
+            retryQueuedDurableUploadScheduling(retryDelaysMillis, reconcile, wait)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: AndroidDurableMultipartUploadRecoveryException) {
+            false
+        }
+        if (recovered) {
+            recoveryFailureReported = false
+        } else if (!recoveryFailureReported) {
+            runCatching(recordRecoveryFailure)
+            recoveryFailureReported = true
+        }
+        wait(followUpDelayMillis)
+    }
+}
+
 internal enum class DurableUploadAccountMismatchOutcome {
     DeferAccountRecovery,
     AccountUnavailable,
@@ -169,6 +245,29 @@ internal fun resolveDurableUploadSession(
     return loadSession(account.id)?.takeIf { session ->
         NextcloudDocumentIds.accountKey(session) == expectedAccountId
     }
+}
+
+internal fun resolveDurableUploadSessionWithRegistryRecovery(
+    expectedAccountId: String,
+    listAccounts: () -> List<NextcloudAccountRecord>,
+    recoverRegistry: () -> NextcloudSession?,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): NextcloudSession? {
+    val accounts = listAccounts()
+    val accountAvailable = accounts.any { account ->
+        NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == expectedAccountId
+    }
+    if (!accountAvailable) {
+        val recoveredSession = recoverRegistry()
+        if (
+            recoveredSession != null &&
+            NextcloudDocumentIds.accountKey(recoveredSession) == expectedAccountId
+        ) {
+            return recoveredSession
+        }
+        return resolveDurableUploadSession(expectedAccountId, listAccounts(), loadSession)
+    }
+    return resolveDurableUploadSession(expectedAccountId, accounts, loadSession)
 }
 
 internal data class AndroidDurableMultipartUploadJob(
