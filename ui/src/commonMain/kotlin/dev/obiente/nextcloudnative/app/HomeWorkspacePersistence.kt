@@ -29,8 +29,13 @@ internal class HomeWorkspaceLayoutRepository(
         val legacyScope = legacyAccountScopeDigest?.let { digest ->
             HomeWorkspaceScope(digest, scope.formFactor)
         } ?: return defaultHomeWorkspaceLayout(scope)
-        val legacyEncoded = runCatching { storage.read(legacyScope.persistenceKey) }.getOrNull()
-            ?: return defaultHomeWorkspaceLayout(scope)
+        val legacyEncoded = try {
+            storage.read(legacyScope.persistenceKey)
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            null
+        } ?: return defaultHomeWorkspaceLayout(scope)
         val legacyLayout = decodeHomeWorkspaceLayoutSnapshot(legacyScope, legacyEncoded)
         val migrated = HomeWorkspaceLayout(scope, legacyLayout.sections)
         save(migrated)
