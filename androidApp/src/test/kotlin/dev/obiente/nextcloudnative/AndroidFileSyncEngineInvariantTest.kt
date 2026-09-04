@@ -60,6 +60,33 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun accountRetirementRemovesOnlyItsPersistedSyncPairsAndLabels() {
+        val first = FileSyncPair(
+            id = "first-pair",
+            accountId = "first-account",
+            localRootId = "first-root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+        )
+        val retained = FileSyncPair(
+            id = "retained-pair",
+            accountId = "retained-account",
+            localRootId = "retained-root",
+            remoteRootPath = "Documents",
+            configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+        )
+        val state = AndroidFileSyncPersistedState(
+            coordinator = FileSyncCoordinatorState(listOf(first, retained)),
+            localDisplayNames = mapOf(first.id to "Camera", retained.id to "Documents"),
+        )
+
+        val retired = removeAndroidFileSyncAccountPairs(state, first.accountId)
+
+        assertEquals(listOf(retained), retired.coordinator.pairs)
+        assertEquals(mapOf(retained.id to "Documents"), retired.localDisplayNames)
+    }
+
+    @Test
     fun scheduleRestorationRejectsAStaleAccountSwitch() {
         val selected = NextcloudSession("https://cloud.example.test/nextcloud", "alice", "secret")
         val other = NextcloudSession("https://cloud.example.test/nextcloud", "bob", "other-secret")

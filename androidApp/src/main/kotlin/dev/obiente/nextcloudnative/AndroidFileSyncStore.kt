@@ -27,6 +27,19 @@ internal data class AndroidFileSyncPersistedState(
     }
 }
 
+internal fun removeAndroidFileSyncAccountPairs(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+): AndroidFileSyncPersistedState {
+    require(accountId.isNotBlank())
+    val retainedPairs = state.coordinator.pairs.filterNot { pair -> pair.accountId == accountId }
+    val retainedPairIds = retainedPairs.mapTo(hashSetOf()) { pair -> pair.id }
+    return AndroidFileSyncPersistedState(
+        coordinator = FileSyncCoordinatorState(retainedPairs),
+        localDisplayNames = state.localDisplayNames.filterKeys(retainedPairIds::contains),
+    )
+}
+
 internal class AndroidFileSyncStore internal constructor(
     private val stateFile: File,
     private val maximumSnapshotBytes: Int = MAX_SNAPSHOT_BYTES,

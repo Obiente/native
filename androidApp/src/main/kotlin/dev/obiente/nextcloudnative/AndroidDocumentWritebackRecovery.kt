@@ -29,16 +29,43 @@ internal fun acquireAndroidDocumentWritebackAccountLease(
     remotePath: String,
     loadCurrentSession: () -> NextcloudSession?,
 ): AndroidAccountOperationLease {
-    val lease = ANDROID_ACCOUNT_OPERATION_GUARD.acquireBlocking(NextcloudDocumentIds.accountKey(session))
+    val lease = acquireAndroidDocumentMutationAccountLease(session, loadCurrentSession)
     return try {
-        if (!androidDocumentWritebackSessionIsCurrent(session, loadCurrentSession())) {
-            throw FileNotFoundException("The active Nextcloud account changed before the document could be opened.")
-        }
         reserveAndroidDocumentWritebackPath(session, remotePath)
         lease
     } catch (failure: Throwable) {
         lease.close()
         throw failure
+    }
+}
+
+internal fun acquireAndroidDocumentMutationAccountLease(
+    session: NextcloudSession,
+    loadCurrentSession: () -> NextcloudSession?,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+): AndroidAccountOperationLease {
+    val lease = guard.acquireBlocking(NextcloudDocumentIds.accountKey(session))
+    return try {
+        if (!androidDocumentWritebackSessionIsCurrent(session, loadCurrentSession())) {
+            throw FileNotFoundException("The active Nextcloud account changed before the document mutation could start.")
+        }
+        lease
+    } catch (failure: Throwable) {
+        lease.close()
+        throw failure
+    }
+}
+
+internal inline fun <Result> withAndroidDocumentMutation(
+    session: NextcloudSession,
+    noinline loadCurrentSession: () -> NextcloudSession?,
+    action: (NextcloudSession) -> Result,
+): Result {
+    val lease = acquireAndroidDocumentMutationAccountLease(session, loadCurrentSession)
+    return try {
+        action(session)
+    } finally {
+        lease.close()
     }
 }
 

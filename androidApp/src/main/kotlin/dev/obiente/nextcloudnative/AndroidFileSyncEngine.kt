@@ -840,7 +840,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         return FileSyncBaseline(path, localEntry.kind, localEntry.revision, remoteEntry.etag, contentHash)
     }
 
-    private companion object {
-        val ENGINE_LOCK = Mutex()
+    internal companion object {
+        internal val ENGINE_LOCK = Mutex()
     }
 }
