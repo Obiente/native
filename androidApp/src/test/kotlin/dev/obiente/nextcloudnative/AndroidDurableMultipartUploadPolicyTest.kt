@@ -887,6 +887,26 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `unsupported registry remains unavailable after credential recovery attempt`() {
+        var recoveryAttempts = 0
+        var credentialReads = 0
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(fixtureSession("alice")),
+            readRegistry = { DurableUploadAccountRegistry.Unavailable },
+            recoverRegistry = { recoveryAttempts += 1 },
+            loadSession = {
+                credentialReads += 1
+                fixtureSession("alice")
+            },
+        )
+
+        assertEquals(DurableUploadAccountResolution.RegistryUnavailable, resolved)
+        assertEquals(1, recoveryAttempts)
+        assertEquals(0, credentialReads)
+    }
+
+    @Test
     fun `background upload never substitutes another account on the same server path`() {
         val queuedSession = fixtureSession("alice")
         val otherSession = fixtureSession("bob")
