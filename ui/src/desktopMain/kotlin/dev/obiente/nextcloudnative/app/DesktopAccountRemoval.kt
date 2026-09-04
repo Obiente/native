@@ -209,6 +209,19 @@ internal suspend fun retryPendingDesktopAccountSyncPairCleanups(
     }
 }
 
+internal suspend fun recoverDesktopBackgroundAccountSyncPairCleanups(
+    retry: suspend () -> Unit,
+    recordFailure: (Exception) -> Unit,
+) {
+    try {
+        retry()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        runCatching { recordFailure(failure) }
+    }
+}
+
 internal fun desktopAccountSyncPairCleanupFailureDiagnostic(accountId: String, failure: Exception) =
     SupportDiagnosticEventDraft(
         severity = SupportDiagnosticSeverity.Error,
@@ -216,5 +229,14 @@ internal fun desktopAccountSyncPairCleanupFailureDiagnostic(accountId: String, f
         operation = "account.remove-sync-cleanup",
         outcome = "failed",
         fields = desktopAccountDiagnosticFields(accountId),
+        exception = failure.toSupportDiagnosticExceptionDraft(),
+    )
+
+internal fun desktopAccountSyncPairCleanupJournalFailureDiagnostic(failure: Exception) =
+    SupportDiagnosticEventDraft(
+        severity = SupportDiagnosticSeverity.Error,
+        component = SupportDiagnosticComponent.Sync,
+        operation = "account.remove-sync-cleanup-journal",
+        outcome = "failed",
         exception = failure.toSupportDiagnosticExceptionDraft(),
     )
