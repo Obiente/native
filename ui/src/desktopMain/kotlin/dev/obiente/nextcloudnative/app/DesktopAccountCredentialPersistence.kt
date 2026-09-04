@@ -50,12 +50,15 @@ internal class DesktopAccountCredentialPersistence(
         val registry = read.registry
             ?: restoreLegacySession(read.encoded != null)?.let { requireNotNull(readRegistry().registry) }
             ?: if (read.encoded == null) NextcloudAccountRegistry.Empty else throw invalidRegistryForMutation()
-        val updatedRegistry = registry.upsertAndSelect(session.accountRecord())
-        val encodedRegistry = prepareRegistry(updatedRegistry)
-        val secretReference = desktopAccountSecretReference(session.accountId)
         val previousRecord = registry.accounts.firstOrNull { account -> account.id == session.accountId }
+        val persistedSession = previousRecord
+            ?.let { record -> session.copy(serverUrl = record.serverUrl, loginName = record.loginName) }
+            ?: session
+        val updatedRegistry = registry.upsertAndSelect(persistedSession.accountRecord())
+        val encodedRegistry = prepareRegistry(updatedRegistry)
+        val secretReference = desktopAccountSecretReference(persistedSession.accountId)
         val previousSecret = loadSecretForRollback(secretReference)
-        saveSecret(session)
+        saveSecret(persistedSession)
         try {
             persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
         } catch (failure: Exception) {
