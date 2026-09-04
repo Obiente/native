@@ -3,7 +3,6 @@ package dev.obiente.nextcloudnative.app
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -187,26 +186,36 @@ fun decodeNextcloudAccountRegistry(encoded: String): NextcloudAccountRegistry? =
     (decodeNextcloudAccountRegistryResult(encoded) as? NextcloudAccountRegistryDecodeResult.Valid)?.registry
 
 private fun decodeNextcloudAccountRegistryResult(encoded: String): NextcloudAccountRegistryDecodeResult {
-    val envelopeVersion = accountRegistryVersionEnvelope
+    val envelopeVersionToken = accountRegistryVersionEnvelope
         .find(encoded.take(MAX_ACCOUNT_REGISTRY_VERSION_ENVELOPE_CHARACTERS))
         ?.groupValues
         ?.get(1)
-        ?.toIntOrNull()
-    if (envelopeVersion != null && envelopeVersion > ACCOUNT_REGISTRY_VERSION) {
+    val envelopeVersion = envelopeVersionToken?.let(::classifyAccountRegistryVersion)
+    if (envelopeVersion == AccountRegistryVersionClassification.Unsupported) {
         return NextcloudAccountRegistryDecodeResult.UnsupportedVersion
     }
     if (encoded.encodeToByteArray().size > MAX_ACCOUNT_REGISTRY_BYTES) {
-        return if (envelopeVersion != null) {
+        return if (envelopeVersionToken != null) {
             NextcloudAccountRegistryDecodeResult.Malformed
         } else {
             NextcloudAccountRegistryDecodeResult.UnsupportedVersion
         }
     }
-    val version = runCatching {
-        accountRegistryJson.parseToJsonElement(encoded).jsonObject["version"]?.jsonPrimitive?.intOrNull
+    val versionToken = runCatching {
+        accountRegistryJson.parseToJsonElement(encoded).jsonObject["version"]
+            ?.jsonPrimitive
+            ?.takeUnless { version -> version.isString }
+            ?.content
     }.getOrNull() ?: return NextcloudAccountRegistryDecodeResult.Malformed
-    if (version > ACCOUNT_REGISTRY_VERSION) return NextcloudAccountRegistryDecodeResult.UnsupportedVersion
-    if (version != ACCOUNT_REGISTRY_VERSION) return NextcloudAccountRegistryDecodeResult.Malformed
+    when (classifyAccountRegistryVersion(versionToken)) {
+        AccountRegistryVersionClassification.Current -> Unit
+        AccountRegistryVersionClassification.Unsupported -> {
+            return NextcloudAccountRegistryDecodeResult.UnsupportedVersion
+        }
+        AccountRegistryVersionClassification.Malformed -> {
+            return NextcloudAccountRegistryDecodeResult.Malformed
+        }
+    }
     return runCatching {
         val persisted = accountRegistryJson.decodeFromString<PersistedNextcloudAccountRegistry>(encoded)
         NextcloudAccountRegistry(
@@ -223,6 +232,27 @@ private fun decodeNextcloudAccountRegistryResult(encoded: String): NextcloudAcco
         onSuccess = NextcloudAccountRegistryDecodeResult::Valid,
         onFailure = { NextcloudAccountRegistryDecodeResult.Malformed },
     )
+}
+
+private fun classifyAccountRegistryVersion(value: String): AccountRegistryVersionClassification {
+    if (value.isEmpty() || value.any { character -> character !in '0'..'9' }) {
+        return AccountRegistryVersionClassification.Malformed
+    }
+    val current = ACCOUNT_REGISTRY_VERSION.toString()
+    if (value.length > current.length || value.length == current.length && value > current) {
+        return AccountRegistryVersionClassification.Unsupported
+    }
+    return if (value == current) {
+        AccountRegistryVersionClassification.Current
+    } else {
+        AccountRegistryVersionClassification.Malformed
+    }
+}
+
+private enum class AccountRegistryVersionClassification {
+    Current,
+    Unsupported,
+    Malformed,
 }
 
 private sealed interface NextcloudAccountRegistryDecodeResult {
@@ -252,7 +282,9 @@ private val accountRegistryJson = Json {
     explicitNulls = false
 }
 
-private val accountRegistryVersionEnvelope = Regex("""\A\s*\{\s*"version"\s*:\s*(-?\d+)""")
+private val accountRegistryVersionEnvelope = Regex(
+    """\A\s*\{\s*"version"\s*:\s*(-?(?:0|[1-9]\d*))(?=\s*[,}])""",
+)
 
 private const val ACCOUNT_REGISTRY_VERSION = 1
 internal const val MAX_LOCAL_ACCOUNTS = 64
