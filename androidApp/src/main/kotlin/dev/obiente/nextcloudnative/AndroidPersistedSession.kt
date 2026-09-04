@@ -35,9 +35,12 @@ internal data class AndroidAccountCredentialState(
 
     fun upsertAndSelect(session: NextcloudSession): AndroidAccountCredentialState {
         requireMutationsAllowed()
+        val stableSession = sessions[session.accountId]
+            ?.let { retained -> session.copy(serverUrl = retained.serverUrl) }
+            ?: session
         return copy(
-            registry = registry.upsertAndSelect(session.accountRecord()),
-            sessions = sessions + (session.accountId to session),
+            registry = registry.upsertAndSelect(stableSession.accountRecord()),
+            sessions = sessions + (stableSession.accountId to stableSession),
         )
     }
 

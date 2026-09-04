@@ -195,6 +195,23 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun equivalentReauthenticationRetainsThePersistedAndroidWorkIdentity() {
+        val original = firstSession().copy(serverUrl = "https://CLOUD.EXAMPLE.TEST:443/")
+        val reauthenticated = firstSession().copy(appPassword = "rotated-private-password")
+        assertEquals(original.accountId, reauthenticated.accountId)
+
+        val updated = AndroidAccountCredentialState.Empty
+            .upsertAndSelect(original)
+            .upsertAndSelect(reauthenticated)
+
+        val active = requireNotNull(updated.activeSession)
+        assertEquals(original.serverUrl, active.serverUrl)
+        assertEquals(reauthenticated.appPassword, active.appPassword)
+        assertEquals(NextcloudDocumentIds.accountKey(original), NextcloudDocumentIds.accountKey(active))
+        assertEquals(NextcloudDocumentIds.cacheAccountId(original), NextcloudDocumentIds.cacheAccountId(active))
+    }
+
+    @Test
     fun encodingIsDeterministicAcrossCredentialInsertionOrder() {
         val firstThenSecond = AndroidAccountCredentialState.Empty
             .upsertAndSelect(firstSession())
@@ -488,6 +505,37 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun damagedCredentialSlotRecoversFromTheMatchingAggregateCredential() {
+        val session = firstSession()
+        val aggregate = AndroidAccountCredentialState.Empty.upsertAndSelect(session)
+
+        val recovered = recoverAndroidAccountCredentialSlot(
+            accountId = session.accountId,
+            registry = aggregate.registry,
+            storedSlot = null,
+            aggregate = aggregate,
+        )
+
+        assertEquals(session, recovered)
+    }
+
+    @Test
+    fun credentialSlotRecoveryRejectsAnAggregateThatDoesNotMatchTheVisibleRegistry() {
+        val original = firstSession().copy(serverUrl = "https://CLOUD.EXAMPLE:443/")
+        val aggregate = AndroidAccountCredentialState.Empty.upsertAndSelect(firstSession())
+        val visibleRegistry = NextcloudAccountRegistry.Empty.upsertAndSelect(original.accountRecord())
+
+        val recovered = recoverAndroidAccountCredentialSlot(
+            accountId = original.accountId,
+            registry = visibleRegistry,
+            storedSlot = null,
+            aggregate = aggregate,
+        )
+
+        assertNull(recovered)
+    }
+
+    @Test
     fun validIndependentSlotsCanRecoverAroundAMalformedAggregateStore() {
         val first = firstSession()
         val second = secondSession()
@@ -541,6 +589,28 @@ class AndroidPersistedSessionTest {
             }
         }
         assertEquals(listOf("notify"), events)
+    }
+
+    @Test
+    fun parentCancellationStopsQueuedUploadResumeAndStillNotifies() = runBlocking {
+        val resumeEntered = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val selection = launch {
+            resumeAndroidQueuedUploadsAfterSelection(
+                resume = {
+                    events += "resume"
+                    resumeEntered.complete(Unit)
+                    awaitCancellation()
+                },
+                notifyDocumentRootsChanged = { events += "notify" },
+                recordFailure = { events += "diagnose" },
+            )
+        }
+        resumeEntered.await()
+
+        selection.cancelAndJoin()
+
+        assertEquals(listOf("resume", "notify"), events)
     }
 
     @Test
