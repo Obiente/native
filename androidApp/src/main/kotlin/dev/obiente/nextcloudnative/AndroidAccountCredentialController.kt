@@ -53,13 +53,11 @@ internal class AndroidAccountCredentialController(
         ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
             val registry = readCredentialFreeRegistry() ?: return@serialize null
             if (registry.accounts.none { account -> account.id == accountId }) return@serialize null
+            val aggregateRead = readStore()
+            if (!androidCredentialStoreAllowsSessionRestore(aggregateRead)) return@serialize null
+            val aggregate = (aggregateRead as? AndroidAccountCredentialStoreRead.Available)?.state
             val storedSlot = readCredentialSlot(accountId)
             val restoredSlot = recoverAndroidAccountCredentialSlot(accountId, registry, storedSlot, aggregate = null)
-            val aggregate = if (restoredSlot == null) {
-                (readStore() as? AndroidAccountCredentialStoreRead.Available)?.state
-            } else {
-                null
-            }
             val session = restoredSlot ?: recoverAndroidAccountCredentialSlot(
                 accountId,
                 registry,
@@ -142,6 +140,7 @@ internal class AndroidAccountCredentialController(
                     },
                     persistInactiveRemoval = { persistState(current.remove(accountId)) },
                     rollbackInactiveRemoval = { persistState(current) },
+                    recordCommittedCleanupFailure = { recordAccountRemovalCleanupFailure() },
                 )
                 if (!active) {
                     clearPreviewAccount(NextcloudDocumentIds.cacheAccountId(session))
@@ -172,6 +171,7 @@ internal class AndroidAccountCredentialController(
                             },
                             persistInactiveRemoval = {},
                             rollbackInactiveRemoval = {},
+                            recordCommittedCleanupFailure = { recordAccountRemovalCleanupFailure() },
                         )
                     }
                 }
@@ -229,6 +229,7 @@ internal class AndroidAccountCredentialController(
                             suspectEncrypted = suspectEncrypted,
                         )
                     },
+                    recordCommittedCleanupFailure = { recordAccountRemovalCleanupFailure() },
                 )
             }
         } else {
@@ -565,8 +566,13 @@ internal class AndroidAccountCredentialController(
         )
     }
 
-}
+    private fun recordAccountRemovalCleanupFailure() = recordCredentialFailure(
+        code = "ACCOUNT_REMOVAL_CLEANUP_FAILED",
+        operation = "account.remove-cleanup",
+        component = SupportDiagnosticComponent.Sync,
+    )
 
+}
 internal sealed interface AndroidAccountCredentialStoreRead {
     data class Available(val state: AndroidAccountCredentialState) : AndroidAccountCredentialStoreRead
     data class Invalid(val encrypted: String) : AndroidAccountCredentialStoreRead
@@ -677,6 +683,7 @@ internal suspend fun removeAndroidAccountCredentialData(
     rollbackActiveRemoval: suspend () -> Unit,
     persistInactiveRemoval: suspend () -> Unit,
     rollbackInactiveRemoval: suspend () -> Unit,
+    recordCommittedCleanupFailure: (Exception) -> Unit = {},
 ) {
     prepareAccountRemoval()
     if (active) {
@@ -689,7 +696,7 @@ internal suspend fun removeAndroidAccountCredentialData(
             }
             throw failure
         }
-        removeQueuedUploads()
+        finishCommittedAndroidAccountRemovalCleanup(removeQueuedUploads, recordCommittedCleanupFailure)
         return
     }
 
@@ -702,7 +709,20 @@ internal suspend fun removeAndroidAccountCredentialData(
         }
         throw failure
     }
-    removeQueuedUploads()
+    finishCommittedAndroidAccountRemovalCleanup(removeQueuedUploads, recordCommittedCleanupFailure)
+}
+
+private suspend fun finishCommittedAndroidAccountRemovalCleanup(
+    removeQueuedUploads: suspend () -> Unit,
+    recordFailure: (Exception) -> Unit,
+) {
+    try {
+        removeQueuedUploads()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        recordFailure(failure)
+    }
 }
 
 internal suspend fun removeRecoveredAndroidAccountCredentialData(
@@ -710,6 +730,7 @@ internal suspend fun removeRecoveredAndroidAccountCredentialData(
     removeQueuedUploads: suspend () -> Unit,
     clearRecoveredAccount: suspend () -> Unit,
     rollbackRecoveredAccount: suspend () -> Unit,
+    recordCommittedCleanupFailure: (Exception) -> Unit = {},
 ) = removeAndroidAccountCredentialData(
     active = true,
     prepareAccountRemoval = prepareAccountRemoval,
@@ -718,7 +739,12 @@ internal suspend fun removeRecoveredAndroidAccountCredentialData(
     rollbackActiveRemoval = rollbackRecoveredAccount,
     persistInactiveRemoval = {},
     rollbackInactiveRemoval = {},
+    recordCommittedCleanupFailure = recordCommittedCleanupFailure,
 )
+
+internal fun androidCredentialStoreAllowsSessionRestore(
+    read: AndroidAccountCredentialStoreRead,
+): Boolean = read !is AndroidAccountCredentialStoreRead.Unsupported
 
 internal class AndroidAccountCredentialStoreGuard {
     private val monitor = Any()
