@@ -4,6 +4,7 @@ import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.decodeFileSyncCoordinatorSnapshot
 import dev.obiente.nextcloudnative.app.encodeFileSyncCoordinatorSnapshot
+import dev.obiente.nextcloudnative.app.fileSyncOwnedUploads
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -32,6 +33,13 @@ internal fun removeAndroidFileSyncAccountPairs(
     accountId: String,
 ): AndroidFileSyncPersistedState {
     require(accountId.isNotBlank())
+    state.coordinator.pairs
+        .filter { pair -> pair.accountId == accountId }
+        .forEach { pair ->
+            require(fileSyncOwnedUploads(pair).isEmpty()) {
+                "Owned remote upload state must be recovered before removing this account's sync pairs."
+            }
+        }
     val retainedPairs = state.coordinator.pairs.filterNot { pair -> pair.accountId == accountId }
     val retainedPairIds = retainedPairs.mapTo(hashSetOf()) { pair -> pair.id }
     return AndroidFileSyncPersistedState(

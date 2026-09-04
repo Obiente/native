@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.app.FileSyncCoordinatorState
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import dev.obiente.nextcloudnative.app.FileSyncPendingUploadCleanup
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
@@ -84,6 +85,33 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertEquals(listOf(retained), retired.coordinator.pairs)
         assertEquals(mapOf(retained.id to "Documents"), retired.localDisplayNames)
+    }
+
+    @Test
+    fun accountRetirementPreservesPairsThatStillOwnRemoteUploadRecovery() {
+        val pair = FileSyncPair(
+            id = "pair",
+            accountId = "account",
+            localRootId = "root",
+            remoteRootPath = "Pictures",
+            configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+            pendingUploadCleanups = listOf(
+                FileSyncPendingUploadCleanup(
+                    uploadId = "123e4567-e89b-12d3-a456-426614174000",
+                    relativePath = "photo.jpg",
+                ),
+            ),
+        )
+        val state = AndroidFileSyncPersistedState(
+            coordinator = FileSyncCoordinatorState(listOf(pair)),
+            localDisplayNames = mapOf(pair.id to "Camera"),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            removeAndroidFileSyncAccountPairs(state, pair.accountId)
+        }
+        assertEquals(listOf(pair), state.coordinator.pairs)
+        assertEquals(mapOf(pair.id to "Camera"), state.localDisplayNames)
     }
 
     @Test
@@ -815,6 +843,41 @@ class AndroidFileSyncEngineInvariantTest {
         assertTrue(guard.runIfCurrent(oldToken) { events += "old-account-still-current" })
         assertEquals(listOf("save-new-session", "old-account-still-current"), events)
         assertEquals(null, guard.capture("account-new"))
+    }
+
+    @Test
+    fun postCommitScheduleFailureDoesNotRejectTheSelectedAccount() {
+        val guard = AndroidFileSyncSessionSchedulingGuard()
+        guard.restorePersistedSession(load = { "account-old" }, accountIdOf = { it })
+        val events = mutableListOf<String>()
+
+        guard.replaceSession(
+            replacementAccountId = "account-new",
+            persist = { events += "save-new-session" },
+            cancelAll = {
+                events += "cancel-old-work"
+                error("synthetic WorkManager failure")
+            },
+            publishAccount = { events += "publish-$it" },
+            restoreSchedules = {
+                events += "restore-$it-work"
+                error("synthetic enqueue failure")
+            },
+            onScheduleMaintenanceFailure = { events += "diagnose" },
+        )
+
+        assertEquals(
+            listOf(
+                "save-new-session",
+                "publish-account-new",
+                "cancel-old-work",
+                "diagnose",
+                "restore-account-new-work",
+                "diagnose",
+            ),
+            events,
+        )
+        assertTrue(guard.capture("account-new") != null)
     }
 
     @Test
