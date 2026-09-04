@@ -538,10 +538,10 @@ class AndroidDurableMultipartUploadPolicyTest {
                     reconcile = {
                         attempts += 1
                         when (attempts) {
-                            1 -> throw AndroidDurableMultipartUploadRecoveryException(
+                            1, 2 -> throw AndroidDurableMultipartUploadRecoveryException(
                                 IOException("Synthetic unreadable journal"),
                             )
-                            2 -> true
+                            3 -> true
                             else -> throw CancellationException("Lifecycle stopped")
                         }
                     },
@@ -551,8 +551,8 @@ class AndroidDurableMultipartUploadPolicyTest {
             }
         }
 
-        assertEquals(3, attempts)
-        assertEquals(listOf(100L, 100L), waits)
+        assertEquals(4, attempts)
+        assertEquals(listOf(100L, 100L, 100L), waits)
         assertEquals(1, diagnostics)
     }
 
@@ -875,7 +875,10 @@ class AndroidDurableMultipartUploadPolicyTest {
         val resolved = resolveDurableUploadSessionWithRegistryRecovery(
             expectedAccountId = NextcloudDocumentIds.accountKey(fixtureSession("alice")),
             readRegistry = { DurableUploadAccountRegistry.Unavailable },
-            recoverRegistry = { recoveryAttempts += 1 },
+            recoverRegistry = {
+                recoveryAttempts += 1
+                null
+            },
             loadSession = {
                 credentialReads += 1
                 fixtureSession("alice")
