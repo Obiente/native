@@ -24,7 +24,12 @@ class NextcloudDocumentAtomicReplacementCancellationTest {
                     .headersDelay(30, TimeUnit.SECONDS)
                     .build(),
             )
-            server.enqueue(MockResponse.Builder().code(204).build())
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(204)
+                    .headersDelay(30, TimeUnit.SECONDS)
+                    .build(),
+            )
             server.start()
             val source = Files.createTempFile("ncn-cancel-replace-", ".txt").toFile()
             val cancellation = TestCancellation()
@@ -47,7 +52,7 @@ class NextcloudDocumentAtomicReplacementCancellationTest {
                 assertEquals("PUT", upload.method)
                 cancellation.cancel()
                 val failure = assertFailsWith<java.util.concurrent.ExecutionException> {
-                    replacement.get(2, TimeUnit.SECONDS)
+                    replacement.get(6, TimeUnit.SECONDS)
                 }
                 assertTrue(failure.cause is TestCancelledException)
                 assertTrue(cancellation.detached.await(2, TimeUnit.SECONDS))

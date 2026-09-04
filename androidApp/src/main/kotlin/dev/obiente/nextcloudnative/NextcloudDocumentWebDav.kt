@@ -454,7 +454,11 @@ internal class NextcloudDocumentWebDav(
     ) {
         val builder = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path))
         expectedEtag?.takeIf(String::isNotBlank)?.let { builder.header("If-Match", it) }
-        execute(builder.delete().build(), "clean up staged upload")
+        execute(
+            request = builder.delete().build(),
+            operation = "clean up staged upload",
+            callTimeoutMillis = OWNED_STAGE_CLEANUP_TIMEOUT_MILLIS,
+        )
     }
 
     internal fun execute(
@@ -463,21 +467,24 @@ internal class NextcloudDocumentWebDav(
         onRequestStarted: () -> Unit = {},
         cancellation: DocumentRequestCancellation = NoDocumentRequestCancellation,
         timeoutMillis: Long? = null,
+        callTimeoutMillis: Long? = null,
         requiredSuccessStatus: Int? = null,
     ): DocumentMutationResult {
         check(cloudMutationsAllowed()) {
             "This emulator is using a shared read-only test session. Cloud changes are blocked."
         }
         cancellation.throwIfCancelled()
-        val operationClient = timeoutMillis?.let { timeout ->
-            require(timeout > 0L)
-            client.newBuilder()
-                .readTimeout(timeout, TimeUnit.MILLISECONDS)
-                .writeTimeout(timeout, TimeUnit.MILLISECONDS)
-                .callTimeout(0L, TimeUnit.MILLISECONDS)
-                .build()
-        } ?: client
-        val requestClient = operationClient.newBuilder()
+        require(timeoutMillis == null || timeoutMillis > 0L)
+        require(callTimeoutMillis == null || callTimeoutMillis > 0L)
+        val requestClient = client.newBuilder()
+            .apply {
+                timeoutMillis?.let { timeout ->
+                    readTimeout(timeout, TimeUnit.MILLISECONDS)
+                    writeTimeout(timeout, TimeUnit.MILLISECONDS)
+                    callTimeout(0L, TimeUnit.MILLISECONDS)
+                }
+                callTimeoutMillis?.let { timeout -> callTimeout(timeout, TimeUnit.MILLISECONDS) }
+            }
             .eventListener(
                 object : EventListener() {
                     override fun requestHeadersStart(call: Call) {
@@ -570,6 +577,7 @@ internal class NextcloudDocumentWebDav(
         const val DEFAULT_DIRECTORY_ENTRY_LIMIT = 1_000
         const val MAX_DIRECTORY_ENTRY_LIMIT = 5_000
         const val MAX_DIRECTORY_RESPONSE_BYTES = 4L * 1024L * 1024L
+        const val OWNED_STAGE_CLEANUP_TIMEOUT_MILLIS = 3_000L
         val OCTET_STREAM = "application/octet-stream".toMediaType()
         val XML_CONTENT_TYPE = "application/xml; charset=utf-8".toMediaType()
         val EMPTY_BODY = byteArrayOf().toRequestBody(null)
