@@ -32,6 +32,19 @@ internal fun removeAndroidFileSyncAccountPairs(
     state: AndroidFileSyncPersistedState,
     accountId: String,
 ): AndroidFileSyncPersistedState {
+    requireAndroidFileSyncAccountRemovalReady(state, accountId)
+    val retainedPairs = state.coordinator.pairs.filterNot { pair -> pair.accountId == accountId }
+    val retainedPairIds = retainedPairs.mapTo(hashSetOf()) { pair -> pair.id }
+    return AndroidFileSyncPersistedState(
+        coordinator = FileSyncCoordinatorState(retainedPairs),
+        localDisplayNames = state.localDisplayNames.filterKeys(retainedPairIds::contains),
+    )
+}
+
+internal fun requireAndroidFileSyncAccountRemovalReady(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+) {
     require(accountId.isNotBlank())
     state.coordinator.pairs
         .filter { pair -> pair.accountId == accountId }
@@ -40,12 +53,6 @@ internal fun removeAndroidFileSyncAccountPairs(
                 "Owned remote upload state must be recovered before removing this account's sync pairs."
             }
         }
-    val retainedPairs = state.coordinator.pairs.filterNot { pair -> pair.accountId == accountId }
-    val retainedPairIds = retainedPairs.mapTo(hashSetOf()) { pair -> pair.id }
-    return AndroidFileSyncPersistedState(
-        coordinator = FileSyncCoordinatorState(retainedPairs),
-        localDisplayNames = state.localDisplayNames.filterKeys(retainedPairIds::contains),
-    )
 }
 
 internal class AndroidFileSyncStore internal constructor(

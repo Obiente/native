@@ -243,3 +243,9 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
         retiredPairIds.forEach { pairId -> scheduler.cancel(pairId) }
     }
 }
+
+internal suspend fun requireAndroidFileSyncAccountRemovalReady(context: Context, accountId: String) {
+    AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+        requireAndroidFileSyncAccountRemovalReady(AndroidFileSyncStore(context).load(), accountId)
+    }
+}
