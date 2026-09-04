@@ -437,6 +437,28 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun failedProviderPreferenceClearRestoresThePreviousValue() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeDesktopCredentialWithoutProviderReactivation(
+                providerWasEnabled = true,
+                clearProviderPreference = {
+                    events += "clear"
+                    error("synthetic preference flush failure")
+                },
+                restoreProviderPreference = { enabled -> events += "restore:$enabled" },
+                removeCredential = {
+                    events += "remove"
+                    true
+                },
+            )
+        }
+
+        assertEquals(listOf("clear", "restore:true"), events)
+    }
+
+    @Test
     fun successfulCredentialRemovalLeavesProviderPreferenceDisabled() = runBlocking {
         val events = mutableListOf<String>()
 
@@ -559,6 +581,25 @@ class DesktopAccountOperationGuardTest {
         }
 
         assertEquals(listOf("prepare-cleanup", "remove-credential", "commit-cleanup"), events)
+    }
+
+    @Test
+    fun backgroundSyncContinuesAfterCleanupJournalReadFailure() = runBlocking {
+        val events = mutableListOf<String>()
+
+        recoverDesktopBackgroundAccountSyncPairCleanups(
+            retry = {
+                events += "retry-cleanup"
+                error("synthetic cleanup journal read failure")
+            },
+            recordFailure = { events += "diagnose-cleanup" },
+        )
+        events += "continue-background-sync"
+
+        assertEquals(
+            listOf("retry-cleanup", "diagnose-cleanup", "continue-background-sync"),
+            events,
+        )
     }
 
     @Test
