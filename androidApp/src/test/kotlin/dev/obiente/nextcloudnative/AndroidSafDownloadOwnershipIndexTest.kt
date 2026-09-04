@@ -5,8 +5,43 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AndroidSafDownloadOwnershipIndexTest {
+    @Test
+    fun `tree-wide recovery indexing is skipped without pending ownership`() {
+        val root = Files.createTempDirectory("saf-download-empty-index-").toFile()
+        try {
+            val index = AndroidSafDownloadOwnershipStore(root).indexed()
+            var indexed = false
+
+            indexAndroidSafRecoveryLocationsIfNeeded(index) { indexed = true }
+
+            assertFalse(indexed)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `pending ownership enables tree-wide recovery indexing`() {
+        val root = Files.createTempDirectory("saf-download-pending-index-").toFile()
+        try {
+            AndroidSafDownloadOwnershipStore(root)
+                .forDirectory("content://provider/tree/root/document/original")
+                .add(AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN))
+            val index = AndroidSafDownloadOwnershipStore(root).indexed()
+            var indexed = false
+
+            indexAndroidSafRecoveryLocationsIfNeeded(index) { indexed = true }
+
+            assertTrue(indexed)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun `one ownership listing serves a large directory scan`() {
         val root = Files.createTempDirectory("saf-download-ownership-index-").toFile()

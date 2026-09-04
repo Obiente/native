@@ -4,6 +4,9 @@ import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncWorkItem
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import kotlinx.coroutines.CancellationException
 
 internal fun executeAndroidFileSyncKeepBoth(
     operation: FileSyncOperation.KeepBoth,
@@ -102,7 +105,13 @@ internal fun executeAndroidFileSyncKeepBoth(
                         expectedContentHash = localContentHash,
                         shouldContinue = remote::shouldContinueTransfer,
                     ) { output ->
-                        remoteBytes.inputStream().use { input -> input.copyTo(output) }
+                        remoteBytes.inputStream().use { input ->
+                            copyAndroidFileSyncWithCancellation(
+                                input,
+                                output,
+                                remote::shouldContinueTransfer,
+                            )
+                        }
                     }
                 },
             )
@@ -131,7 +140,18 @@ private fun ensureExactLocalAndroidFileSyncConflictCopy(
     shouldContinue: () -> Boolean,
 ) = ensureExactAndroidFileSyncConflictCopy(
     exists = { local.resolve(path) != null },
-    create = { local.writeFile(path, source, expectedLocalRevision = null) },
+    create = {
+        local.writeFileFromStreamForDownload(
+            path = path,
+            expectedLocalRevision = null,
+            expectedContentHash = null,
+            shouldContinue = shouldContinue,
+        ) { output ->
+            source.inputStream().use { input ->
+                copyAndroidFileSyncWithCancellation(input, output, shouldContinue)
+            }
+        }
+    },
     verify = {
         val existing = requireNotNull(local.resolve(path)) { "The local conflict copy disappeared." }
         require(existing.entry.kind == SyncEntryKind.File) { "The local conflict copy changed type." }
@@ -151,6 +171,27 @@ internal inline fun ensureExactAndroidFileSyncConflictCopy(
 ) {
     if (!exists()) create()
     verify()
+}
+
+internal fun copyAndroidFileSyncWithCancellation(
+    input: InputStream,
+    output: OutputStream,
+    shouldContinue: () -> Boolean,
+) {
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    while (true) {
+        requireAndroidFileSyncCopyContinuation(shouldContinue)
+        val count = input.read(buffer)
+        if (count < 0) return
+        requireAndroidFileSyncCopyContinuation(shouldContinue)
+        output.write(buffer, 0, count)
+    }
+}
+
+private fun requireAndroidFileSyncCopyContinuation(shouldContinue: () -> Boolean) {
+    if (!shouldContinue() || Thread.currentThread().isInterrupted) {
+        throw CancellationException("The local conflict copy was cancelled.")
+    }
 }
 
 internal fun publishAuthenticatedAndroidFileSyncKeepBoth(

@@ -46,7 +46,7 @@ internal class AndroidSafFileSyncLocalTree(
         shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> {
         val ownershipDirectory = downloadOwnershipStore.indexed()
-        indexRecoveryLocations(ownershipDirectory, shouldContinue)
+        indexRecoveryLocationsIfNeeded(ownershipDirectory, shouldContinue)
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
@@ -94,6 +94,13 @@ internal class AndroidSafFileSyncLocalTree(
         }
     }
 
+    private fun indexRecoveryLocationsIfNeeded(
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
+        shouldContinue: () -> Boolean,
+    ) = indexAndroidSafRecoveryLocationsIfNeeded(ownershipDirectory) {
+        indexRecoveryLocations(ownershipDirectory, shouldContinue)
+    }
+
     override fun authenticateFileForReplacement(
         path: String,
         expectedLocalRevision: String,
@@ -124,6 +131,10 @@ internal class AndroidSafFileSyncLocalTree(
 
     override fun reconcileOwnedDownloads() {
         val ownershipDirectory = downloadOwnershipStore.indexed()
+        indexRecoveryLocationsIfNeeded(
+            ownershipDirectory = ownershipDirectory,
+            shouldContinue = { !Thread.currentThread().isInterrupted },
+        )
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
         var visitedEntries = 0
@@ -658,6 +669,13 @@ internal class AndroidSafFileSyncLocalTree(
             DocumentsContract.Document.COLUMN_SIZE,
         )
     }
+}
+
+internal inline fun indexAndroidSafRecoveryLocationsIfNeeded(
+    ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
+    indexRecoveryLocations: () -> Unit,
+) {
+    if (ownershipDirectory.hasPendingTransactions()) indexRecoveryLocations()
 }
 
 internal fun requireScanContinuation(shouldContinue: () -> Boolean) {

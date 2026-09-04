@@ -20,6 +20,10 @@ internal class AndroidSafDownloadOwnershipStore(
     private val listFiles: () -> Array<File>? = directory::listFiles,
     private val openInput: (File) -> InputStream = ::FileInputStream,
 ) : AndroidSafDownloadOwnershipDirectory {
+    override fun hasPendingTransactions(): Boolean = synchronized(LOCK) {
+        ownershipFiles().isNotEmpty()
+    }
+
     override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
         require(directoryIdentity.isNotBlank())
         return ScopedOwnership(scopeDigest(directoryIdentity))
@@ -44,6 +48,8 @@ internal class AndroidSafDownloadOwnershipStore(
                 "SAF download recovery ownership collided."
             }
         }
+
+        override fun hasPendingTransactions(): Boolean = referencesByToken.isNotEmpty()
 
         override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
             require(directoryIdentity.isNotBlank())
