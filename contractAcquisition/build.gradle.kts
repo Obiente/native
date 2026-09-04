@@ -17,7 +17,7 @@ dependencies {
     implementation(libs.org.json)
     implementation("org.snakeyaml:snakeyaml-engine:3.0.1")
     testImplementation(kotlin("test-junit5"))
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
 }
 
 tasks.test {
