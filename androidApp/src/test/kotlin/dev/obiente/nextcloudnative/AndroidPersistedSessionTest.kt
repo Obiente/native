@@ -687,6 +687,7 @@ class AndroidPersistedSessionTest {
 
         removeAndroidAccountCredentialData(
             active = true,
+            prepareAccountRemoval = { events += "prepare-removal" },
             removeQueuedUploads = { events += "remove-uploads" },
             clearActiveAccount = { events += "clear-account" },
             rollbackActiveRemoval = { events += "rollback-active" },
@@ -694,7 +695,29 @@ class AndroidPersistedSessionTest {
             rollbackInactiveRemoval = { events += "rollback-inactive" },
         )
 
-        assertEquals(listOf("clear-account", "remove-uploads"), events)
+        assertEquals(listOf("prepare-removal", "clear-account", "remove-uploads"), events)
+    }
+
+    @Test
+    fun blockedAccountRemovalDoesNotDeleteCredentialsOrQueuedWork() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidAccountCredentialData(
+                active = true,
+                prepareAccountRemoval = {
+                    events += "prepare-removal"
+                    error("pending document writeback")
+                },
+                removeQueuedUploads = { events += "remove-uploads" },
+                clearActiveAccount = { events += "clear-account" },
+                rollbackActiveRemoval = { events += "rollback-active" },
+                persistInactiveRemoval = { events += "persist-inactive" },
+                rollbackInactiveRemoval = { events += "rollback-inactive" },
+            )
+        }
+
+        assertEquals(listOf("prepare-removal"), events)
     }
 
     @Test

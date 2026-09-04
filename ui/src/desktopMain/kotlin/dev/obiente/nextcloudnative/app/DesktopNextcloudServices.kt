@@ -3815,9 +3815,13 @@ class DesktopNextcloudServices(
             } else {
                 val account = listAccounts().firstOrNull { record -> record.id == accountId }
                     ?: return@serialize false
+                val providerAccountId = desktopFileCacheAccountId(account)
+                requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
                 accountOperationGuard.withSyncRunLock {
-                    fileSyncEngine.removeAccountPairs(desktopFileCacheAccountId(account))
-                    sessionPublicationGuard.serialize { accountCredentials.removeAccount(accountId) }
+                    fileSyncEngine.removeAccountPairs(providerAccountId)
+                    sessionPublicationGuard.serialize {
+                        removeDesktopAccountCredential(preferences, providerAccountId) { accountCredentials.removeAccount(accountId) }
+                    }
                 }
             }
         }
@@ -3842,6 +3846,7 @@ class DesktopNextcloudServices(
             }
             val accountId = activeSession?.let(::desktopFileCacheAccountId)
                 ?: activeRecord?.let(::desktopFileCacheAccountId)
+            accountId?.let { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3933,7 +3938,7 @@ class DesktopNextcloudServices(
                 accountId?.let { fileSyncEngine.removeAccountPairs(it) }
                 sessionPublicationGuard.serialize {
                     if (activeAccountId != null) {
-                        check(accountCredentials.removeAccount(activeAccountId))
+                        check(removeDesktopAccountCredential(preferences, accountId) { accountCredentials.removeAccount(activeAccountId) })
                     }
                     supportDiagnostics.setActiveAccountIdentity(null)
                     supportIntake.setActiveAccountIdentity(null)
@@ -3947,6 +3952,7 @@ class DesktopNextcloudServices(
             }
         }
     }
+
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
@@ -4087,7 +4093,7 @@ class DesktopNextcloudServices(
             fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
             poll = { endpoint ->
                 networkFailure = null
-                request(
+                kotlinx.coroutines.runBlocking { request(
                     "POST",
                     endpoint,
                     body = "token=" + encodeForm(challenge.token),
@@ -4096,7 +4102,7 @@ class DesktopNextcloudServices(
                     maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
                     diagnosticIgnoredHttpStatuses = setOf(404),
                     onNetworkFailure = { networkFailure = it },
-                ).let { LoginPollHttpResponse(it.status, it.text) }
+                ) }.let { LoginPollHttpResponse(it.status, it.text) }
             },
             networkFailure = { networkFailure },
         )
@@ -5637,14 +5643,14 @@ class DesktopNextcloudServices(
         Unit
     }
 
-    private fun ocsGet(session: NextcloudSession, path: String): JSONObject {
+    private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
         val separator = if ('?' in path) '&' else '?'
         val response = request("GET", session.serverUrl + path + separator + "format=json", session, ocsRequest = true)
         check(response.status in 200..299) { "Nextcloud API request failed (HTTP ${response.status})." }
         return JSONObject(response.text)
     }
 
-    private fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
+    private suspend fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
         val response = request(
             "PROPFIND",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -5664,7 +5670,7 @@ class DesktopNextcloudServices(
             .documentElement.firstText(DAV, "getetag")
     }
 
-    private fun request(
+    private suspend fun request(
         method: String,
         url: String,
         session: NextcloudSession? = null,
@@ -5683,7 +5689,13 @@ class DesktopNextcloudServices(
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
         diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
+        accountMutationSerialized: Boolean = false,
     ): HttpResponse {
+        if (session != null && !method.isReadOnlyJvmNetworkMethod() && !accountMutationSerialized) {
+            return accountOperationGuard.withAuthenticatedMutationSession(session, ::loadSession) { current -> request(
+                method, url, current, body, contentType, ocsRequest, headers, rawBody, maxResponseBytes, expectedSuccessResponseBytes, expectedSuccessResponseStatus, client, streamingBody, mutationExecutor,
+                onAmbiguousMutationResult, onNetworkFailure, onFailurePhase, diagnosticIgnoredHttpStatuses, true) }
+        }
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         val requestBody = when {

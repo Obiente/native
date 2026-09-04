@@ -497,6 +497,7 @@ internal class AndroidNextcloudServices(
         clearPreviewAccount = nativeMediaPreviewCache::clearAccount,
         notifyDocumentRootsChanged = ::notifyDocumentsRootsChanged,
         resumeQueuedUploads = durableMultipartUploads::resumeQueuedForAccount,
+        prepareAccountRemoval = { session -> prepareAndroidAccountRemoval(appContext, session) },
         removeQueuedUploads = { session ->
             fileOfflineAccountCleanup.removeForAccount(NextcloudDocumentIds.accountKey(session))
             incomingShareAccountCleanup.removeForAccount(session)
@@ -1279,7 +1280,7 @@ internal class AndroidNextcloudServices(
             fallbackAlreadySelected = challenge.token in loginPollFallbackTokens,
             poll = { endpoint ->
                 networkFailure = null
-                request(
+                kotlinx.coroutines.runBlocking { request(
                     method = "POST",
                     url = endpoint,
                     body = formBody,
@@ -1288,7 +1289,7 @@ internal class AndroidNextcloudServices(
                     maxResponseBytes = LOGIN_FLOW_RESPONSE_MAX_BYTES,
                     diagnosticIgnoredHttpStatuses = setOf(404),
                     onNetworkFailure = { networkFailure = it },
-                ).let { LoginPollHttpResponse(it.status, it.text) }
+                ) }.let { LoginPollHttpResponse(it.status, it.text) }
             },
             networkFailure = { networkFailure },
         )
@@ -1551,64 +1552,69 @@ internal class AndroidNextcloudServices(
         val offline = fileOfflineRepository.loadCenter(session)
         val documentWritebacks = androidDocumentPendingWritebacks(appContext, session)
         if (documentWritebacks.isNotEmpty()) {
-            val webDav = NextcloudDocumentWebDav(
-                client = OkHttpClient.Builder()
-                    .useAndroidNextcloudCertificateTrust(appContext)
-                    .build(),
-                cloudMutationsAllowed = appContext.cloudMutationGate(),
-            )
-            documentWritebacks.forEach { discovered ->
-                currentCoroutineContext().ensureActive()
-                val pending = claimAndroidDocumentPendingWritebackForRecovery(
-                    appContext,
-                    session,
-                    discovered.remotePath,
-                ) ?: return@forEach
-                runCatching {
-                    if (pending.conflict) {
-                        pending.releaseActive()
-                        return@runCatching
-                    }
-                    requireAndroidDocumentStagedWritebackCapacity(
-                        stagedBytes = pending.staging.length(),
-                        availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
-                    )
-                    CoroutineDocumentRequestCancellation(
-                        requireNotNull(currentCoroutineContext()[Job]),
-                    ).use { cancellation ->
-                        val remote = compareAndroidDocumentWriteback(
-                            webDav = webDav,
-                            session = session,
-                            userId = userId,
-                            pending = pending,
-                            cancellation = cancellation,
-                        )
-                        currentCoroutineContext().ensureActive()
-                        if (remote.contentsMatch) {
-                            virtualFileCache.invalidate(session, pending.remotePath)
-                            notifyDocumentsDocumentChanged(session, pending.remotePath)
-                            pending.complete()
-                            return@runCatching
-                        }
-                        if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
-                            pending.markConflict(remote.etag)
+            ANDROID_ACCOUNT_OPERATION_GUARD.withAuthenticatedMutationSession(
+                expectedSession = session,
+                resolveSession = ::loadSession,
+            ) { current ->
+                val webDav = NextcloudDocumentWebDav(
+                    client = OkHttpClient.Builder()
+                        .useAndroidNextcloudCertificateTrust(appContext)
+                        .build(),
+                    cloudMutationsAllowed = appContext.cloudMutationGate(),
+                )
+                documentWritebacks.forEach { discovered ->
+                    currentCoroutineContext().ensureActive()
+                    val pending = claimAndroidDocumentPendingWritebackForRecovery(
+                        appContext,
+                        current,
+                        discovered.remotePath,
+                    ) ?: return@forEach
+                    runCatching {
+                        if (pending.conflict) {
                             pending.releaseActive()
                             return@runCatching
                         }
-                        webDav.replaceFileAtomically(
-                            session = session,
-                            userId = userId,
-                            path = pending.remotePath,
-                            source = pending.staging,
-                            expectedEtag = pending.expectedRemoteEtag,
-                            cancellation = cancellation,
+                        requireAndroidDocumentStagedWritebackCapacity(
+                            stagedBytes = pending.staging.length(),
+                            availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
                         )
+                        CoroutineDocumentRequestCancellation(
+                            requireNotNull(currentCoroutineContext()[Job]),
+                        ).use { cancellation ->
+                            val remote = compareAndroidDocumentWriteback(
+                                webDav = webDav,
+                                session = current,
+                                userId = userId,
+                                pending = pending,
+                                cancellation = cancellation,
+                            )
+                            currentCoroutineContext().ensureActive()
+                            if (remote.contentsMatch) {
+                                virtualFileCache.invalidate(current, pending.remotePath)
+                                notifyDocumentsDocumentChanged(current, pending.remotePath)
+                                pending.complete()
+                                return@runCatching
+                            }
+                            if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
+                                pending.markConflict(remote.etag)
+                                pending.releaseActive()
+                                return@runCatching
+                            }
+                            webDav.replaceFileAtomically(
+                                session = current,
+                                userId = userId,
+                                path = pending.remotePath,
+                                source = pending.staging,
+                                expectedEtag = pending.expectedRemoteEtag,
+                                cancellation = cancellation,
+                            )
+                        }
+                        virtualFileCache.invalidate(current, pending.remotePath)
+                        notifyDocumentsDocumentChanged(current, pending.remotePath)
+                        pending.complete()
+                    }.onFailure { failure ->
+                        handleAndroidDocumentWritebackRecoveryFailure(failure, pending::releaseActive)
                     }
-                    virtualFileCache.invalidate(session, pending.remotePath)
-                    notifyDocumentsDocumentChanged(session, pending.remotePath)
-                    pending.complete()
-                }.onFailure { failure ->
-                    handleAndroidDocumentWritebackRecoveryFailure(failure, pending::releaseActive)
                 }
             }
         }
@@ -2684,7 +2690,7 @@ internal class AndroidNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        withNoBlockingAndroidDocumentWriteback(appContext, session, path) {
+        withNoBlockingAndroidDocumentWritebackSuspending(appContext, session, path) {
             val specification = textFileDavSaveRequest(text, expectedEtag)
             val response = request(
                 method = "PUT",
@@ -2756,7 +2762,7 @@ internal class AndroidNextcloudServices(
         mutation: NextcloudFileMutation,
     ): NextcloudFileMutationResult = withContext(Dispatchers.IO) {
         val spec = mutation.toWebDavMutationSpec()
-        withNoBlockingAndroidDocumentWriteback(
+        withNoBlockingAndroidDocumentWritebackSuspending(
             appContext,
             session,
             *listOfNotNull(spec.sourcePath, spec.destinationPath).toTypedArray(),
@@ -3459,7 +3465,7 @@ internal class AndroidNextcloudServices(
         Unit
     }
 
-    private fun ocsGet(session: NextcloudSession, path: String): JSONObject {
+    private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
         val separator = if ('?' in path) '&' else '?'
         val response = request(
             method = "GET",
@@ -3471,7 +3477,7 @@ internal class AndroidNextcloudServices(
         return JSONObject(response.text)
     }
 
-    private fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
+    private suspend fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
         val response = request(
             method = "PROPFIND",
             url = buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -3484,7 +3490,7 @@ internal class AndroidNextcloudServices(
         return SafeXmlParser.parse(response.body).documentElement.firstText(DAV_NAMESPACE, "getetag")
     }
 
-    private fun request(
+    private suspend fun request(
         method: String,
         url: String,
         session: NextcloudSession? = null,
@@ -3501,7 +3507,16 @@ internal class AndroidNextcloudServices(
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
         diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
+        accountMutationSerialized: Boolean = false,
     ): HttpResponse {
+        if (session != null && !method.isReadOnlyJvmNetworkMethod() && !accountMutationSerialized) {
+            return ANDROID_ACCOUNT_OPERATION_GUARD.withAuthenticatedMutationSession(session, ::loadSession) { current ->
+                request(
+                    method, url, current, body, contentType, ocsRequest, headers, rawBody, maxResponseBytes, expectedSuccessResponseBytes, expectedSuccessResponseStatus,
+                    client, streamingBody, onNetworkFailure, onFailurePhase, diagnosticIgnoredHttpStatuses, true,
+                )
+            }
+        }
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         check(appContext.isAllowedTestRequest(method, url)) {

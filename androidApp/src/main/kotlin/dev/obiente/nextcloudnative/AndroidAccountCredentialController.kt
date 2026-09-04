@@ -31,6 +31,7 @@ internal class AndroidAccountCredentialController(
     private val clearPreviewAccount: (String) -> Unit,
     private val notifyDocumentRootsChanged: () -> Unit,
     private val resumeQueuedUploads: suspend (String) -> Unit,
+    private val prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
     private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
 ) {
     private val appContext = context.applicationContext
@@ -129,6 +130,7 @@ internal class AndroidAccountCredentialController(
                 val active = current.registry.activeAccountId == accountId
                 removeAndroidAccountCredentialData(
                     active = active,
+                    prepareAccountRemoval = { prepareAccountRemoval(session) },
                     removeQueuedUploads = { removeQueuedUploads(session) },
                     clearActiveAccount = { clearSession(current) },
                     rollbackActiveRemoval = {
@@ -158,6 +160,7 @@ internal class AndroidAccountCredentialController(
                     ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(session)) {
                         removeAndroidAccountCredentialData(
                             active = true,
+                            prepareAccountRemoval = { prepareAccountRemoval(session) },
                             removeQueuedUploads = { removeQueuedUploads(session) },
                             clearActiveAccount = { clearSession(read.state) },
                             rollbackActiveRemoval = {
@@ -216,6 +219,7 @@ internal class AndroidAccountCredentialController(
         if (activeSession != null) {
             ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(activeSession)) {
                 removeRecoveredAndroidAccountCredentialData(
+                    prepareAccountRemoval = { prepareAccountRemoval(activeSession) },
                     removeQueuedUploads = { removeQueuedUploads(activeSession) },
                     clearRecoveredAccount = { persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted) },
                     rollbackRecoveredAccount = {
@@ -667,12 +671,14 @@ internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
 
 internal suspend fun removeAndroidAccountCredentialData(
     active: Boolean,
+    prepareAccountRemoval: suspend () -> Unit = {},
     removeQueuedUploads: suspend () -> Unit,
     clearActiveAccount: suspend () -> Unit,
     rollbackActiveRemoval: suspend () -> Unit,
     persistInactiveRemoval: suspend () -> Unit,
     rollbackInactiveRemoval: suspend () -> Unit,
 ) {
+    prepareAccountRemoval()
     if (active) {
         try {
             clearActiveAccount()
@@ -700,11 +706,13 @@ internal suspend fun removeAndroidAccountCredentialData(
 }
 
 internal suspend fun removeRecoveredAndroidAccountCredentialData(
+    prepareAccountRemoval: suspend () -> Unit = {},
     removeQueuedUploads: suspend () -> Unit,
     clearRecoveredAccount: suspend () -> Unit,
     rollbackRecoveredAccount: suspend () -> Unit,
 ) = removeAndroidAccountCredentialData(
     active = true,
+    prepareAccountRemoval = prepareAccountRemoval,
     removeQueuedUploads = removeQueuedUploads,
     clearActiveAccount = clearRecoveredAccount,
     rollbackActiveRemoval = rollbackRecoveredAccount,

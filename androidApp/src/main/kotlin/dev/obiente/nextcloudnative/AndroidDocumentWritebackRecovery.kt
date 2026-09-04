@@ -271,11 +271,38 @@ internal fun <T> withNoBlockingAndroidDocumentWriteback(
     vararg remotePaths: String,
     operation: () -> T,
 ): T {
+    val reservation = reserveAndroidDocumentMutation(context, session, remotePaths)
+    return try {
+        operation()
+    } finally {
+        releaseAndroidDocumentMutation(reservation)
+    }
+}
+
+internal suspend fun <T> withNoBlockingAndroidDocumentWritebackSuspending(
+    context: android.content.Context?,
+    session: NextcloudSession,
+    vararg remotePaths: String,
+    operation: suspend () -> T,
+): T {
+    val reservation = reserveAndroidDocumentMutation(context, session, remotePaths)
+    return try {
+        operation()
+    } finally {
+        releaseAndroidDocumentMutation(reservation)
+    }
+}
+
+private fun reserveAndroidDocumentMutation(
+    context: android.content.Context?,
+    session: NextcloudSession,
+    remotePaths: Array<out String>,
+): ActiveAndroidDocumentMutation {
     val providerContext = requireNotNull(context) { "Provider context is unavailable." }
     val accountId = NextcloudDocumentIds.accountKey(session)
     val paths = remotePaths.toSet()
     require(paths.isNotEmpty() && paths.none(String::isBlank))
-    val reservation = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+    return synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
         val activePaths = ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.asSequence()
             .filter { active -> active.accountId == accountId }
             .map(ActiveAndroidDocumentWritebackPath::remotePath)
@@ -294,12 +321,11 @@ internal fun <T> withNoBlockingAndroidDocumentWriteback(
         }
         ActiveAndroidDocumentMutation(accountId, paths).also(ACTIVE_ANDROID_DOCUMENT_MUTATIONS::add)
     }
-    return try {
-        operation()
-    } finally {
-        synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-            check(ACTIVE_ANDROID_DOCUMENT_MUTATIONS.remove(reservation))
-        }
+}
+
+private fun releaseAndroidDocumentMutation(reservation: ActiveAndroidDocumentMutation) {
+    synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+        check(ACTIVE_ANDROID_DOCUMENT_MUTATIONS.remove(reservation))
     }
 }
 
