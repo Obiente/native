@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
+import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.WorkManager
 import androidx.work.await
@@ -52,6 +53,9 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
                     cancellation.close()
                 }
             },
+            recordChunkReleaseFailure = { failure ->
+                Log.w(LOG_TAG, "Remote staged-share chunk cleanup deferred during account removal", failure)
+            },
             removeRequest = { requestId ->
                 check(store.remove(requestId)) { "The staged share data could not be released." }
                 NotificationManagerCompat.from(appContext).apply {
@@ -100,13 +104,22 @@ internal suspend fun removeAndroidIncomingShareRequests(
     requests: List<AndroidIncomingShareAccountRequest>,
     cancelWork: suspend (String) -> Unit,
     releaseChunk: suspend (AndroidIncomingShareRequest, String) -> Unit,
+    recordChunkReleaseFailure: (Throwable) -> Unit = {},
     removeRequest: (String) -> Unit,
 ) {
     requests.forEach { request -> cancelWork(request.id) }
     requests.forEach { accountRequest ->
         accountRequest.request?.chunkSession?.let { chunk ->
-            releaseChunk(accountRequest.request, chunk.uploadId)
+            try {
+                releaseChunk(accountRequest.request, chunk.uploadId)
+            } catch (failure: kotlinx.coroutines.CancellationException) {
+                throw failure
+            } catch (failure: Exception) {
+                recordChunkReleaseFailure(failure)
+            }
         }
     }
     requests.forEach { request -> removeRequest(request.id) }
 }
+
+private const val LOG_TAG = "IncomingShareCleanup"
