@@ -461,6 +461,7 @@ class AndroidDurableMultipartUploadPolicyTest {
         val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
         val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
         val acceptedWork = mutableSetOf<String>()
+        var recoveryRequests = 0
 
         val result = persistAndScheduleDurableUpload(
             job = job,
@@ -469,11 +470,13 @@ class AndroidDurableMultipartUploadPolicyTest {
                 acceptedWork += queued.id
                 throw IOException("The scheduler completion signal was lost")
             },
+            requestRecovery = { recoveryRequests += 1 },
         )
 
         assertIs<DurableUploadEnqueueResult.Queued>(result)
         assertEquals(listOf(job), persisted)
         assertEquals(setOf(job.id), acceptedWork)
+        assertEquals(1, recoveryRequests)
 
         val workRecoveredAfterRestart = persisted
             .filter { queued -> queued.state == DurableUploadState.Queued }
@@ -498,92 +501,73 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `startup scheduling keeps polling after success for later enqueue failures`() {
-        var attempts = 0
-        val waits = mutableListOf<Long>()
+    fun `a recovery request wakes the idle scheduling monitor without polling`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        var recoveryRuns = 0
+        recoverySignal.request()
 
         assertFailsWith<CancellationException> {
-            runBlocking {
-                keepRetryingQueuedDurableUploadScheduling(
-                    retryDelaysMillis = listOf(10L, 20L),
-                    followUpDelayMillis = 100L,
-                    reconcile = {
-                        attempts += 1
-                        when (attempts) {
-                            1 -> true
-                            2 -> false
-                            3 -> true
-                            else -> throw CancellationException("Lifecycle stopped")
-                        }
-                    },
-                    wait = waits::add,
-                )
-            }
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 2) throw CancellationException("Lifecycle stopped")
+                },
+                recoverySignal = recoverySignal,
+            )
         }
 
-        assertEquals(4, attempts)
-        assertEquals(listOf(100L, 10L, 100L), waits)
+        assertEquals(2, recoveryRuns)
     }
 
     @Test
-    fun `startup scheduling keeps polling after a transient journal read failure`() {
+    fun `startup scheduling retries until a transient journal read failure clears`() = runBlocking {
         var attempts = 0
         val waits = mutableListOf<Long>()
         var diagnostics = 0
 
-        assertFailsWith<CancellationException> {
-            runBlocking {
-                keepRetryingQueuedDurableUploadScheduling(
-                    followUpDelayMillis = 100L,
-                    reconcile = {
-                        attempts += 1
-                        when (attempts) {
-                            1, 2 -> throw AndroidDurableMultipartUploadRecoveryException(
-                                IOException("Synthetic unreadable journal"),
-                            )
-                            3 -> true
-                            else -> throw CancellationException("Lifecycle stopped")
-                        }
-                    },
-                    wait = waits::add,
-                    recordRecoveryFailure = { diagnostics += 1 },
-                )
-            }
-        }
+        keepRetryingQueuedDurableUploadScheduling(
+            followUpDelayMillis = 100L,
+            reconcile = {
+                attempts += 1
+                when (attempts) {
+                    1, 2 -> throw AndroidDurableMultipartUploadRecoveryException(
+                        IOException("Synthetic unreadable journal"),
+                    )
+                    else -> true
+                }
+            },
+            wait = waits::add,
+            recordRecoveryFailure = { diagnostics += 1 },
+        )
 
-        assertEquals(4, attempts)
-        assertEquals(listOf(100L, 100L, 100L), waits)
+        assertEquals(3, attempts)
+        assertEquals(listOf(100L, 100L), waits)
         assertEquals(1, diagnostics)
     }
 
     @Test
-    fun `startup scheduling retries when uploader construction is temporarily unavailable`() {
+    fun `startup scheduling retries when uploader construction is temporarily unavailable`() = runBlocking {
         var constructions = 0
         val waits = mutableListOf<Long>()
         var diagnostics = 0
 
-        assertFailsWith<CancellationException> {
-            runBlocking {
-                keepRetryingQueuedDurableUploadScheduling(
-                    followUpDelayMillis = 100L,
-                    reconcile = {
-                        constructAndReconcileQueuedDurableUploads {
-                            constructions += 1
-                            when (constructions) {
-                                1 -> throw IOException("Synthetic keystore initialization failure")
-                                2 -> suspend { true }
-                                else -> suspend { throw CancellationException("Lifecycle stopped") }
-                            }
-                        }
-                    },
-                    wait = waits::add,
-                    recordRecoveryFailure = { diagnostics += 1 },
-                )
-            }
-        }
+        keepRetryingQueuedDurableUploadScheduling(
+            followUpDelayMillis = 100L,
+            reconcile = {
+                constructAndReconcileQueuedDurableUploads {
+                    constructions += 1
+                    when (constructions) {
+                        1 -> throw IOException("Synthetic keystore initialization failure")
+                        else -> suspend { true }
+                    }
+                }
+            },
+            wait = waits::add,
+            recordRecoveryFailure = { diagnostics += 1 },
+        )
 
-        assertEquals(3, constructions)
-        assertEquals(listOf(100L, 100L), waits)
+        assertEquals(2, constructions)
+        assertEquals(listOf(100L), waits)
         assertEquals(1, diagnostics)
     }
 
@@ -591,6 +575,7 @@ class AndroidDurableMultipartUploadPolicyTest {
     fun `cancellation after persistence propagates without discarding restart state`() {
         val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
         val persisted = mutableListOf<AndroidDurableMultipartUploadJob>()
+        var recoveryRequests = 0
 
         assertFailsWith<CancellationException> {
             runBlocking {
@@ -598,11 +583,13 @@ class AndroidDurableMultipartUploadPolicyTest {
                     job = job,
                     persist = persisted::add,
                     schedule = { throw CancellationException("Owner stopped") },
+                    requestRecovery = { recoveryRequests += 1 },
                 )
             }
         }
 
         assertEquals(listOf(job), persisted)
+        assertEquals(1, recoveryRequests)
     }
 
     @Test

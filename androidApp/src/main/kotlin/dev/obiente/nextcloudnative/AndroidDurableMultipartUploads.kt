@@ -77,6 +77,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
             .onEach { job ->
                 if (job.state == DurableUploadState.Queued) {
                     runCatching { schedule(job) }
+                        .onFailure { requestQueuedDurableUploadSchedulingRecovery() }
                 }
             }
             .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
@@ -97,7 +98,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // The queue stays authoritative; status refresh or a later activation can retry.
+                requestQueuedDurableUploadSchedulingRecovery()
             }
         }
     }
