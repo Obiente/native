@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
+import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -442,6 +443,188 @@ class AndroidDurableMultipartUploadPolicyTest {
 
         assertEquals(queuedSession, resolved)
         assertEquals(listOf(queuedSession.accountId.storageKey), loadedAccountIds)
+    }
+
+    @Test
+    fun `background upload recovers missing account metadata before rejecting the account`() {
+        val queuedSession = fixtureSession("alice")
+        var accounts = emptyList<NextcloudAccountRecord>()
+        val events = mutableListOf<String>()
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            listAccounts = {
+                events += "list"
+                accounts
+            },
+            recoverRegistry = {
+                events += "recover"
+                accounts = listOf(queuedSession.accountRecord())
+                null
+            },
+            loadSession = {
+                events += "load:${it.storageKey}"
+                queuedSession
+            },
+        )
+
+        assertEquals(queuedSession, resolved)
+        assertEquals(
+            listOf("list", "recover", "list", "load:${queuedSession.accountId.storageKey}"),
+            events,
+        )
+    }
+
+    @Test
+    fun `background upload retains a matching recovered session when registry repair cannot persist`() {
+        val queuedSession = fixtureSession("alice")
+        var accountReads = 0
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            listAccounts = {
+                accountReads += 1
+                emptyList()
+            },
+            recoverRegistry = { queuedSession },
+            loadSession = { error("the uncommitted registry must not hide the recovered session") },
+        )
+
+        assertEquals(queuedSession, resolved)
+        assertEquals(1, accountReads)
+    }
+
+    @Test
+    fun `background upload skips registry recovery when account metadata is healthy`() {
+        val queuedSession = fixtureSession("alice")
+        var registryRecoveryAttempted = false
+
+        val resolved = resolveDurableUploadSessionWithRegistryRecovery(
+            expectedAccountId = NextcloudDocumentIds.accountKey(queuedSession),
+            listAccounts = { listOf(queuedSession.accountRecord()) },
+            recoverRegistry = {
+                registryRecoveryAttempted = true
+                null
+            },
+            loadSession = { queuedSession },
+        )
+
+        assertEquals(queuedSession, resolved)
+        assertFalse(registryRecoveryAttempted)
+    }
+
+    @Test
+    fun `startup reconciliation schedules every queued upload across accounts`() = runBlocking {
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val completed = fixtureJob(
+            index = 3,
+            account = ACCOUNT_A,
+            cardId = 44,
+            state = DurableUploadState.Completed,
+        )
+        val attempted = mutableListOf<String>()
+
+        val allScheduled = reconcileQueuedDurableUploads(listOf(first, completed, second)) { job ->
+            attempted += job.id
+            if (job == first) throw IOException("Synthetic scheduler rejection")
+        }
+
+        assertEquals(listOf(first.id, second.id), attempted)
+        assertFalse(allScheduled)
+    }
+
+    @Test
+    fun `startup scheduling retries an observed asynchronous failure`() = runBlocking {
+        var attempts = 0
+        val waits = mutableListOf<Long>()
+
+        val recovered = retryQueuedDurableUploadScheduling(
+            retryDelaysMillis = listOf(10L, 20L),
+            reconcile = {
+                attempts += 1
+                attempts >= 2
+            },
+            wait = { delayMillis -> waits += delayMillis },
+        )
+
+        assertTrue(recovered)
+        assertEquals(2, attempts)
+        assertEquals(listOf(10L), waits)
+    }
+
+    @Test
+    fun `exhausted startup scheduling is reported before the next recovery cycle`() {
+        var attempts = 0
+        var diagnostics = 0
+        var recoveryCycles = 0
+        val waits = mutableListOf<Long>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                keepRetryingQueuedDurableUploadScheduling(
+                    retryDelaysMillis = listOf(10L),
+                    followUpDelayMillis = 20L,
+                    reconcile = {
+                        attempts += 1
+                        false
+                    },
+                    wait = { delayMillis ->
+                        waits += delayMillis
+                        if (delayMillis == 20L && ++recoveryCycles == 2) {
+                            throw CancellationException("stop after two cycles")
+                        }
+                    },
+                    recordRecoveryFailure = { diagnostics += 1 },
+                )
+            }
+        }
+
+        assertEquals(4, attempts)
+        assertEquals(1, diagnostics)
+        assertEquals(listOf(10L, 20L, 10L, 20L), waits)
+    }
+
+    @Test
+    fun `startup recovery contains uploader construction failures`() = runBlocking {
+        val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+            constructAndReconcileQueuedDurableUploads {
+                throw IOException("synthetic keystore failure")
+            }
+        }
+
+        assertTrue(failure.cause is IOException)
+    }
+
+    @Test
+    fun `startup recovery contains an unreadable queue and records one bounded diagnostic`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        runAndroidDurableUploadStartupRecovery(
+            recover = {
+                events += "recover"
+                throw AndroidDurableMultipartUploadRecoveryException(IOException("sensitive storage detail"))
+            },
+            recordRecoveryFailure = { events += "diagnose" },
+        )
+
+        assertEquals(listOf("recover", "diagnose"), events)
+    }
+
+    @Test
+    fun `startup recovery preserves cancellation`() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            runBlocking {
+                runAndroidDurableUploadStartupRecovery(
+                    recover = { throw CancellationException("application stopped") },
+                    recordRecoveryFailure = { events += "diagnose" },
+                )
+            }
+        }
+
+        assertTrue(events.isEmpty())
     }
 
     @Test

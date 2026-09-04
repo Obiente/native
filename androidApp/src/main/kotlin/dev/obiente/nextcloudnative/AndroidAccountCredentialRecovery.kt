@@ -359,6 +359,7 @@ internal fun resolveStoredAndroidAccountSession(
 
 internal const val ANDROID_ACCOUNT_SESSION_KEY = "encrypted_session"
 internal const val ANDROID_ACCOUNT_REGISTRY_KEY = "account_registry_v1"
+internal const val ANDROID_ACCOUNT_PREFERENCES_NAME = "nextcloud_native"
 internal const val ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX = "account_credential_v1:"
 internal const val ANDROID_QUARANTINED_SESSION_KEY = "encrypted_session_quarantine"
 internal const val ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY = "pending_account_removal_cleanup_v2"
