@@ -3,6 +3,9 @@ package dev.obiente.nextcloudnative
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
+import kotlinx.coroutines.CancellationException
 
 class AndroidSafDownloadContentRecoveryTest {
     @Test
@@ -93,6 +96,34 @@ class AndroidSafDownloadContentRecoveryTest {
 
         assertEquals(listOf("Archive"), directory.names())
         assertContentEquals(byteArrayOf(1, 2), directory.entryNamed("Archive").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `restart authenticates exact backup name after identity-changing protection rename`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            replaceIdentityAfterRenameTo = initial.backupName
+            cancelAfterRenameTo = initial.backupName
+        }
+        val originalIdentity = directory.documentNamed("Archive").toString()
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(3, 4))
+            }
+        }
+
+        val interrupted = directory.ownership.transactions().single()
+        assertEquals(originalIdentity, interrupted.backupDocumentIdentity)
+        assertNotEquals(originalIdentity, directory.documentNamed(initial.backupName).toString())
+        assertEquals(setOf(initial.backupName, interrupted.stageName), directory.names().toSet())
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
         assertEquals(emptyList(), directory.ownership.transactions())
     }
 

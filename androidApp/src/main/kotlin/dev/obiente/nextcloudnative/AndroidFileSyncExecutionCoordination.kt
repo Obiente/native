@@ -132,17 +132,23 @@ internal suspend fun removeConfiguredFileSyncPair(
     currentCoroutineContext().ensureActive()
     if (!cleanRemoteUploads()) return false
     currentCoroutineContext().ensureActive()
-    cleanLedger()
-    currentCoroutineContext().ensureActive()
-    persistRemoval()
-    completePersistedFileSyncPairRemoval(cancelSchedule, releaseLocalGrant)
+    commitConfiguredFileSyncPairRemoval(
+        cleanLedger = cleanLedger,
+        persistRemoval = persistRemoval,
+        cancelSchedule = cancelSchedule,
+        releaseLocalGrant = releaseLocalGrant,
+    )
     return true
 }
 
-internal suspend fun completePersistedFileSyncPairRemoval(
+internal suspend fun commitConfiguredFileSyncPairRemoval(
+    cleanLedger: suspend () -> Unit,
+    persistRemoval: suspend () -> Unit,
     cancelSchedule: suspend () -> Unit,
     releaseLocalGrant: suspend () -> Unit,
 ) = withContext(NonCancellable) {
+    cleanLedger()
+    persistRemoval()
     try {
         cancelSchedule()
     } finally {

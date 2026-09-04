@@ -23,6 +23,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
@@ -353,22 +354,53 @@ class AndroidFileSyncEngineInvariantTest {
     @Test
     fun pairRemovalFinishesCleanupNonCancellablyAfterPersistence() = runBlocking {
         val events = mutableListOf<String>()
-        val removal = launch {
+        lateinit var removal: Job
+        removal = launch(start = CoroutineStart.LAZY) {
             removeConfiguredFileSyncPair(
                 reconcileLocalDownloads = { events += "reconcile"; true },
                 cleanRemoteUploads = { events += "remote"; true },
                 cleanLedger = { events += "clean" },
                 persistRemoval = {
                     events += "persist"
-                    currentCoroutineContext().cancel()
+                    removal.cancel()
                 },
                 cancelSchedule = { events += "cancel-schedule" },
                 releaseLocalGrant = { events += "release" },
             )
         }
 
+        removal.start()
         removal.join()
 
+        assertTrue(removal.isCancelled)
+        assertEquals(
+            listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
+            events,
+        )
+    }
+
+    @Test
+    fun pairRemovalCannotBeCancelledBetweenLedgerCleanupAndPersistence() = runBlocking {
+        val events = mutableListOf<String>()
+        lateinit var removal: Job
+        removal = launch(start = CoroutineStart.LAZY) {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = { events += "reconcile"; true },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = {
+                    events += "clean"
+                    removal.cancel()
+                },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.start()
+        removal.join()
+
+        assertTrue(removal.isCancelled)
         assertEquals(
             listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
             events,

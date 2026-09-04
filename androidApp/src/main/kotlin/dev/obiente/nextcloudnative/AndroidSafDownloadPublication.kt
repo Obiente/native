@@ -337,6 +337,10 @@ internal class AndroidSafDownloadPublisher<Document>(
             documents.singleOrNull { document ->
                 document.documentIdentity == identity && document.displayName != transaction.finalName
             } ?: documents.singleOrNull { document ->
+                document.displayName == transaction.backupName &&
+                    transaction.backupContentIdentity != null &&
+                    contentIdentity(document.document) == transaction.backupContentIdentity
+            } ?: documents.singleOrNull { document ->
                 transaction.token in document.displayName &&
                     document.documentIdentity != transaction.stageDocumentIdentity &&
                     document.displayName != transaction.backupName &&
