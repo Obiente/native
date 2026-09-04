@@ -2,10 +2,13 @@ package dev.obiente.nextcloudnative.app
 
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.channels.FileChannel
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -29,13 +32,14 @@ internal class DesktopDeckCardDraftStore(
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
     private val deleteFile: (File) -> Boolean = ::deleteDeckDraftFile,
+    private val syncDirectory: (File) -> Unit = ::syncDeckDraftDirectory,
 ) {
     @Synchronized
     fun load(session: NextcloudSession, key: DeckCardDraftKey): PersistedDeckCardDraft? {
         val file = draftFile(session, key)
         val quarantine = quarantineFile(file)
         if (quarantine.exists()) {
-            if (deleteFile(file)) deleteFile(quarantine)
+            if (deleteDurably(file)) deleteDurably(quarantine)
             return null
         }
         if (!file.exists()) return null
@@ -82,7 +86,7 @@ internal class DesktopDeckCardDraftStore(
         check(!Files.isSymbolicLink(root.toPath())) {
             "Desktop Deck draft storage must not be a symbolic link."
         }
-        check(deleteFile(file) && deleteFile(quarantineFile(file))) {
+        check(deleteDurably(file) && deleteDurably(quarantineFile(file))) {
             "The Deck card draft could not be cleared."
         }
     }
@@ -93,7 +97,7 @@ internal class DesktopDeckCardDraftStore(
         val quarantine = quarantineFile(file)
         ensurePrivateDirectory()
         publish(quarantine, SUBMITTED_MARKER_BYTES)
-        if (deleteFile(file)) deleteFile(quarantine)
+        if (deleteDurably(file)) deleteDurably(quarantine)
     }
 
     @Synchronized
@@ -107,7 +111,7 @@ internal class DesktopDeckCardDraftStore(
         }.filter { file ->
             file.name.matches(DRAFT_FILE_PATTERN) || file.name.matches(SUBMITTED_FILE_PATTERN)
         }
-        check(files.all(deleteFile)) { "Saved Deck card drafts could not be discarded." }
+        check(files.all(::deleteDurably)) { "Saved Deck card drafts could not be discarded." }
     }
 
     internal fun storageFileName(session: NextcloudSession, key: DeckCardDraftKey): String {
@@ -131,7 +135,7 @@ internal class DesktopDeckCardDraftStore(
     private fun clearQuarantineBeforeSave(draftFile: File) {
         val quarantine = quarantineFile(draftFile)
         if (!quarantine.exists()) return
-        check(deleteFile(draftFile) && deleteFile(quarantine)) {
+        check(deleteDurably(draftFile) && deleteDurably(quarantine)) {
             "The submitted Deck card draft quarantine could not be cleared."
         }
     }
@@ -340,15 +344,23 @@ internal class DesktopDeckCardDraftStore(
                 file,
                 setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
             )
+            syncDirectory(root)
         } finally {
             temporary.delete()
         }
     }
 
     private fun deleteDraft(file: File) {
-        check(deleteFile(file)) {
+        check(deleteDurably(file)) {
             "An old Deck card draft could not be removed."
         }
+    }
+
+    private fun deleteDurably(file: File): Boolean {
+        val existed = Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+        val deleted = deleteFile(file)
+        if (deleted && existed) syncDirectory(root)
+        return deleted
     }
 
     private fun File.isSafeRegularFile(): Boolean =
@@ -390,6 +402,13 @@ internal class DesktopDeckCardDraftStore(
 
 private fun deleteDeckDraftFile(file: File): Boolean =
     Files.deleteIfExists(file.toPath()) || !file.exists()
+
+private fun syncDeckDraftDirectory(directory: File) {
+    if (Files.getFileAttributeView(directory.toPath(), PosixFileAttributeView::class.java) == null) return
+    FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+        channel.force(true)
+    }
+}
 
 internal class DesktopDeckDraftRecoveryException(
     cause: Throwable,
@@ -436,7 +455,15 @@ internal class PlatformDeckDraftKeyProvider(
             username = null,
             secret = encoded.encodeToByteArray(),
         )
-        return lookup() ?: generated
+        val persisted = lookup() ?: throw DesktopSecretStoreUnavailableException(
+            "The Deck draft encryption key could not be verified after saving.",
+        )
+        if (!MessageDigest.isEqual(generated, persisted)) {
+            throw DesktopSecretStoreUnavailableException(
+                "The Deck draft encryption key changed during secure storage verification.",
+            )
+        }
+        return generated
     }
 
     private fun lookup(): ByteArray? {

@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.nio.file.Files
+import java.util.Base64
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -297,6 +298,68 @@ class DesktopDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `generated key is rejected when secure storage does not persist it`() {
+        var saves = 0
+        val secretStore = object : DesktopSecretStore {
+            override fun load(reference: DesktopSecretReference): ByteArray? = null
+
+            override fun save(
+                reference: DesktopSecretReference,
+                username: String?,
+                secret: ByteArray,
+            ) {
+                saves += 1
+            }
+
+            override fun clear(reference: DesktopSecretReference) = Unit
+        }
+        val provider = PlatformDeckDraftKeyProvider(
+            secretStore = secretStore,
+            legacySecretRequired = { false },
+        )
+
+        repeat(2) {
+            val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+                provider.encryptionKey()
+            }
+            assertTrue(failure.message.orEmpty().contains("could not be verified"))
+        }
+
+        assertEquals(2, saves)
+    }
+
+    @Test
+    fun `generated key is rejected when secure storage readback changes it`() {
+        var saved = false
+        val replacement = Base64.getEncoder().encode(
+            ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { 0x5a },
+        )
+        val secretStore = object : DesktopSecretStore {
+            override fun load(reference: DesktopSecretReference): ByteArray? =
+                replacement.copyOf().takeIf { saved }
+
+            override fun save(
+                reference: DesktopSecretReference,
+                username: String?,
+                secret: ByteArray,
+            ) {
+                saved = true
+            }
+
+            override fun clear(reference: DesktopSecretReference) = Unit
+        }
+
+        val failure = assertFailsWith<DesktopSecretStoreUnavailableException> {
+            PlatformDeckDraftKeyProvider(
+                secretStore = secretStore,
+                legacySecretRequired = { false },
+            ).encryptionKey()
+        }
+
+        assertTrue(failure.message.orEmpty().contains("changed during secure storage verification"))
+    }
+
+    @Test
     fun `clear removes only the requested account resource`() =
         withStore { root, _, store ->
             val session = session()
@@ -311,6 +374,34 @@ class DesktopDeckCardDraftStoreTest {
             assertEquals(second, store.load(session, second.key))
             assertEquals(1, root.listFiles().orEmpty().size)
         }
+
+    @Test
+    fun `publish and delete sync the draft directory entry`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-directory-sync").toFile()
+        val key = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { (it + 1).toByte() }
+        val session = session()
+        val persisted = persisted()
+        val syncedDraftPresence = mutableListOf<Boolean>()
+        try {
+            lateinit var draftFile: java.io.File
+            val store = DesktopDeckCardDraftStore(
+                root = root,
+                keyProvider = fixedKey(key),
+                syncDirectory = { directory ->
+                    assertEquals(root.canonicalFile, directory.canonicalFile)
+                    syncedDraftPresence += draftFile.exists()
+                },
+            )
+            draftFile = root.resolve(store.storageFileName(session, persisted.key))
+
+            store.save(session, persisted)
+            store.clear(session, persisted.key)
+
+            assertEquals(listOf(true, false), syncedDraftPresence)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 
     @Test
     fun `submitted draft quarantine blocks recovery when immediate deletion fails`() {
