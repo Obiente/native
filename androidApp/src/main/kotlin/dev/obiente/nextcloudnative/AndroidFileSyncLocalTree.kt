@@ -151,13 +151,14 @@ internal class AndroidSafFileSyncLocalTree(
     override fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
     ): List<AndroidLocalSyncDocument> {
+        val ownershipDirectory = downloadOwnershipStore.indexed()
         val result = ArrayList<AndroidLocalSyncDocument>()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
         while (pending.isNotEmpty()) {
             val (parentPath, parentUri) = pending.removeFirst()
             require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
-            for (document in children(parentUri, parentPath)) {
+            for (document in children(parentUri, parentPath, ownershipDirectory)) {
                 if (!includes(document.entry.relativePath, document.entry.kind)) continue
                 require(result.size < MAX_ENTRIES) { "The local folder contains too many entries." }
                 result += document
@@ -182,6 +183,7 @@ internal class AndroidSafFileSyncLocalTree(
     )
 
     override fun reconcileOwnedDownloads() {
+        val ownershipDirectory = downloadOwnershipStore.indexed()
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
         var visitedEntries = 0
@@ -190,7 +192,7 @@ internal class AndroidSafFileSyncLocalTree(
             require(parentPath.count { it == '/' } < MAX_DEPTH) {
                 "The local recovery folder is nested too deeply."
             }
-            val publisher = downloadPublisher(parentUri, parentPath)
+            val publisher = downloadPublisher(parentUri, parentPath, ownershipDirectory = ownershipDirectory)
             publisher.reconcileForSync()
             val listedChildren = rawChildren(parentUri, parentPath)
             val visibleUris = publisher.visibleDocuments(
@@ -560,8 +562,12 @@ internal class AndroidSafFileSyncLocalTree(
         return currentUri
     }
 
-    private fun children(parentUri: Uri, parentPath: String): List<AndroidLocalSyncDocument> {
-        val publisher = downloadPublisher(parentUri, parentPath)
+    private fun children(
+        parentUri: Uri,
+        parentPath: String,
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory = downloadOwnershipStore,
+    ): List<AndroidLocalSyncDocument> {
+        val publisher = downloadPublisher(parentUri, parentPath, ownershipDirectory = ownershipDirectory)
         publisher.reconcileForSync()
         val listedChildren = rawChildren(parentUri, parentPath)
         val visibleUris = publisher.visibleDocuments(
@@ -576,9 +582,10 @@ internal class AndroidSafFileSyncLocalTree(
         parentUri: Uri,
         parentPath: String,
         shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+        ownershipDirectory: AndroidSafDownloadOwnershipDirectory = downloadOwnershipStore,
     ): AndroidSafDownloadPublisher<Uri> = AndroidSafDownloadPublisher(
         directory = publicationDirectory(parentUri, parentPath),
-        ownership = downloadOwnershipStore.forDirectory(parentUri.toString()),
+        ownership = ownershipDirectory.forDirectory(parentUri.toString()),
         contentIdentity = { document ->
             replacementContentIdentity(parentUri, parentPath, document, shouldContinue)
         },

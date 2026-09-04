@@ -26,6 +26,10 @@ internal interface AndroidSafDownloadOwnership {
     fun remove(transaction: AndroidSafOwnedDownloadTransaction)
 }
 
+internal interface AndroidSafDownloadOwnershipDirectory {
+    fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership
+}
+
 /**
  * Owns the recoverable rename sequence for one SAF parent directory.
  *
@@ -142,14 +146,17 @@ internal class AndroidSafDownloadPublisher<Document>(
         }
         ownership.add(transaction)
         val stage = createStage(transaction.stageName)
-        val staged = directory.documents().singleOrNull { document ->
-            document.document == stage && document.displayName == transaction.stageName
-        }
-        if (staged == null) {
-            error("The local file provider changed the recovery stage name.")
+        val staged = requireNotNull(directory.documents().singleOrNull { document -> document.document == stage }) {
+            "The local file provider did not return the created recovery stage."
         }
         transaction = transaction.copy(stageDocumentIdentity = staged.documentIdentity)
         ownership.replace(transaction)
+        if (staged.displayName != transaction.stageName) {
+            val failure = IllegalStateException("The local file provider changed the recovery stage name.")
+            deleteMisnamedStageOrThrow(stage, failure)
+            retireRecoveredOwnershipBestEffort(transaction, publicationFailureAccountedFor = true)
+            throw failure
+        }
         require(stageDocument(transaction)?.document == stage) {
             "The local file provider changed the recovery stage identity."
         }
@@ -291,7 +298,7 @@ internal class AndroidSafDownloadPublisher<Document>(
     ): AndroidSafPublicationDocument<Document>? {
         val identity = transaction.stageDocumentIdentity ?: return null
         return documents.singleOrNull { document ->
-            document.displayName == transaction.stageName && document.documentIdentity == identity
+            document.documentIdentity == identity && document.displayName != transaction.finalName
         }
     }
 
@@ -307,6 +314,7 @@ internal class AndroidSafDownloadPublisher<Document>(
                 document.documentIdentity == identity && document.displayName != transaction.finalName
             } ?: documents.singleOrNull { document ->
                 transaction.token in document.displayName &&
+                    document.documentIdentity != transaction.stageDocumentIdentity &&
                     document.displayName != transaction.backupName &&
                     document.displayName != transaction.generatedBackupName &&
                     document.displayName != transaction.stageName &&
@@ -501,6 +509,7 @@ internal class AndroidSafDownloadPublisher<Document>(
             originalDocumentIsFinal(transaction, final)
         if (
             publicationAccountedFor &&
+            stageDocument(transaction) == null &&
             documentNamed(transaction.stageName) == null &&
             backupDocument(transaction) == null &&
             (!transaction.backupProtected || transaction.publicationCompleted)

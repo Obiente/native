@@ -11,6 +11,34 @@ import kotlin.test.assertNotEquals
 
 class AndroidSafDownloadStageIdentityTest {
     @Test
+    fun `normalized created stage stays owned until cleanup succeeds`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val normalizedStageName = "provider-stage-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(8, 9))
+            normalizedCreateNames[transaction.stageName] = normalizedStageName
+            failNextDeletionOfName = normalizedStageName
+        }
+
+        assertFailsWith<IllegalStateException> {
+            publisher(directory).publish("Report.txt", directory.documentNamed("Report.txt")) { output ->
+                output.write(byteArrayOf(10, 11))
+            }
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(directory.documentNamed(normalizedStageName).toString(), pending.stageDocumentIdentity)
+        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Report.txt"), directory.names())
+        assertContentEquals(byteArrayOf(8, 9), directory.entryNamed("Report.txt").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+        assertEquals(2, directory.deleteCalls)
+    }
+
+    @Test
     fun `exact restore persists a changed provider identity before retiring ownership`() {
         val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory()

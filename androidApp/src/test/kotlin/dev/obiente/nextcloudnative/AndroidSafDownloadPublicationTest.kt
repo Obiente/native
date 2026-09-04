@@ -1011,6 +1011,7 @@ internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     var replaceBackupWithUnrelatedFinalBeforeRenameTo: String? = null
     var removeBackupBeforeStageRenameFailureTo: String? = null
     val normalizedRenameNames = mutableMapOf<String, String>()
+    val normalizedCreateNames = mutableMapOf<String, String>()
     val cancelNextDocumentsAfterRenameTo = mutableMapOf<String, CancellationException>()
     var failNextBackupDeletion: Boolean = false
     var failNextStageDeletion: Boolean = false
@@ -1067,9 +1068,11 @@ internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
         return entries.values.map { entry -> AndroidSafPublicationDocument(entry.document, entry.displayName) }
     }
 
-    override fun createFile(displayName: String): Int = addFile(displayName)
+    override fun createFile(displayName: String): Int =
+        addFile(normalizedCreateNames.remove(displayName) ?: displayName)
 
-    override fun createDirectory(displayName: String): Int = addDirectory(displayName)
+    override fun createDirectory(displayName: String): Int =
+        addDirectory(normalizedCreateNames.remove(displayName) ?: displayName)
 
     override fun writeFile(document: Int, write: (OutputStream) -> Unit) {
         val destination = ByteArrayOutputStream()

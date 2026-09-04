@@ -1,0 +1,106 @@
+package dev.obiente.nextcloudnative
+
+import java.io.FileInputStream
+import java.nio.file.Files
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+
+class AndroidSafDownloadOwnershipIndexTest {
+    @Test
+    fun `one ownership listing serves a large directory scan`() {
+        val root = Files.createTempDirectory("saf-download-ownership-index-").toFile()
+        try {
+            val relevantScope = "content://provider/tree/root/document/relevant"
+            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            AndroidSafDownloadOwnershipStore(root).forDirectory(relevantScope).add(transaction)
+            var listingCount = 0
+            var readCount = 0
+            val store = AndroidSafDownloadOwnershipStore(
+                directory = root,
+                listFiles = {
+                    listingCount += 1
+                    root.listFiles()
+                },
+                openInput = { file ->
+                    readCount += 1
+                    FileInputStream(file)
+                },
+            )
+
+            val index = store.indexed()
+            repeat(100) {
+                assertEquals(listOf(transaction), index.forDirectory(relevantScope).transactions())
+            }
+            repeat(20_000) { directory ->
+                assertEquals(
+                    emptyList(),
+                    index.forDirectory("content://provider/tree/root/document/$directory").transactions(),
+                )
+            }
+
+            assertEquals(1, listingCount)
+            assertEquals(1, readCount)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `indexed malformed row blocks only its encoded recovery scope`() {
+        val root = Files.createTempDirectory("saf-download-ownership-index-malformed-").toFile()
+        try {
+            val firstScope = "content://provider/tree/root/document/one"
+            val secondScope = "content://provider/tree/root/document/two"
+            val first = AndroidSafOwnedDownloadTransaction("Archive", FIRST_TOKEN)
+            val second = AndroidSafOwnedDownloadTransaction("Photos", SECOND_TOKEN)
+            val store = AndroidSafDownloadOwnershipStore(root)
+            store.forDirectory(firstScope).add(first)
+            store.forDirectory(secondScope).add(second)
+            root.listFiles().orEmpty().single { file -> "-${first.token}.row" in file.name }
+                .writeBytes(byteArrayOf(0x01, 0x02))
+
+            val index = store.indexed()
+            assertEquals(listOf(second), index.forDirectory(secondScope).transactions())
+            assertFailsWith<Exception> { index.forDirectory(firstScope).transactions() }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `indexed ownership mutations stay durable without another directory listing`() {
+        val root = Files.createTempDirectory("saf-download-ownership-index-mutation-").toFile()
+        try {
+            var listingCount = 0
+            val store = AndroidSafDownloadOwnershipStore(
+                directory = root,
+                listFiles = {
+                    listingCount += 1
+                    root.listFiles()
+                },
+            )
+            val index = store.indexed()
+            val ownership = index.forDirectory("content://provider/tree/root/document/one")
+            val relocated = index.forDirectory("content://provider/tree/root/document/two")
+            val initial = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            val attempted = initial.copy(publicationAttempted = true)
+
+            ownership.add(initial)
+            assertEquals(listOf(initial), relocated.transactions(setOf(initial.backupName)))
+            relocated.replace(attempted)
+            assertEquals(listOf(attempted), relocated.transactions(setOf(attempted.backupName)))
+            relocated.remove(attempted)
+
+            assertEquals(emptyList(), root.listFiles().orEmpty().toList())
+            assertEquals(1, listingCount)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    private companion object {
+        const val FIRST_TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
+        const val SECOND_TOKEN = "fedcba98-7654-3210-fedc-ba9876543210"
+    }
+}

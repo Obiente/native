@@ -78,6 +78,9 @@ internal fun verifyAndroidRemoteDeletionContent(
         if (baseline.contentHash == null) {
             return@map entry.copy(contentIdentityUnverified = true)
         }
+        if (entry.contentHash != null) {
+            return@map entry.copy(contentIdentityUnverified = false)
+        }
         val expectedBytes = entry.size
         if (!budget.reserve(expectedBytes)) {
             return@map entry.copy(contentIdentityUnverified = true)
