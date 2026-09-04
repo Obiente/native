@@ -3932,17 +3932,16 @@ class DesktopNextcloudServices(
                         }
                     }
                 }
-                mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
-                    phase = DesktopFileSyncTrayPhase.Idle,
-                )
-                accountId?.let { fileSyncEngine.removeAccountPairs(it) }
-                sessionPublicationGuard.serialize {
-                    if (activeAccountId != null) {
-                        check(removeDesktopAccountCredential(preferences, accountId) { accountCredentials.removeAccount(activeAccountId) })
+                mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(phase = DesktopFileSyncTrayPhase.Idle)
+                clearDesktopActiveAccountBeforeSyncPairCleanup(accountId, {
+                    sessionPublicationGuard.serialize {
+                        check(activeAccountId == null || removeDesktopAccountCredential(preferences, accountId) {
+                            accountCredentials.removeAccount(activeAccountId)
+                        })
+                        supportDiagnostics.setActiveAccountIdentity(null)
+                        supportIntake.setActiveAccountIdentity(null)
                     }
-                    supportDiagnostics.setActiveAccountIdentity(null)
-                    supportIntake.setActiveAccountIdentity(null)
-                }
+                }, fileSyncEngine::removeAccountPairs, ::recordSupportDiagnostic)
                 cleared = true
             }
         } finally {

@@ -456,31 +456,53 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
-    fun malformedCredentialFreeRegistryRecoversFromTheValidatedAggregateRegistry() {
+    fun malformedCredentialFreeRegistryDefersCredentialBearingRecovery() {
         val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(firstSession().accountRecord())
         var recoveryAttempted = false
 
-        val restored = restoreAndroidCredentialFreeRegistry("{not-json") {
+        val restored = restoreAndroidCredentialFreeRegistry("{not-json")
+
+        assertFalse(recoveryAttempted)
+        assertNull(restored.registry)
+        assertTrue(restored.credentialRecoveryRequired)
+        assertEquals("ACCOUNT_REGISTRY_MALFORMED", restored.diagnosticCode)
+
+        val recovered = recoverAndroidCredentialFreeRegistryForCredentialLoad(restored) {
             recoveryAttempted = true
             registry
         }
 
         assertTrue(recoveryAttempted)
-        assertEquals(registry, restored.registry)
-        assertEquals("ACCOUNT_REGISTRY_MALFORMED", restored.diagnosticCode)
+        assertEquals(registry, recovered)
+    }
+
+    @Test
+    fun missingCredentialFreeRegistryIsRecoveredOnlyForCredentialLoad() {
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(firstSession().accountRecord())
+        var recoveryAttempted = false
+
+        val recovered = recoverAndroidCredentialFreeRegistryForCredentialLoad(restored = null) {
+            recoveryAttempted = true
+            registry
+        }
+
+        assertTrue(recoveryAttempted)
+        assertEquals(registry, recovered)
     }
 
     @Test
     fun futureCredentialFreeRegistryIsNeverRebuiltFromAnOlderAggregate() {
         var recoveryAttempted = false
 
-        val restored = restoreAndroidCredentialFreeRegistry("""{"version":99,"accounts":[]}""") {
+        val restored = restoreAndroidCredentialFreeRegistry("""{"version":99,"accounts":[]}""")
+        val recovered = recoverAndroidCredentialFreeRegistryForCredentialLoad(restored) {
             recoveryAttempted = true
             NextcloudAccountRegistry.Empty
         }
 
         assertFalse(recoveryAttempted)
-        assertNull(restored.registry)
+        assertNull(recovered)
+        assertFalse(restored.credentialRecoveryRequired)
         assertEquals("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED", restored.diagnosticCode)
     }
 
