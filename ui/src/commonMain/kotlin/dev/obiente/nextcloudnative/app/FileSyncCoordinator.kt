@@ -543,6 +543,10 @@ private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSy
         FileSyncDecisionChoice.KeepBoth,
         FileSyncDecisionChoice.Skip,
     )
+    FileSyncDecisionReason.UnverifiedLocalContent -> setOf(
+        FileSyncDecisionChoice.UseLocal,
+        FileSyncDecisionChoice.Skip,
+    )
     FileSyncDecisionReason.TypeChanged -> setOf(
         FileSyncDecisionChoice.UseLocal,
         FileSyncDecisionChoice.UseRemote,
@@ -562,6 +566,9 @@ private fun allowedFileSyncDecisions(
     configuration: FileSyncConfiguration,
 ): Set<FileSyncDecisionChoice> = allowedFileSyncDecisions(reason).filterTo(linkedSetOf()) { choice ->
     when (choice) {
+        FileSyncDecisionChoice.UseLocal ->
+            reason != FileSyncDecisionReason.UnverifiedLocalContent ||
+                configuration.direction != FileSyncDirection.DownloadOnly
         FileSyncDecisionChoice.PropagateDeletion -> when (reason) {
             FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
             FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.UploadOnly

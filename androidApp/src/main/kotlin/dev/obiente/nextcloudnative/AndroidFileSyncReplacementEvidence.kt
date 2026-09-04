@@ -29,6 +29,12 @@ internal fun AndroidLocalSyncDocument.androidSafReplacementEvidence(
     contentHash = contentHash,
 )
 
+internal fun LocalSyncEntry.withAndroidSafReplacementContentHash(contentHash: String?): LocalSyncEntry = copy(
+    contentHash = contentHash,
+    contentIdentityUnverified = contentHash == null,
+    replacementContentIdentityUnavailable = contentHash == null,
+)
+
 internal fun requireUnchangedAndroidSafReplacement(
     expected: List<AndroidSafReplacementEvidence>?,
     actual: List<AndroidSafReplacementEvidence>?,
@@ -163,10 +169,7 @@ internal fun strengthenAndroidSafReplacementEntries(
         if (root.entry.kind == SyncEntryKind.File) {
             val hash = exactHash(root)
             strengthened[path] = root.copy(
-                entry = root.entry.copy(
-                    contentHash = hash,
-                    contentIdentityUnverified = hash == null,
-                ),
+                entry = root.entry.withAndroidSafReplacementContentHash(hash),
             )
         } else {
             val documentsToHash = scopedPaths.map { scopedPath -> requireNotNull(scanned[scopedPath]) }
@@ -236,6 +239,7 @@ internal fun androidFileSyncProtectedReplacementPaths(
             is FileSyncOperation.NeedsDecision -> when (operation.reason) {
                 FileSyncDecisionReason.FirstSyncCollision,
                 FileSyncDecisionReason.SimultaneousEdit,
+                FileSyncDecisionReason.UnverifiedLocalContent,
                 FileSyncDecisionReason.TypeChanged,
                 FileSyncDecisionReason.RemoteDeletion,
                 -> true

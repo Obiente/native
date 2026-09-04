@@ -423,6 +423,8 @@ fun applyFileSyncContentVerificationResults(
             when {
                 entry.relativePath in verifiedLocalByPath -> entry.copy(
                     contentHash = requireNotNull(verifiedLocalByPath[entry.relativePath]).localContentHash,
+                    contentIdentityUnverified = false,
+                    replacementContentIdentityUnavailable = false,
                 )
                 entry.relativePath in pairedFilePaths -> entry.copy(contentHash = null)
                 else -> entry

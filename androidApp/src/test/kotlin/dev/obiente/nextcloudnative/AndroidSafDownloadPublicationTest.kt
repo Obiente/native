@@ -414,17 +414,16 @@ class AndroidSafDownloadPublicationTest {
     fun `provider-normalized restore identity remains owned across restart`() {
         val providerBackupName = "provider-backup-$TOKEN"
         val restoredBackupName = "restored-provider-backup-$TOKEN"
-        val transaction = AndroidSafOwnedDownloadTransaction(
+        val initial = AndroidSafOwnedDownloadTransaction(
             finalName = "Archive",
             token = TOKEN,
             backupDisplayName = providerBackupName,
         )
         val directory = FakeSafDirectory().apply {
-            ownership.add(transaction)
             addDirectory(providerBackupName)
-            addFile(transaction.stageName, byteArrayOf(3, 4))
-            normalizedRenameNames[transaction.finalName] = restoredBackupName
         }
+        val transaction = directory.addOwnedStage(initial, byteArrayOf(3, 4))
+        directory.normalizedRenameNames[transaction.finalName] = restoredBackupName
 
         assertFailsWith<IllegalStateException> { publisher(directory).reconcile() }
 
@@ -442,13 +441,12 @@ class AndroidSafDownloadPublicationTest {
 
     @Test
     fun `unrelated final cannot satisfy an ambiguous backup restore`() {
-        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory().apply {
-            ownership.add(transaction)
-            addDirectory(transaction.backupName)
-            addFile(transaction.stageName, byteArrayOf(5, 6))
-            replaceBackupWithUnrelatedFinalBeforeRenameTo = transaction.finalName
+            addDirectory(initial.backupName)
         }
+        val transaction = directory.addOwnedStage(initial, byteArrayOf(5, 6))
+        directory.replaceBackupWithUnrelatedFinalBeforeRenameTo = transaction.finalName
 
         assertFailsWith<IOException> { publisher(directory).reconcile() }
         assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
@@ -539,12 +537,11 @@ class AndroidSafDownloadPublicationTest {
 
     @Test
     fun `visible filtering retains a same-name document whose provider identity changed`() {
-        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory().apply {
-            ownership.add(transaction)
             addFile("Archive", byteArrayOf(1))
-            addFile(transaction.stageName, byteArrayOf(2))
         }
+        directory.addOwnedStage(initial, byteArrayOf(2))
         val obsoleteDocument = directory.documentNamed("Archive")
         directory.replaceDocumentIdentity("Archive")
         val listed = directory.documents()
@@ -582,6 +579,7 @@ class AndroidSafDownloadPublicationTest {
                 transaction.copy(
                     backupProtected = true,
                     backupDocumentIdentity = originalDocument.toString(),
+                    stageDocumentIdentity = directory.documentNamed(transaction.stageName).toString(),
                 ),
             ),
             directory.ownership.transactions(),
@@ -595,12 +593,11 @@ class AndroidSafDownloadPublicationTest {
 
     @Test
     fun `restart restores a protected directory and hides the abandoned stage`() {
-        val transaction = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory().apply {
-            ownership.add(transaction)
-            addDirectory(transaction.backupName)
-            addFile(transaction.stageName, byteArrayOf(10, 11))
+            addDirectory(initial.backupName)
         }
+        directory.addOwnedStage(initial, byteArrayOf(10, 11))
         val restarted = publisher(directory)
 
         assertEquals(emptyList(), restarted.visibleDocuments())
@@ -840,13 +837,14 @@ class AndroidSafDownloadPublicationTest {
         val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory()
         val original = directory.addDirectory("provider-backup-$TOKEN")
+        val stage = directory.addFile(initial.stageName, byteArrayOf(30, 31))
         val transaction = initial.copy(
             backupProtected = true,
             backupDocumentIdentity = original.toString(),
+            stageDocumentIdentity = stage.toString(),
         )
         directory.ownership.add(transaction)
         directory.addFile(transaction.backupName, byteArrayOf(28, 29))
-        directory.addFile(transaction.stageName, byteArrayOf(30, 31))
 
         publisher(directory).reconcile()
 
@@ -861,12 +859,13 @@ class AndroidSafDownloadPublicationTest {
         val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
         val directory = FakeSafDirectory()
         val backup = directory.addDirectory(initial.backupName)
+        val stage = directory.addFile(initial.stageName, byteArrayOf(24, 25))
         val transaction = initial.copy(
             backupProtected = true,
             backupDocumentIdentity = backup.toString(),
+            stageDocumentIdentity = stage.toString(),
         )
         directory.ownership.add(transaction)
-        directory.addFile(transaction.stageName, byteArrayOf(24, 25))
         directory.throwAfterRenameTo = transaction.finalName
 
         publisher(directory).reconcile()
@@ -909,6 +908,7 @@ class AndroidSafDownloadPublicationTest {
                 finalName = "Archive",
                 token = TOKEN,
                 backupDocumentIdentity = "content://provider/document/original",
+                stageDocumentIdentity = "content://provider/document/stage",
             )
             AndroidSafDownloadOwnershipStore(root).forDirectory("content://provider/tree/root/document/one")
                 .add(transaction)
@@ -921,6 +921,7 @@ class AndroidSafDownloadPublicationTest {
             val protected = transaction.copy(
                 backupDisplayName = "provider-backup-$TOKEN",
                 backupProtected = true,
+                backupDocumentIdentity = "content://provider/document/protected",
             )
             restarted.forDirectory("content://provider/tree/root/document/one").replace(protected)
             assertEquals(
@@ -1006,16 +1007,16 @@ class AndroidSafDownloadPublicationTest {
     }
 }
 
-private enum class FakeSafKind { File, Directory }
+internal enum class FakeSafKind { File, Directory }
 
-private data class FakeSafEntry(
+internal data class FakeSafEntry(
     val document: Int,
     var displayName: String,
     val kind: FakeSafKind,
     var bytes: ByteArray = byteArrayOf(),
 )
 
-private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
+internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     private val entries = linkedMapOf<Int, FakeSafEntry>()
     private var nextDocument = 1
 
@@ -1041,6 +1042,14 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
 
     fun addFile(displayName: String, bytes: ByteArray = byteArrayOf()): Int =
         add(displayName, FakeSafKind.File, bytes)
+
+    fun addOwnedStage(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        bytes: ByteArray,
+    ): AndroidSafOwnedDownloadTransaction {
+        val stage = addFile(transaction.stageName, bytes)
+        return transaction.copy(stageDocumentIdentity = stage.toString()).also(ownership::add)
+    }
 
     fun documentNamed(displayName: String): Int = entryNamed(displayName).document
 
@@ -1160,7 +1169,7 @@ private class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     }
 }
 
-private class FakeSafDownloadOwnership : AndroidSafDownloadOwnership {
+internal class FakeSafDownloadOwnership : AndroidSafDownloadOwnership {
     private val records = linkedSetOf<AndroidSafOwnedDownloadTransaction>()
     var failNextAdd = false
     var failNextRemove = false
