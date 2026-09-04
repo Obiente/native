@@ -1,16 +1,17 @@
 package dev.obiente.nextcloudnative
 
-import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRedirectException
+import dev.obiente.nextcloudnative.app.NextcloudAuthenticatedRequestPolicy
 import dev.obiente.nextcloudnative.app.NextcloudFile
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.buildNextcloudFileUrl
+import dev.obiente.nextcloudnative.app.executeNextcloudAuthenticatedRequest
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.File
 import java.io.OutputStream
 import java.io.FileInputStream
 import java.io.InputStream
-import java.nio.charset.StandardCharsets
-import java.util.Base64
 import java.util.UUID
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -39,9 +40,14 @@ internal object NoDocumentRequestCancellation : DocumentRequestCancellation {
 
 /** Bounded read and conflict-aware mutation WebDAV client for the Android DocumentsProvider. */
 internal class NextcloudDocumentWebDav(
-    internal val client: OkHttpClient = OkHttpClient(),
+    client: OkHttpClient = OkHttpClient(),
     private val cloudMutationsAllowed: () -> Boolean = { true },
 ) {
+    internal val client = client.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
     fun readFile(
         session: NextcloudSession,
         userId: String,
@@ -57,10 +63,15 @@ internal class NextcloudDocumentWebDav(
         val request = requestBuilder(session, buildNextcloudFileUrl(session.serverUrl, userId, path)).apply {
             expectedEtag?.let { header("If-Match", it) }
         }.get().build()
-        val call = client.newCall(request)
-        cancellation.setOnCancelAction(call::cancel)
         try {
-            call.execute().use { response ->
+            return executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = { call ->
+                    cancellation.setOnCancelAction(call::cancel)
+                    call.execute()
+                },
+            ) { response ->
                 if (!response.isSuccessful) throw response.toDocumentException("read document")
                 val body = response.body
                 val declaredLength = body.contentLength()
@@ -91,12 +102,14 @@ internal class NextcloudDocumentWebDav(
                 }
                 cancellation.throwIfCancelled()
                 destination.flush()
-                return DocumentReadResult(
+                DocumentReadResult(
                     byteCount = copied,
                     contentType = body.contentType()?.toString(),
                     etag = response.header("ETag") ?: response.header("OC-Etag"),
                 )
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException("read document")
         } catch (failure: IOException) {
             // A CancellationSignal cancels the OkHttp call, which normally surfaces as an
             // IOException. Prefer the platform cancellation exception supplied by the adapter.
@@ -128,10 +141,15 @@ internal class NextcloudDocumentWebDav(
             .header("Accept", "application/xml")
             .method("SEARCH", body.toRequestBody(XML_CONTENT_TYPE))
             .build()
-        val call = client.newCall(request)
-        cancellation.setOnCancelAction(call::cancel)
         try {
-            call.execute().use { response ->
+            return executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = { call ->
+                    cancellation.setOnCancelAction(call::cancel)
+                    call.execute()
+                },
+            ) { response ->
                 if (response.code != 207) throw response.toDocumentException("search documents")
                 val declaredLength = response.body.contentLength()
                 if (declaredLength > MAX_SEARCH_RESPONSE_BYTES) {
@@ -144,12 +162,14 @@ internal class NextcloudDocumentWebDav(
                 val bytes = response.body.byteStream().readBoundedSearchResponse(cancellation)
                 cancellation.throwIfCancelled()
                 val parsed = parseDocumentSearchResponse(bytes, userId, maximumResults)
-                return DocumentSearchResult(
+                DocumentSearchResult(
                     files = parsed.take(maximumResults),
                     query = query,
                     limited = parsed.size > maximumResults,
                 )
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException("search documents")
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -178,10 +198,15 @@ internal class NextcloudDocumentWebDav(
             .header("Depth", "1")
             .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
             .build()
-        val call = client.newCall(request)
-        cancellation.setOnCancelAction(call::cancel)
         try {
-            call.execute().use { response ->
+            return executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = { call ->
+                    cancellation.setOnCancelAction(call::cancel)
+                    call.execute()
+                },
+            ) { response ->
                 if (response.code != 207) throw response.toDocumentException("list folder")
                 if (response.body.contentLength() > MAX_DIRECTORY_RESPONSE_BYTES) {
                     throw DocumentWebDavException(
@@ -198,11 +223,13 @@ internal class NextcloudDocumentWebDav(
                 val normalizedParent = path.trim('/')
                 val parsed = parseDocumentDavResponse(bytes, userId, maximumEntries + 2)
                     .filter { it.path.substringBeforeLast('/', "") == normalizedParent }
-                return DocumentDirectoryResult(
+                DocumentDirectoryResult(
                     files = parsed.take(maximumEntries),
                     limited = parsed.size > maximumEntries,
                 )
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException("list folder")
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -451,10 +478,15 @@ internal class NextcloudDocumentWebDav(
                 },
             )
             .build()
-        val call = requestClient.newCall(request)
-        cancellation.setOnCancelAction(call::cancel)
         try {
-            return call.execute().use { response ->
+            return executeNextcloudAuthenticatedRequest(
+                client = requestClient,
+                initialRequest = request,
+                executeCall = { call ->
+                    cancellation.setOnCancelAction(call::cancel)
+                    call.execute()
+                },
+            ) { response ->
                 if (!response.isSuccessful) throw response.toDocumentException(operation)
                 if (requiredSuccessStatus != null && response.code != requiredSuccessStatus) {
                     throw DocumentWebDavException(
@@ -466,6 +498,8 @@ internal class NextcloudDocumentWebDav(
                 }
                 DocumentMutationResult(response.header("ETag") ?: response.header("OC-Etag"))
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException(operation)
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -493,13 +527,20 @@ internal class NextcloudDocumentWebDav(
         consume: (InputStream) -> T,
     ): T {
         cancellation.throwIfCancelled()
-        val call = client.newCall(request)
-        cancellation.setOnCancelAction(call::cancel)
         try {
-            return call.execute().use { response ->
+            return executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = { call ->
+                    cancellation.setOnCancelAction(call::cancel)
+                    call.execute()
+                },
+            ) { response ->
                 if (response.code != 207) throw response.toDocumentException(operation)
                 consume(response.body.byteStream())
             }
+        } catch (failure: NextcloudAuthenticatedRedirectException) {
+            throw failure.toDocumentException(operation)
         } catch (failure: IOException) {
             cancellation.throwIfCancelled()
             throw failure
@@ -509,12 +550,7 @@ internal class NextcloudDocumentWebDav(
     }
 
     internal fun requestBuilder(session: NextcloudSession, url: String): Request.Builder {
-        val credentials = "${session.loginName}:${session.appPassword}"
-        val basic = Base64.getEncoder().encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
-        return Request.Builder()
-            .url(url)
-            .header("Authorization", "Basic $basic")
-            .header("User-Agent", USER_AGENT)
+        return NextcloudAuthenticatedRequestPolicy(session, USER_AGENT).requestBuilder(url)
     }
 
     private companion object {

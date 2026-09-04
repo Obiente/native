@@ -43,6 +43,32 @@ class DesktopFileSyncDiagnosticsTest {
     }
 
     @Test
+    fun `redirect rejection diagnostics retain the stable policy reason`() {
+        val failure = DesktopFileSyncHttpStatusException(
+            statusCode = 307,
+            operation = "follow authenticated redirect",
+            redirectReason = "unsafe_target",
+        )
+        val event = DesktopFileSyncProgressEvent(
+            pairId = "pair-private",
+            workId = 7L,
+            relativePath = "report.txt",
+            pairLabel = "Documents",
+            operation = FileSyncOperation.Download("report.txt", expectedLocalRevision = null),
+            completedOperations = 0,
+            totalOperations = 1,
+            sizeBytes = null,
+            stage = DesktopFileSyncProgressStage.Failed,
+            failureMessage = "The redirect was rejected.",
+            failureDiagnostic = desktopFileSyncFailureDiagnostic(failure),
+        ).toSupportDiagnosticEventDraft()
+
+        val fields = requireNotNull(event).fields.associate { it.name to it.value }
+        assertEquals("protocol", fields["failure_kind"])
+        assertEquals("unsafe_target", fields["redirect_reason"])
+    }
+
+    @Test
     fun `remote byte diagnostics preserve missing file sizes`() {
         val directory = RemoteSyncEntry("Photos", SyncEntryKind.Directory, "directory")
         val known = RemoteSyncEntry("Photos/known.jpg", SyncEntryKind.File, "known", size = 0L)

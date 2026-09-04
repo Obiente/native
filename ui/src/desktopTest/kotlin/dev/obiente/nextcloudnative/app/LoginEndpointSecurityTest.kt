@@ -22,14 +22,42 @@ class LoginEndpointSecurityTest {
     }
 
     @Test
-    fun sameOriginAdvertisedPollingPathIsPreserved() {
+    fun sameOriginPrettyPollingPathGetsEnteredBasePathCompatibilityEndpoint() {
         val relationships = validateLoginEndpointRelationships(
             enteredServerUrl = "https://cloud.example.com/nextcloud",
             loginUrl = "https://cloud.example.com/nextcloud/login",
             pollEndpoint = "https://cloud.example.com/custom/poll",
         )
 
+        assertEquals(
+            "https://cloud.example.com/nextcloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
+    }
+
+    @Test
+    fun canonicalPollingPathDoesNotCreateASecondEndpoint() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "https://cloud.example.com/nextcloud",
+            loginUrl = "https://cloud.example.com/nextcloud/login",
+            pollEndpoint = "https://cloud.example.com/nextcloud/index.php/login/v2/poll",
+        )
+
         assertEquals(null, relationships.pollFallbackEndpoint)
+    }
+
+    @Test
+    fun encodedBasePathIsPreservedInCompatibilityEndpoint() {
+        val relationships = validateLoginEndpointRelationships(
+            enteredServerUrl = "https://cloud.example.com/next%20cloud",
+            loginUrl = "https://cloud.example.com/next%20cloud/login",
+            pollEndpoint = "https://cloud.example.com/custom/poll",
+        )
+
+        assertEquals(
+            "https://cloud.example.com/next%20cloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
     }
 
     @Test
@@ -60,7 +88,10 @@ class LoginEndpointSecurityTest {
 
         assertTrue(relationships.loginOriginMatchesEntered)
         assertTrue(relationships.pollOriginMatchesEntered)
-        assertEquals(null, relationships.pollFallbackEndpoint)
+        assertEquals(
+            "http://cloud.home.test:8080/nextcloud/index.php/login/v2/poll",
+            relationships.pollFallbackEndpoint,
+        )
         assertTrue(serverAddressUsesPlainHttp(" HTTP://cloud.home.test "))
         assertFalse(serverAddressUsesPlainHttp("cloud.home.test"))
 

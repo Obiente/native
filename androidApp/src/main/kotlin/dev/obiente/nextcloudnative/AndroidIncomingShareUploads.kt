@@ -753,6 +753,7 @@ internal fun incomingShareMutationOutcomeUnknown(failure: Throwable, mutationInF
         DocumentWebDavError.InsufficientStorage,
         DocumentWebDavError.TooLarge,
         DocumentWebDavError.Throttled,
+        DocumentWebDavError.RedirectRejected,
     )
 }
 

@@ -581,7 +581,7 @@ internal class DesktopFileSyncEngine(
                         snapshot = snapshotDiagnostics,
                         stage = DesktopFileSyncProgressStage.Failed,
                         failureMessage = safeMessage,
-                        failureKind = desktopFileSyncFailureKind(failure),
+                        failureDiagnostic = desktopFileSyncFailureDiagnostic(failure),
                     ),
                 )
                 if (execution.hasPendingDesktopUploadCleanup()) break

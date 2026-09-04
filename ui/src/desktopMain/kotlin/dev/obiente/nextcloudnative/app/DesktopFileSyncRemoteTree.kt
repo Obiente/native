@@ -3,9 +3,7 @@ package dev.obiente.nextcloudnative.app
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
@@ -19,7 +17,7 @@ internal class DesktopFileSyncRemoteTree(
     private val session: NextcloudSession,
     private val userId: String,
     remoteRootPath: String,
-    private val client: OkHttpClient = desktopFileSyncHttpClient(),
+    httpClient: OkHttpClient = desktopFileSyncHttpClient(),
     private val onMutationCommitted: (relativePath: String) -> Unit = {},
     private val onAmbiguousMutationResult: (relativePath: String) -> Unit = onMutationCommitted,
     private val ownedUploadIds: Set<String> = emptySet(),
@@ -28,7 +26,9 @@ internal class DesktopFileSyncRemoteTree(
     internal val ownedReplacementBackupEtags: Map<String, String> = emptyMap(),
 ) : LinuxVirtualWritebackRemote {
     private val rootPath = remoteRootPath.trim('/')
-    private val mutationExecutor = DesktopHttpMutationExecutor(client)
+    private val client = httpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val requestPolicy = NextcloudAuthenticatedRequestPolicy(session, USER_AGENT)
+    private val mutationExecutor = DesktopHttpMutationExecutor(this.client)
     private val ownedDestinationPaths = ownedUploadPaths.mapValues { (_, path) -> fullPath(path) }
 
     init {
@@ -145,7 +145,7 @@ internal class DesktopFileSyncRemoteTree(
             .header("If-Match", safeEtag(expectedRemoteEtag))
             .get()
             .build()
-        client.newCall(request).execute().use { response ->
+        executeRequest(request) { response ->
             response.requireAccepted(response.code == 200, "download file")
             val declared = response.body.contentLength()
             require(declared == -1L || declared <= maximumBytes) { "The server file exceeds the sync size limit." }
@@ -183,8 +183,7 @@ internal class DesktopFileSyncRemoteTree(
             .build()
         val digest = MessageDigest.getInstance("SHA-256")
         var total = 0L
-        executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
-            call.execute().use { response ->
+        executeRequest(request, shouldContinue) { response ->
                 require(response.code == 200) {
                     "The server rejected file content verification with HTTP ${response.code}."
                 }
@@ -208,7 +207,6 @@ internal class DesktopFileSyncRemoteTree(
                         digest.update(buffer, 0, count)
                     }
                 }
-            }
         }
         require(total == expectedBytes) { "The server returned truncated content during verification." }
         val after = requireNotNull(when {
@@ -251,8 +249,7 @@ internal class DesktopFileSyncRemoteTree(
             .header("Range", "bytes=$offset-$endInclusive")
             .get()
             .build()
-        val hash = executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
-            call.execute().use { response ->
+        val hash = executeRequest(request, shouldContinue) { response ->
                 require(response.code == 206) {
                     "The server did not honor bounded content verification (HTTP ${response.code})."
                 }
@@ -268,7 +265,6 @@ internal class DesktopFileSyncRemoteTree(
                     shouldContinue,
                     requireExhausted = true,
                 )
-            }
         }
         val after = requireNotNull(resolvePhysical(relativePath, shouldContinue)) {
             "The server file disappeared during content verification."
@@ -379,8 +375,7 @@ internal class DesktopFileSyncRemoteTree(
             .header("Depth", "0")
             .method("PROPFIND", DIRECTORY_PROPERTIES.toRequestBody(XML_CONTENT_TYPE))
             .build()
-        return executeDesktopFileSyncCancellableCall(client.newCall(request), shouldContinue) { call ->
-            call.execute().use { response ->
+        return executeRequest(request, shouldContinue) { response ->
                 response.requireAccepted(response.code == 207, "inspect upload destination")
                 val directory = parseDesktopDavDirectoryAccess(
                     input = response.body.byteStream(),
@@ -392,7 +387,6 @@ internal class DesktopFileSyncRemoteTree(
                 }
                 require(directory.isDirectory) { "The upload destination is not a folder." }
                 directory.permissions?.contains('C')
-            }
         }
     }
 
@@ -403,7 +397,7 @@ internal class DesktopFileSyncRemoteTree(
         session = session,
         userId = userId,
         rootPath = rootPath,
-        client = client,
+        httpClient = client,
         tree = this,
         onMutationCommitted = onMutationCommitted,
         onAmbiguousMutationResult = onAmbiguousMutationResult,
@@ -547,7 +541,7 @@ internal class DesktopFileSyncRemoteTree(
         request: Request,
         shouldContinue: (() -> Boolean)? = null,
     ): List<DesktopRemoteSyncDocument> {
-        val consume = { call: okhttp3.Call -> call.execute().use { response ->
+        return executeRequest(request, shouldContinue) { response ->
             response.requireAccepted(response.code == 207, "list folder")
             parseDesktopSyncDav(
                 input = response.body.byteStream(),
@@ -555,10 +549,6 @@ internal class DesktopFileSyncRemoteTree(
                 maximumBytes = MAX_DIRECTORY_RESPONSE_BYTES,
                 maximumDocuments = MAX_CHILDREN + MAX_RECOVERY_ITEMS + 1,
             )
-        } }
-        val call = client.newCall(request)
-        return if (shouldContinue == null) consume(call) else {
-            executeDesktopFileSyncCancellableCall(call, shouldContinue, consume)
         }
     }
 
@@ -754,19 +744,34 @@ internal class DesktopFileSyncRemoteTree(
         operation: String,
         expectedStatus: Int? = null,
         maximumResponseBytes: Long = MAX_ERROR_RESPONSE_BYTES,
-    ): ByteArray = client.newCall(request).execute().use { response ->
-        val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
-        response.requireAccepted(accepted, operation)
-        response.body.byteStream().readBounded(maximumResponseBytes)
-    }
+    ): ByteArray = executeRequest(request) { response ->
+            val accepted = expectedStatus?.let { response.code == it } ?: (response.code in 200..299)
+            response.requireAccepted(accepted, operation)
+            response.body.byteStream().readBounded(maximumResponseBytes)
+        }
 
-    internal fun requestBuilder(url: String): Request.Builder {
-        val authorization = Base64.getEncoder().encodeToString(
-            "${session.loginName}:${session.appPassword}".toByteArray(StandardCharsets.UTF_8),
-        )
-        return Request.Builder().url(url)
-            .header("Authorization", "Basic $authorization")
-            .header("User-Agent", USER_AGENT)
+    internal fun requestBuilder(url: String): Request.Builder = requestPolicy.requestBuilder(url)
+
+    private fun <T> executeRequest(
+        request: Request,
+        shouldContinue: (() -> Boolean)? = null,
+        consume: (okhttp3.Response) -> T,
+    ): T = try {
+        val execute: (((okhttp3.Call) -> okhttp3.Response) -> T) = { executeCall ->
+            executeNextcloudAuthenticatedRequest(
+                client = client,
+                initialRequest = request,
+                executeCall = executeCall,
+                consume = consume,
+            )
+        }
+        if (shouldContinue == null) {
+            execute { call -> call.execute() }
+        } else {
+            withDesktopFileSyncCallCancellation(shouldContinue, execute)
+        }
+    } catch (failure: NextcloudAuthenticatedRedirectException) {
+        throw failure.toDesktopFileSyncHttpStatusException("follow authenticated DAV redirect")
     }
 
     internal fun fileUrl(path: String): String = buildNextcloudFileUrl(session.serverUrl, userId, path)
