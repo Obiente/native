@@ -3,6 +3,59 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+internal class AndroidDurableUploadStartCoordinator {
+    private val monitor = Any()
+    private val jobLeases = mutableMapOf<String, JobLease>()
+
+    suspend fun <Result> withJob(jobId: String, action: suspend () -> Result): Result {
+        require(jobId.isNotBlank())
+        val lease = synchronized(monitor) {
+            jobLeases.getOrPut(jobId) { JobLease() }.also { it.references += 1 }
+        }
+        return try {
+            lease.mutex.withLock { action() }
+        } finally {
+            synchronized(monitor) {
+                lease.references -= 1
+                if (lease.references == 0) jobLeases.remove(jobId, lease)
+            }
+        }
+    }
+
+    private class JobLease(
+        val mutex: Mutex = Mutex(),
+        var references: Int = 0,
+    )
+}
+
+private val ANDROID_DURABLE_UPLOAD_START_COORDINATOR = AndroidDurableUploadStartCoordinator()
+
+internal suspend fun claimQueuedDurableUploadForExecution(
+    jobId: String,
+    coordinator: AndroidDurableUploadStartCoordinator = ANDROID_DURABLE_UPLOAD_START_COORDINATOR,
+    claim: suspend () -> AndroidDurableMultipartUploadJob?,
+): AndroidDurableMultipartUploadJob? = coordinator.withJob(jobId, claim)
+
+internal suspend fun replaceDeferredDurableUploadWork(
+    expected: AndroidDurableMultipartUploadJob,
+    load: (String) -> AndroidDurableMultipartUploadJob?,
+    replace: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    coordinator: AndroidDurableUploadStartCoordinator = ANDROID_DURABLE_UPLOAD_START_COORDINATOR,
+): Boolean = coordinator.withJob(expected.id) {
+    val current = load(expected.id)
+    if (
+        current == null ||
+        current.accountId != expected.accountId ||
+        current.state != DurableUploadState.Queued
+    ) {
+        return@withJob false
+    }
+    replace(current)
+    true
+}
 
 internal suspend fun constructAndReconcileQueuedDurableUploads(
     createReconciler: () -> suspend () -> Boolean,
