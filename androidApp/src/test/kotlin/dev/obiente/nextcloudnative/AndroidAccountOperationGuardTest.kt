@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -107,5 +108,46 @@ class AndroidAccountOperationGuardTest {
         releaseRemoval.complete(Unit)
         removal.await()
         assertFalse(offlineSessionAvailable.await())
+    }
+
+    @Test
+    fun accountSessionResolutionWaitsForRemovalAndSkipsTheStaleOperation() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val session = dev.obiente.nextcloudnative.app.NextcloudSession(
+            "https://first.example.test",
+            "alice",
+            "old-password",
+        )
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
+        val removalCommitted = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var sessionAvailable = true
+        var operationRan = false
+        val removal = async {
+            guard.withAccount(accountIdentity) {
+                sessionAvailable = false
+                removalCommitted.complete(Unit)
+                releaseRemoval.await()
+            }
+        }
+        removalCommitted.await()
+
+        val cleanup = async {
+            guard.withAccountSession(
+                accountId = accountIdentity,
+                resolveSession = { session.takeIf { sessionAvailable } },
+                unavailable = { "unavailable" },
+            ) {
+                operationRan = true
+                "deleted"
+            }
+        }
+        yield()
+        assertFalse(cleanup.isCompleted)
+
+        releaseRemoval.complete(Unit)
+        removal.await()
+        assertEquals("unavailable", cleanup.await())
+        assertFalse(operationRan)
     }
 }
