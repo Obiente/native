@@ -567,7 +567,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             }
             writeback = recovered ?: createDurableWriteback(session, file, requireMutationEtag(file))
         } catch (failure: Throwable) {
-            releaseAndroidDocumentWritebackPath(session, file.path)
+            releaseAndroidDocumentWritebackSetup(accountLease) {
+                releaseAndroidDocumentWritebackPath(session, file.path)
+            }
             throw failure
         }
         val expectedEtag = writeback.expectedRemoteEtag
