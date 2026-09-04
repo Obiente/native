@@ -1264,9 +1264,9 @@ private fun AuthenticatedApp(
         appPinsRepository.loadWithProvenance(appPinsAccountScope, appPinsPersistenceScopes.legacy)
     }
     var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
-    var appPinsStorageAuthoritative by remember(appPinsAccountScope) {
-        mutableStateOf(loadedAppPins.storageAuthoritative)
-    }
+    var appPinsStorageAuthoritative by rememberMigratedAppPinsAuthority(
+        appPinsRepository, appPinsAccountScope, loadedAppPins,
+    )
     var appPinsPersistenceError by remember(appPinsAccountScope) { mutableStateOf<String?>(null) }
     val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
         if (!appPinsStorageAuthoritative) {
