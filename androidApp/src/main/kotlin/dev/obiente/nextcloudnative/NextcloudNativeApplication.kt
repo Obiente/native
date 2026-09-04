@@ -40,25 +40,29 @@ class NextcloudNativeApplication : Application() {
             runAndroidDurableUploadStartupRecovery(
                 recover = {
                     var uploads: AndroidDurableMultipartUploads? = null
-                    keepRetryingQueuedDurableUploadScheduling(
-                        reconcile = {
-                            constructAndReconcileQueuedDurableUploads {
-                                val accountPreferences = getSharedPreferences(
-                                    ANDROID_ACCOUNT_PREFERENCES_NAME,
-                                    Context.MODE_PRIVATE,
-                                )
-                                if (accountPreferences.durableUploadAccountResolutionAvailable()) {
-                                    val available = uploads ?: AndroidDurableMultipartUploads(
-                                        this@NextcloudNativeApplication,
-                                    ).also { uploads = it }
-                                    available::reconcileQueuedUploads
-                                } else {
-                                    suspend { true }
-                                }
-                            }
+                    monitorQueuedDurableUploadScheduling(
+                        recover = {
+                            keepRetryingQueuedDurableUploadScheduling(
+                                reconcile = {
+                                    constructAndReconcileQueuedDurableUploads {
+                                        val accountPreferences = getSharedPreferences(
+                                            ANDROID_ACCOUNT_PREFERENCES_NAME,
+                                            Context.MODE_PRIVATE,
+                                        )
+                                        if (accountPreferences.durableUploadAccountResolutionAvailable()) {
+                                            val available = uploads ?: AndroidDurableMultipartUploads(
+                                                this@NextcloudNativeApplication,
+                                            ).also { uploads = it }
+                                            available::reconcileQueuedUploads
+                                        } else {
+                                            suspend { true }
+                                        }
+                                    }
+                                },
+                                wait = { delayMillis -> delay(delayMillis) },
+                                recordRecoveryFailure = recordRecoveryFailure,
+                            )
                         },
-                        wait = { delayMillis -> delay(delayMillis) },
-                        recordRecoveryFailure = recordRecoveryFailure,
                     )
                 },
                 recordRecoveryFailure = recordRecoveryFailure,
