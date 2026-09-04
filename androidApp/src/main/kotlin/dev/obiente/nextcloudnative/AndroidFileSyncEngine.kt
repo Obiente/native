@@ -59,6 +59,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+internal fun retainNewestAndroidFileSyncLocalContentHashes(
+    localEntries: List<LocalSyncEntry>,
+    scanContentHashes: Map<String, String>,
+    verifiedPaths: Set<String>,
+): List<LocalSyncEntry> = localEntries.map { entry ->
+    scanContentHashes[entry.relativePath]
+        ?.takeIf { entry.relativePath !in verifiedPaths }
+        ?.let { hash -> entry.copy(contentHash = hash) }
+        ?: entry
+}
+
 /**
  * Foreground execution engine for SAF-backed sync pairs.
  *
@@ -493,9 +505,11 @@ internal class AndroidFileSyncEngine(context: Context) {
             applyFileSyncContentVerificationResults(localEntries, remoteEntries, verificationResults),
             pendingCandidates,
         )
-        val reconciledLocalEntries = contentIdentity.localEntries.map { entry ->
-            scanContentHashes[entry.relativePath]?.let { hash -> entry.copy(contentHash = hash) } ?: entry
-        }
+        val reconciledLocalEntries = retainNewestAndroidFileSyncLocalContentHashes(
+            localEntries = contentIdentity.localEntries,
+            scanContentHashes = scanContentHashes,
+            verifiedPaths = verifiedPaths,
+        )
         val reconciledRemoteEntries = contentIdentity.remoteEntries
         persisted = persisted.copy(
             coordinator = scanFileSyncPair(

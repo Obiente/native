@@ -257,6 +257,65 @@ internal class AndroidSafDownloadPublisher<Document>(
         if (!ownershipReleased) retireRecoveredOwnershipBestEffort(transaction)
     }
 
+    fun delete(
+        finalName: String,
+        currentDocument: Document,
+        backupContentIdentity: String,
+    ) {
+        require(finalName.isNotBlank() && '/' !in finalName && finalName.none(Char::isISOControl))
+        reconcileForSync()
+        val current = requireNotNull(
+            directory.documents().singleOrNull { document ->
+                document.document == currentDocument && document.displayName == finalName
+            },
+        ) { "The local item identity could not be resolved before deletion." }
+        require(contentIdentity(current.document) == backupContentIdentity) {
+            "The local item changed before deletion."
+        }
+        var transaction = AndroidSafOwnedDownloadTransaction(
+            finalName = finalName,
+            token = requireValidToken(newToken()),
+            backupDocumentIdentity = current.documentIdentity,
+            backupContentIdentity = backupContentIdentity,
+        )
+        ownership.add(transaction)
+        val backup = try {
+            transaction = transaction.copy(backupProtected = true)
+            ownership.replace(transaction)
+            val renamed = requireNotNull(directory.rename(current.document, transaction.backupName)) {
+                "The local item could not be protected before deletion."
+            }
+            val protected = requireNotNull(
+                directory.documents().singleOrNull { document -> document.document == renamed },
+            ) { "The protected local item could not be resolved after rename." }
+            transaction = transaction.copy(
+                backupDisplayName = protected.displayName.takeIf { it != transaction.backupName },
+                backupDocumentIdentity = protected.documentIdentity,
+            )
+            ownership.replace(transaction)
+            require(documentNamed(transaction.backupName)?.document == renamed) {
+                "The local file provider changed the protected item identity."
+            }
+            protected
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Throwable) {
+            recoverBeforePublicationOrSuppress(transaction, failure)
+                ?.let { recovered -> retireRecoveredOwnershipBestEffort(recovered) }
+            throw failure
+        }
+        if (contentIdentity(backup.document) != backupContentIdentity) {
+            preserveChangedBackup(transaction, backup)
+            return
+        }
+        transaction = markPublished(markPublicationAttempted(transaction))
+        val persistedBackup = requireNotNull(backupDocument(transaction)) {
+            "The protected local item identity is unavailable."
+        }
+        val ownershipReleased = cleanupPublishedBackup(transaction, persistedBackup)
+        if (!ownershipReleased) retireRecoveredOwnershipBestEffort(transaction)
+    }
+
     fun visibleDocuments(
         documents: List<AndroidSafPublicationDocument<Document>> = directory.documents(),
     ): List<AndroidSafPublicationDocument<Document>> {
@@ -369,7 +428,9 @@ internal class AndroidSafDownloadPublisher<Document>(
             return recovered
         }
         if (final != null && stage == null) {
-            return transaction
+            if (backup == null) return transaction
+            preserveConcurrentFinal(transaction, final)
+            return restoreBackup(transaction, backup)
         }
         check(!transaction.backupProtected || backup != null) {
             "The protected local item identity is unavailable."
@@ -521,6 +582,28 @@ internal class AndroidSafDownloadPublisher<Document>(
         ) { "The changed local backup was not preserved under a safe name." }
         ownership.remove(transaction)
         return true
+    }
+
+    private fun preserveConcurrentFinal(
+        transaction: AndroidSafOwnedDownloadTransaction,
+        final: AndroidSafPublicationDocument<Document>,
+    ) {
+        val preservedDocument = requireNotNull(directory.rename(final.document, transaction.changedBackupName)) {
+            "The concurrent local item could not be preserved as a conflict."
+        }
+        val preserved = requireNotNull(
+            directory.documents().singleOrNull { document -> document.document == preservedDocument },
+        ) { "The concurrent local item could not be resolved after preservation." }
+        require(
+            preserved.displayName != transaction.finalName &&
+                preserved.displayName != transaction.stageName &&
+                preserved.displayName != transaction.backupName &&
+                preserved.displayName != transaction.generatedBackupName &&
+                transaction.token !in preserved.displayName
+        ) { "The concurrent local item was not preserved under a safe name." }
+        require(documentNamed(transaction.finalName) == null) {
+            "The concurrent local item still occupies the destination name."
+        }
     }
 
     private fun deleteBestEffort(document: Document) {

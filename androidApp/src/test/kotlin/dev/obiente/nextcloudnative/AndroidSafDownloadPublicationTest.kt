@@ -1,7 +1,5 @@
 package dev.obiente.nextcloudnative
 
-import dev.obiente.nextcloudnative.app.FileSyncDecisionReason
-import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import java.io.ByteArrayInputStream
@@ -76,20 +74,6 @@ class AndroidSafDownloadPublicationTest {
             listOf("Archive", "Archive/a", "Archive/nested/b"),
             androidSafReplacementScopedPaths(paths, "Archive", SyncEntryKind.Directory),
         )
-    }
-
-    @Test
-    fun `local deletions retain strengthened replacement evidence`() {
-        val protected = androidFileSyncProtectedReplacementPaths(
-            operations = listOf(
-                FileSyncOperation.NeedsDecision("removed", FileSyncDecisionReason.RemoteDeletion),
-                FileSyncOperation.NeedsDecision("collision", FileSyncDecisionReason.FirstSyncCollision),
-                FileSyncOperation.Download("download", expectedLocalRevision = "local-1"),
-            ),
-            localPaths = setOf("removed", "collision", "download"),
-        )
-
-        assertEquals(setOf("removed", "collision", "download"), protected)
     }
 
     @Test
@@ -387,7 +371,7 @@ class AndroidSafDownloadPublicationTest {
     }
 
     @Test
-    fun `unverified final name occupancy never retires the protected backup`() {
+    fun `concurrent final name occupancy is preserved before the backup is restored`() {
         val directory = FakeSafDirectory().apply {
             addDirectory("Archive")
             replaceStageWithUnrelatedFinalBeforeRenameTo = "Archive"
@@ -398,16 +382,15 @@ class AndroidSafDownloadPublicationTest {
             publisher(directory).publish("Archive", current) { output -> output.write(byteArrayOf(8, 9)) }
         }
 
-        val transaction = directory.ownership.transactions().single()
-        val restarted = publisher(directory)
-
-        restarted.reconcile()
-        assertFailsWith<IllegalArgumentException> { restarted.reconcileForSync() }
-
-        assertEquals(FakeSafKind.Directory, directory.entryNamed(transaction.backupName).kind)
-        assertContentEquals(byteArrayOf(21, 22), directory.entryNamed("Archive").bytes)
-        assertEquals(listOf("Archive"), restarted.visibleDocuments().map { it.displayName })
-        assertEquals(listOf(transaction.copy(backupProtected = true)), directory.ownership.transactions())
+        val recoveredName = AndroidSafOwnedDownloadTransaction("Archive", TOKEN).changedBackupName
+        assertEquals(setOf("Archive", recoveredName), directory.names().toSet())
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertContentEquals(byteArrayOf(21, 22), directory.entryNamed(recoveredName).bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+        assertEquals(
+            setOf("Archive", recoveredName),
+            publisher(directory).visibleDocuments().map { it.displayName }.toSet(),
+        )
     }
 
     @Test
@@ -1022,6 +1005,8 @@ internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     private var documentsCancellation: CancellationException? = null
     var deleteCalls: Int = 0
     var mutateNextBackupBeforeContentIdentity: ByteArray? = null
+    var mutateBackupBeforeContentIdentityCall: Pair<Int, ByteArray>? = null
+    private var backupContentIdentityCalls: Int = 0
     val ownership = FakeSafDownloadOwnership()
 
     fun addDirectory(displayName: String): Int = add(displayName, FakeSafKind.Directory)
@@ -1046,6 +1031,11 @@ internal class FakeSafDirectory : AndroidSafPublicationDirectory<Int> {
     fun contentIdentity(document: Int): String {
         val entry = entries.getValue(document)
         if (".nextcloud-native-backup-" in entry.displayName) {
+            backupContentIdentityCalls += 1
+            mutateBackupBeforeContentIdentityCall?.takeIf { it.first == backupContentIdentityCalls }?.let {
+                mutateBackupBeforeContentIdentityCall = null
+                entry.bytes = it.second
+            }
             mutateNextBackupBeforeContentIdentity?.let { bytes ->
                 mutateNextBackupBeforeContentIdentity = null
                 entry.bytes = bytes

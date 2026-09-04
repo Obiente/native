@@ -412,9 +412,15 @@ internal class AndroidSafFileSyncLocalTree(
         requireDeletionContinuation(shouldContinue)
         requireUnchangedReplacement(path, authenticatedSnapshot, shouldContinue)
         requireDeletionContinuation(shouldContinue)
-        require(DocumentsContract.deleteDocument(resolver, current.uri)) {
-            "The local item could not be removed."
-        }
+        val parentPath = path.substringBeforeLast('/', "")
+        val parentUri = if (parentPath.isBlank()) rootUri else requireNotNull(resolve(parentPath)) {
+            "The local item's parent folder disappeared before deletion."
+        }.uri
+        downloadPublisher(parentUri, parentPath, shouldContinue).delete(
+            finalName = path.substringAfterLast('/'),
+            currentDocument = current.uri,
+            backupContentIdentity = androidSafReplacementContentIdentity(authenticatedSnapshot),
+        )
     }
 
     private fun requireDeletionContinuation(shouldContinue: () -> Boolean) {

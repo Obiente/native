@@ -34,6 +34,31 @@ import kotlinx.coroutines.sync.Mutex
 
 class AndroidFileSyncEngineInvariantTest {
     @Test
+    fun verifiedContentHashWinsOverEarlierSafScanEvidence() {
+        val verified = LocalSyncEntry(
+            relativePath = "Archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "same-revision",
+            size = 2L,
+            contentHash = "sha256:${"2".repeat(64)}",
+        )
+        val unverified = verified.copy(relativePath = "Other.bin", contentHash = null)
+        val scanHashes = mapOf(
+            verified.relativePath to "sha256:${"1".repeat(64)}",
+            unverified.relativePath to "sha256:${"3".repeat(64)}",
+        )
+
+        val reconciled = retainNewestAndroidFileSyncLocalContentHashes(
+            localEntries = listOf(verified, unverified),
+            scanContentHashes = scanHashes,
+            verifiedPaths = setOf(verified.relativePath),
+        )
+
+        assertEquals(verified.contentHash, reconciled[0].contentHash)
+        assertEquals(scanHashes.getValue(unverified.relativePath), reconciled[1].contentHash)
+    }
+
+    @Test
     fun largeFileDirectoryReplacementKeepsTheDirectoryUntilProtectedPublication() {
         val directory = RemoteSyncEntry("archive.bin", SyncEntryKind.Directory, "directory-etag")
 
