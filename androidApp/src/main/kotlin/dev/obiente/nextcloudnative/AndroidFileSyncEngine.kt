@@ -796,7 +796,13 @@ internal class AndroidFileSyncEngine(context: Context) {
         executeAndroidFileSyncKeepBoth(operation, work, local, remote, stagingRoot)
         return FileSyncExecutionSuccess(
             synchronizedBaselines = listOf(
-                verifiedBaseline(operation.relativePath, local, remote, contentReadBudget),
+                verifiedBaseline(
+                    operation.relativePath,
+                    local,
+                    remote,
+                    contentReadBudget,
+                    expectedRemoteEtag = requireNotNull(work.observedRemote).etag,
+                ),
                 verifiedBaseline(operation.localConflictPath, local, remote, contentReadBudget),
                 verifiedBaseline(operation.remoteConflictPath, local, remote, contentReadBudget),
             ),
@@ -818,9 +824,15 @@ internal class AndroidFileSyncEngine(context: Context) {
         local: AndroidFileSyncLocalTree,
         remote: AndroidFileSyncRemoteTree,
         contentReadBudget: AndroidFileSyncContentReadBudget,
+        expectedRemoteEtag: String? = null,
     ): FileSyncBaseline {
         val localEntry = requireNotNull(local.resolve(path)) { "The local result could not be verified." }.entry
         val remoteEntry = requireNotNull(remote.resolve(path)) { "The server result could not be verified." }.entry
+        expectedRemoteEtag?.let { expected ->
+            require(remoteEntry.etag == expected) {
+                "The server result changed before the synchronized baseline was recorded."
+            }
+        }
         require(localEntry.kind == remoteEntry.kind) { "The synchronized item types do not match." }
         val contentHash = localEntry.size
             ?.takeIf { localEntry.kind == SyncEntryKind.File && contentReadBudget.reserve(it) }

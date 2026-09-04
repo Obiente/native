@@ -46,11 +46,6 @@ internal fun executeAndroidFileSyncKeepBoth(
                     ),
                 )
             }
-            remoteSource.contentHash?.let { expected ->
-                require(remoteContentHash == expected) {
-                    "The server conflict changed while it was being staged."
-                }
-            }
             publishAuthenticatedAndroidFileSyncKeepBoth(
                 authenticateSource = {
                     local.authenticateFileForReplacement(
@@ -94,6 +89,11 @@ internal fun executeAndroidFileSyncKeepBoth(
                         )
                     },
                 ),
+                authenticateRemoteSource = {
+                    require(remote.resolve(operation.relativePath)?.entry?.etag == remoteSource.etag) {
+                        "The server conflict changed while conflict copies were being published."
+                    }
+                },
                 replaceOriginal = {
                     local.writeFileFromStreamForDownload(
                         path = operation.relativePath,
@@ -210,9 +210,11 @@ private fun requireAndroidFileSyncCopyContinuation(shouldContinue: () -> Boolean
 internal fun publishAuthenticatedAndroidFileSyncKeepBoth(
     authenticateSource: () -> Unit,
     publishConflictCopies: List<() -> Unit>,
+    authenticateRemoteSource: () -> Unit = {},
     replaceOriginal: () -> Unit,
 ) {
     authenticateSource()
     publishConflictCopies.forEach { publish -> publish() }
+    authenticateRemoteSource()
     replaceOriginal()
 }

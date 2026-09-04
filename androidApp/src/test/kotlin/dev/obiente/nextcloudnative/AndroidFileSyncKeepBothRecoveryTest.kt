@@ -66,6 +66,54 @@ class AndroidFileSyncKeepBothRecoveryTest {
     }
 
     @Test
+    fun `remote generation is revalidated before replacing the original`() {
+        val events = mutableListOf<String>()
+
+        publishAuthenticatedAndroidFileSyncKeepBoth(
+            authenticateSource = { events += "authenticate-local-source" },
+            publishConflictCopies = listOf({ events += "publish-conflict-copies" }),
+            authenticateRemoteSource = { events += "authenticate-remote-source" },
+            replaceOriginal = { events += "replace-original" },
+        )
+
+        assertEquals(
+            listOf(
+                "authenticate-local-source",
+                "publish-conflict-copies",
+                "authenticate-remote-source",
+                "replace-original",
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun `changed remote generation leaves the original untouched`() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalArgumentException> {
+            publishAuthenticatedAndroidFileSyncKeepBoth(
+                authenticateSource = { events += "authenticate-local-source" },
+                publishConflictCopies = listOf({ events += "publish-conflict-copies" }),
+                authenticateRemoteSource = {
+                    events += "authenticate-remote-source"
+                    throw IllegalArgumentException("remote generation changed")
+                },
+                replaceOriginal = { events += "replace-original" },
+            )
+        }
+
+        assertEquals(
+            listOf(
+                "authenticate-local-source",
+                "publish-conflict-copies",
+                "authenticate-remote-source",
+            ),
+            events,
+        )
+    }
+
+    @Test
     fun `local conflict copy stops streaming when the sync is cancelled`() {
         val source = byteArrayOf(1, 2, 3, 4)
         val output = ByteArrayOutputStream()

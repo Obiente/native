@@ -117,7 +117,7 @@ internal class AndroidSafFileSyncLocalTree(
             document = current,
             expectedLocalRevision = expectedLocalRevision,
             expectedContentHash = expectedContentHash,
-            expectedReplacementAuthentication = null,
+            expectedReplacementAuthentication = expectedContentHash,
             shouldContinue = shouldContinue,
         )
     }
