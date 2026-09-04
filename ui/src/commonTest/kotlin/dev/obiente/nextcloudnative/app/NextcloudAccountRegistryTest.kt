@@ -118,6 +118,30 @@ class NextcloudAccountRegistryTest {
     }
 
     @Test
+    fun oversizedFutureRegistryRemainsUntouchedAfterBoundedVersionInspection() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+        val futureRegistry = """{"version":2,"future":"${"x".repeat(300 * 1024)}"}"""
+
+        val restored = restoreNextcloudAccountRegistry(futureRegistry, session)
+
+        assertEquals(NextcloudAccountRegistryRecoveryReason.UnsupportedRegistryVersion, restored.recoveryReason)
+        assertEquals(session.accountRecord(), restored.registry.activeAccount)
+        assertFalse(restored.needsPersistence)
+    }
+
+    @Test
+    fun oversizedCurrentRegistryStillUsesTheVersionSpecificSizeLimit() {
+        val session = session("https://cloud.example.test", "alice", "private-app-password")
+        val oversizedRegistry = """{"version":1,"padding":"${"x".repeat(300 * 1024)}"}"""
+
+        val restored = restoreNextcloudAccountRegistry(oversizedRegistry, session)
+
+        assertEquals(NextcloudAccountRegistryRecoveryReason.MalformedRegistry, restored.recoveryReason)
+        assertEquals(session.accountRecord(), restored.registry.activeAccount)
+        assertTrue(restored.needsPersistence)
+    }
+
+    @Test
     fun zeroAndNegativeRegistryVersionsRemainMalformedAndRepairable() {
         val session = session("https://cloud.example.test", "alice", "private-app-password")
 
@@ -152,12 +176,15 @@ class NextcloudAccountRegistryTest {
     }
 
     @Test
-    fun fullRegistryReplacesTheStaleActiveRecordWithTheLegacySession() {
+    fun fullRegistryPreservesTheStaleActiveRecordWhileSelectingTheLegacySession() {
         val legacy = session("https://legacy.example.test", "alice", "private-app-password")
         val persistedAccounts = (0 until MAX_LOCAL_ACCOUNTS).map { index ->
             session("https://account-$index.example.test", "user-$index", "secret-$index").accountRecord()
         }
         val staleActive = persistedAccounts[17]
+        val displaced = persistedAccounts
+            .filterNot { account -> account.id == staleActive.id }
+            .maxBy { account -> account.id.storageKey }
         val encoded = encodeNextcloudAccountRegistry(
             NextcloudAccountRegistry(persistedAccounts, staleActive.id),
         )
@@ -168,7 +195,8 @@ class NextcloudAccountRegistryTest {
         assertEquals(legacy.accountId, restored.registry.activeAccountId)
         assertEquals(MAX_LOCAL_ACCOUNTS, restored.registry.accounts.size)
         assertTrue(legacy.accountRecord() in restored.registry.accounts)
-        assertFalse(staleActive in restored.registry.accounts)
+        assertTrue(staleActive in restored.registry.accounts)
+        assertFalse(displaced in restored.registry.accounts)
         assertTrue(restored.needsPersistence)
     }
 
