@@ -288,14 +288,28 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
-    fun pairRemovalSkipsLocalRecoveryAfterTheSafGrantExpires() {
+    fun pairRemovalAllowsExpiredSafGrantWhenNoRecoveryIsPending() {
         var reconciled = false
 
-        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant = false) {
-            reconciled = true
-        }
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = false,
+            hasPendingRecovery = false,
+        ) { reconciled = true }
 
         assertTrue(safeToRemove)
+        assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRetainsExpiredSafGrantPairWhileRecoveryIsPending() {
+        var reconciled = false
+
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = false,
+            hasPendingRecovery = true,
+        ) { reconciled = true }
+
+        assertFalse(safeToRemove)
         assertFalse(reconciled)
     }
 
@@ -303,9 +317,10 @@ class AndroidFileSyncEngineInvariantTest {
     fun pairRemovalReconcilesDownloadsWhenAnotherPairRetainsTheSafGrant() {
         var reconciled = false
 
-        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant = true) {
-            reconciled = true
-        }
+        val safeToRemove = reconcileSafDownloadsBeforePairRemoval(
+            hasPersistedGrant = true,
+            hasPendingRecovery = true,
+        ) { reconciled = true }
 
         assertTrue(safeToRemove)
         assertTrue(reconciled)

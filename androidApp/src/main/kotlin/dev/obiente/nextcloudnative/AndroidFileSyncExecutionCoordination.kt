@@ -148,16 +148,24 @@ internal fun reconcileSafDownloadsBeforePairRemoval(
     } catch (_: Exception) {
         return false
     }
-    return reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant) {
+    val hasPendingRecovery = try {
+        createAndroidSafDownloadOwnershipStore(context.applicationContext).hasPendingTransactions()
+    } catch (failure: CancellationException) {
+        throw failure
+    } catch (_: Exception) {
+        return false
+    }
+    return reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant, hasPendingRecovery) {
         createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads()
     }
 }
 
 internal fun reconcileSafDownloadsBeforePairRemoval(
     hasPersistedGrant: Boolean,
+    hasPendingRecovery: Boolean,
     reconcile: () -> Unit,
 ): Boolean {
-    if (!hasPersistedGrant) return true
+    if (!hasPersistedGrant) return !hasPendingRecovery
     return try {
         reconcile()
         true
