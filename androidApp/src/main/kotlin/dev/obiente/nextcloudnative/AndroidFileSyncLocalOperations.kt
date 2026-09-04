@@ -146,5 +146,7 @@ internal interface AndroidFileSyncLocalTree {
 
     fun resolve(path: String): AndroidLocalSyncDocument?
 
-    fun reconcileOwnedDownloads() = Unit
+    fun reconcileOwnedDownloads(
+        shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
+    ) = Unit
 }

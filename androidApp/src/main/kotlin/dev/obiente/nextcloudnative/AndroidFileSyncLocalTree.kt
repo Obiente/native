@@ -129,29 +129,39 @@ internal class AndroidSafFileSyncLocalTree(
         contentHash = { document -> replacementContentHash(document, shouldContinue) },
     )
 
-    override fun reconcileOwnedDownloads() {
+    override fun reconcileOwnedDownloads(shouldContinue: () -> Boolean) {
+        requireScanContinuation(shouldContinue)
         val ownershipDirectory = downloadOwnershipStore.indexed()
         indexRecoveryLocationsIfNeeded(
             ownershipDirectory = ownershipDirectory,
-            shouldContinue = { !Thread.currentThread().isInterrupted },
+            shouldContinue = shouldContinue,
         )
         val pending = ArrayDeque<Pair<String, Uri>>()
         pending += "" to rootUri
         var visitedEntries = 0
         while (pending.isNotEmpty()) {
+            requireScanContinuation(shouldContinue)
             val (parentPath, parentUri) = pending.removeFirst()
             require(parentPath.count { it == '/' } < MAX_DEPTH) {
                 "The local recovery folder is nested too deeply."
             }
-            val publisher = downloadPublisher(parentUri, parentPath, ownershipDirectory = ownershipDirectory)
+            val publisher = downloadPublisher(
+                parentUri,
+                parentPath,
+                shouldContinue,
+                ownershipDirectory,
+            )
             publisher.reconcileForSync()
+            requireScanContinuation(shouldContinue)
             val listedChildren = rawChildren(parentUri, parentPath)
+            requireScanContinuation(shouldContinue)
             val visibleUris = publisher.visibleDocuments(
                 listedChildren.map { document ->
                     AndroidSafPublicationDocument(document.uri, document.displayName)
                 },
             ).mapTo(mutableSetOf()) { it.document }
             listedChildren.forEach { document ->
+                requireScanContinuation(shouldContinue)
                 if (document.uri !in visibleUris) return@forEach
                 require(visitedEntries < MAX_ENTRIES) {
                     "The local recovery folder contains too many entries."
@@ -162,6 +172,7 @@ internal class AndroidSafFileSyncLocalTree(
                 }
             }
         }
+        requireScanContinuation(shouldContinue)
     }
 
     override fun contentHash(

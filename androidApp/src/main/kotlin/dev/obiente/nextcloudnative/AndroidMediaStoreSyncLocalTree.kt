@@ -28,13 +28,18 @@ internal fun createAndroidFileSyncLocalTree(
         AndroidSafFileSyncLocalTree(
             resolver = appContext.contentResolver,
             rootId = rootId,
-            downloadOwnershipStore = createAndroidSafDownloadOwnershipStore(appContext),
+            downloadOwnershipStore = createAndroidSafDownloadOwnershipStore(appContext, rootId),
         )
     }
 }
 
-internal fun createAndroidSafDownloadOwnershipStore(context: Context): AndroidSafDownloadOwnershipStore =
-    AndroidSafDownloadOwnershipStore(File(context.filesDir, "file-sync-saf-download-ownership"))
+internal fun createAndroidSafDownloadOwnershipStore(
+    context: Context,
+    treeIdentity: String,
+): AndroidSafDownloadOwnershipStore = androidSafDownloadOwnershipStoreForTree(
+    baseDirectory = File(context.filesDir, "file-sync-saf-download-ownership"),
+    treeIdentity = treeIdentity,
+)
 
 internal fun resolveMediaStoreSyncRoot(rootId: String, externalStorageRoot: File): File {
     require(rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {

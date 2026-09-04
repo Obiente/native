@@ -8,6 +8,8 @@ import dev.obiente.nextcloudnative.app.FileSyncOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -125,19 +127,26 @@ internal suspend fun removeConfiguredFileSyncPair(
     releaseLocalGrant: suspend () -> Unit,
 ): Boolean {
     if (!reconcileLocalDownloads()) return false
+    currentCoroutineContext().ensureActive()
     if (!cleanRemoteUploads()) return false
+    currentCoroutineContext().ensureActive()
     cleanLedger()
+    currentCoroutineContext().ensureActive()
     persistRemoval()
+    currentCoroutineContext().ensureActive()
     cancelSchedule()
+    currentCoroutineContext().ensureActive()
     releaseLocalGrant()
     return true
 }
 
-internal fun reconcileSafDownloadsBeforePairRemoval(
+internal suspend fun reconcileSafDownloadsBeforePairRemoval(
     context: Context,
     localRootId: String,
 ): Boolean {
     if (!localRootId.startsWith("content://")) return true
+    val shouldContinue = androidFileSyncJobContinuation(currentCoroutineContext()[Job])
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
     val treeUri = Uri.parse(localRootId)
     val hasPersistedGrant = try {
         context.contentResolver.persistedUriPermissions.any { permission ->
@@ -148,17 +157,27 @@ internal fun reconcileSafDownloadsBeforePairRemoval(
     } catch (_: Exception) {
         return false
     }
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
     val hasPendingRecovery = try {
-        createAndroidSafDownloadOwnershipStore(context.applicationContext).hasPendingTransactions()
+        createAndroidSafDownloadOwnershipStore(
+            context.applicationContext,
+            localRootId,
+        ).hasPendingTransactions()
     } catch (failure: CancellationException) {
         throw failure
     } catch (_: Exception) {
         return false
     }
-    return reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant, hasPendingRecovery) {
-        createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads()
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
+    val reconciled = reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant, hasPendingRecovery) {
+        createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
     }
+    if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
+    return reconciled
 }
+
+internal fun androidFileSyncJobContinuation(job: Job?): () -> Boolean =
+    { job?.isActive != false && !Thread.currentThread().isInterrupted }
 
 internal fun reconcileSafDownloadsBeforePairRemoval(
     hasPersistedGrant: Boolean,

@@ -19,6 +19,7 @@ internal class AndroidSafDownloadOwnershipStore(
     private val directory: File,
     private val listFiles: () -> Array<File>? = directory::listFiles,
     private val openInput: (File) -> InputStream = ::FileInputStream,
+    private val legacyDirectory: File? = null,
 ) : AndroidSafDownloadOwnershipDirectory {
     override fun hasPendingTransactions(): Boolean = synchronized(LOCK) {
         ownershipFiles().isNotEmpty()
@@ -241,10 +242,20 @@ internal class AndroidSafDownloadOwnershipStore(
             StoredOwnershipRow(reference.file, reference.scope, transaction)
         }
 
-    private fun ownershipFiles(): List<File> {
-        if (!directory.exists()) return emptyList()
-        check(directory.isDirectory) { "SAF download recovery storage is invalid." }
-        return checkNotNull(listFiles()) { "Could not list SAF download recovery storage." }
+    private fun ownershipFiles(): List<File> = buildList {
+        addAll(ownershipFiles(directory, listFiles))
+        legacyDirectory?.takeIf { it != directory }?.let { legacy ->
+            addAll(ownershipFiles(legacy, legacy::listFiles))
+        }
+    }.distinctBy(File::getAbsolutePath)
+
+    private fun ownershipFiles(
+        rowDirectory: File,
+        listing: () -> Array<File>?,
+    ): List<File> {
+        if (!rowDirectory.exists()) return emptyList()
+        check(rowDirectory.isDirectory) { "SAF download recovery storage is invalid." }
+        return checkNotNull(listing()) { "Could not list SAF download recovery storage." }
             .filter { file -> file.isFile && file.name.endsWith(ROW_SUFFIX) }
     }
 
@@ -302,7 +313,9 @@ internal class AndroidSafDownloadOwnershipStore(
         transaction: AndroidSafOwnedDownloadTransaction,
         replace: Boolean,
     ) {
-        val temporary = File.createTempFile("ownership-", TEMP_SUFFIX, directory)
+        val rowDirectory = checkNotNull(destination.parentFile)
+        ensureDirectory(rowDirectory)
+        val temporary = File.createTempFile("ownership-", TEMP_SUFFIX, rowDirectory)
         try {
             FileOutputStream(temporary).use { fileOutput ->
                 DataOutputStream(BufferedOutputStream(fileOutput)).use { output ->
@@ -372,8 +385,8 @@ internal class AndroidSafDownloadOwnershipStore(
         return value
     }
 
-    private fun ensureDirectory() {
-        check(directory.isDirectory || directory.mkdirs()) {
+    private fun ensureDirectory(rowDirectory: File = directory) {
+        check(rowDirectory.isDirectory || rowDirectory.mkdirs()) {
             "Could not create SAF download recovery storage."
         }
     }
@@ -412,6 +425,20 @@ internal class AndroidSafDownloadOwnershipStore(
         val file: File,
         val scope: String,
         val transaction: AndroidSafOwnedDownloadTransaction,
+    )
+}
+
+internal fun androidSafDownloadOwnershipStoreForTree(
+    baseDirectory: File,
+    treeIdentity: String,
+): AndroidSafDownloadOwnershipStore {
+    require(treeIdentity.isNotBlank())
+    val treeDigest = MessageDigest.getInstance("SHA-256")
+        .digest(treeIdentity.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
+    return AndroidSafDownloadOwnershipStore(
+        directory = File(baseDirectory, treeDigest),
+        legacyDirectory = baseDirectory,
     )
 }
 

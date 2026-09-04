@@ -10,6 +10,63 @@ import kotlin.test.assertTrue
 
 class AndroidSafDownloadOwnershipIndexTest {
     @Test
+    fun `pending ownership is isolated from unrelated SAF trees`() {
+        val base = Files.createTempDirectory("saf-download-tree-index-").toFile()
+        try {
+            val first = androidSafDownloadOwnershipStoreForTree(base, "content://provider/tree/first")
+            val second = androidSafDownloadOwnershipStoreForTree(base, "content://provider/tree/second")
+            first.forDirectory("content://provider/tree/first/document/parent")
+                .add(AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN))
+
+            assertTrue(first.hasPendingTransactions())
+            assertFalse(second.hasPendingTransactions())
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `unrelated ownership does not enable a selective tree recovery prepass`() {
+        val base = Files.createTempDirectory("saf-download-unrelated-index-").toFile()
+        try {
+            androidSafDownloadOwnershipStoreForTree(base, "content://provider/tree/first")
+                .forDirectory("content://provider/tree/first/document/parent")
+                .add(AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN))
+            val unrelated = androidSafDownloadOwnershipStoreForTree(
+                base,
+                "content://provider/tree/large-selective-root",
+            ).indexed()
+            var traversed = false
+
+            indexAndroidSafRecoveryLocationsIfNeeded(unrelated) { traversed = true }
+
+            assertFalse(traversed)
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy unscoped ownership remains fail closed for scoped trees`() {
+        val base = Files.createTempDirectory("saf-download-legacy-index-").toFile()
+        try {
+            val parent = "content://provider/tree/legacy/document/parent"
+            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            AndroidSafDownloadOwnershipStore(base).forDirectory(parent).add(transaction)
+
+            val scoped = androidSafDownloadOwnershipStoreForTree(
+                base,
+                "content://provider/tree/current",
+            )
+
+            assertTrue(scoped.hasPendingTransactions())
+            assertEquals(listOf(transaction), scoped.indexed().forDirectory(parent).transactions())
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `tree-wide recovery indexing is skipped without pending ownership`() {
         val root = Files.createTempDirectory("saf-download-empty-index-").toFile()
         try {

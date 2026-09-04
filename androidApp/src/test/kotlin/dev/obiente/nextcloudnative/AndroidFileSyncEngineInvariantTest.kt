@@ -25,6 +25,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -311,6 +313,41 @@ class AndroidFileSyncEngineInvariantTest {
 
         assertFalse(safeToRemove)
         assertFalse(reconciled)
+    }
+
+    @Test
+    fun pairRemovalRecoveryContinuationTracksCoroutineJobCancellation() {
+        val job = Job()
+        val shouldContinue = androidFileSyncJobContinuation(job)
+
+        assertTrue(shouldContinue())
+        job.cancel()
+
+        assertFalse(shouldContinue())
+    }
+
+    @Test
+    fun pairRemovalStopsAfterAReconciliationThatCancelsItsJob() = runBlocking {
+        val events = mutableListOf<String>()
+        val removal = launch {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = {
+                    events += "reconcile"
+                    currentCoroutineContext().cancel()
+                    true
+                },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = { events += "persist" },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.join()
+
+        assertTrue(removal.isCancelled)
+        assertEquals(listOf("reconcile"), events)
     }
 
     @Test
