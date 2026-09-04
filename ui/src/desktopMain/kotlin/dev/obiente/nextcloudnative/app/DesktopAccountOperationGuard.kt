@@ -105,8 +105,8 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
     removalCommitted: () -> Boolean = { false },
     removeCredential: () -> Boolean,
 ): Boolean {
-    clearProviderPreference()
     return try {
+        clearProviderPreference()
         removeCredential().also { removed ->
             if (!removed) restoreProviderPreference(providerWasEnabled)
         }

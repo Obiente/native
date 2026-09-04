@@ -224,6 +224,36 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
+    fun failedReplacementRollbackIsFinalizedFromTheCredentialJournalOnRestart() =
+        withStore { preferences, secrets ->
+            val original = firstSession()
+            val replacement = original.copy(appPassword = "replacement-password")
+            var flushCount = 0
+            var failFlushOnAttempt: Int? = null
+            val persistence = persistence(preferences, secrets) {
+                flushCount += 1
+                if (flushCount == failFlushOnAttempt) error("synthetic registry flush failure")
+                preferences.flush()
+            }
+            persistence.saveSession(original)
+            secrets.failSaveOnAttempt = secrets.saveCount + 2
+            failFlushOnAttempt = flushCount + 2
+
+            assertFailsWith<IllegalStateException> { persistence.saveSession(replacement) }
+
+            assertEquals(
+                replacement.appPassword,
+                secrets.load(desktopAccountSecretReference(original.accountId))?.decodeToString(),
+            )
+            assertEquals(original.serverUrl, preferences.get("accountCredentialSaveServer", null))
+
+            failFlushOnAttempt = null
+            assertEquals(replacement, persistence(preferences, secrets).loadActiveSession())
+            assertNull(preferences.get("accountCredentialSaveServer", null))
+            assertNull(preferences.get("accountCredentialSaveLogin", null))
+        }
+
+    @Test
     fun canonicalEquivalentReauthenticationPreservesDesktopStorageIdentity() =
         withStore { preferences, secrets ->
             val original = NextcloudSession(
@@ -601,9 +631,12 @@ class DesktopAccountCredentialPersistenceTest {
     private class MemorySecretStore : DesktopSecretStore {
         private val values = mutableMapOf<String, ByteArray>()
         var failSaves = false
+        var failSaveOnAttempt: Int? = null
         var failClears = false
         var loadFailure: RuntimeException? = null
         var loadCount = 0
+            private set
+        var saveCount = 0
             private set
         var clearCount = 0
             private set
@@ -615,7 +648,10 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
         override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
-            if (failSaves) error("private-app-password at cloud.example.test for alice")
+            saveCount += 1
+            if (failSaves || saveCount == failSaveOnAttempt) {
+                error("private-app-password at cloud.example.test for alice")
+            }
             values[reference.targetName] = secret.copyOf()
         }
 
