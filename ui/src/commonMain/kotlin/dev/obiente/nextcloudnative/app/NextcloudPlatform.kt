@@ -428,7 +428,6 @@ data class NextcloudPerson(
     val coverEtag: String?,
     val backend: String,
 )
-
 interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCardDraftPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =

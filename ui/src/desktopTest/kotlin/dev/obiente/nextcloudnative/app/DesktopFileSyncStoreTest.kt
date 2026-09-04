@@ -21,6 +21,42 @@ import kotlinx.serialization.json.put
 
 class DesktopFileSyncStoreTest {
     @Test
+    fun `account removal deletes only that account's sync pairs and roots`() {
+        val directory = Files.createTempDirectory("desktop-sync-account-removal-").toFile()
+        try {
+            val first = FileSyncPair(
+                id = "first-pair",
+                accountId = "account-a",
+                localRootId = "first-root",
+                remoteRootPath = "Documents",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val second = FileSyncPair(
+                id = "second-pair",
+                accountId = "account-b",
+                localRootId = "second-root",
+                remoteRootPath = "Photos",
+                configuration = FileSyncConfiguration(deviceLabel = "Workstation"),
+            )
+            val roots = listOf(
+                DesktopFileSyncRootRecord(first.localRootId, directory.resolve("first").absolutePath, "First"),
+                DesktopFileSyncRootRecord(second.localRootId, directory.resolve("second").absolutePath, "Second"),
+            )
+            val store = DesktopFileSyncStore(File(directory, "state.db"), legacyStateFile = null)
+            store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(first)), roots.take(1)), first.id)
+            store.savePair(DesktopFileSyncPersistedState(FileSyncCoordinatorState(listOf(second)), roots.drop(1)), second.id)
+
+            store.removeDesktopFileSyncAccountPairs("account-a")
+
+            val retained = store.load()
+            assertEquals(listOf(second), retained.coordinator.pairs)
+            assertEquals(roots.drop(1), retained.roots)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `legacy json state imports once into the transactional database`() {
         val directory = Files.createTempDirectory("desktop-sync-legacy-import-").toFile()
         try {

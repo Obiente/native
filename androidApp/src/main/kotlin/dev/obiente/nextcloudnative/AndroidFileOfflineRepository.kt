@@ -705,7 +705,7 @@ internal class AndroidFileOfflineRepository(context: Context) {
         val record: dev.obiente.nextcloudnative.app.FileOfflinePinRecord,
     )
 
-    private companion object {
+    internal companion object {
         const val CONTENT_DIRECTORY = "offline-content-v1"
         const val WORK_TAG = "nextcloud-native-offline-files"
         const val MAX_OFFLINE_CENTER_VISIBLE_ITEMS = 10_000
