@@ -3891,7 +3891,7 @@ class DesktopNextcloudServices(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key)
+        deckCardDrafts.clear(session, key, discardUnreadable)
     }
     override suspend fun quarantineSubmittedDeckCardDraft(
         session: NextcloudSession,
