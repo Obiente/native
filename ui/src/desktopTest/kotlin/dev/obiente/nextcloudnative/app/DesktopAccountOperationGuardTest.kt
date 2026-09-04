@@ -434,4 +434,23 @@ class DesktopAccountOperationGuardTest {
         assertTrue(removed)
         assertEquals(listOf("remove-credential", "remove-pairs", "diagnose-cleanup"), events)
     }
+
+    @Test
+    fun failedActiveCredentialCommitPreservesSyncPairs() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            clearDesktopActiveAccountBeforeSyncPairCleanup(
+                accountId = "account-old",
+                commitRemoval = {
+                    events += "remove-credential"
+                    error("synthetic credential commit failure")
+                },
+                removeSyncPairs = { events += "remove-pairs-$it" },
+                recordDiagnostic = { events += "diagnose-cleanup" },
+            )
+        }
+
+        assertEquals(listOf("remove-credential"), events)
+    }
 }
