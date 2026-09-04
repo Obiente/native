@@ -13,6 +13,7 @@ internal class AndroidAccountOwnedStateCleanup(context: Context) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
         runAndroidAccountRemovalCleanups(
             listOf(
+                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
@@ -21,11 +22,12 @@ internal class AndroidAccountOwnedStateCleanup(context: Context) {
         )
     }
 
-    suspend fun retry(accountIdentity: String) {
+    suspend fun retry(session: NextcloudSession, accountIdentity: String) {
         runAndroidAccountRemovalCleanups(
             listOf(
+                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
-                { incomingShares.removeForAccount(accountIdentity) },
+                { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
             ),

@@ -407,6 +407,7 @@ internal class AndroidNextcloudServices(
     private val localUploadPicker: AndroidLocalUploadPicker? = null,
     private val requestPlatformPermissions: ((Array<String>) -> Boolean)? = null,
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
+    private val accountMutationLeaseHeld: Boolean = false,
 ) : NextcloudPlatformServices {
     private val appContext = context.applicationContext
     private val activity = context as? Activity
@@ -2922,6 +2923,7 @@ internal class AndroidNextcloudServices(
                 streamingBody = requestBody,
                 maxResponseBytes = safeRequest.maximumResponseBytes,
                 client = noRedirectHttpClient,
+                accountMutationSerialized = accountMutationLeaseHeld,
             )
             NextcloudApiResponse(
                 response.status,
@@ -3444,14 +3446,13 @@ internal class AndroidNextcloudServices(
         Unit
     }
     override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        revokeAndroidSessionAfterRemovalPreflight(
-            preflight = { preflightAndroidAccountRemoval(appContext, session) },
-        ) {
+        accountCredentials.revokeSession(session) {
             request(
                 method = "DELETE",
                 url = session.serverUrl + "/ocs/v2.php/core/apppassword",
                 session = session,
                 ocsRequest = true,
+                accountMutationSerialized = true,
             )
         }
     }

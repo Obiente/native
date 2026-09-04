@@ -545,6 +545,24 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun accountRetirementKeepsPairIdsUntilEveryScheduleCancellationCompletes() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            cancelAndroidFileSyncPairSchedulesBeforeRetirement(
+                pairIds = listOf("pair-a", "pair-b"),
+                cancelSchedule = { pairId ->
+                    events += "cancel-$pairId"
+                    if (pairId == "pair-b") error("synthetic WorkManager cancellation failure")
+                },
+                persistRetirement = { events += "persist-retirement" },
+            )
+        }
+
+        assertEquals(listOf("cancel-pair-a", "cancel-pair-b"), events)
+    }
+
+    @Test
     fun pairRemovalRecoveryPropagatesCancellationBeforeAnyMutation() = runBlocking {
         val events = mutableListOf<String>()
 

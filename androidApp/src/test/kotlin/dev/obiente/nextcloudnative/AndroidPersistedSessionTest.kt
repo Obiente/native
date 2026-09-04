@@ -408,6 +408,21 @@ class AndroidPersistedSessionTest {
                 AndroidAccountCredentialStoreRead.Invalid("encrypted-malformed-store"),
             ),
         )
+        assertFalse(
+            androidCredentialStoreAllowsSessionRestore(
+                AndroidAccountCredentialStoreRead.Available(
+                    AndroidAccountCredentialState.Empty.upsertAndSelect(firstSession())
+                        .copy(mutationsAllowed = false),
+                ),
+            ),
+        )
+        assertTrue(
+            androidCredentialStoreAllowsSessionRestore(
+                AndroidAccountCredentialStoreRead.Available(
+                    AndroidAccountCredentialState.Empty.upsertAndSelect(firstSession()),
+                ),
+            ),
+        )
     }
 
     @Test
@@ -527,10 +542,15 @@ class AndroidPersistedSessionTest {
                 decryptedValues += encrypted
                 "decoded-second"
             },
-            decode = { decoded -> second.takeIf { decoded == "decoded-second" } },
+            decode = { decoded ->
+                RestoredAndroidAccountCredentialState(
+                    AndroidAccountCredentialState.Empty.upsertAndSelect(second)
+                        .takeIf { decoded == "decoded-second" },
+                )
+            },
         )
 
-        assertEquals(second, restored)
+        assertEquals(AndroidAccountCredentialSlotRead.Available(second), restored)
         assertEquals(listOf(androidAccountCredentialSlotKey(second.accountId)), requestedKeys)
         assertEquals(listOf("encrypted-second"), decryptedValues)
     }
@@ -544,10 +564,44 @@ class AndroidPersistedSessionTest {
             accountId = second.accountId,
             readEncrypted = { "encrypted-first" },
             decrypt = { "decoded-first" },
-            decode = { first },
+            decode = {
+                RestoredAndroidAccountCredentialState(
+                    AndroidAccountCredentialState.Empty.upsertAndSelect(first),
+                )
+            },
         )
 
-        assertNull(restored)
+        assertEquals(AndroidAccountCredentialSlotRead.Invalid, restored)
+    }
+
+    @Test
+    fun futureCredentialSlotBlocksAggregateFallbackAndRepair() {
+        val session = firstSession()
+        val future = JSONObject(encodeAndroidPersistedSession(session)).put("version", 3).toString()
+
+        val restored = readAndroidAccountCredentialSlot(
+            accountId = session.accountId,
+            readEncrypted = { "encrypted-future-slot" },
+            decrypt = { future },
+            decode = ::decodeAndroidAccountCredentialState,
+        )
+
+        assertEquals(AndroidAccountCredentialSlotRead.Unsupported(3), restored)
+    }
+
+    @Test
+    fun pendingCleanupMatchesCanonicalAccountAndRetainsOriginalWorkIdentity() {
+        val original = firstSession().copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443/")
+        val replacement = firstSession().copy(serverUrl = "https://cloud.example.test")
+        assertEquals(original.accountId, replacement.accountId)
+        assertFalse(NextcloudDocumentIds.accountKey(original) == NextcloudDocumentIds.accountKey(replacement))
+        val encoded = encodeAndroidPendingAccountRemovalCleanup(pendingAndroidAccountRemovalCleanup(original))
+        val decoded = requireNotNull(decodeAndroidPendingAccountRemovalCleanup(encoded))
+
+        val pending = pendingAndroidAccountRemovalCleanupForSession(replacement, listOf(decoded))
+
+        assertEquals(NextcloudDocumentIds.accountKey(original), requireNotNull(pending).workIdentity)
+        assertEquals(original.accountId.storageKey, pending.accountStorageKey)
     }
 
     @Test
@@ -690,6 +744,40 @@ class AndroidPersistedSessionTest {
         )
 
         assertEquals(listOf("clear-preview", "diagnose-cleanup"), events)
+    }
+
+    @Test
+    fun failedAccountTransitionDoesNotClearExternalHandoffs() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            commitAndroidAccountTransitionBeforeHandoffCleanup(
+                commitTransition = {
+                    events += "commit-transition"
+                    error("synthetic credential persistence failure")
+                },
+                clearHandoffs = { events += "clear-handoffs" },
+                recordFailure = { events += "diagnose-cleanup" },
+            )
+        }
+
+        assertEquals(listOf("commit-transition"), events)
+    }
+
+    @Test
+    fun handoffCleanupFailureDoesNotHideACommittedAccountTransition() {
+        val events = mutableListOf<String>()
+
+        commitAndroidAccountTransitionBeforeHandoffCleanup(
+            commitTransition = { events += "commit-transition" },
+            clearHandoffs = {
+                events += "clear-handoffs"
+                error("synthetic handoff cleanup failure")
+            },
+            recordFailure = { events += "diagnose-cleanup" },
+        )
+
+        assertEquals(listOf("commit-transition", "clear-handoffs", "diagnose-cleanup"), events)
     }
 
     @Test

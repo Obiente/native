@@ -24,11 +24,17 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
     private val store = AndroidIncomingShareStore(appContext)
 
     suspend fun removeForAccount(session: NextcloudSession) =
-        removeForAccount(NextcloudDocumentIds.accountKey(session), session)
+        removeForAccountInternal(NextcloudDocumentIds.accountKey(session), session)
 
-    suspend fun removeForAccount(accountId: String) = removeForAccount(accountId, session = null)
+    suspend fun removeForAccount(accountId: String) = removeForAccountInternal(accountId, session = null)
 
-    private suspend fun removeForAccount(accountId: String, session: NextcloudSession?) = withContext(Dispatchers.IO) {
+    suspend fun removeForAccount(accountId: String, session: NextcloudSession) =
+        removeForAccountInternal(accountId, session)
+
+    private suspend fun removeForAccountInternal(
+        accountId: String,
+        session: NextcloudSession?,
+    ) = withContext(Dispatchers.IO) {
         val workManager = WorkManager.getInstance(appContext)
         val webDav = session?.let {
             NextcloudDocumentWebDav(
@@ -60,8 +66,8 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
                     cancellation.close()
                 }
             },
-            recordChunkReleaseFailure = { failure ->
-                Log.w(LOG_TAG, "Remote staged-share chunk cleanup deferred during account removal", failure)
+            recordChunkReleaseFailure = {
+                Log.w(LOG_TAG, "Remote staged-share chunk cleanup deferred during account removal")
             },
             removeRequest = { requestId ->
                 check(store.remove(requestId)) { "The staged share data could not be released." }
@@ -115,6 +121,8 @@ internal suspend fun removeAndroidIncomingShareRequests(
     removeRequest: (String) -> Unit,
 ) {
     requests.forEach { request -> cancelWork(request.id) }
+    val retained = mutableSetOf<String>()
+    var firstReleaseFailure: Exception? = null
     requests.forEach { accountRequest ->
         accountRequest.request?.chunkSession?.let { chunk ->
             try {
@@ -123,10 +131,17 @@ internal suspend fun removeAndroidIncomingShareRequests(
                 throw failure
             } catch (failure: Exception) {
                 recordChunkReleaseFailure(failure)
+                retained += accountRequest.id
+                if (firstReleaseFailure == null) {
+                    firstReleaseFailure = failure
+                } else {
+                    firstReleaseFailure.addSuppressed(failure)
+                }
             }
         }
     }
-    requests.forEach { request -> removeRequest(request.id) }
+    requests.filterNot { request -> request.id in retained }.forEach { request -> removeRequest(request.id) }
+    firstReleaseFailure?.let { throw it }
 }
 
 private const val LOG_TAG = "IncomingShareCleanup"

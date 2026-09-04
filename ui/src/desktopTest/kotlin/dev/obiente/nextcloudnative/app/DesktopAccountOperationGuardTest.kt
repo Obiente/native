@@ -14,6 +14,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.UUID
+import java.util.prefs.Preferences
 import kotlin.concurrent.thread
 
 class DesktopAccountOperationGuardTest {
@@ -201,6 +203,44 @@ class DesktopAccountOperationGuardTest {
         removal.await()
         assertEquals("rejected", result.await())
         assertFalse(pairCreated)
+    }
+
+    @Test
+    fun sessionRevocationWaitsForSyncAndBlocksMutationsUntilLocalRemoval() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val syncEntered = CompletableDeferred<Unit>()
+        val releaseSync = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        var localRemovalCommitted = false
+
+        val sync = async {
+            guard.withSyncRunLock {
+                syncEntered.complete(Unit)
+                releaseSync.await()
+            }
+        }
+        syncEntered.await()
+        val revocation = async {
+            guard.serializeWhenSyncIdle {
+                events += "preflight"
+                events += "revoke"
+                localRemovalCommitted = true
+                events += "remove-local"
+            }
+        }
+        yield()
+        val laterMutation = async {
+            guard.serialize { localRemovalCommitted }
+        }
+        yield()
+
+        assertFalse(revocation.isCompleted)
+        assertFalse(laterMutation.isCompleted)
+        releaseSync.complete(Unit)
+        sync.await()
+        revocation.await()
+        assertTrue(laterMutation.await())
+        assertEquals(listOf("preflight", "revoke", "remove-local"), events)
     }
 
     @Test
@@ -416,10 +456,35 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun committedCredentialRemovalFailureDoesNotReactivateTheProvider() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeDesktopCredentialWithoutProviderReactivation(
+                providerWasEnabled = true,
+                clearProviderPreference = { events += "cleared" },
+                restoreProviderPreference = { enabled -> events += "restored:$enabled" },
+                removalCommitted = { true },
+                removeCredential = {
+                    events += "remove"
+                    error("synthetic post-commit credential cleanup failure")
+                },
+            )
+        }
+
+        assertEquals(listOf("cleared", "remove"), events)
+    }
+
+    @Test
     fun committedInactiveRemovalSurvivesSyncPairCleanupFailure() = runBlocking {
         val events = mutableListOf<String>()
 
         val removed = removeDesktopAccountBeforeSyncPairCleanup(
+            accountId = CLEANUP_ACCOUNT_ID,
+            prepareCleanup = { events += "prepare-cleanup" },
+            commitCleanup = { events += "commit-cleanup" },
+            clearCleanup = { events += "clear-cleanup" },
+            accountStillExists = { false },
             removeCredential = {
                 events += "remove-credential"
                 true
@@ -432,7 +497,16 @@ class DesktopAccountOperationGuardTest {
         )
 
         assertTrue(removed)
-        assertEquals(listOf("remove-credential", "remove-pairs", "diagnose-cleanup"), events)
+        assertEquals(
+            listOf(
+                "prepare-cleanup",
+                "remove-credential",
+                "commit-cleanup",
+                "remove-pairs",
+                "diagnose-cleanup",
+            ),
+            events,
+        )
     }
 
     @Test
@@ -441,6 +515,11 @@ class DesktopAccountOperationGuardTest {
 
         assertFailsWith<CancellationException> {
             removeDesktopAccountBeforeSyncPairCleanup(
+                accountId = CLEANUP_ACCOUNT_ID,
+                prepareCleanup = { events += "prepare-cleanup" },
+                commitCleanup = { events += "commit-cleanup" },
+                clearCleanup = { events += "clear-cleanup" },
+                accountStillExists = { false },
                 removeCredential = {
                     events += "remove-credential"
                     true
@@ -453,25 +532,132 @@ class DesktopAccountOperationGuardTest {
             )
         }
 
-        assertEquals(listOf("remove-credential", "remove-pairs"), events)
+        assertEquals(
+            listOf("prepare-cleanup", "remove-credential", "commit-cleanup", "remove-pairs"),
+            events,
+        )
+    }
+
+    @Test
+    fun postCommitCredentialFailureRetainsCommittedPairCleanupRecovery() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeDesktopAccountBeforeSyncPairCleanup(
+                accountId = CLEANUP_ACCOUNT_ID,
+                prepareCleanup = { events += "prepare-cleanup" },
+                commitCleanup = { events += "commit-cleanup" },
+                clearCleanup = { events += "clear-cleanup" },
+                accountStillExists = { false },
+                removeCredential = {
+                    events += "remove-credential"
+                    error("synthetic post-commit credential cleanup failure")
+                },
+                removeSyncPairs = { events += "remove-pairs" },
+                recordCleanupFailure = { events += "diagnose-cleanup" },
+            )
+        }
+
+        assertEquals(listOf("prepare-cleanup", "remove-credential", "commit-cleanup"), events)
     }
 
     @Test
     fun failedActiveCredentialCommitPreservesSyncPairs() = runBlocking {
         val events = mutableListOf<String>()
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
 
-        assertFailsWith<IllegalStateException> {
-            clearDesktopActiveAccountBeforeSyncPairCleanup(
-                accountId = "account-old",
-                commitRemoval = {
-                    events += "remove-credential"
-                    error("synthetic credential commit failure")
-                },
-                removeSyncPairs = { events += "remove-pairs-$it" },
-                recordDiagnostic = { events += "diagnose-cleanup" },
-            )
+        try {
+            assertFailsWith<IllegalStateException> {
+                clearDesktopActiveAccountBeforeSyncPairCleanup(
+                    accountId = CLEANUP_ACCOUNT_ID,
+                    cleanupJournal = DesktopAccountSyncPairCleanupJournal(preferences),
+                    accountStillExists = { true },
+                    commitRemoval = {
+                        events += "remove-credential"
+                        error("synthetic credential commit failure")
+                    },
+                    removeSyncPairs = { events += "remove-pairs-$it" },
+                    recordDiagnostic = { events += "diagnose-cleanup" },
+                )
+            }
+
+            assertEquals(listOf("remove-credential"), events)
+            assertTrue(DesktopAccountSyncPairCleanupJournal(preferences).pending().isEmpty())
+        } finally {
+            preferences.removeNode()
         }
+    }
 
-        assertEquals(listOf("remove-credential"), events)
+    @Test
+    fun committedPairCleanupFailureSurvivesRestartAndBlocksReactivationUntilRetry() = runBlocking {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val firstJournal = DesktopAccountSyncPairCleanupJournal(preferences)
+        try {
+            val removalEvents = mutableListOf<String>()
+            assertTrue(
+                removeDesktopAccountBeforeSyncPairCleanup(
+                    accountId = CLEANUP_ACCOUNT_ID,
+                    prepareCleanup = firstJournal::prepare,
+                    commitCleanup = firstJournal::commit,
+                    clearCleanup = firstJournal::clear,
+                    accountStillExists = { false },
+                    removeCredential = { true },
+                    removeSyncPairs = { error("synthetic pair cleanup failure") },
+                    recordCleanupFailure = { removalEvents += "diagnose" },
+                ),
+            )
+
+            assertEquals(listOf("diagnose"), removalEvents)
+            val restored = DesktopAccountSyncPairCleanupJournal(preferences)
+            assertEquals(
+                listOf(
+                    DesktopAccountSyncPairCleanup(
+                        CLEANUP_ACCOUNT_ID,
+                        DesktopAccountSyncPairCleanupPhase.Committed,
+                    ),
+                ),
+                restored.pending(),
+            )
+
+            val retryEvents = mutableListOf<String>()
+            retryDesktopAccountSyncPairCleanup(
+                cleanup = restored.pending().single(),
+                accountStillExists = { true },
+                removeSyncPairs = { retryEvents += "remove-pairs-$it" },
+                clearCleanup = {
+                    retryEvents += "clear-cleanup-$it"
+                    restored.clear(it)
+                },
+            )
+
+            assertEquals(
+                listOf("remove-pairs-$CLEANUP_ACCOUNT_ID", "clear-cleanup-$CLEANUP_ACCOUNT_ID"),
+                retryEvents,
+            )
+            assertTrue(restored.pending().isEmpty())
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun preparedCleanupFromAnAbortedRemovalPreservesExistingPairs() = runBlocking {
+        val events = mutableListOf<String>()
+
+        retryDesktopAccountSyncPairCleanup(
+            cleanup = DesktopAccountSyncPairCleanup(
+                CLEANUP_ACCOUNT_ID,
+                DesktopAccountSyncPairCleanupPhase.Prepared,
+            ),
+            accountStillExists = { true },
+            removeSyncPairs = { events += "remove-pairs" },
+            clearCleanup = { events += "clear-cleanup" },
+        )
+
+        assertEquals(listOf("clear-cleanup"), events)
+    }
+
+    private companion object {
+        const val CLEANUP_ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     }
 }

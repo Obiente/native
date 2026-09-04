@@ -8,6 +8,7 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
