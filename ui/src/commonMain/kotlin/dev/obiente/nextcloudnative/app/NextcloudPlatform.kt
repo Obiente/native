@@ -435,7 +435,7 @@ data class NextcloudPerson(
     val backend: String,
 )
 
-interface NextcloudPlatformServices {
+interface NextcloudPlatformServices : DeckCardDraftPlatformServices {
     /** Loads public project news from the fixed Obiente feed, with a bounded platform cache. */
     suspend fun loadProjectNews(forceRefresh: Boolean = false): ProjectNewsResult =
         error("Project news is unavailable on this platform.")
@@ -686,24 +686,6 @@ interface NextcloudPlatformServices {
     suspend fun saveSession(session: NextcloudSession)
 
     suspend fun clearSession()
-
-    /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
-    suspend fun loadDeckCardDraft(
-        session: NextcloudSession,
-        key: DeckCardDraftKey,
-    ): PersistedDeckCardDraft? = null
-
-    /** Persists one bounded Deck editor draft without storing account credentials in its key. */
-    suspend fun saveDeckCardDraft(
-        session: NextcloudSession,
-        draft: PersistedDeckCardDraft,
-    ) = Unit
-
-    /** Clears a draft after an explicit cancel or a confirmed successful server mutation. */
-    suspend fun clearDeckCardDraft(
-        session: NextcloudSession,
-        key: DeckCardDraftKey,
-    ) = Unit
 
     fun openExternalUrl(url: String)
 

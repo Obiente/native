@@ -956,6 +956,11 @@ internal class AndroidNextcloudServices(
         )
     }
 
+    override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) =
+        withContext(Dispatchers.IO) {
+            deckCardDrafts.migrateLegacyEntries(session)
+        }
+
     override suspend fun saveSession(session: NextcloudSession) {
         registerSessionPrivateValues(session)
         val previousAccountId = loadSession()?.let(NextcloudDocumentIds::cacheAccountId)
@@ -1019,8 +1024,20 @@ internal class AndroidNextcloudServices(
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
+        discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key)
+        deckCardDrafts.clear(session, key, discardUnreadable)
+    }
+
+    override suspend fun quarantineSubmittedDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.quarantineAfterSubmit(session, key)
+    }
+
+    override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {
+        deckCardDrafts.discardAll()
     }
 
     override suspend fun clearSession() {
