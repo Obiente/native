@@ -565,6 +565,21 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `successful startup reconciliation stops background polling`() = runBlocking {
+        var attempts = 0
+
+        keepRetryingQueuedDurableUploadScheduling(
+            reconcile = {
+                attempts += 1
+                true
+            },
+            wait = { error("a successful reconciliation must not schedule another poll") },
+        )
+
+        assertEquals(1, attempts)
+    }
+
+    @Test
     fun `startup recovery contains uploader construction failures`() = runBlocking {
         val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
             constructAndReconcileQueuedDurableUploads {
