@@ -223,7 +223,7 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
-    fun unsupportedFutureRegistryUsesLegacyCredentialWithoutOverwritingIt() = withStore { preferences, secrets ->
+    fun unsupportedFutureRegistryPreservesLegacyCredentialWithoutExposingIt() = withStore { preferences, secrets ->
         val session = firstSession()
         val futureRegistry = """{"version":2,"futureAccounts":[{"id":"future"}]}"""
         putLegacySession(preferences, secrets, session)
@@ -233,11 +233,12 @@ class DesktopAccountCredentialPersistenceTest {
         val persistence = persistence(preferences, secrets, diagnostics)
         val restored = persistence.loadActiveSession()
 
-        assertEquals(session, restored)
-        assertEquals(listOf(session.accountRecord()), persistence.listAccounts())
-        assertEquals(session.accountId, persistence.activeAccountId())
+        assertNull(restored)
+        assertTrue(persistence.listAccounts().isEmpty())
+        assertNull(persistence.activeAccountId())
         assertEquals(futureRegistry, preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
         assertNull(secrets.load(desktopAccountSecretReference(session.accountId)))
+        assertNotNull(secrets.load(desktopSessionSecretReference(session.serverUrl, session.loginName)))
         assertEquals(
             listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"),
             diagnostics.mapNotNull { it.code }.distinct(),
