@@ -407,6 +407,22 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `startup reconciliation skips queued uploads already owned by WorkManager`() = runBlocking {
+        val owned = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val missing = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val attempted = mutableListOf<String>()
+
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(owned, missing),
+            schedulerOwns = { job -> job == owned },
+            schedule = { job -> attempted += job.id },
+        )
+
+        assertTrue(allScheduled)
+        assertEquals(listOf(missing.id), attempted)
+    }
+
+    @Test
     fun `startup scheduling keeps polling after success for later enqueue failures`() {
         var attempts = 0
         val waits = mutableListOf<Long>()
