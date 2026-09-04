@@ -142,7 +142,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "Vault",
-            client = client,
+            httpClient = client,
             ownedUploadIds = setOf(uploadId),
         )
 
@@ -171,7 +171,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "Vault",
-            client = client,
+            httpClient = client,
             ownedUploadIds = setOf(uploadId),
         )
 
@@ -210,7 +210,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "Vault",
-            client = client,
+            httpClient = client,
             ownedUploadIds = setOf(ownedId),
         )
 
@@ -520,7 +520,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "Vault",
-            client = client,
+            httpClient = client,
         )
 
         assertFails {
@@ -570,7 +570,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "Vault",
-            client = client,
+            httpClient = client,
         )
         val expected = "sha256:8b4c848f9c906b8b340c2400c9aa8fdc1c9d5db557bad1b6aabdd9aabe3eb6e9"
 
@@ -620,7 +620,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "",
-            client = client,
+            httpClient = client,
         )
         val source = Files.createTempFile("nextcloud-sync-replacement", ".tmp").toFile()
         try {
@@ -654,7 +654,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "",
-            client = client,
+            httpClient = client,
             onMutationCommitted = invalidated::add,
         )
 
@@ -681,7 +681,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "",
-            client = client,
+            httpClient = client,
             onMutationCommitted = invalidated::add,
             onAmbiguousMutationResult = ambiguous::add,
         )
@@ -709,7 +709,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "",
-            client = client,
+            httpClient = client,
             onMutationCommitted = invalidated::add,
         )
 
@@ -740,7 +740,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "",
-            client = client,
+            httpClient = client,
         )
 
         assertFails { tree.isDirectoryEmpty("Photos/Trips", "stale-directory") }
@@ -792,7 +792,7 @@ class DesktopFileSyncRemoteTreeTest {
             session = NextcloudSession("https://cloud.example.test", "alice", "secret"),
             userId = "alice",
             remoteRootPath = "",
-            client = client,
+            httpClient = client,
             onMutationCommitted = confirmed::add,
         )
 
