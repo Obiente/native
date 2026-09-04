@@ -22,12 +22,14 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 
 internal class AndroidDurableMultipartUploads(context: Context) {
     private val appContext = context.applicationContext
     private val store = AndroidDurableMultipartUploadStore(appContext)
+    private val workManager = WorkManager.getInstance(appContext)
 
     suspend fun enqueue(
         session: NextcloudSession,
@@ -94,10 +96,16 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         }
     }
 
-    suspend fun reconcileQueuedUploads(): Boolean = reconcileQueuedDurableUploads(
-        jobs = store.list(),
-        schedule = { job -> schedule(job).await() },
-    )
+    suspend fun reconcileQueuedUploads(): Boolean =
+        reconcileQueuedDurableUploads(
+            jobs = store.list(),
+            schedulerOwns = { job ->
+                workManager.getWorkInfosForUniqueWorkFlow(durableUploadWorkName(job.id))
+                    .first()
+                    .any { work -> !work.state.isFinished }
+            },
+            schedule = { job -> schedule(job).await() },
+        )
 
     fun dismiss(session: NextcloudSession, scope: DurableUploadScope, uploadId: String): Boolean {
         val job = store.find(uploadId) ?: return false
@@ -117,7 +125,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         job: AndroidDurableMultipartUploadJob,
         policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
     ): Operation =
-        WorkManager.getInstance(appContext).enqueueUniqueWork(
+        workManager.enqueueUniqueWork(
             durableUploadWorkName(job.id),
             policy,
             OneTimeWorkRequestBuilder<DeckAttachmentUploadWorker>()
