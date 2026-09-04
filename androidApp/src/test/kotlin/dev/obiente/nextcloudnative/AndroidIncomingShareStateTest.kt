@@ -759,7 +759,7 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
-    fun accountRemovalPurgesLocalShareAfterRemoteChunkCleanupFails() = runBlocking {
+    fun accountRemovalRetainsLocalShareAfterRemoteChunkCleanupFails() = runBlocking {
         val staged = request(AndroidIncomingShareState.Uploading).copy(
             chunkSession = AndroidIncomingShareChunkSession(
                 fileIndex = 0,
@@ -769,15 +769,17 @@ class AndroidIncomingShareStateTest {
         )
         val events = mutableListOf<String>()
 
-        removeAndroidIncomingShareRequests(
-            requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
-            cancelWork = { events += "cancel" },
-            releaseChunk = { _, _ -> error("synthetic offline cleanup failure") },
-            recordChunkReleaseFailure = { events += "release-failed" },
-            removeRequest = { events += "remove" },
-        )
+        assertFailsWith<IllegalStateException> {
+            removeAndroidIncomingShareRequests(
+                requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+                cancelWork = { events += "cancel" },
+                releaseChunk = { _, _ -> error("synthetic offline cleanup failure") },
+                recordChunkReleaseFailure = { events += "release-failed" },
+                removeRequest = { events += "remove" },
+            )
+        }
 
-        assertEquals(listOf("cancel", "release-failed", "remove"), events)
+        assertEquals(listOf("cancel", "release-failed"), events)
     }
 
     @Test

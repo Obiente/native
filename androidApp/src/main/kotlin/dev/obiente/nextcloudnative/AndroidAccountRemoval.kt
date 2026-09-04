@@ -19,9 +19,21 @@ internal fun requireAndroidAccountRemovalWritebacksResolved(resolved: Boolean) {
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
+    removeLocalAccount: suspend () -> Unit,
 ) {
     preflight()
     revoke()
+    removeLocalAccount()
+}
+
+internal suspend fun revokeAndroidSessionWithAccountLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    preflight: suspend () -> Unit,
+    revoke: suspend () -> Unit,
+    removeLocalAccount: suspend () -> Unit,
+) = guard.withAccount(accountIdentity) {
+    revokeAndroidSessionAfterRemovalPreflight(preflight, revoke, removeLocalAccount)
 }
 
 internal enum class AndroidAccountDocumentGrantScope(val pathSegment: String) {
@@ -41,9 +53,12 @@ internal suspend fun preflightAndroidAccountRemoval(context: Context, session: N
 
 internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     preflightAndroidAccountRemoval(context, session)
+}
+
+internal fun revokeAndroidAccountDocumentGrants(context: Context, accountIdentity: String) {
     AndroidAccountDocumentGrantScope.entries.forEach { scope ->
         context.revokeUriPermission(
-            scope.uri(nextcloudDocumentsAuthority(context.packageName), NextcloudDocumentIds.rootId(session)),
+            scope.uri(nextcloudDocumentsAuthority(context.packageName), NextcloudDocumentIds.rootId(accountIdentity)),
             NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS,
         )
     }

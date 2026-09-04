@@ -247,7 +247,11 @@ internal class DeckAttachmentUploadWorker(
             target = DurableUploadState.Uploading,
             message = null,
         ) ?: return Result.success()
-        val services = AndroidNextcloudServices(applicationContext, localUploadPicker = picker)
+        val services = AndroidNextcloudServices(
+            applicationContext,
+            localUploadPicker = picker,
+            accountMutationLeaseHeld = true,
+        )
         val outcome = runCatching {
             services.executeNextcloudMultipartUpload(session, started.request)
         }

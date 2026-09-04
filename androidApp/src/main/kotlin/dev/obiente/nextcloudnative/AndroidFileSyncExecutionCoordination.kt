@@ -238,10 +238,22 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
             .filter { pair -> pair.accountId == accountId }
             .map { pair -> pair.id }
         if (retiredPairIds.isEmpty()) return@withLock
-        store.save(removeAndroidFileSyncAccountPairs(current, accountId))
         val scheduler = AndroidFileSyncScheduler(context)
-        retiredPairIds.forEach { pairId -> scheduler.cancel(pairId) }
+        cancelAndroidFileSyncPairSchedulesBeforeRetirement(
+            pairIds = retiredPairIds,
+            cancelSchedule = scheduler::cancel,
+            persistRetirement = { store.save(removeAndroidFileSyncAccountPairs(current, accountId)) },
+        )
     }
+}
+
+internal suspend fun cancelAndroidFileSyncPairSchedulesBeforeRetirement(
+    pairIds: List<String>,
+    cancelSchedule: suspend (String) -> Unit,
+    persistRetirement: () -> Unit,
+) {
+    pairIds.forEach { pairId -> cancelSchedule(pairId) }
+    persistRetirement()
 }
 
 internal suspend fun requireAndroidFileSyncAccountRemovalReady(context: Context, accountId: String) {
