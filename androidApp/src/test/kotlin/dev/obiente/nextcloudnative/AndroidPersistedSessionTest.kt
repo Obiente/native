@@ -57,17 +57,16 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
-    fun invalidCredentialStoreCanBeQuarantinedForLoginOrResetRecovery() {
+    fun invalidCredentialStoreRecoveryPurgesCredentialBearingQuarantine() {
         val replacementWrites = linkedMapOf<String, String>()
         val replacementRemovals = linkedSetOf<String>()
         prepareInvalidAndroidAccountCredentialRecoveryEdit(
             editor = recoveryRecordingEditor(replacementWrites, replacementRemovals),
-            suspectEncrypted = "suspect-encrypted-store",
             replacementEncrypted = "new-encrypted-session",
-            hasExistingQuarantine = false,
         )
 
-        assertEquals("suspect-encrypted-store", replacementWrites["encrypted_session_quarantine"])
+        assertFalse("encrypted_session_quarantine" in replacementWrites)
+        assertTrue("encrypted_session_quarantine" in replacementRemovals)
         assertEquals("new-encrypted-session", replacementWrites["encrypted_session"])
         assertTrue("emulator_test_read_only" in replacementRemovals)
 
@@ -75,12 +74,11 @@ class AndroidPersistedSessionTest {
         val resetRemovals = linkedSetOf<String>()
         prepareInvalidAndroidAccountCredentialRecoveryEdit(
             editor = recoveryRecordingEditor(resetWrites, resetRemovals),
-            suspectEncrypted = "newer-suspect-store",
             replacementEncrypted = null,
-            hasExistingQuarantine = true,
         )
 
         assertFalse("encrypted_session_quarantine" in resetWrites)
+        assertTrue("encrypted_session_quarantine" in resetRemovals)
         assertTrue("encrypted_session" in resetRemovals)
         assertTrue("emulator_test_read_only" in resetRemovals)
     }
@@ -566,6 +564,40 @@ class AndroidPersistedSessionTest {
 
         assertEquals(slots, requireNotNull(restored).sessions)
         assertEquals(second, restored.activeSession)
+    }
+
+    @Test
+    fun corruptInactiveCredentialSlotDoesNotHideTheHealthyActiveAccount() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+            .select(first.accountId)
+            .let(::requireNotNull)
+
+        val restored = reconstructAndroidAccountCredentialState(registry) { accountId ->
+            first.takeIf { accountId == first.accountId }
+        }
+
+        assertEquals(mapOf(first.accountId to first), requireNotNull(restored).sessions)
+        assertEquals(listOf(first.accountRecord()), restored.registry.accounts)
+        assertEquals(first, restored.activeSession)
+    }
+
+    @Test
+    fun corruptActiveCredentialSlotStillFailsClosed() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+
+        assertNull(
+            reconstructAndroidAccountCredentialState(registry) { accountId ->
+                first.takeIf { accountId == first.accountId }
+            },
+        )
     }
 
     @Test

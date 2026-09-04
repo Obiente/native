@@ -75,6 +75,43 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun fileSyncPairCreationWaitsForRemovalAndRejectsTheReauthenticatedSession() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")
+        val replacement = original.copy(appPassword = "replacement-password")
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var current = original
+        var pairCreated = false
+        val removal = async {
+            guard.withAccount(NextcloudDocumentIds.accountKey(original)) {
+                current = replacement
+                removalEntered.complete(Unit)
+                releaseRemoval.await()
+            }
+        }
+        removalEntered.await()
+
+        val result = async {
+            guard.withExactAccountSession(
+                expectedSession = original,
+                resolveSession = { current },
+                unavailable = { "rejected" },
+            ) {
+                pairCreated = true
+                "created"
+            }
+        }
+        yield()
+
+        assertFalse(result.isCompleted)
+        releaseRemoval.complete(Unit)
+        removal.await()
+        assertEquals("rejected", result.await())
+        assertFalse(pairCreated)
+    }
+
+    @Test
     fun differentAccountsKeepIndependentOperationLeases() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val uploadEntered = CompletableDeferred<Unit>()
