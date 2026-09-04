@@ -17,6 +17,36 @@ import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
     @Test
+    fun `account cleanup removes a row only after its source capability is released`() = runBlocking {
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43)
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidDurableUploadJobs(
+                jobs = listOf(first, second),
+                cancelWork = { job -> events += "cancel:${job.id}" },
+                releaseCapability = { job ->
+                    events += "release:${job.id}"
+                    job == first
+                },
+                removeJob = { jobId -> events += "remove:$jobId" },
+            )
+        }
+
+        assertEquals(
+            listOf(
+                "cancel:${first.id}",
+                "cancel:${second.id}",
+                "release:${first.id}",
+                "remove:${first.id}",
+                "release:${second.id}",
+            ),
+            events,
+        )
+    }
+
+    @Test
     fun `removing an account deletes only its queued upload recovery rows`() {
         val storage = FakeDurableUploadEncryptedStorage()
         val store = AndroidDurableMultipartUploadStore(storage, FakeDurableUploadCipher())
