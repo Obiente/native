@@ -32,7 +32,7 @@ internal fun rememberAppWorkspacePinsCompositionState(
         val result = coordinator.load()
         appIds.value = result.appIds
         authoritative.value = if (result.legacyMigrationRequired) {
-            withContext(Dispatchers.Default) { repository.save(accountScopeDigest, result.appIds) }
+            withContext(Dispatchers.Default) { repository.saveIfAbsent(accountScopeDigest, result.appIds) }
         } else {
             result.storageAuthoritative
         }
