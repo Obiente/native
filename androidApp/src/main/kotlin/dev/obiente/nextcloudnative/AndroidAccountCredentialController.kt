@@ -96,6 +96,16 @@ internal class AndroidAccountCredentialController(
                         suspectEncrypted = read.encrypted,
                     )
                 }
+                AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable -> {
+                    val retained = readIndependentCredentialSlotState()
+                    check(retained != null || !hasIndependentCredentialState()) {
+                        "The independent account credential slots could not be recovered."
+                    }
+                    replaceActiveState(
+                        replacement = (retained ?: AndroidAccountCredentialState.Empty).upsertAndSelect(session),
+                        previousSession = retained?.activeSession,
+                    )
+                }
                 is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
             }
             requireNotNull(loadSession(session.accountId))
@@ -146,11 +156,28 @@ internal class AndroidAccountCredentialController(
                     clearSession(read.state)
                 } else {
                     ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(NextcloudDocumentIds.accountKey(session)) {
-                        clearSession(read.state)
+                        removeAndroidAccountCredentialData(
+                            active = true,
+                            removeQueuedUploads = { removeQueuedUploads(session) },
+                            clearActiveAccount = { clearSession(read.state) },
+                            rollbackActiveRemoval = {
+                                replaceActiveStateWhileOperationsIdle(
+                                    replacement = read.state,
+                                    previousSession = null,
+                                    suspectEncrypted = null,
+                                )
+                            },
+                            persistInactiveRemoval = {},
+                            rollbackInactiveRemoval = {},
+                        )
                     }
                 }
             }
             is AndroidAccountCredentialStoreRead.Invalid -> clearInvalidStore(read.encrypted)
+            AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable -> {
+                clearPersistedSession(null, AndroidAccountCredentialState.Empty)
+                notifyDocumentRootsChanged()
+            }
             is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
         }
     }
@@ -274,6 +301,8 @@ internal class AndroidAccountCredentialController(
     private fun requireValidState(): AndroidAccountCredentialState = when (val read = readStore()) {
         is AndroidAccountCredentialStoreRead.Available -> read.state
         is AndroidAccountCredentialStoreRead.Invalid -> error("The account credential store is invalid.")
+        AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable ->
+            error("The independent account credential slots could not be recovered.")
         is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
     }
 
@@ -318,8 +347,14 @@ internal class AndroidAccountCredentialController(
         }
 
     private fun readStore(): AndroidAccountCredentialStoreRead = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
-        val encrypted = preferences.getString(KEY_SESSION, null)
-            ?: return@serialize AndroidAccountCredentialStoreRead.Available(AndroidAccountCredentialState.Empty)
+        val encrypted = preferences.getString(KEY_SESSION, null) ?: return@serialize run {
+            val retained = readIndependentCredentialSlotState()
+            when {
+                retained != null -> AndroidAccountCredentialStoreRead.Available(retained)
+                hasIndependentCredentialState() -> AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable
+                else -> AndroidAccountCredentialStoreRead.Available(AndroidAccountCredentialState.Empty)
+            }
+        }
         val encoded = try {
             sessionCipher.decrypt(encrypted)
         } catch (_: Exception) {
@@ -356,10 +391,10 @@ internal class AndroidAccountCredentialController(
     }
 
     private fun readIndependentCredentialSlotState(): AndroidAccountCredentialState? {
-        val encodedRegistry = preferences.getString(KEY_ACCOUNT_REGISTRY, null) ?: return null
-        val restored = restoreNextcloudAccountRegistry(encodedRegistry, legacySession = null)
-        if (restored.recoveryReason != null) return null
-        return reconstructAndroidAccountCredentialState(restored.registry, ::readCredentialSlot)
+        return restoreAndroidAccountCredentialStateWithoutAggregate(
+            encodedRegistry = preferences.getString(KEY_ACCOUNT_REGISTRY, null),
+            loadSession = ::readCredentialSlot,
+        )
     }
 
     private fun hasIndependentCredentialState(): Boolean =
@@ -474,6 +509,7 @@ internal class AndroidAccountCredentialController(
 internal sealed interface AndroidAccountCredentialStoreRead {
     data class Available(val state: AndroidAccountCredentialState) : AndroidAccountCredentialStoreRead
     data class Invalid(val encrypted: String) : AndroidAccountCredentialStoreRead
+    data object IndependentRecoveryUnavailable : AndroidAccountCredentialStoreRead
     data class Unsupported(val encrypted: String, val version: Int) : AndroidAccountCredentialStoreRead
 }
 
@@ -537,6 +573,17 @@ internal fun reconstructAndroidAccountCredentialState(
         sessions[account.id] = session
     }
     return AndroidAccountCredentialState(registry, sessions)
+}
+
+internal fun restoreAndroidAccountCredentialStateWithoutAggregate(
+    encodedRegistry: String?,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): AndroidAccountCredentialState? {
+    val restored = encodedRegistry
+        ?.let { encoded -> restoreNextcloudAccountRegistry(encoded, legacySession = null) }
+        ?: return null
+    if (restored.recoveryReason != null) return null
+    return reconstructAndroidAccountCredentialState(restored.registry, loadSession)
 }
 
 internal suspend fun resumeAndroidQueuedUploadsAfterSelection(

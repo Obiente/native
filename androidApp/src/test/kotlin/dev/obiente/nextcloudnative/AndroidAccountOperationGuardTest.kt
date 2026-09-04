@@ -7,6 +7,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 
 class AndroidAccountOperationGuardTest {
@@ -106,6 +107,20 @@ class AndroidAccountOperationGuardTest {
         descriptorLease.close()
         transition.await()
         assertTrue(transitionEntered)
+    }
+
+    @Test
+    fun failedWritebackSetupReleasesItsPathAndAccountLease() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val descriptorLease = guard.acquireBlocking("account-a")
+        var pathReleased = false
+
+        releaseAndroidDocumentWritebackSetup(descriptorLease) { pathReleased = true }
+
+        withTimeout(1_000L) {
+            guard.withAccount("account-a") { }
+        }
+        assertTrue(pathReleased)
     }
 
     @Test

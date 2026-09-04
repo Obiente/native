@@ -42,6 +42,17 @@ internal fun acquireAndroidDocumentWritebackAccountLease(
     }
 }
 
+internal fun releaseAndroidDocumentWritebackSetup(
+    accountLease: AndroidAccountOperationLease,
+    releasePath: () -> Unit,
+) {
+    try {
+        releasePath()
+    } finally {
+        accountLease.close()
+    }
+}
+
 internal fun requireAndroidDocumentWritebackCapacity(remoteSize: Long, availableBytes: Long) {
     require(remoteSize >= 0L && availableBytes >= 0L)
     require(remoteSize <= (availableBytes - MIN_ANDROID_DOCUMENT_FREE_BYTES).coerceAtLeast(0L)) {
