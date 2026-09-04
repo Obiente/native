@@ -185,7 +185,7 @@ fun encodeNextcloudAccountRegistry(registry: NextcloudAccountRegistry): String =
 fun decodeNextcloudAccountRegistry(encoded: String): NextcloudAccountRegistry? =
     (decodeNextcloudAccountRegistryResult(encoded) as? NextcloudAccountRegistryDecodeResult.Valid)?.registry
 
-private fun decodeNextcloudAccountRegistryResult(encoded: String): NextcloudAccountRegistryDecodeResult {
+internal fun decodeNextcloudAccountRegistryResult(encoded: String): NextcloudAccountRegistryDecodeResult {
     val envelopeVersionToken = accountRegistryVersionEnvelope
         .find(encoded.take(MAX_ACCOUNT_REGISTRY_VERSION_ENVELOPE_CHARACTERS))
         ?.groupValues
@@ -255,7 +255,7 @@ private enum class AccountRegistryVersionClassification {
     Malformed,
 }
 
-private sealed interface NextcloudAccountRegistryDecodeResult {
+internal sealed interface NextcloudAccountRegistryDecodeResult {
     data class Valid(val registry: NextcloudAccountRegistry) : NextcloudAccountRegistryDecodeResult
 
     data object Malformed : NextcloudAccountRegistryDecodeResult

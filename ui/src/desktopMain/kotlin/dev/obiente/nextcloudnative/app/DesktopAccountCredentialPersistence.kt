@@ -14,7 +14,7 @@ internal class DesktopAccountCredentialPersistence(
         retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry == null) {
-            return restoreLegacySession(read.encoded != null)
+            return restoreLegacySession(read)
         }
         val active = read.registry.activeAccount ?: return null
         return loadSession(active.id)
@@ -23,12 +23,14 @@ internal class DesktopAccountCredentialPersistence(
     fun listAccounts(): List<NextcloudAccountRecord> {
         val read = readRegistry()
         if (read.registry != null) return read.registry.accounts
+        if (read.unsupportedVersion) return emptyList()
         return readLegacyAccountRecord()?.let(::listOf).orEmpty()
     }
 
     fun activeAccountId(): NextcloudAccountId? {
         val read = readRegistry()
         if (read.registry != null) return read.registry.activeAccountId
+        if (read.unsupportedVersion) return null
         return readLegacyAccountRecord()?.id
     }
 
@@ -54,7 +56,7 @@ internal class DesktopAccountCredentialPersistence(
         retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         val registry = read.registry
-            ?: restoreLegacySession(read.encoded != null)?.let { requireNotNull(readRegistry().registry) }
+            ?: restoreLegacySession(read)?.let { requireNotNull(readRegistry().registry) }
             ?: if (read.encoded == null) NextcloudAccountRegistry.Empty else throw invalidRegistryForMutation()
         val previousRecord = registry.accounts.firstOrNull { account -> account.id == session.accountId }
         val persistedSession = previousRecord
@@ -122,20 +124,17 @@ internal class DesktopAccountCredentialPersistence(
         return true
     }
 
-    private fun restoreLegacySession(malformedRegistry: Boolean): NextcloudSession? {
-        val legacy = loadLegacySession() ?: run {
-            if (malformedRegistry) {
-                recordCredentialDiagnostic("ACCOUNT_REGISTRY_MALFORMED", "account-registry.restore")
-            }
-            return null
-        }
+    private fun restoreLegacySession(read: DesktopRegistryRead): NextcloudSession? {
+        val legacy = loadLegacySession()
         val restored = restoreNextcloudAccountRegistry(
-            encoded = preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null),
+            encoded = read.encoded,
             legacySession = legacy,
         )
         restored.recoveryReason?.diagnosticCode?.let { code ->
             recordCredentialDiagnostic(code, "account-registry.restore")
         }
+        if (read.unsupportedVersion) return null
+        legacy ?: return null
         if (!restored.needsPersistence) return legacy
         try {
             val encodedRegistry = prepareRegistry(restored.registry)
@@ -407,7 +406,12 @@ internal class DesktopAccountCredentialPersistence(
 
     private fun readRegistry(): DesktopRegistryRead {
         val encoded = preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null)
-        return DesktopRegistryRead(encoded, encoded?.let(::decodeNextcloudAccountRegistry))
+        val decoded = encoded?.let(::decodeNextcloudAccountRegistryResult)
+        return DesktopRegistryRead(
+            encoded = encoded,
+            registry = (decoded as? NextcloudAccountRegistryDecodeResult.Valid)?.registry,
+            unsupportedVersion = decoded == NextcloudAccountRegistryDecodeResult.UnsupportedVersion,
+        )
     }
 
     private fun prepareRegistry(registry: NextcloudAccountRegistry): String =
@@ -480,6 +484,7 @@ internal class DesktopAccountCredentialPersistence(
     private data class DesktopRegistryRead(
         val encoded: String?,
         val registry: NextcloudAccountRegistry?,
+        val unsupportedVersion: Boolean,
     )
 
     private data class DesktopAccountPreferenceSnapshot(
