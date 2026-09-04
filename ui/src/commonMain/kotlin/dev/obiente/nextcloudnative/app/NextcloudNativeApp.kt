@@ -1259,13 +1259,11 @@ private fun AuthenticatedApp(
     val appPinsRepository = remember(appPinsStorage) { AppWorkspacePinsRepository(appPinsStorage) }
     val appPinsPersistenceScopes = remember(session) { accountPersistenceScopeDigests(session) }
     val appPinsAccountScope = appPinsPersistenceScopes.current
-    val loadedAppPins = remember(appPinsPersistenceScopes) {
-        appPinsRepository.loadWithProvenance(appPinsAccountScope, appPinsPersistenceScopes.legacy)
-    }
-    var pinnedAppIds by remember(appPinsAccountScope) { mutableStateOf(loadedAppPins.appIds) }
-    var appPinsStorageAuthoritative by rememberMigratedAppPinsAuthority(
-        appPinsRepository, appPinsAccountScope, loadedAppPins,
+    val appPinsState = rememberAppWorkspacePinsCompositionState(
+        appPinsRepository, appPinsAccountScope, appPinsPersistenceScopes.legacy,
     )
+    var pinnedAppIds by appPinsState.appIds
+    var appPinsStorageAuthoritative by appPinsState.storageAuthoritative
     var appPinsPersistenceError by remember(appPinsAccountScope) { mutableStateOf<String?>(null) }
     val togglePinnedApp: (String) -> String? = togglePinnedApp@{ appId ->
         if (!appPinsStorageAuthoritative) {
@@ -1462,7 +1460,8 @@ private fun AuthenticatedApp(
         }
     }
 
-    LaunchedEffect(session, discoveryAttempt) {
+    LaunchedEffect(session, discoveryAttempt, appPinsState.loadComplete) {
+        if (!appPinsState.loadComplete) return@LaunchedEffect
         discoveryError = null
         val discoveryResult = runCatching { services.loadServerInfo(session) }
         val discovered = discoveryResult.getOrNull()

@@ -6,8 +6,28 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 class AppWorkspacePinsTest {
+    @Test
+    fun `coordinator defers preference reads until its effect runs`() = runBlocking {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val coordinator = AppWorkspacePinsLoadCoordinator {
+            repository.loadWithProvenance("a".repeat(64), "b".repeat(64))
+        }
+
+        assertEquals(0, storage.readCount)
+        assertEquals(null, coordinator.state)
+
+        val loaded = coordinator.load(Dispatchers.Unconfined)
+
+        assertEquals(defaultAppWorkspacePinnedIds(), loaded.appIds)
+        assertEquals(2, storage.readCount)
+        assertEquals(loaded, coordinator.state)
+    }
+
     @Test
     fun `pins persist per opaque account scope and preserve order`() {
         val storage = MemoryStorage()
@@ -128,8 +148,12 @@ class AppWorkspacePinsTest {
 
     private class MemoryStorage : HomeWorkspaceLayoutStorage {
         val values = mutableMapOf<String, String>()
+        var readCount = 0
 
-        override fun read(persistenceKey: String): String? = values[persistenceKey]
+        override fun read(persistenceKey: String): String? {
+            readCount += 1
+            return values[persistenceKey]
+        }
 
         override fun write(persistenceKey: String, encodedSnapshot: String) {
             values[persistenceKey] = encodedSnapshot

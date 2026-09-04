@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -17,6 +20,19 @@ internal data class AppWorkspacePinsLoad(
     val storageAuthoritative: Boolean,
     val legacyMigrationRequired: Boolean = false,
 )
+
+internal class AppWorkspacePinsLoadCoordinator(
+    private val loadPins: () -> AppWorkspacePinsLoad,
+) {
+    var state: AppWorkspacePinsLoad? = null
+        private set
+
+    suspend fun load(dispatcher: CoroutineDispatcher = Dispatchers.Default): AppWorkspacePinsLoad {
+        val loaded = withContext(dispatcher) { loadPins() }
+        state = loaded
+        return loaded
+    }
+}
 
 internal class AppWorkspacePinsRepository(
     private val storage: HomeWorkspaceLayoutStorage,
