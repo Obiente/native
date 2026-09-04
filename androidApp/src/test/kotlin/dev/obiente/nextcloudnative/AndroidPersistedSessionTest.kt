@@ -614,18 +614,61 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
-    fun activeAccountRemovalCleansQueuedUploadsBeforeDeletingTheCredential() = runBlocking {
+    fun activeAccountRemovalDeletesTheCredentialBeforeIrreversibleUploadCleanup() = runBlocking {
         val events = mutableListOf<String>()
 
         removeAndroidAccountCredentialData(
             active = true,
             removeQueuedUploads = { events += "remove-uploads" },
             clearActiveAccount = { events += "clear-account" },
+            rollbackActiveRemoval = { events += "rollback-active" },
             persistInactiveRemoval = { events += "persist-inactive" },
             rollbackInactiveRemoval = { events += "rollback-inactive" },
         )
 
-        assertEquals(listOf("remove-uploads", "clear-account"), events)
+        assertEquals(listOf("clear-account", "remove-uploads"), events)
+    }
+
+    @Test
+    fun failedActiveUploadCleanupRestoresTheRemovedCredentialState() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidAccountCredentialData(
+                active = true,
+                removeQueuedUploads = {
+                    events += "remove-uploads"
+                    error("synthetic cleanup failure")
+                },
+                clearActiveAccount = { events += "clear-account" },
+                rollbackActiveRemoval = { events += "rollback-active" },
+                persistInactiveRemoval = { events += "persist-inactive" },
+                rollbackInactiveRemoval = { events += "rollback-inactive" },
+            )
+        }
+
+        assertEquals(listOf("clear-account", "remove-uploads", "rollback-active"), events)
+    }
+
+    @Test
+    fun failedActiveCredentialRemovalDoesNotStartUploadCleanupAndAttemptsRollback() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidAccountCredentialData(
+                active = true,
+                removeQueuedUploads = { events += "remove-uploads" },
+                clearActiveAccount = {
+                    events += "clear-account"
+                    error("synthetic credential persistence failure")
+                },
+                rollbackActiveRemoval = { events += "rollback-active" },
+                persistInactiveRemoval = { events += "persist-inactive" },
+                rollbackInactiveRemoval = { events += "rollback-inactive" },
+            )
+        }
+
+        assertEquals(listOf("clear-account", "rollback-active"), events)
     }
 
     @Test
@@ -642,6 +685,7 @@ class AndroidPersistedSessionTest {
                     awaitCancellation()
                 },
                 clearActiveAccount = { events += "clear-account" },
+                rollbackActiveRemoval = { events += "rollback-active" },
                 persistInactiveRemoval = { events += "persist-removal" },
                 rollbackInactiveRemoval = {
                     rollbackWasActive = currentCoroutineContext().isActive

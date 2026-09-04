@@ -2724,6 +2724,11 @@ class DesktopNextcloudServices(
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-run", diagnosticFields) {
             accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could start.",
+                    )
+                }
                 if (isFileSyncPaused()) {
                     return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
@@ -2774,6 +2779,11 @@ class DesktopNextcloudServices(
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
             accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could start.",
+                    )
+                }
                 if (isFileSyncPaused()) {
                     return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
@@ -2821,6 +2831,11 @@ class DesktopNextcloudServices(
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve-batch", diagnosticFields) {
             accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could start.",
+                    )
+                }
                 if (isFileSyncPaused()) {
                     return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
