@@ -169,7 +169,22 @@ internal inline fun <T> readAndroidSafReplacementContentWithinBudget(
     expectedBytes: Long?,
     budget: AndroidFileSyncContentReadBudget,
     contentHash: (T) -> String,
-): String? = if (budget.reserve(expectedBytes)) contentHash(item) else null
+): String? = if (budget.reserve(expectedBytes)) {
+    readAndroidSafReplacementContentOrNull(item, contentHash)
+} else {
+    null
+}
+
+internal inline fun <T> readAndroidSafReplacementContentOrNull(
+    item: T,
+    contentHash: (T) -> String,
+): String? = try {
+    contentHash(item)
+} catch (failure: CancellationException) {
+    throw failure
+} catch (_: Exception) {
+    null
+}
 
 internal fun AndroidFileSyncContentReadBudget.reserveCompleteReplacementContent(
     expectedByteCounts: List<Long?>,
@@ -231,7 +246,14 @@ internal fun strengthenAndroidSafReplacementEntries(
                 return@forEach
             }
             documentsToHash.forEach { document ->
-                computedHashes[document.entry.relativePath] = contentHash(document)
+                computedHashes[document.entry.relativePath] =
+                    readAndroidSafReplacementContentOrNull(document, contentHash)
+            }
+            if (documentsToHash.any { document -> computedHashes[document.entry.relativePath] == null }) {
+                strengthened[path] = root.copy(
+                    entry = root.entry.withUnavailableAndroidSafReplacementIdentity(),
+                )
+                return@forEach
             }
             val evidence = scopedPaths.mapNotNull { scopedPath ->
                 val document = requireNotNull(scanned[scopedPath])

@@ -74,6 +74,29 @@ class AndroidSafDownloadContentRecoveryTest {
     }
 
     @Test
+    fun `restore lost after identity-changing rename is authenticated by content`() {
+        val directory = FakeSafDirectory()
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val backup = directory.addFile(initial.backupName, byteArrayOf(1, 2))
+        val stage = directory.addFile(initial.stageName, byteArrayOf(3, 4))
+        val transaction = initial.copy(
+            backupProtected = true,
+            backupDocumentIdentity = backup.toString(),
+            backupContentIdentity = directory.contentIdentity(backup),
+            stageDocumentIdentity = stage.toString(),
+        )
+        directory.ownership.add(transaction)
+        directory.replaceIdentityAfterRenameTo = transaction.finalName
+        directory.throwAfterRenameTo = transaction.finalName
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertContentEquals(byteArrayOf(1, 2), directory.entryNamed("Archive").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
     fun `verified publication never restores its authenticated backup`() {
         val directory = FakeSafDirectory()
         val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)

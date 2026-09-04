@@ -8,9 +8,11 @@ import dev.obiente.nextcloudnative.app.FileSyncOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -133,11 +135,19 @@ internal suspend fun removeConfiguredFileSyncPair(
     cleanLedger()
     currentCoroutineContext().ensureActive()
     persistRemoval()
-    currentCoroutineContext().ensureActive()
-    cancelSchedule()
-    currentCoroutineContext().ensureActive()
-    releaseLocalGrant()
+    completePersistedFileSyncPairRemoval(cancelSchedule, releaseLocalGrant)
     return true
+}
+
+internal suspend fun completePersistedFileSyncPairRemoval(
+    cancelSchedule: suspend () -> Unit,
+    releaseLocalGrant: suspend () -> Unit,
+) = withContext(NonCancellable) {
+    try {
+        cancelSchedule()
+    } finally {
+        releaseLocalGrant()
+    }
 }
 
 internal suspend fun reconcileSafDownloadsBeforePairRemoval(

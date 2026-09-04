@@ -7,6 +7,7 @@ import dev.obiente.nextcloudnative.app.LocalSyncEntry
 import dev.obiente.nextcloudnative.app.RemoteSyncEntry
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import dev.obiente.nextcloudnative.app.planFileSync
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -63,6 +64,29 @@ class AndroidFileSyncReplacementEvidenceTest {
         assertEquals(listOf("a.bin", "b.bin"), reads)
         assertEquals(0L, budget.remainingBytes)
         assertEquals(listOf(hash('a'), hash('b'), null), hashes)
+    }
+
+    @Test
+    fun `unreadable replacement content becomes unavailable evidence`() {
+        val budget = AndroidFileSyncContentReadBudget(maximumFileBytes = 8L, maximumTotalBytes = 8L)
+
+        val hash = readAndroidSafReplacementContentWithinBudget("offline.bin", 4L, budget) {
+            throw IOException("provider item is offline")
+        }
+
+        assertNull(hash)
+        assertEquals(4L, budget.remainingBytes)
+    }
+
+    @Test
+    fun `replacement content read still propagates cancellation`() {
+        val budget = AndroidFileSyncContentReadBudget(maximumFileBytes = 8L, maximumTotalBytes = 8L)
+
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            readAndroidSafReplacementContentWithinBudget("cancelled.bin", 4L, budget) {
+                throw kotlinx.coroutines.CancellationException("cancelled")
+            }
+        }
     }
 
     @Test

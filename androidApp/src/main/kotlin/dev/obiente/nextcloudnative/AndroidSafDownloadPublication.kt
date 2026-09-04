@@ -393,14 +393,15 @@ internal class AndroidSafDownloadPublisher<Document>(
             if (failure is CancellationException) throw failure
             val documents = directory.documents()
             val restored = documents.singleOrNull { it.document == backup.document }
-            val exactRestored = documents.singleOrNull {
-                it.displayName == transaction.finalName && it.document == backup.document
-            }
-            val remainingBackup = documents.singleOrNull {
-                it.displayName == transaction.backupName && it.document == backup.document
-            }
-            if (exactRestored != null && remainingBackup == null) {
-                return clearRestoredBackupName(transaction)
+            val exactRestored = documents.singleOrNull { it.displayName == transaction.finalName }
+            val remainingBackup = documents.singleOrNull { it.displayName == transaction.backupName }
+            val restoredIsAuthenticated = exactRestored != null && (
+                exactRestored.document == backup.document ||
+                    transaction.backupContentIdentity != null &&
+                    contentIdentity(exactRestored.document) == transaction.backupContentIdentity
+                )
+            if (restoredIsAuthenticated && remainingBackup == null) {
+                return clearRestoredBackupName(transaction, requireNotNull(exactRestored).documentIdentity)
             }
             var recovered = transaction
             if (restored != null && restored.displayName != transaction.backupName) {

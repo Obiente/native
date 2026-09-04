@@ -351,6 +351,31 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun pairRemovalFinishesCleanupNonCancellablyAfterPersistence() = runBlocking {
+        val events = mutableListOf<String>()
+        val removal = launch {
+            removeConfiguredFileSyncPair(
+                reconcileLocalDownloads = { events += "reconcile"; true },
+                cleanRemoteUploads = { events += "remote"; true },
+                cleanLedger = { events += "clean" },
+                persistRemoval = {
+                    events += "persist"
+                    currentCoroutineContext().cancel()
+                },
+                cancelSchedule = { events += "cancel-schedule" },
+                releaseLocalGrant = { events += "release" },
+            )
+        }
+
+        removal.join()
+
+        assertEquals(
+            listOf("reconcile", "remote", "clean", "persist", "cancel-schedule", "release"),
+            events,
+        )
+    }
+
+    @Test
     fun pairRemovalReconcilesDownloadsWhenAnotherPairRetainsTheSafGrant() {
         var reconciled = false
 
