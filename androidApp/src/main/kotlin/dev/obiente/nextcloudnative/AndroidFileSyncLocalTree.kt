@@ -81,15 +81,19 @@ internal class AndroidSafFileSyncLocalTree(
             require(visited.add(parentUri.toString())) { "The local folder contains a directory cycle." }
             require(parentPath.count { it == '/' } < MAX_DEPTH) { "The local folder is nested too deeply." }
             val documents = rawChildren(parentUri, parentPath)
+            val observedNames = documents.mapTo(mutableSetOf(), AndroidLocalSyncDocument::displayName)
             ownershipDirectory.observeRecoveryNames(
                 parentUri.toString(),
-                documents.mapTo(mutableSetOf(), AndroidLocalSyncDocument::displayName),
+                observedNames,
             )
+            val ownedRecoveryTokens = ownershipDirectory.forDirectory(parentUri.toString())
+                .transactions(observedNames)
+                .mapTo(mutableSetOf(), AndroidSafOwnedDownloadTransaction::token)
             observedEntries = Math.addExact(observedEntries, documents.size)
             require(observedEntries <= MAX_ENTRIES) { "The local folder contains too many entries." }
             documents.filter { document ->
                 document.entry.kind == SyncEntryKind.Directory &&
-                    !hasAndroidSafRecoveryToken(document.displayName)
+                    shouldTraverseAndroidSafRecoveryDirectory(document.displayName, ownedRecoveryTokens)
             }.forEach { document -> pending += document.entry.relativePath to document.uri }
         }
     }
@@ -694,6 +698,11 @@ internal inline fun indexAndroidSafRecoveryLocationsIfNeeded(
 ) {
     if (ownershipDirectory.hasPendingTransactions()) indexRecoveryLocations()
 }
+
+internal fun shouldTraverseAndroidSafRecoveryDirectory(
+    displayName: String,
+    ownedRecoveryTokens: Set<String>,
+): Boolean = ownedRecoveryTokens.none(displayName::contains)
 
 internal fun requireScanContinuation(shouldContinue: () -> Boolean) {
     if (!shouldContinue() || Thread.currentThread().isInterrupted) {

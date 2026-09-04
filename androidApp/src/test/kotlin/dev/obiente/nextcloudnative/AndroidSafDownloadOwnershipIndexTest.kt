@@ -215,6 +215,34 @@ class AndroidSafDownloadOwnershipIndexTest {
         }
     }
 
+    @Test
+    fun `uuid user parent remains traversable while relocated owned recovery is pruned`() {
+        val root = Files.createTempDirectory("saf-download-ownership-uuid-parent-").toFile()
+        try {
+            val originalScope = "content://provider/tree/root/document/original"
+            val uuidParentScope = "content://provider/tree/root/document/$SECOND_TOKEN"
+            val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", FIRST_TOKEN)
+            AndroidSafDownloadOwnershipStore(root).forDirectory(originalScope).add(transaction)
+            val index = AndroidSafDownloadOwnershipStore(root).indexed()
+
+            index.observeRecoveryNames("content://provider/tree/root", setOf(SECOND_TOKEN))
+            val rootTokens = index.forDirectory("content://provider/tree/root")
+                .transactions(setOf(SECOND_TOKEN))
+                .mapTo(mutableSetOf(), AndroidSafOwnedDownloadTransaction::token)
+            assertTrue(shouldTraverseAndroidSafRecoveryDirectory(SECOND_TOKEN, rootTokens))
+
+            val relocatedName = "provider-stage-${transaction.token}"
+            index.observeRecoveryNames(uuidParentScope, setOf(relocatedName))
+            val relocatedTokens = index.forDirectory(uuidParentScope)
+                .transactions(setOf(relocatedName))
+                .mapTo(mutableSetOf(), AndroidSafOwnedDownloadTransaction::token)
+            assertEquals(setOf(transaction.token), relocatedTokens)
+            assertFalse(shouldTraverseAndroidSafRecoveryDirectory(relocatedName, relocatedTokens))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private companion object {
         const val FIRST_TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
         const val SECOND_TOKEN = "fedcba98-7654-3210-fedc-ba9876543210"

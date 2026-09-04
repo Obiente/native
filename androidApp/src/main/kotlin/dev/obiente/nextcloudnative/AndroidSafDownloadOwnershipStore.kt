@@ -441,10 +441,3 @@ internal fun androidSafDownloadOwnershipStoreForTree(
         legacyDirectory = baseDirectory,
     )
 }
-
-internal fun hasAndroidSafRecoveryToken(name: String): Boolean =
-    ANDROID_SAF_RECOVERY_TOKEN_PATTERN.containsMatchIn(name)
-
-private val ANDROID_SAF_RECOVERY_TOKEN_PATTERN = Regex(
-    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-)
