@@ -132,6 +132,22 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun syncRunRejectsAStaleAccountAfterWaitingForSelection() {
+        val first = NextcloudSession("https://first.example.test", "alice", "one")
+        val second = NextcloudSession("https://second.example.test", "bob", "two")
+
+        assertTrue(desktopSyncRunMatchesActiveSession(first, first.copy()))
+        assertFalse(desktopSyncRunMatchesActiveSession(second, first))
+        assertFalse(desktopSyncRunMatchesActiveSession(activeSession = null, first))
+        assertFalse(
+            desktopSyncRunMatchesActiveSession(
+                first.copy(appPassword = "rotated"),
+                first,
+            ),
+        )
+    }
+
+    @Test
     fun differentAccountSaveRequiresTheSelectionTransition() {
         val first = NextcloudSession("https://first.example.test", "alice", "one")
         val second = NextcloudSession("https://second.example.test", "bob", "two")

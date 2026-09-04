@@ -92,6 +92,32 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
+    fun canonicalEquivalentReauthenticationPreservesDesktopStorageIdentity() =
+        withStore { preferences, secrets ->
+            val original = NextcloudSession(
+                serverUrl = "https://CLOUD.example.test:443/nextcloud",
+                loginName = "alice",
+                appPassword = "original-password",
+            )
+            val replacement = NextcloudSession(
+                serverUrl = "https://cloud.example.test/nextcloud/",
+                loginName = "alice",
+                appPassword = "replacement-password",
+            )
+            assertEquals(original.accountId, replacement.accountId)
+            val persistence = persistence(preferences, secrets)
+            persistence.saveSession(original)
+
+            persistence.saveSession(replacement)
+
+            val restored = persistence(preferences, secrets).loadActiveSession()
+            assertEquals(original.serverUrl, restored?.serverUrl)
+            assertEquals(replacement.appPassword, restored?.appPassword)
+            assertEquals(desktopFileCacheAccountId(original), restored?.let(::desktopFileCacheAccountId))
+            assertEquals(original.serverUrl, decodeRegistry(preferences).activeAccount?.serverUrl)
+        }
+
+    @Test
     fun unsupportedFutureRegistryUsesLegacyCredentialWithoutOverwritingIt() = withStore { preferences, secrets ->
         val session = firstSession()
         val futureRegistry = """{"version":2,"futureAccounts":[{"id":"future"}]}"""
