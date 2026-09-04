@@ -55,6 +55,13 @@ internal fun desktopResourceActivationMatchesActiveSession(
     requestedSession: NextcloudSession,
 ): Boolean = activeSession == requestedSession
 
+internal fun desktopResourceDeactivationTargetsCurrentProvider(
+    activeSession: NextcloudSession?,
+    requestedSession: NextcloudSession,
+    providerAccountId: String?,
+): Boolean = desktopResourceActivationMatchesActiveSession(activeSession, requestedSession) &&
+    providerAccountId == desktopFileCacheAccountId(requestedSession)
+
 internal fun desktopSyncRunMatchesActiveSession(
     activeSession: NextcloudSession?,
     requestedSession: NextcloudSession,
