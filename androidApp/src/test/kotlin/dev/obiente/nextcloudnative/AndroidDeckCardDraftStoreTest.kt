@@ -11,6 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.json.JSONObject
 
 class AndroidDeckCardDraftStoreTest {
     @Test
@@ -132,7 +133,44 @@ class AndroidDeckCardDraftStoreTest {
     }
 
     @Test
-    fun `retention preserves ciphertext copied into a mismatched storage slot`() {
+    fun `retention preserves current and legacy ciphertext copied into a mismatched storage slot`() {
+        listOf(false, true).forEach { legacy ->
+            val storage = MemoryDeckDraftStorage()
+            var now = 0L
+            val store = AndroidDeckCardDraftStore(
+                storage = storage,
+                cipher = IdentityDeckDraftCipher,
+                nowEpochMillis = { ++now },
+            )
+            val source = persisted(cardId = 42L)
+            store.save(session, source)
+            val sourceKey = store.storageKey(session, source.key)
+            val mismatchedKey = store.storageKey(session, persisted(cardId = 99L).key)
+            val ciphertext = storage.values.getValue(sourceKey) as String
+            storage.values[mismatchedKey] = if (legacy) {
+                JSONObject(ciphertext).apply { remove("storageKey") }.toString()
+            } else {
+                ciphertext
+            }
+            storage.values.remove(sourceKey)
+
+            repeat(DeckCardDraftRetention.MAX_ENTRIES + 2) { index ->
+                store.save(session, persisted(cardId = 1_000L + index, title = "Draft $index"))
+            }
+
+            assertTrue(mismatchedKey in storage.values)
+            assertFailsWith<AndroidDeckDraftRecoveryException> {
+                store.load(session, persisted(cardId = 99L).key)
+            }
+            assertFailsWith<AndroidDeckDraftRecoveryException> {
+                store.clear(session, persisted(cardId = 99L).key)
+            }
+            assertTrue(mismatchedKey in storage.values)
+        }
+    }
+
+    @Test
+    fun `legacy drafts for the active account participate in bounded retention`() {
         val storage = MemoryDeckDraftStorage()
         var now = 0L
         val store = AndroidDeckCardDraftStore(
@@ -140,25 +178,25 @@ class AndroidDeckCardDraftStoreTest {
             cipher = IdentityDeckDraftCipher,
             nowEpochMillis = { ++now },
         )
-        val source = persisted(cardId = 42L)
-        store.save(session, source)
-        val sourceKey = store.storageKey(session, source.key)
-        val mismatchedKey = store.storageKey(session, persisted(cardId = 99L).key)
-        storage.values[mismatchedKey] = storage.values.getValue(sourceKey)
-        storage.values.remove(sourceKey)
+        val legacyDrafts = (1L..DeckCardDraftRetention.MAX_ENTRIES.toLong()).map { cardId ->
+            persisted(cardId = cardId, title = "Legacy $cardId").also { draft ->
+                store.save(session, draft)
+                val storedKey = store.storageKey(session, draft.key)
+                storage.values[storedKey] = JSONObject(storage.values.getValue(storedKey) as String)
+                    .apply { remove("storageKey") }
+                    .toString()
+            }
+        }
+        val newcomer = persisted(cardId = 1_000L, title = "New draft")
 
-        repeat(DeckCardDraftRetention.MAX_ENTRIES + 2) { index ->
-            store.save(session, persisted(cardId = 1_000L + index, title = "Draft $index"))
-        }
+        store.save(session, newcomer)
 
-        assertTrue(mismatchedKey in storage.values)
-        assertFailsWith<AndroidDeckDraftRecoveryException> {
-            store.load(session, persisted(cardId = 99L).key)
-        }
-        assertFailsWith<AndroidDeckDraftRecoveryException> {
-            store.clear(session, persisted(cardId = 99L).key)
-        }
-        assertTrue(mismatchedKey in storage.values)
+        assertEquals(DeckCardDraftRetention.MAX_ENTRIES, storage.values.size)
+        assertEquals(newcomer, store.load(session, newcomer.key))
+        assertEquals(
+            DeckCardDraftRetention.MAX_ENTRIES - 1,
+            legacyDrafts.count { draft -> store.load(session, draft.key) != null },
+        )
     }
 
     @Test

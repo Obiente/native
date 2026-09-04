@@ -4,4 +4,4 @@ pull: 442
 platforms: android, desktop
 user-facing: yes
 
-Preserve unreadable encrypted Deck card drafts until they can be restored or explicitly discarded.
+Preserve unreadable Android Deck card drafts until explicit discard, and expose recovery controls for Desktop drafts retained during keyring failures.
