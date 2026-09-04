@@ -387,14 +387,23 @@ internal class AndroidSafDownloadPublisher<Document>(
         require(restored.document == restoredDocument && backupDocument(transaction) == null) {
             "The protected local item could not be restored."
         }
-        return clearRestoredBackupName(transaction)
+        return clearRestoredBackupName(transaction, restored.documentIdentity)
     }
 
     private fun clearRestoredBackupName(
         transaction: AndroidSafOwnedDownloadTransaction,
+        restoredDocumentIdentity: String? = null,
     ): AndroidSafOwnedDownloadTransaction {
-        if (transaction.backupDisplayName == null && !transaction.backupProtected) return transaction
-        val restored = transaction.copy(backupDisplayName = null, backupProtected = false)
+        if (
+            transaction.backupDisplayName == null &&
+            !transaction.backupProtected &&
+            restoredDocumentIdentity == null
+        ) return transaction
+        val restored = transaction.copy(
+            backupDisplayName = null,
+            backupProtected = false,
+            backupDocumentIdentity = restoredDocumentIdentity ?: transaction.backupDocumentIdentity,
+        )
         ownership.replace(restored)
         return restored
     }

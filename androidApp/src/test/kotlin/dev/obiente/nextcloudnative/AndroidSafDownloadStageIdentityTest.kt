@@ -7,8 +7,32 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 
 class AndroidSafDownloadStageIdentityTest {
+    @Test
+    fun `exact restore persists a changed provider identity before retiring ownership`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory()
+        val backup = directory.addDirectory(initial.backupName)
+        val stage = directory.addFile(initial.stageName, byteArrayOf(26, 27))
+        val transaction = initial.copy(
+            publicationAttempted = true,
+            backupProtected = true,
+            backupDocumentIdentity = backup.toString(),
+            stageDocumentIdentity = stage.toString(),
+        )
+        directory.ownership.add(transaction)
+        directory.replaceIdentityAfterRenameTo = transaction.finalName
+
+        publisher(directory).reconcile()
+
+        assertNotEquals(backup, directory.documentNamed("Archive"))
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
     @Test
     fun `restart authenticates and retires a stage created before identity persistence`() {
         val directory = FakeSafDirectory().apply { addFile("Report.txt", byteArrayOf(10, 11)) }
