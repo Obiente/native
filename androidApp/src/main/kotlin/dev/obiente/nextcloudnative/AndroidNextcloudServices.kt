@@ -953,7 +953,7 @@ internal class AndroidNextcloudServices(
                 supportDiagnostics.setActiveAccountIdentity(accountIdentity)
                 supportIntake.setActiveAccountIdentity(accountIdentity)
             },
-        )
+        )?.also(deckCardDrafts::migrateLegacyEntries)
     }
 
     override suspend fun saveSession(session: NextcloudSession) {

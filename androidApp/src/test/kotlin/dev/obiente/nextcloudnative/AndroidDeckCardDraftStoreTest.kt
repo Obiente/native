@@ -200,6 +200,67 @@ class AndroidDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `session migration makes legacy drafts readable to cross account retention`() {
+        val storage = MemoryDeckDraftStorage()
+        var now = 0L
+        val store = AndroidDeckCardDraftStore(
+            storage = storage,
+            cipher = IdentityDeckDraftCipher,
+            nowEpochMillis = { ++now },
+        )
+        val legacyDrafts = (1L..DeckCardDraftRetention.MAX_ENTRIES.toLong()).map { cardId ->
+            persisted(cardId = cardId, title = "Legacy $cardId").also { draft ->
+                store.save(session, draft)
+                val storedKey = store.storageKey(session, draft.key)
+                storage.values[storedKey] = JSONObject(storage.values.getValue(storedKey) as String)
+                    .apply { remove("storageKey") }
+                    .toString()
+            }
+        }
+        val otherSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test",
+            loginName = "bob",
+            appPassword = "other-password",
+        )
+        val newcomer = persisted(cardId = 1_000L, title = "Other account draft")
+        val untouchedLegacyCiphertext = storage.values.toMap()
+
+        store.migrateLegacyEntries(otherSession)
+        assertEquals(untouchedLegacyCiphertext, storage.values)
+        assertFailsWith<DeckCardDraftCapacityException> {
+            store.save(otherSession, newcomer)
+        }
+
+        store.migrateLegacyEntries(session)
+        store.save(otherSession, newcomer)
+
+        assertEquals(DeckCardDraftRetention.MAX_ENTRIES, storage.values.size)
+        assertEquals(newcomer, store.load(otherSession, newcomer.key))
+        assertEquals(
+            DeckCardDraftRetention.MAX_ENTRIES - 1,
+            legacyDrafts.count { draft -> store.load(session, draft.key) != null },
+        )
+    }
+
+    @Test
+    fun `failed legacy migration leaves recovery ciphertext intact`() {
+        val storage = MemoryDeckDraftStorage()
+        val store = store(storage, IdentityDeckDraftCipher)
+        val legacy = persisted()
+        store.save(session, legacy)
+        val storedKey = store.storageKey(session, legacy.key)
+        val legacyCiphertext = JSONObject(storage.values.getValue(storedKey) as String)
+            .apply { remove("storageKey") }
+            .toString()
+        storage.values[storedKey] = legacyCiphertext
+        storage.putSucceeds = false
+
+        store.migrateLegacyEntries(session)
+
+        assertEquals(legacyCiphertext, storage.values[storedKey])
+    }
+
+    @Test
     fun `unreadable drafts can fill but cannot exceed the retention ceiling`() {
         val storage = MemoryDeckDraftStorage()
         repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
@@ -369,6 +430,7 @@ class AndroidDeckCardDraftStoreTest {
 
     private class MemoryDeckDraftStorage : AndroidDeckDraftStorage {
         val values = linkedMapOf<String, Any?>()
+        var putSucceeds = true
         var removeSucceeds = true
 
         override fun getString(key: String): String? = values[key] as? String
@@ -376,6 +438,7 @@ class AndroidDeckCardDraftStoreTest {
         override fun entries(): Map<String, Any?> = values.toMap()
 
         override fun putString(key: String, value: String): Boolean {
+            if (!putSucceeds) return false
             values[key] = value
             return true
         }
