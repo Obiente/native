@@ -33,6 +33,34 @@ data class PersistedDeckCardDraft(
     }
 }
 
+interface DeckCardDraftPlatformServices {
+    /** Loads one bounded, account-scoped unsaved Deck editor draft from app-private storage. */
+    suspend fun loadDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ): PersistedDeckCardDraft? = null
+
+    /** Persists one bounded editor draft without storing account credentials in its key. */
+    suspend fun saveDeckCardDraft(session: NextcloudSession, draft: PersistedDeckCardDraft) = Unit
+
+    /** Clears a draft after explicit discard or confirmed successful server mutation. */
+    suspend fun clearDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+        discardUnreadable: Boolean = false,
+    ) = Unit
+
+    /** Quarantines a recovery copy after the corresponding server mutation is confirmed. */
+    suspend fun quarantineSubmittedDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = clearDeckCardDraft(session, key, discardUnreadable = true)
+
+    /** Explicitly discards every local Deck recovery record, including unreadable records. */
+    suspend fun discardAllDeckCardDrafts(): Unit =
+        error("This platform does not provide Deck draft recovery reset.")
+}
+
 object DeckCardDraftRetention {
     const val MAX_ENTRIES = 24
 
@@ -55,6 +83,10 @@ object DeckCardDraftRetention {
             .mapTo(linkedSetOf(), Entry::storageKey)
     }
 }
+
+class DeckCardDraftCapacityException : IllegalStateException(
+    "Unreadable Deck drafts fill the recovery limit.",
+)
 
 internal fun DeckUiCardDraft.hasMeaningfulChangesFrom(original: DeckUiCardDraft): Boolean =
     title != original.title ||

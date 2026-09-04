@@ -189,14 +189,19 @@ fun DeckUiCardEditorDialog(
     initialDraft: DeckUiCardDraft? = null,
     recoveredDraft: Boolean = false,
     draftRecoveryFailed: Boolean = false,
+    draftRecoveryResetRequired: Boolean = false,
     busy: Boolean,
     errorMessage: String?,
     quickDueDates: List<DeckUiDueDateOption>,
     onDismiss: () -> Unit,
-    onDiscardRecoveredDraft: () -> Unit = {},
+    onDiscardRecoveredDraft: (DeckUiCardDraft) -> Unit = {},
+    onResetDraftRecovery: (DeckUiCardDraft) -> Unit = {},
     onDraftChange: (DeckUiCardDraft) -> Unit = {},
     onSubmit: (DeckUiCardDraft) -> Unit,
 ) {
+    var pendingDestructiveAction by remember(stack, card) {
+        mutableStateOf<DeckDraftDestructiveAction?>(null)
+    }
     var draft by remember(stack, card, recoveredDraft) {
         mutableStateOf(initialDraft ?: card.toDeckUiDraft())
     }
@@ -263,9 +268,38 @@ fun DeckUiCardEditorDialog(
                             }
                             TextButton(
                                 enabled = !busy,
-                                onClick = onDiscardRecoveredDraft,
+                                onClick = { pendingDestructiveAction = DeckDraftDestructiveAction.DiscardOne },
                             ) {
                                 Text("Discard")
+                            }
+                        }
+                    }
+                }
+            }
+            if (draftRecoveryResetRequired) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = RoundedCornerShape(NextcloudRadii.Medium),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(NextcloudSpacing.Medium),
+                            horizontalArrangement = Arrangement.spacedBy(NextcloudSpacing.Small),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Saved draft storage is full", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    "Unreadable recovery copies must be reset before new edits can be saved.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            TextButton(
+                                enabled = !busy,
+                                onClick = { pendingDestructiveAction = DeckDraftDestructiveAction.ResetAll },
+                            ) {
+                                Text("Reset")
                             }
                         }
                     }
@@ -325,7 +359,23 @@ fun DeckUiCardEditorDialog(
             }
         }
     }
+    pendingDestructiveAction?.let { action ->
+        DeckUiDraftRecoveryConfirmationDialog(
+            resetAll = action == DeckDraftDestructiveAction.ResetAll,
+            busy = busy,
+            onDismiss = { pendingDestructiveAction = null },
+            onConfirm = {
+                pendingDestructiveAction = null
+                when (action) {
+                    DeckDraftDestructiveAction.DiscardOne -> onDiscardRecoveredDraft(draft)
+                    DeckDraftDestructiveAction.ResetAll -> onResetDraftRecovery(draft)
+                }
+            },
+        )
+    }
 }
+
+private enum class DeckDraftDestructiveAction { DiscardOne, ResetAll }
 
 @Composable
 fun DeckUiDueDateDialog(

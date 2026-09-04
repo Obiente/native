@@ -3893,6 +3893,15 @@ class DesktopNextcloudServices(
     ) = withContext(Dispatchers.IO) {
         deckCardDrafts.clear(session, key)
     }
+    override suspend fun quarantineSubmittedDeckCardDraft(
+        session: NextcloudSession,
+        key: DeckCardDraftKey,
+    ) = withContext(Dispatchers.IO) {
+        deckCardDrafts.quarantineAfterSubmit(session, key)
+    }
+    override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {
+        deckCardDrafts.discardAll()
+    }
     override fun openExternalUrl(url: String) {
         serviceScope.launch {
             runCatching { openExternalUrlNow(url) }

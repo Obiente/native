@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.DeckCardDraftKey
+import dev.obiente.nextcloudnative.app.DeckCardDraftCapacityException
 import dev.obiente.nextcloudnative.app.DeckCardDraftRetention
 import dev.obiente.nextcloudnative.app.DeckUiCardDraft
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -131,6 +132,36 @@ class AndroidDeckCardDraftStoreTest {
     }
 
     @Test
+    fun `retention preserves ciphertext copied into a mismatched storage slot`() {
+        val storage = MemoryDeckDraftStorage()
+        var now = 0L
+        val store = AndroidDeckCardDraftStore(
+            storage = storage,
+            cipher = IdentityDeckDraftCipher,
+            nowEpochMillis = { ++now },
+        )
+        val source = persisted(cardId = 42L)
+        store.save(session, source)
+        val sourceKey = store.storageKey(session, source.key)
+        val mismatchedKey = store.storageKey(session, persisted(cardId = 99L).key)
+        storage.values[mismatchedKey] = storage.values.getValue(sourceKey)
+        storage.values.remove(sourceKey)
+
+        repeat(DeckCardDraftRetention.MAX_ENTRIES + 2) { index ->
+            store.save(session, persisted(cardId = 1_000L + index, title = "Draft $index"))
+        }
+
+        assertTrue(mismatchedKey in storage.values)
+        assertFailsWith<AndroidDeckDraftRecoveryException> {
+            store.load(session, persisted(cardId = 99L).key)
+        }
+        assertFailsWith<AndroidDeckDraftRecoveryException> {
+            store.clear(session, persisted(cardId = 99L).key)
+        }
+        assertTrue(mismatchedKey in storage.values)
+    }
+
+    @Test
     fun `unreadable drafts can fill but cannot exceed the retention ceiling`() {
         val storage = MemoryDeckDraftStorage()
         repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
@@ -138,11 +169,96 @@ class AndroidDeckCardDraftStoreTest {
         }
         val store = store(storage, IdentityDeckDraftCipher)
 
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<DeckCardDraftCapacityException> {
             store.save(session, persisted())
         }
 
         assertEquals(DeckCardDraftRetention.MAX_ENTRIES, storage.values.size)
+    }
+
+    @Test
+    fun `all unreadable entries after commit do not pass a zero retention limit`() {
+        val storage = MemoryDeckDraftStorage()
+        val writer = store(storage, IdentityDeckDraftCipher)
+        repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
+            writer.save(session, persisted(cardId = 1_000L + index))
+        }
+        var decryptions = 0
+        val temporarilyUnavailable = store(
+            storage,
+            object : AndroidDeckDraftCipher {
+                override fun encrypt(value: String): String = value
+
+                override fun decrypt(value: String): String {
+                    decryptions += 1
+                    if (decryptions > 2) error("Android Keystore became unavailable.")
+                    return value
+                }
+            },
+        )
+        val updated = persisted(cardId = 1_000L, title = "Updated safely")
+
+        temporarilyUnavailable.save(session, updated)
+
+        assertEquals(DeckCardDraftRetention.MAX_ENTRIES, storage.values.size)
+        assertEquals(updated, writer.load(session, updated.key))
+    }
+
+    @Test
+    fun `explicit reset restores capacity after unreadable drafts fill the store`() {
+        val storage = MemoryDeckDraftStorage()
+        repeat(DeckCardDraftRetention.MAX_ENTRIES) { index ->
+            storage.values["${AndroidDeckCardDraftStore.KEY_PREFIX}unreadable-$index"] = "not-json"
+        }
+        val store = store(storage, IdentityDeckDraftCipher)
+
+        assertFailsWith<DeckCardDraftCapacityException> { store.save(session, persisted()) }
+        store.discardAll()
+        store.save(session, persisted())
+
+        assertEquals(persisted(), store.load(session, persisted().key))
+    }
+
+    @Test
+    fun `submitted draft quarantine survives cleanup failure and blocks recovery`() {
+        val storage = MemoryDeckDraftStorage()
+        val store = store(storage, IdentityDeckDraftCipher)
+        val persisted = persisted()
+        store.save(session, persisted)
+        val storedKey = store.storageKey(session, persisted.key)
+        val markerKey = AndroidDeckCardDraftStore.QUARANTINE_PREFIX +
+            storedKey.removePrefix(AndroidDeckCardDraftStore.KEY_PREFIX)
+        storage.removeSucceeds = false
+
+        store.quarantineAfterSubmit(session, persisted.key)
+
+        assertTrue(storedKey in storage.values)
+        assertEquals(AndroidDeckCardDraftStore.QUARANTINE_MARKER, storage.values[markerKey])
+        assertNull(store.load(session, persisted.key))
+        assertTrue(storedKey in storage.values)
+        storage.removeSucceeds = true
+        assertNull(store.load(session, persisted.key))
+        assertTrue(storedKey !in storage.values)
+        assertTrue(markerKey !in storage.values)
+    }
+
+    @Test
+    fun `submitted draft quarantine fails closed when its marker value is corrupted`() {
+        val storage = MemoryDeckDraftStorage()
+        val store = store(storage, IdentityDeckDraftCipher)
+        val persisted = persisted()
+        store.save(session, persisted)
+        val storedKey = store.storageKey(session, persisted.key)
+        val markerKey = AndroidDeckCardDraftStore.QUARANTINE_PREFIX +
+            storedKey.removePrefix(AndroidDeckCardDraftStore.KEY_PREFIX)
+        storage.values[markerKey] = "truncated"
+        storage.removeSucceeds = false
+
+        assertNull(store.load(session, persisted.key))
+        assertTrue(storedKey in storage.values)
+        assertEquals("truncated", storage.values[markerKey])
+        storage.values.remove(markerKey)
+        assertEquals(persisted, store.load(session, persisted.key))
     }
 
     @Test
@@ -215,6 +331,7 @@ class AndroidDeckCardDraftStoreTest {
 
     private class MemoryDeckDraftStorage : AndroidDeckDraftStorage {
         val values = linkedMapOf<String, Any?>()
+        var removeSucceeds = true
 
         override fun getString(key: String): String? = values[key] as? String
 
@@ -226,6 +343,7 @@ class AndroidDeckCardDraftStoreTest {
         }
 
         override fun remove(keys: Set<String>): Boolean {
+            if (!removeSucceeds) return false
             keys.forEach(values::remove)
             return true
         }

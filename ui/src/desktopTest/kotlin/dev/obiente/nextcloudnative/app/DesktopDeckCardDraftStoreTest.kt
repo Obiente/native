@@ -171,6 +171,55 @@ class DesktopDeckCardDraftStoreTest {
             assertEquals(1, root.listFiles().orEmpty().size)
         }
 
+    @Test
+    fun `submitted draft quarantine blocks recovery when immediate deletion fails`() {
+        val root = Files.createTempDirectory("desktop-deck-drafts-quarantine").toFile()
+        val key = ByteArray(DesktopDeckCardDraftStore.AES_KEY_BYTES) { (it + 1).toByte() }
+        val session = session()
+        val persisted = persisted()
+        try {
+            val writer = DesktopDeckCardDraftStore(root, fixedKey(key))
+            writer.save(session, persisted)
+            val draftName = writer.storageFileName(session, persisted.key)
+            val failedCleanup = DesktopDeckCardDraftStore(
+                root = root,
+                keyProvider = fixedKey(key),
+                deleteFile = { file ->
+                    if (file.name == draftName) false else Files.deleteIfExists(file.toPath()) || !file.exists()
+                },
+            )
+
+            failedCleanup.quarantineAfterSubmit(session, persisted.key)
+
+            assertTrue(root.resolve(draftName).isFile)
+            assertTrue(
+                root.listFiles().orEmpty()
+                    .any { it.name.matches(DesktopDeckCardDraftStore.SUBMITTED_FILE_PATTERN) },
+            )
+            assertNull(DesktopDeckCardDraftStore(root, fixedKey(key)).load(session, persisted.key))
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `explicit reset removes every draft and submitted quarantine`() {
+        withStore { root, _, store ->
+            val session = session()
+            val first = persisted(cardId = 42L)
+            val second = persisted(cardId = 43L)
+            store.save(session, first)
+            store.save(session, second)
+
+            store.discardAll()
+
+            assertTrue(root.listFiles().orEmpty().isEmpty())
+            assertNull(store.load(session, first.key))
+            assertNull(store.load(session, second.key))
+        }
+    }
+
     private fun withStore(
         block: (root: java.io.File, key: ByteArray, store: DesktopDeckCardDraftStore) -> Unit,
     ) {

@@ -11,7 +11,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.obiente.nextcloudnative.app.design.NextcloudCardAction
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -49,11 +48,9 @@ fun NativeDeckScreen(
     }
     var loadAttempt by remember(session) { mutableStateOf(0) }
     var interaction by remember(session) { mutableStateOf<DeckUiInteraction?>(null) }
-    var restoredCardDraft by remember(session) { mutableStateOf<PersistedDeckCardDraft?>(null) }
-    var loadedCardDraftKey by remember(session) { mutableStateOf<DeckCardDraftKey?>(null) }
-    var recoveredCardDraftNotice by remember(session) { mutableStateOf(false) }
-    var unreadableCardDraftKey by remember(session) { mutableStateOf<DeckCardDraftKey?>(null) }
-    var draftPersistenceJob by remember(session) { mutableStateOf<Job?>(null) }
+    val cardDraftRecovery = remember(services, session) {
+        DeckCardDraftRecoveryCoordinator(services, session)
+    }
     var mutationBusy by remember(session) { mutableStateOf(false) }
     var mutationOutcomeUnknown by remember(session) { mutableStateOf(false) }
     var mutationError by remember(session) { mutableStateOf<String?>(null) }
@@ -127,16 +124,6 @@ fun NativeDeckScreen(
             stackId = editor.stack.id,
             cardId = editor.card?.id,
         )
-
-    suspend fun discardCardDraft(key: DeckCardDraftKey, failureMessage: String): Boolean = try {
-        services.clearDeckCardDraft(session, key, discardUnreadable = true)
-        true
-    } catch (failure: CancellationException) {
-        throw failure
-    } catch (_: Exception) {
-        mutationError = failureMessage
-        false
-    }
 
     suspend fun fetchAuthoritativeCard(card: DeckCard): DeckCard {
         val route = selectedRoute()
@@ -840,34 +827,12 @@ fun NativeDeckScreen(
 
     LaunchedEffect(interaction) {
         val editor = interaction as? DeckUiInteraction.CardEditor
-        loadedCardDraftKey = null
-        recoveredCardDraftNotice = false
-        unreadableCardDraftKey = null
-        restoredCardDraft = null
-        if (editor == null) return@LaunchedEffect
-        val key = cardDraftKey(editor)
-        restoredCardDraft = try {
-            draftPersistenceJob?.join()
-            services.loadDeckCardDraft(session, key)
-                ?.let { persisted ->
-                    val reconciled = persisted.copy(
-                        draft = persisted.draft.reconcileUntouchedDueDate(
-                            editor.card.toDeckUiDraft(),
-                        ),
-                    )
-                    if (reconciled != persisted) {
-                        runCatching { services.saveDeckCardDraft(session, reconciled) }
-                    }
-                    recoveredCardDraftNotice = true
-                    reconciled
-                }
-        } catch (failure: Exception) {
-            if (failure is CancellationException) throw failure
-            unreadableCardDraftKey = key
-            mutationError = "The saved card draft could not be restored safely."
-            null
+        if (editor == null) {
+            cardDraftRecovery.clearForClosedEditor()
+            return@LaunchedEffect
         }
-        loadedCardDraftKey = key
+        val key = cardDraftKey(editor)
+        mutationError = cardDraftRecovery.load(key, editor.card.toDeckUiDraft())
     }
 
     LaunchedEffect(session, requestedBoard?.id, loadAttempt) {
@@ -1251,72 +1216,78 @@ fun NativeDeckScreen(
                 }
             },
         )
-        is DeckUiInteraction.CardEditor -> if (loadedCardDraftKey == cardDraftKey(overlay)) {
+        is DeckUiInteraction.CardEditor -> if (cardDraftRecovery.loadedKey == cardDraftKey(overlay)) {
             DeckUiCardEditorDialog(
             stack = overlay.stack,
             card = overlay.card,
-            initialDraft = restoredCardDraft
+            initialDraft = cardDraftRecovery.restoredDraft
                 ?.takeIf { it.key == cardDraftKey(overlay) }
                 ?.draft,
-            recoveredDraft = recoveredCardDraftNotice,
-            draftRecoveryFailed = unreadableCardDraftKey == cardDraftKey(overlay),
+            recoveredDraft = cardDraftRecovery.recoveredNotice,
+            draftRecoveryFailed = cardDraftRecovery.unreadableKey == cardDraftKey(overlay),
+            draftRecoveryResetRequired = cardDraftRecovery.resetRequired,
             busy = mutationBusy,
             errorMessage = mutationError,
             quickDueDates = deckQuickDueDates(),
             onDismiss = {
                 if (!mutationBusy) {
                     val key = cardDraftKey(overlay)
-                    restoredCardDraft = null
-                    recoveredCardDraftNotice = false
+                    cardDraftRecovery.clearForClosedEditor()
                     interaction = null
-                    if (unreadableCardDraftKey != key) {
-                        val pendingPersistence = draftPersistenceJob
-                        draftPersistenceJob = scope.launch {
+                    if (cardDraftRecovery.canClearOnClose(key)) {
+                        val pendingPersistence = cardDraftRecovery.persistenceJob
+                        cardDraftRecovery.persistenceJob = scope.launch {
                             pendingPersistence?.cancelAndJoin()
                             runCatching { services.clearDeckCardDraft(session, key) }
                         }
                     }
                 }
             },
-            onDiscardRecoveredDraft = {
+            onDiscardRecoveredDraft = { draft ->
                 if (!mutationBusy) {
                     val key = cardDraftKey(overlay)
-                    val pendingPersistence = draftPersistenceJob
-                    draftPersistenceJob = scope.launch {
+                    val original = overlay.card.toDeckUiDraft()
+                    val pendingPersistence = cardDraftRecovery.persistenceJob
+                    cardDraftRecovery.persistenceJob = scope.launch {
                         pendingPersistence?.cancelAndJoin()
-                        if (discardCardDraft(
-                                key,
-                                "The recovered card draft could not be discarded.",
-                            )
-                        ) {
-                            restoredCardDraft = null
-                            recoveredCardDraftNotice = false
-                            unreadableCardDraftKey = null
-                        }
+                        val error = cardDraftRecovery.discardAndPersistReplacement(
+                            key,
+                            draft,
+                            original,
+                        )
+                        mutationError = error
+                    }
+                }
+            },
+            onResetDraftRecovery = { draft ->
+                if (!mutationBusy) {
+                    val key = cardDraftKey(overlay)
+                    val original = overlay.card.toDeckUiDraft()
+                    val pendingPersistence = cardDraftRecovery.persistenceJob
+                    cardDraftRecovery.persistenceJob = scope.launch {
+                        pendingPersistence?.cancelAndJoin()
+                        mutationError = cardDraftRecovery.resetAndPersistReplacement(
+                            key,
+                            draft,
+                            original,
+                        )
                     }
                 }
             },
             onDraftChange = draftChange@ { draft ->
                 val key = cardDraftKey(overlay)
-                if (unreadableCardDraftKey == key) return@draftChange
+                if (cardDraftRecovery.blocksPersistence(key)) return@draftChange
                 val original = overlay.card.toDeckUiDraft()
-                val pendingPersistence = draftPersistenceJob
-                draftPersistenceJob = scope.launch {
+                val pendingPersistence = cardDraftRecovery.persistenceJob
+                cardDraftRecovery.persistenceJob = scope.launch {
                     pendingPersistence?.cancelAndJoin()
-                    if (draft.hasMeaningfulChangesFrom(original)) {
-                        val persisted = PersistedDeckCardDraft(key, draft)
-                        runCatching { services.saveDeckCardDraft(session, persisted) }
-                            .onSuccess { restoredCardDraft = persisted }
-                            .onFailure {
-                                mutationError = "The unsaved card draft could not be stored safely."
-                            }
-                    } else {
-                        runCatching { services.clearDeckCardDraft(session, key) }
-                            .onSuccess {
-                                restoredCardDraft = null
-                                recoveredCardDraftNotice = false
-                            }
-                        }
+                    val persistenceError = cardDraftRecovery.persist(key, draft, original)
+                    if (
+                        persistenceError != null ||
+                        mutationError == DeckCardDraftRecoveryCoordinator.DRAFT_SAVE_FAILURE
+                    ) {
+                        mutationError = persistenceError
+                    }
                 }
             },
             onSubmit = { draft ->
@@ -1340,15 +1311,9 @@ fun NativeDeckScreen(
                             )
                         },
                         afterSuccess = {
-                            draftPersistenceJob?.cancelAndJoin()
-                            discardCardDraft(
-                                draftKey,
-                                "The saved card draft could not be removed.",
-                            )
-                            draftPersistenceJob = null
-                            restoredCardDraft = null
-                            recoveredCardDraftNotice = false
-                            unreadableCardDraftKey = null
+                            cardDraftRecovery.persistenceJob?.cancelAndJoin()
+                            cardDraftRecovery.quarantineSubmitted(draftKey)?.let { mutationError = it }
+                            cardDraftRecovery.persistenceJob = null
                         },
                     )
                 } else {
@@ -1359,9 +1324,9 @@ fun NativeDeckScreen(
                                 val authoritativeDue = current.toDeckUiDraft()
                                 val reconciledDraft = draft.reconcileUntouchedDueDate(authoritativeDue)
                                 val persisted = PersistedDeckCardDraft(draftKey, reconciledDraft)
-                                restoredCardDraft = persisted
-                                val pendingPersistence = draftPersistenceJob
-                                draftPersistenceJob = scope.launch {
+                                cardDraftRecovery.markRestored(persisted)
+                                val pendingPersistence = cardDraftRecovery.persistenceJob
+                                cardDraftRecovery.persistenceJob = scope.launch {
                                     pendingPersistence?.cancelAndJoin()
                                     runCatching { services.saveDeckCardDraft(session, persisted) }
                                         .onFailure {
@@ -1382,15 +1347,9 @@ fun NativeDeckScreen(
                             )
                         },
                         afterSuccess = {
-                            draftPersistenceJob?.cancelAndJoin()
-                            discardCardDraft(
-                                draftKey,
-                                "The saved card draft could not be removed.",
-                            )
-                            draftPersistenceJob = null
-                            restoredCardDraft = null
-                            recoveredCardDraftNotice = false
-                            unreadableCardDraftKey = null
+                            cardDraftRecovery.persistenceJob?.cancelAndJoin()
+                            cardDraftRecovery.quarantineSubmitted(draftKey)?.let { mutationError = it }
+                            cardDraftRecovery.persistenceJob = null
                         },
                     )
                 }
