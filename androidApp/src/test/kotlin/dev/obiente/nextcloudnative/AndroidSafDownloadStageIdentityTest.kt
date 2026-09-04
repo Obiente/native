@@ -1,0 +1,317 @@
+package dev.obiente.nextcloudnative
+
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+
+class AndroidSafDownloadStageIdentityTest {
+    @Test
+    fun `restart authenticates a published stage after provider changes its identity`() {
+        val cancellation = CancellationException("process stopped after identity-changing publication")
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            replaceIdentityAfterRenameTo = "Archive"
+            cancelAfterRenameTo = "Archive"
+        }
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(10, 11))
+            }
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(false, pending.publicationCompleted)
+        assertNotEquals(pending.stageDocumentIdentity, directory.documentNamed("Archive").toString())
+        assertEquals(directory.contentIdentity(directory.documentNamed("Archive")), pending.stageContentIdentity)
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Archive"), directory.names())
+        assertContentEquals(byteArrayOf(10, 11), directory.entryNamed("Archive").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `changed final content cannot authenticate an identity-changing publication`() {
+        val directory = FakeSafDirectory().apply {
+            addDirectory("Archive")
+            replaceIdentityAfterRenameTo = "Archive"
+            cancelAfterRenameTo = "Archive"
+        }
+
+        assertFailsWith<CancellationException> {
+            publisher(directory).publish("Archive", directory.documentNamed("Archive")) { output ->
+                output.write(byteArrayOf(12, 13))
+            }
+        }
+        val pending = directory.ownership.transactions().single()
+        directory.entryNamed("Archive").bytes = byteArrayOf(14, 15)
+
+        publisher(directory).reconcile()
+
+        assertContentEquals(byteArrayOf(14, 15), directory.entryNamed("Archive").bytes)
+        assertContentEquals(byteArrayOf(), directory.entryNamed(pending.backupName).bytes)
+        assertEquals(listOf(pending), directory.ownership.transactions())
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
+    }
+
+    @Test
+    fun `normalized created stage stays owned until cleanup succeeds`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val normalizedStageName = "provider-stage-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(8, 9))
+            normalizedCreateNames[transaction.stageName] = normalizedStageName
+            failNextDeletionOfName = normalizedStageName
+        }
+
+        assertFailsWith<IllegalStateException> {
+            publisher(directory).publish("Report.txt", directory.documentNamed("Report.txt")) { output ->
+                output.write(byteArrayOf(10, 11))
+            }
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(directory.documentNamed(normalizedStageName).toString(), pending.stageDocumentIdentity)
+        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Report.txt"), directory.names())
+        assertContentEquals(byteArrayOf(8, 9), directory.entryNamed("Report.txt").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+        assertEquals(2, directory.deleteCalls)
+    }
+
+    @Test
+    fun `exact restore persists a changed provider identity before retiring ownership`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val directory = FakeSafDirectory()
+        val backup = directory.addDirectory(initial.backupName)
+        val stage = directory.addFile(initial.stageName, byteArrayOf(26, 27))
+        val transaction = initial.copy(
+            publicationAttempted = true,
+            backupProtected = true,
+            backupDocumentIdentity = backup.toString(),
+            stageDocumentIdentity = stage.toString(),
+        )
+        directory.ownership.add(transaction)
+        directory.replaceIdentityAfterRenameTo = transaction.finalName
+
+        publisher(directory).reconcile()
+
+        assertNotEquals(backup, directory.documentNamed("Archive"))
+        assertEquals(FakeSafKind.Directory, directory.entryNamed("Archive").kind)
+        assertEquals(listOf("Archive"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `restart authenticates and retires a stage created before identity persistence`() {
+        val directory = FakeSafDirectory().apply { addFile("Report.txt", byteArrayOf(10, 11)) }
+
+        assertFailsWith<IOException> {
+            publisher(directory).publish(
+                finalName = "Report.txt",
+                currentDocument = directory.documentNamed("Report.txt"),
+                createStage = { name ->
+                    directory.createFile(name)
+                    throw IOException("process stopped after provider creation")
+                },
+                prepareStage = {},
+            )
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(null, pending.stageDocumentIdentity)
+        assertEquals(setOf("Report.txt", pending.stageName), directory.names().toSet())
+        directory.failNextStageDeletion = true
+
+        publisher(directory).reconcile()
+
+        val authenticated = directory.ownership.transactions().single()
+        assertEquals(directory.documentNamed(pending.stageName).toString(), authenticated.stageDocumentIdentity)
+        assertEquals(setOf("Report.txt", pending.stageName), directory.names().toSet())
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Report.txt"), directory.names())
+        assertContentEquals(byteArrayOf(10, 11), directory.entryNamed("Report.txt").bytes)
+        assertEquals(emptyList(), directory.ownership.transactions())
+        assertEquals(2, directory.deleteCalls)
+    }
+
+    @Test
+    fun `restart adopts a normalized stage created before identity persistence`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val normalizedStageName = "provider-stage-$TOKEN"
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(10, 11))
+            normalizedCreateNames[transaction.stageName] = normalizedStageName
+        }
+
+        assertFailsWith<IOException> {
+            publisher(directory).publish(
+                finalName = "Report.txt",
+                currentDocument = directory.documentNamed("Report.txt"),
+                createStage = { name ->
+                    directory.createFile(name)
+                    throw IOException("process stopped after normalized provider creation")
+                },
+                prepareStage = {},
+            )
+        }
+
+        val pending = directory.ownership.transactions().single()
+        assertEquals(null, pending.stageDocumentIdentity)
+        directory.failNextDeletionOfName = normalizedStageName
+
+        publisher(directory).reconcile()
+
+        val adopted = directory.ownership.transactions().single()
+        assertEquals(directory.documentNamed(normalizedStageName).toString(), adopted.stageDocumentIdentity)
+        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
+
+        publisher(directory).reconcile()
+
+        assertEquals(listOf("Report.txt"), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    @Test
+    fun `changed backup remains owned when provider keeps its reserved recovery name`() {
+        val initial = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(8, 9))
+        }
+        val backup = directory.addFile(initial.backupName, byteArrayOf(12, 13))
+        val transaction = initial.copy(
+            publicationAttempted = true,
+            publicationCompleted = true,
+            backupProtected = true,
+            backupDocumentIdentity = backup.toString(),
+            backupContentIdentity = "File:8,9",
+        )
+        directory.ownership.add(transaction)
+        directory.normalizedRenameNames[transaction.changedBackupName] = transaction.backupName
+
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcile() }
+
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertEquals(listOf("Report.txt"), publisher(directory).visibleDocuments().map { it.displayName })
+    }
+
+    @Test
+    fun `preexisting exact stage name prevents ownership and provider mutation`() {
+        val transaction = AndroidSafOwnedDownloadTransaction("Report.txt", TOKEN)
+        val directory = FakeSafDirectory().apply {
+            addFile("Report.txt", byteArrayOf(12, 13))
+            addFile(transaction.stageName, byteArrayOf(14, 15))
+        }
+        var createCalled = false
+
+        assertFailsWith<IllegalArgumentException> {
+            publisher(directory).publish(
+                finalName = "Report.txt",
+                currentDocument = directory.documentNamed("Report.txt"),
+                createStage = {
+                    createCalled = true
+                    directory.createFile(it)
+                },
+                prepareStage = {},
+            )
+        }
+
+        assertFalse(createCalled)
+        assertEquals(emptyList(), directory.ownership.transactions())
+        assertContentEquals(byteArrayOf(14, 15), directory.entryNamed(transaction.stageName).bytes)
+        assertEquals(0, directory.deleteCalls)
+    }
+
+    @Test
+    fun `replacement stage identity mismatch preserves and reveals the unknown occupant`() {
+        val directory = FakeSafDirectory()
+        val publisher = publisher(directory)
+        assertFailsWith<CancellationException> {
+            publisher.publish(
+                finalName = "Archive",
+                currentDocument = null,
+                createStage = directory::createFile,
+                prepareStage = { stage ->
+                    directory.writeFile(stage) { output -> output.write(byteArrayOf(14, 15)) }
+                    throw CancellationException("process stopped before publication")
+                },
+            )
+        }
+        val transaction = directory.ownership.transactions().single()
+        assertEquals(
+            directory.documentNamed(transaction.stageName).toString(),
+            transaction.stageDocumentIdentity,
+        )
+        directory.replaceDocumentIdentity(transaction.stageName)
+
+        publisher.reconcile()
+
+        assertEquals(0, directory.deleteCalls)
+        assertContentEquals(byteArrayOf(14, 15), directory.entryNamed(transaction.stageName).bytes)
+        assertEquals(
+            listOf(transaction.stageName),
+            publisher.visibleDocuments().map { it.displayName },
+        )
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertFailsWith<IllegalArgumentException> { publisher.reconcileForSync() }
+    }
+
+    @Test
+    fun `changed owned stage content is preserved and revealed`() {
+        val directory = FakeSafDirectory()
+        val initial = AndroidSafOwnedDownloadTransaction("Archive", TOKEN)
+        val stage = directory.addFile(initial.stageName, byteArrayOf(16, 17))
+        val transaction = initial.copy(
+            stageDocumentIdentity = stage.toString(),
+            stageContentIdentity = directory.contentIdentity(stage),
+        )
+        directory.ownership.add(transaction)
+        directory.entryNamed(transaction.stageName).bytes = byteArrayOf(18, 19)
+
+        publisher(directory).reconcile()
+
+        assertEquals(0, directory.deleteCalls)
+        assertContentEquals(byteArrayOf(18, 19), directory.entryNamed(transaction.stageName).bytes)
+        assertEquals(
+            listOf(transaction.stageName),
+            publisher(directory).visibleDocuments().map { it.displayName },
+        )
+        assertEquals(listOf(transaction), directory.ownership.transactions())
+        assertFailsWith<IllegalArgumentException> { publisher(directory).reconcileForSync() }
+    }
+
+    @Test
+    fun `restart retires an authenticated stage that never reached publication`() {
+        val initial = AndroidSafOwnedDownloadTransaction(
+            finalName = "Report.txt",
+            token = TOKEN,
+            publicationAttempted = true,
+        )
+        val directory = FakeSafDirectory()
+        directory.addOwnedStage(initial, byteArrayOf(16, 17))
+
+        publisher(directory).reconcile()
+
+        assertEquals(emptyList(), directory.names())
+        assertEquals(emptyList(), directory.ownership.transactions())
+    }
+
+    private fun publisher(directory: FakeSafDirectory) =
+        AndroidSafDownloadPublisher(directory, directory.ownership, { TOKEN }, directory::contentIdentity)
+
+    private companion object {
+        const val TOKEN = "01234567-89ab-cdef-0123-456789abcdef"
+    }
+}

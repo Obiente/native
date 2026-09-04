@@ -79,6 +79,35 @@ class AndroidFileSyncContentEvidenceTest {
     }
 
     @Test
+    fun exactReplacementHashIsReusedAfterItsReadBudgetWasConsumed() {
+        val fileBytes = 40L * 1024L * 1024L
+        val hash = "sha256:${"2".repeat(64)}"
+        val localEntry = LocalSyncEntry(
+            relativePath = "archive.bin",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = fileBytes,
+            contentHash = hash,
+        )
+        val budget = AndroidFileSyncContentReadBudget()
+        assertTrue(budget.reserve(fileBytes))
+
+        val verified = verifyAndroidRemoteDeletionContent(
+            localEntries = listOf(localEntry),
+            remoteEntries = emptyList(),
+            baselines = listOf(
+                FileSyncBaseline("archive.bin", SyncEntryKind.File, "local-1", "remote-1", hash),
+            ),
+            direction = FileSyncDirection.Bidirectional,
+            local = NoReadLocalTree,
+            budget = budget,
+        ).single()
+
+        assertEquals(localEntry, verified)
+        assertEquals(24L * 1024L * 1024L, budget.remainingBytes)
+    }
+
+    @Test
     fun unreadableContentRetainsRemoteDeletionForReview() {
         val localEntry = LocalSyncEntry(
             relativePath = "note.txt",
@@ -106,6 +135,37 @@ class AndroidFileSyncContentEvidenceTest {
 
         assertTrue(verified.contentIdentityUnverified)
         assertEquals(null, verified.contentHash)
+    }
+
+    @Test
+    fun unavailableReplacementEvidenceIsNotRetriedDuringRemoteDeletionVerification() {
+        val localEntry = LocalSyncEntry(
+            relativePath = "offline.bin",
+            kind = SyncEntryKind.File,
+            revision = "local-1",
+            size = 4L,
+            contentIdentityUnverified = true,
+            replacementContentIdentityUnavailable = true,
+        )
+
+        val verified = verifyAndroidRemoteDeletionContent(
+            localEntries = listOf(localEntry),
+            remoteEntries = emptyList(),
+            baselines = listOf(
+                FileSyncBaseline(
+                    "offline.bin",
+                    SyncEntryKind.File,
+                    "local-1",
+                    "remote-1",
+                    contentHash = "sha256:${"0".repeat(64)}",
+                ),
+            ),
+            direction = FileSyncDirection.Bidirectional,
+            local = NoReadLocalTree,
+            budget = AndroidFileSyncContentReadBudget(),
+        ).single()
+
+        assertEquals(localEntry, verified)
     }
 
     @Test
@@ -170,6 +230,7 @@ class AndroidFileSyncContentEvidenceTest {
     private object NoReadLocalTree : AndroidFileSyncLocalTree {
         override fun scan(
             includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+            shouldContinue: () -> Boolean,
         ): List<AndroidLocalSyncDocument> = emptyList()
 
         override fun contentHash(

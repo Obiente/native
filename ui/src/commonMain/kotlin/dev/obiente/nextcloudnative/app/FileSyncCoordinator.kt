@@ -543,6 +543,10 @@ private fun allowedFileSyncDecisions(reason: FileSyncDecisionReason): Set<FileSy
         FileSyncDecisionChoice.KeepBoth,
         FileSyncDecisionChoice.Skip,
     )
+    FileSyncDecisionReason.UnverifiedLocalContent -> setOf(
+        FileSyncDecisionChoice.UseLocal,
+        FileSyncDecisionChoice.Skip,
+    )
     FileSyncDecisionReason.TypeChanged -> setOf(
         FileSyncDecisionChoice.UseLocal,
         FileSyncDecisionChoice.UseRemote,
@@ -562,6 +566,9 @@ private fun allowedFileSyncDecisions(
     configuration: FileSyncConfiguration,
 ): Set<FileSyncDecisionChoice> = allowedFileSyncDecisions(reason).filterTo(linkedSetOf()) { choice ->
     when (choice) {
+        FileSyncDecisionChoice.UseLocal ->
+            reason != FileSyncDecisionReason.UnverifiedLocalContent ||
+                configuration.direction != FileSyncDirection.DownloadOnly
         FileSyncDecisionChoice.PropagateDeletion -> when (reason) {
             FileSyncDecisionReason.LocalDeletion -> configuration.direction != FileSyncDirection.DownloadOnly
             FileSyncDecisionReason.RemoteDeletion -> configuration.direction != FileSyncDirection.UploadOnly
@@ -779,7 +786,8 @@ private fun LocalSyncEntry?.hasSameGenerationAs(other: LocalSyncEntry?): Boolean
             kind == other.kind &&
             revision == other.revision &&
             size == other.size &&
-            contentHash == other.contentHash
+            contentHash == other.contentHash &&
+            replacementAuthentication == other.replacementAuthentication
 }
 
 private fun RemoteSyncEntry?.hasSameGenerationAs(other: RemoteSyncEntry?): Boolean = when {
@@ -896,6 +904,10 @@ private fun requireBoundedWorkItem(work: FileSyncWorkItem) {
     require(work.relativePath.length <= MAX_FILE_SYNC_PATH_LENGTH)
     work.observedLocal?.let {
         require(it.revision.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH))
+        require(
+            it.replacementAuthentication == null ||
+                it.replacementAuthentication.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH),
+        )
     }
     work.observedRemote?.let {
         require(it.etag.isSafeSyncText(MAX_FILE_SYNC_REVISION_LENGTH))

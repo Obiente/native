@@ -21,6 +21,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 
 class AndroidMediaFolderSyncScopeTest {
     @Test
@@ -183,6 +184,25 @@ class AndroidMediaFolderSyncScopeTest {
             }
 
             assertTrue("too many uploadable files" in failure.message.orEmpty())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun uploaderEnumerationHonorsRunCancellation() {
+        val root = Files.createTempDirectory("media-cancelled-").toFile()
+        try {
+            repeat(3) { index ->
+                root.resolve("photo-$index.jpg").writeBytes(byteArrayOf(index.toByte()))
+            }
+            var checks = 0
+
+            assertFailsWith<CancellationException> {
+                mediaFolderSyncFiles(root) { ++checks < 3 }
+            }
+
+            assertEquals(3, checks)
         } finally {
             root.deleteRecursively()
         }

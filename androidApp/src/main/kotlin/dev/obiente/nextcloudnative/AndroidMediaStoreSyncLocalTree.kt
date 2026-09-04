@@ -1,6 +1,6 @@
 package dev.obiente.nextcloudnative
 
-import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import dev.obiente.nextcloudnative.app.LocalSyncEntry
@@ -16,16 +16,30 @@ import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 
 internal fun createAndroidFileSyncLocalTree(
-    resolver: ContentResolver,
+    context: Context,
     rootId: String,
-): AndroidFileSyncLocalTree =
-    if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
+): AndroidFileSyncLocalTree {
+    val appContext = context.applicationContext
+    return if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
         AndroidMediaStoreSyncLocalTree(
             root = resolveMediaStoreSyncRoot(rootId, Environment.getExternalStorageDirectory()),
         )
     } else {
-        AndroidSafFileSyncLocalTree(resolver, rootId)
+        AndroidSafFileSyncLocalTree(
+            resolver = appContext.contentResolver,
+            rootId = rootId,
+            downloadOwnershipStore = createAndroidSafDownloadOwnershipStore(appContext, rootId),
+        )
     }
+}
+
+internal fun createAndroidSafDownloadOwnershipStore(
+    context: Context,
+    treeIdentity: String,
+): AndroidSafDownloadOwnershipStore = androidSafDownloadOwnershipStoreForTree(
+    baseDirectory = File(context.filesDir, "file-sync-saf-download-ownership"),
+    treeIdentity = treeIdentity,
+)
 
 internal fun resolveMediaStoreSyncRoot(rootId: String, externalStorageRoot: File): File {
     require(rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
@@ -56,8 +70,9 @@ internal class AndroidMediaStoreSyncLocalTree(
 
     override fun scan(
         includes: (relativePath: String, kind: SyncEntryKind) -> Boolean,
+        shouldContinue: () -> Boolean,
     ): List<AndroidLocalSyncDocument> {
-        return mediaFolderSyncFiles(root)
+        return mediaFolderSyncFiles(root, shouldContinue = shouldContinue)
             .map { file -> file.toSyncDocument(file.name) }
             .filter { document -> includes(document.entry.relativePath, document.entry.kind) }
     }
@@ -215,11 +230,14 @@ internal const val MAX_MEDIA_FOLDER_SYNC_ENTRIES = 20_000
 internal fun mediaFolderSyncFiles(
     root: File,
     maximumEntries: Int = MAX_MEDIA_FOLDER_SYNC_ENTRIES,
+    shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
 ): List<File> {
     require(maximumEntries > 0)
     val result = mutableListOf<File>()
     var exceedsLimit = false
+    requireScanContinuation(shouldContinue)
     forEachMediaFolderSyncFile(root) {
+        requireScanContinuation(shouldContinue)
         if (result.size >= maximumEntries) {
             exceedsLimit = true
             false
@@ -228,6 +246,7 @@ internal fun mediaFolderSyncFiles(
             true
         }
     }
+    requireScanContinuation(shouldContinue)
     require(!exceedsLimit) { "The local media folder contains too many uploadable files." }
     return result.sortedBy { it.name.lowercase() }
 }

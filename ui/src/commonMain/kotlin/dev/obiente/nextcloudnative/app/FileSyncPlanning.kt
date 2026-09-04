@@ -62,6 +62,8 @@ data class LocalSyncEntry(
     val contentHash: String? = null,
     val modifiedEpochMillis: Long? = null,
     val contentIdentityUnverified: Boolean = false,
+    val replacementContentIdentityUnavailable: Boolean = false,
+    val replacementAuthentication: String? = null,
 ) {
     init {
         requireValidSyncPath(relativePath)
@@ -75,6 +77,18 @@ data class LocalSyncEntry(
             "The local sync content hash is invalid."
         }
         require(!contentIdentityUnverified || kind == SyncEntryKind.File)
+        require(
+            !replacementContentIdentityUnavailable ||
+                kind == SyncEntryKind.Directory ||
+                contentIdentityUnverified,
+        )
+        require(!replacementContentIdentityUnavailable || contentHash == null)
+        require(
+            replacementAuthentication == null ||
+                replacementAuthentication.isNotBlank() &&
+                replacementAuthentication.length <= MAX_FILE_SYNC_REVISION_LENGTH &&
+                replacementAuthentication.none(Char::isISOControl),
+        )
     }
 }
 
@@ -290,6 +304,7 @@ sealed interface FileSyncOperation {
 enum class FileSyncDecisionReason {
     FirstSyncCollision,
     SimultaneousEdit,
+    UnverifiedLocalContent,
     LocalDeletion,
     RemoteDeletion,
     TypeChanged,
@@ -333,6 +348,9 @@ private fun planSyncPath(
     baseline: FileSyncBaseline?,
     configuration: FileSyncConfiguration,
 ): FileSyncOperation? {
+    if (local?.replacementContentIdentityUnavailable == true) {
+        return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.UnverifiedLocalContent)
+    }
     if (local != null && remote != null && local.kind != remote.kind) {
         return FileSyncOperation.NeedsDecision(path, FileSyncDecisionReason.TypeChanged)
     }
