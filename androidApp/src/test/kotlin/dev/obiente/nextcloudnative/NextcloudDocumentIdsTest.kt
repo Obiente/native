@@ -49,17 +49,17 @@ class NextcloudDocumentIdsTest {
     }
 
     @Test
-    fun accountWorkIdentityIsStableAcrossEquivalentServerSpellings() {
-        val equivalent = listOf(
-            session.copy(serverUrl = "https://CLOUD.EXAMPLE"),
-            session.copy(serverUrl = "https://cloud.example:443/"),
-            session.copy(serverUrl = " https://cloud.example "),
-        )
+    fun accountWorkIdentityRetainsThePreRegistryRawServerDigest() {
+        val legacySession = session.copy(serverUrl = "https://CLOUD.EXAMPLE:443/")
 
-        equivalent.forEach { candidate ->
-            assertEquals(NextcloudDocumentIds.accountKey(session), NextcloudDocumentIds.accountKey(candidate))
-            assertEquals(NextcloudDocumentIds.cacheAccountId(session), NextcloudDocumentIds.cacheAccountId(candidate))
-        }
+        assertEquals(
+            "c21f46fbb8dbbf9611423baaaf1dd45a",
+            NextcloudDocumentIds.accountKey(legacySession),
+        )
+        assertEquals(
+            "c21f46fbb8dbbf9611423baaaf1dd45a664f9593a1d14bb41d486e01b0e54c24",
+            NextcloudDocumentIds.cacheAccountId(legacySession),
+        )
     }
 
     @Test

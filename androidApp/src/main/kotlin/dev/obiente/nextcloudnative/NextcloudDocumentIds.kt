@@ -3,7 +3,6 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.security.MessageDigest
 import java.util.Base64
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal data class NextcloudDocumentReference(
     val accountKey: String,
@@ -62,12 +61,7 @@ internal object NextcloudDocumentIds {
         }
 
     private fun accountDigest(serverUrl: String, loginName: String): ByteArray {
-        val url = serverUrl.trim().toHttpUrlOrNull()
-        requireNotNull(url) { "The account server address is invalid." }
-        require(url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null) {
-            "The account server address contains unsupported URL components."
-        }
-        val identity = url.toString().trimEnd('/') + "\n" + loginName
+        val identity = serverUrl.trimEnd('/') + "\n" + loginName
         return MessageDigest.getInstance("SHA-256").digest(identity.encodeToByteArray())
     }
 

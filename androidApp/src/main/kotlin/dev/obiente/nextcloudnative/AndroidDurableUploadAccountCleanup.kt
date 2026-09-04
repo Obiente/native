@@ -9,11 +9,27 @@ internal class AndroidDurableUploadAccountCleanup(context: Context) {
     private val store = AndroidDurableMultipartUploadStore(appContext)
 
     suspend fun removeForAccount(accountId: String) {
-        store.list().filter { job -> job.accountId == accountId }.forEach { job ->
-            WorkManager.getInstance(appContext).cancelUniqueWork(durableUploadWorkName(job.id)).await()
-        }
-        val removed = store.removeForAccount(accountId)
         val picker = AndroidLocalUploadPicker(appContext)
-        removed.forEach { job -> picker.release(job.request.file) }
+        removeAndroidDurableUploadJobs(
+            jobs = store.list().filter { job -> job.accountId == accountId },
+            cancelWork = { job ->
+                WorkManager.getInstance(appContext).cancelUniqueWork(durableUploadWorkName(job.id)).await()
+            },
+            releaseCapability = { job -> picker.release(job.request.file) },
+            removeJob = store::remove,
+        )
+    }
+}
+
+internal suspend fun removeAndroidDurableUploadJobs(
+    jobs: List<AndroidDurableMultipartUploadJob>,
+    cancelWork: suspend (AndroidDurableMultipartUploadJob) -> Unit,
+    releaseCapability: (AndroidDurableMultipartUploadJob) -> Boolean,
+    removeJob: (String) -> Unit,
+) {
+    jobs.forEach { job -> cancelWork(job) }
+    jobs.forEach { job ->
+        check(releaseCapability(job)) { "The durable upload source capability could not be released." }
+        removeJob(job.id)
     }
 }
