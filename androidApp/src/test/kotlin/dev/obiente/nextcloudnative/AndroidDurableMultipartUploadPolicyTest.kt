@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import androidx.work.ExistingWorkPolicy
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
@@ -11,7 +12,10 @@ import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -395,46 +399,74 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `credential recovery retries become terminal at the durable bound`() {
-        assertEquals(
-            DurableUploadCredentialDisposition.Retry,
-            durableUploadCredentialDisposition(runAttemptCount = 0),
-        )
-        assertEquals(
-            DurableUploadCredentialDisposition.Retry,
-            durableUploadCredentialDisposition(MAX_DURABLE_UPLOAD_CREDENTIAL_RETRIES - 1),
-        )
-        assertEquals(
-            DurableUploadCredentialDisposition.Fail,
-            durableUploadCredentialDisposition(MAX_DURABLE_UPLOAD_CREDENTIAL_RETRIES),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            durableUploadCredentialDisposition(runAttemptCount = -1)
-        }
+    fun `account recovery uses replacement only for deferred worker backoff`() {
+        assertEquals(ExistingWorkPolicy.REPLACE, DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY)
     }
 
     @Test
-    fun `terminal credential recovery releases capability after durable failure`() {
-        val job = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
-        val events = mutableListOf<String>()
+    fun `account recovery never replaces a worker after it starts its upload`() = runBlocking {
+        val queued = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        var current = queued
+        val claimEntered = CompletableDeferred<Unit>()
+        val allowClaim = CompletableDeferred<Unit>()
+        var replacementScheduled = false
 
-        assertTrue(
-            failDurableUploadAfterCredentialRetries(
-                transitionToFailed = {
-                    events += "fail-job"
-                    job.copy(state = DurableUploadState.Failed)
+        val claim = async {
+            claimQueuedDurableUploadForExecution(queued.id) {
+                claimEntered.complete(Unit)
+                allowClaim.await()
+                current = queued.copy(state = DurableUploadState.Uploading)
+                current
+            }
+        }
+        claimEntered.await()
+        val recovery = async {
+            replaceDeferredDurableUploadWork(
+                expected = queued,
+                load = { current },
+                replace = { replacementScheduled = true },
+            )
+        }
+        yield()
+
+        assertFalse(recovery.isCompleted)
+        allowClaim.complete(Unit)
+        assertEquals(DurableUploadState.Uploading, claim.await()?.state)
+        assertFalse(recovery.await())
+        assertFalse(replacementScheduled)
+    }
+
+    @Test
+    fun `slow account recovery does not block an unrelated upload claim`() = runBlocking {
+        val recovering = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val unrelated = fixtureJob(index = 2, account = ACCOUNT_B, cardId = 43)
+        val coordinator = AndroidDurableUploadStartCoordinator()
+        val replacementEntered = CompletableDeferred<Unit>()
+        val releaseReplacement = CompletableDeferred<Unit>()
+        val recovery = async {
+            replaceDeferredDurableUploadWork(
+                expected = recovering,
+                load = { recovering },
+                replace = {
+                    replacementEntered.complete(Unit)
+                    releaseReplacement.await()
                 },
-                releaseCapability = { failed -> events += "release:${failed.request.file.selectionId}" },
-            ),
-        )
+                coordinator = coordinator,
+            )
+        }
+        replacementEntered.await()
 
-        assertEquals(listOf("fail-job", "release:${job.request.file.selectionId}"), events)
-        assertFalse(
-            failDurableUploadAfterCredentialRetries(
-                transitionToFailed = { null },
-                releaseCapability = { events += "unexpected-release" },
-            ),
-        )
+        val claimed = claimQueuedDurableUploadForExecution(
+            jobId = unrelated.id,
+            coordinator = coordinator,
+        ) {
+            unrelated.copy(state = DurableUploadState.Uploading)
+        }
+
+        assertEquals(DurableUploadState.Uploading, claimed?.state)
+        assertFalse(recovery.isCompleted)
+        releaseReplacement.complete(Unit)
+        assertTrue(recovery.await())
     }
 
     @Test
