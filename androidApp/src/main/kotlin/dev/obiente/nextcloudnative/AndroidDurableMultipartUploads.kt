@@ -87,7 +87,13 @@ internal class AndroidDurableMultipartUploads(context: Context) {
     suspend fun resumeQueuedForAccount(accountId: String) {
         queuedDurableUploadsForAccount(store.list(), accountId).forEach { job ->
             try {
-                schedule(job, ExistingWorkPolicy.APPEND_OR_REPLACE).await()
+                replaceDeferredDurableUploadWork(
+                    expected = job,
+                    load = store::find,
+                    replace = { queued ->
+                        schedule(queued, DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY).await()
+                    },
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -142,6 +148,8 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
     }
 }
+
+internal val DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY = ExistingWorkPolicy.REPLACE
 
 internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
 
