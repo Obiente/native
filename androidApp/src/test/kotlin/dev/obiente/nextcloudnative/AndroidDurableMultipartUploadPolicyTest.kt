@@ -9,6 +9,7 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,6 +20,20 @@ import kotlin.test.assertTrue
 import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
+    @Test
+    fun `worker cancellation does not become a terminal upload outcome`() = runBlocking {
+        assertFailsWith<CancellationException> {
+            captureDurableUploadRequestOutcome<Unit> {
+                throw CancellationException("worker stopped")
+            }
+        }
+        assertTrue(
+            captureDurableUploadRequestOutcome<Unit> {
+                throw IOException("transport failed")
+            }.isFailure,
+        )
+    }
+
     @Test
     fun `account cleanup removes a row only after its source capability is released`() = runBlocking {
         val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
