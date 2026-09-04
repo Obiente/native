@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-
 /** Durable manual desktop executor. The common coordinator owns all planning and conflict rules. */
 internal class DesktopFileSyncEngine(
     private val store: DesktopFileSyncStore = DesktopFileSyncStore(),
@@ -215,9 +214,10 @@ internal class DesktopFileSyncEngine(
             FileSyncCenterActionResult.Completed("Folder sync pair removed. No local or server files were deleted.")
         }
     }
-
     suspend fun removeAccountPairs(accountId: String) = lock.withLock { store.removeDesktopFileSyncAccountPairs(accountId) }
-
+    suspend fun requireAccountRemovalReady(accountId: String) = lock.withLock {
+        store.requireDesktopFileSyncAccountRemovalReady(accountId)
+    }
     suspend fun runPair(
         session: NextcloudSession,
         userId: String,

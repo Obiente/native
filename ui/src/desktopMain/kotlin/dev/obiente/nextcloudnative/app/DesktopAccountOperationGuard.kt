@@ -32,6 +32,19 @@ internal class DesktopAccountOperationGuard {
     suspend fun <Result> withSyncRunLock(action: suspend () -> Result): Result = syncRunMutex.withLock { action() }
 }
 
+internal class DesktopSessionPublicationGuard {
+    private val monitor = Any()
+
+    fun <Result> serialize(action: () -> Result): Result = synchronized(monitor, action)
+}
+
+internal fun closeVirtualFileProviderForReplacement(
+    provider: AutoCloseable?,
+    detach: () -> Unit,
+): Throwable? = runCatching { provider?.close() }
+    .onSuccess { detach() }
+    .exceptionOrNull()
+
 internal fun desktopAccountDiagnosticFields(accountId: String?): List<SupportDiagnosticFieldDraft> =
     accountId?.let {
         listOf(
@@ -89,6 +102,7 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
     providerWasEnabled: Boolean,
     clearProviderPreference: () -> Unit,
     restoreProviderPreference: (Boolean) -> Unit,
+    removalCommitted: () -> Boolean = { false },
     removeCredential: () -> Boolean,
 ): Boolean {
     clearProviderPreference()
@@ -97,9 +111,15 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
             if (!removed) restoreProviderPreference(providerWasEnabled)
         }
     } catch (failure: Throwable) {
-        runCatching { restoreProviderPreference(providerWasEnabled) }
-            .exceptionOrNull()
-            ?.let(failure::addSuppressed)
+        val committed = runCatching(removalCommitted).getOrElse { statusFailure ->
+            failure.addSuppressed(statusFailure)
+            true
+        }
+        if (!committed) {
+            runCatching { restoreProviderPreference(providerWasEnabled) }
+                .exceptionOrNull()
+                ?.let(failure::addSuppressed)
+        }
         throw failure
     }
 }

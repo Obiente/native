@@ -9,8 +9,11 @@ internal class DesktopAccountCredentialPersistence(
     private val recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
     private val flushPreferences: () -> Unit = preferences::flush,
 ) {
+    private val registryStore = DesktopAccountRegistryPreferenceStore(preferences, flushPreferences)
+
     fun loadActiveSession(): NextcloudSession? {
         retryPendingCredentialSave()
+        retryPendingCredentialRemoval()
         retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         if (read.registry == null) {
@@ -36,6 +39,7 @@ internal class DesktopAccountCredentialPersistence(
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? {
         retryPendingCredentialSave()
+        retryPendingCredentialRemoval()
         retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return null
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return null
@@ -53,6 +57,7 @@ internal class DesktopAccountCredentialPersistence(
 
     fun saveSession(session: NextcloudSession): NextcloudSession {
         retryPendingCredentialSave()
+        retryPendingCredentialRemoval()
         retryPendingLegacyCredentialCleanup()
         val read = readRegistry()
         val registry = read.registry
@@ -111,16 +116,20 @@ internal class DesktopAccountCredentialPersistence(
 
     fun removeAccount(accountId: NextcloudAccountId): Boolean {
         retryPendingCredentialSave()
+        retryPendingCredentialRemoval()
         retryPendingLegacyCredentialCleanup()
         val registry = readRegistry().registry ?: return false
         val record = registry.accounts.firstOrNull { account -> account.id == accountId } ?: return false
         val clearLegacyCredential = legacyMetadataMatches(record)
         val updated = registry.remove(accountId)
-        clearSecret(desktopAccountSecretReference(accountId))
-        if (clearLegacyCredential) {
-            clearSecret(desktopSessionSecretReference(record.serverUrl, record.loginName))
-        }
-        persistAccountState(prepareRegistry(updated), updated.activeAccount)
+        persistAccountState(
+            encodedRegistry = prepareRegistry(updated),
+            activeAccount = updated.activeAccount,
+            pendingLegacyCleanupAccount = record.takeIf { clearLegacyCredential },
+            pendingCredentialRemoval = accountId,
+        )
+        retryPendingCredentialRemoval()
+        if (clearLegacyCredential) retryPendingLegacyCredentialCleanup()
         return true
     }
 
@@ -142,7 +151,7 @@ internal class DesktopAccountCredentialPersistence(
             persistAccountState(
                 encodedRegistry,
                 restored.registry.activeAccount,
-                pendingLegacyCleanup = legacy,
+                pendingLegacyCleanupAccount = legacy.accountRecord(),
             )
         } catch (failure: Exception) {
             recordCredentialDiagnostic(
@@ -228,6 +237,74 @@ internal class DesktopAccountCredentialPersistence(
         clearPendingCredentialSave()
     }
 
+    private fun retryPendingCredentialRemoval() {
+        pendingCredentialRemovalIds().forEach { accountId ->
+            val registry = readRegistry().registry
+            if (registry == null) {
+                recordCredentialDiagnostic(
+                    "ACCOUNT_CREDENTIAL_REMOVAL_JOURNAL_INVALID",
+                    "account-credentials.recover",
+                )
+                return@forEach
+            }
+            if (registry.accounts.any { account -> account.id == accountId }) {
+                clearPendingCredentialRemoval(accountId)
+                return@forEach
+            }
+            try {
+                secretStore.clear(desktopAccountSecretReference(accountId))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                recordCredentialDiagnostic(
+                    "ACCOUNT_CREDENTIAL_STORE_CLEAR_FAILED",
+                    "account-credentials.remove",
+                    failure,
+                )
+                return@forEach
+            }
+            clearPendingCredentialRemoval(accountId)
+        }
+    }
+
+    private fun pendingCredentialRemovalIds(): Set<NextcloudAccountId> {
+        val encoded = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null) ?: return emptySet()
+        if (encoded.isBlank()) return emptySet()
+        return encoded.split(',').mapNotNullTo(linkedSetOf()) { storageKey ->
+            try {
+                NextcloudAccountId(storageKey)
+            } catch (_: IllegalArgumentException) {
+                recordCredentialDiagnostic(
+                    "ACCOUNT_CREDENTIAL_REMOVAL_JOURNAL_INVALID",
+                    "account-credentials.recover",
+                )
+                null
+            }
+        }
+    }
+
+    private fun clearPendingCredentialRemoval(accountId: NextcloudAccountId) {
+        val previous = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null)
+        val remaining = pendingCredentialRemovalIds() - accountId
+        try {
+            preferences.putOrRemove(
+                KEY_PENDING_CREDENTIAL_REMOVALS,
+                if (remaining.isEmpty()) null else remaining.joinToString(",") { pending -> pending.storageKey },
+            )
+            flushPreferences()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_REMOVALS, previous)
+            runCatching(flushPreferences)
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_CLEAR_FAILED",
+                "account-credentials.recover",
+                failure,
+            )
+        }
+    }
+
     private fun persistPendingCredentialSave(session: NextcloudSession) {
         val previousServer = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
         val previousLogin = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
@@ -284,9 +361,11 @@ internal class DesktopAccountCredentialPersistence(
             return
         }
         if (expected != null && (expected.serverUrl != server || expected.loginName != login)) return
-        val replacementAvailable = try {
+        val cleanupAllowed = try {
             val accountId = deriveNextcloudAccountId(server, login)
-            loadSecret(desktopAccountSecretReference(accountId)) != null
+            val registry = readRegistry().registry
+            registry?.accounts?.none { account -> account.id == accountId } == true ||
+                loadSecret(desktopAccountSecretReference(accountId)) != null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -296,7 +375,7 @@ internal class DesktopAccountCredentialPersistence(
             )
             false
         }
-        if (!replacementAvailable) return
+        if (!cleanupAllowed) return
         try {
             secretStore.clear(desktopSessionSecretReference(server, login))
         } catch (cancelled: CancellationException) {
@@ -405,7 +484,7 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun readRegistry(): DesktopRegistryRead {
-        val encoded = preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null)
+        val encoded = registryStore.read()
         val decoded = encoded?.let(::decodeNextcloudAccountRegistryResult)
         return DesktopRegistryRead(
             encoded = encoded,
@@ -415,36 +494,40 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun prepareRegistry(registry: NextcloudAccountRegistry): String =
-        encodeNextcloudAccountRegistry(registry).also { encoded ->
-            require(encoded.length <= Preferences.MAX_VALUE_LENGTH) {
-                "The account registry exceeds the desktop preference value limit."
-            }
-        }
+        encodeNextcloudAccountRegistry(registry)
 
     private fun persistAccountState(
         encodedRegistry: String,
         activeAccount: NextcloudAccountRecord?,
-        pendingLegacyCleanup: NextcloudSession? = null,
+        pendingLegacyCleanupAccount: NextcloudAccountRecord? = null,
+        pendingCredentialRemoval: NextcloudAccountId? = null,
     ) {
-        require(encodedRegistry.length <= Preferences.MAX_VALUE_LENGTH)
         val previous = DesktopAccountPreferenceSnapshot(
-            registry = preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null),
+            registry = registryStore.read(),
             server = preferences.get(KEY_SERVER, null),
             login = preferences.get(KEY_LOGIN, null),
             pendingLegacyCleanupServer = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null),
             pendingLegacyCleanupLogin = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null),
+            pendingCredentialRemovals = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null),
         )
         try {
-            preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, encodedRegistry)
+            registryStore.write(encodedRegistry)
             preferences.putOrRemove(KEY_SERVER, activeAccount?.serverUrl)
             preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
-            pendingLegacyCleanup?.let { session ->
-                preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, session.serverUrl)
-                preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, session.loginName)
+            pendingLegacyCleanupAccount?.let { account ->
+                preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, account.serverUrl)
+                preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, account.loginName)
+            }
+            pendingCredentialRemoval?.let { accountId ->
+                val removals = pendingCredentialRemovalIds() + accountId
+                preferences.put(
+                    KEY_PENDING_CREDENTIAL_REMOVALS,
+                    removals.joinToString(",") { pending -> pending.storageKey },
+                )
             }
             flushPreferences()
         } catch (failure: Exception) {
-            previous.restore(preferences)
+            runCatching { previous.restore(preferences, registryStore) }
             runCatching(flushPreferences)
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED",
@@ -493,13 +576,15 @@ internal class DesktopAccountCredentialPersistence(
         val login: String?,
         val pendingLegacyCleanupServer: String?,
         val pendingLegacyCleanupLogin: String?,
+        val pendingCredentialRemovals: String?,
     ) {
-        fun restore(preferences: Preferences) {
-            preferences.putOrRemove(DESKTOP_ACCOUNT_REGISTRY_KEY, registry)
+        fun restore(preferences: Preferences, registryStore: DesktopAccountRegistryPreferenceStore) {
+            registryStore.write(registry)
             preferences.putOrRemove(KEY_SERVER, server)
             preferences.putOrRemove(KEY_LOGIN, login)
             preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_SERVER, pendingLegacyCleanupServer)
             preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_LOGIN, pendingLegacyCleanupLogin)
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_REMOVALS, pendingCredentialRemovals)
         }
     }
 
@@ -510,6 +595,7 @@ internal class DesktopAccountCredentialPersistence(
         const val KEY_PENDING_LEGACY_CLEANUP_LOGIN = "accountLegacyCleanupLogin"
         const val KEY_PENDING_CREDENTIAL_SAVE_SERVER = "accountCredentialSaveServer"
         const val KEY_PENDING_CREDENTIAL_SAVE_LOGIN = "accountCredentialSaveLogin"
+        const val KEY_PENDING_CREDENTIAL_REMOVALS = "accountCredentialRemovals"
     }
 }
 
