@@ -70,20 +70,13 @@ internal class DeckAttachmentUploadWorker(
             loadSession = services::loadSession,
         )
         if (session == null) {
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Queued,
-                target = DurableUploadState.Failed,
-                message = "The account used for this upload is no longer available.",
-            )
-            picker.release(initial.request.file)
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Warning,
-                outcome = "account-unavailable",
+                outcome = "account-resolution-deferred",
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return Result.failure()
+            return Result.retry()
         }
         val capabilityReady = runCatching {
             picker.requirePersisted(initial.request.file)

@@ -198,9 +198,8 @@ internal suspend fun keepRetryingQueuedDurableUploadScheduling(
         } catch (_: AndroidDurableMultipartUploadRecoveryException) {
             false
         }
-        if (recovered) {
-            recoveryFailureReported = false
-        } else if (!recoveryFailureReported) {
+        if (recovered) return
+        if (!recoveryFailureReported) {
             runCatching(recordRecoveryFailure)
             recoveryFailureReported = true
         }
