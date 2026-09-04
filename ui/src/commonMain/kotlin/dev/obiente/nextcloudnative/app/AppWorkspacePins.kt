@@ -95,16 +95,41 @@ internal class AppWorkspacePinsRepository(
     }
 
     /** Promotes legacy pins only while the canonical account key is still absent. */
-    fun saveIfAbsent(accountScopeDigest: String, appIds: List<String>): Boolean {
-        val validated = validatedAppWorkspacePinnedIds(appIds) ?: return false
+    fun promoteIfAbsent(
+        accountScopeDigest: String,
+        appIds: List<String>,
+    ): PersistencePromotionResult {
+        val validated = validatedAppWorkspacePinnedIds(appIds) ?: return PersistencePromotionResult.Failed
         return try {
             val encoded = appWorkspacePinsJson.encodeToString(AppWorkspacePinsSnapshot(appIds = validated))
             check(encoded.length <= MAX_APP_WORKSPACE_PINS_CHARACTERS)
-            storage.writeIfAbsent(persistenceKey(accountScopeDigest), encoded)
+            if (storage.writeIfAbsent(persistenceKey(accountScopeDigest), encoded)) {
+                PersistencePromotionResult.Saved
+            } else {
+                PersistencePromotionResult.CanonicalAlreadyPresent
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            false
+            PersistencePromotionResult.Failed
+        }
+    }
+
+    fun saveIfAbsent(accountScopeDigest: String, appIds: List<String>): Boolean =
+        promoteIfAbsent(accountScopeDigest, appIds) == PersistencePromotionResult.Saved
+
+    fun resolveLegacyMigration(
+        accountScopeDigest: String,
+        loaded: AppWorkspacePinsLoad,
+    ): AppWorkspacePinsLoad {
+        if (!loaded.legacyMigrationRequired) return loaded
+        return when (promoteIfAbsent(accountScopeDigest, loaded.appIds)) {
+            PersistencePromotionResult.Saved -> loaded.copy(
+                storageAuthoritative = true,
+                legacyMigrationRequired = false,
+            )
+            PersistencePromotionResult.CanonicalAlreadyPresent -> loadWithProvenance(accountScopeDigest)
+            PersistencePromotionResult.Failed -> loaded.copy(storageAuthoritative = false)
         }
     }
 

@@ -76,6 +76,23 @@ class AppWorkspacePinsTest {
     }
 
     @Test
+    fun `losing legacy promotion reloads canonical pins and restores authority`() {
+        val storage = MemoryStorage()
+        val repository = AppWorkspacePinsRepository(storage)
+        val current = "c".repeat(64)
+        val legacy = "d".repeat(64)
+        assertTrue(repository.save(legacy, listOf("files", "deck")))
+        val staleLegacy = repository.loadWithProvenance(current, legacy)
+        assertTrue(repository.save(current, listOf("files", "calendar")))
+
+        val resolved = repository.resolveLegacyMigration(current, staleLegacy)
+
+        assertEquals(listOf("files", "calendar"), resolved.appIds)
+        assertTrue(resolved.storageAuthoritative)
+        assertFalse(resolved.legacyMigrationRequired)
+    }
+
+    @Test
     fun `legacy pin read cancellation remains control flow`() {
         val current = "e".repeat(64)
         val legacy = "f".repeat(64)

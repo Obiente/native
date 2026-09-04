@@ -20,8 +20,15 @@ internal interface HomeWorkspaceLayoutStorage {
 
 internal data class HomeWorkspaceLayoutLoad(
     val layout: HomeWorkspaceLayout,
+    val storageAuthoritative: Boolean = true,
     val legacyMigrationRequired: Boolean = false,
 )
+
+internal enum class PersistencePromotionResult {
+    Saved,
+    CanonicalAlreadyPresent,
+    Failed,
+}
 
 internal class HomeWorkspaceLayoutRepository(
     private val storage: HomeWorkspaceLayoutStorage,
@@ -41,7 +48,10 @@ internal class HomeWorkspaceLayoutRepository(
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            return HomeWorkspaceLayoutLoad(defaultHomeWorkspaceLayout(scope))
+            return HomeWorkspaceLayoutLoad(
+                defaultHomeWorkspaceLayout(scope),
+                storageAuthoritative = false,
+            )
         }
         if (encoded != null) return HomeWorkspaceLayoutLoad(decodeHomeWorkspaceLayoutSnapshot(scope, encoded))
         val legacyScope = legacyAccountScopeDigest?.let { digest ->
@@ -52,11 +62,18 @@ internal class HomeWorkspaceLayoutRepository(
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            null
+            return HomeWorkspaceLayoutLoad(
+                defaultHomeWorkspaceLayout(scope),
+                storageAuthoritative = false,
+            )
         } ?: return HomeWorkspaceLayoutLoad(defaultHomeWorkspaceLayout(scope))
         val legacyLayout = decodeHomeWorkspaceLayoutSnapshot(legacyScope, legacyEncoded)
         val migrated = HomeWorkspaceLayout(scope, legacyLayout.sections)
-        return HomeWorkspaceLayoutLoad(migrated, legacyMigrationRequired = true)
+        return HomeWorkspaceLayoutLoad(
+            layout = migrated,
+            storageAuthoritative = false,
+            legacyMigrationRequired = true,
+        )
     }
 
     /**
@@ -76,14 +93,33 @@ internal class HomeWorkspaceLayoutRepository(
     }
 
     /** Promotes a legacy layout only while the canonical key is still absent. */
-    fun saveIfAbsent(layout: HomeWorkspaceLayout): Boolean {
+    fun promoteIfAbsent(layout: HomeWorkspaceLayout): PersistencePromotionResult {
         return try {
             val encoded = encodeSnapshot(layout)
-            storage.writeIfAbsent(layout.scope.persistenceKey, encoded)
+            if (storage.writeIfAbsent(layout.scope.persistenceKey, encoded)) {
+                PersistencePromotionResult.Saved
+            } else {
+                PersistencePromotionResult.CanonicalAlreadyPresent
+            }
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
-            false
+            PersistencePromotionResult.Failed
+        }
+    }
+
+    fun saveIfAbsent(layout: HomeWorkspaceLayout): Boolean =
+        promoteIfAbsent(layout) == PersistencePromotionResult.Saved
+
+    fun resolveLegacyMigration(loaded: HomeWorkspaceLayoutLoad): HomeWorkspaceLayoutLoad {
+        if (!loaded.legacyMigrationRequired) return loaded
+        return when (promoteIfAbsent(loaded.layout)) {
+            PersistencePromotionResult.Saved -> loaded.copy(
+                storageAuthoritative = true,
+                legacyMigrationRequired = false,
+            )
+            PersistencePromotionResult.CanonicalAlreadyPresent -> loadWithMigration(loaded.layout.scope)
+            PersistencePromotionResult.Failed -> loaded.copy(storageAuthoritative = false)
         }
     }
 }
