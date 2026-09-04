@@ -551,6 +551,24 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun validIndependentSlotsRecoverWhenTheAggregateKeyIsAbsent() {
+        val first = firstSession()
+        val second = secondSession()
+        val registry = NextcloudAccountRegistry.Empty
+            .upsertAndSelect(first.accountRecord())
+            .upsertAndSelect(second.accountRecord())
+        val slots = mapOf(first.accountId to first, second.accountId to second)
+
+        val restored = restoreAndroidAccountCredentialStateWithoutAggregate(
+            encodedRegistry = encodeNextcloudAccountRegistry(registry),
+            loadSession = slots::get,
+        )
+
+        assertEquals(slots, requireNotNull(restored).sessions)
+        assertEquals(second, restored.activeSession)
+    }
+
+    @Test
     fun independentSlotRecoveryRejectsRegistryCredentialMismatch() {
         val first = firstSession()
         val second = secondSession()
@@ -627,6 +645,22 @@ class AndroidPersistedSessionTest {
         )
 
         assertEquals(listOf("clear-account", "remove-uploads"), events)
+    }
+
+    @Test
+    fun activeSignOutDeletesQueuedUploadsAfterTheCredentialIsCleared() = runBlocking {
+        val events = mutableListOf<String>()
+
+        removeAndroidAccountCredentialData(
+            active = true,
+            removeQueuedUploads = { events += "remove-uploads" },
+            clearActiveAccount = { events += "clear-session" },
+            rollbackActiveRemoval = { events += "rollback-session" },
+            persistInactiveRemoval = {},
+            rollbackInactiveRemoval = {},
+        )
+
+        assertEquals(listOf("clear-session", "remove-uploads"), events)
     }
 
     @Test
