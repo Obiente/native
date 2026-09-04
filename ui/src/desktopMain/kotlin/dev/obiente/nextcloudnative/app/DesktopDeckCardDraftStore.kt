@@ -23,7 +23,9 @@ import org.json.JSONObject
  */
 internal class DesktopDeckCardDraftStore(
     private val root: File = desktopDeckDraftDirectory(),
-    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(),
+    private val keyProvider: DesktopDeckDraftKeyProvider = PlatformDeckDraftKeyProvider(
+        legacySecretRequired = { desktopDeckLegacySecretRequired(root) },
+    ),
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
 ) {
@@ -292,6 +294,16 @@ internal class DesktopDeckCardDraftStore(
     }
 }
 
+internal fun desktopDeckLegacySecretRequired(
+    root: File,
+    listFiles: (File) -> Array<File>? = File::listFiles,
+): Boolean {
+    if (!root.exists()) return false
+    if (!root.isDirectory) return true
+    val entries = listFiles(root) ?: return true
+    return entries.any { file -> file.name.matches(DesktopDeckCardDraftStore.DRAFT_FILE_PATTERN) }
+}
+
 internal fun interface DesktopDeckDraftKeyProvider {
     fun encryptionKey(): ByteArray
 }
@@ -299,6 +311,7 @@ internal fun interface DesktopDeckDraftKeyProvider {
 internal class PlatformDeckDraftKeyProvider(
     private val secretStore: DesktopSecretStore = defaultDesktopSecretStore(),
     private val random: SecureRandom = SecureRandom(),
+    private val legacySecretRequired: () -> Boolean = { true },
 ) : DesktopDeckDraftKeyProvider {
     @Volatile
     private var cached: ByteArray? = null
@@ -326,13 +339,31 @@ internal class PlatformDeckDraftKeyProvider(
     }
 
     private fun lookup(): ByteArray? {
-        val encoded = secretStore.load(desktopDeckDraftSecretReference())
+        val stored = try {
+            secretStore.load(desktopDeckDraftSecretReference())
+        } catch (failure: NextcloudSessionLegacyMigrationUnavailableException) {
+            if (legacySecretRequired()) throw failure
+            null
+        } catch (failure: DesktopSecretStoreUnavailableException) {
+            if (legacySecretRequired()) throw failure
+            null
+        }
+        val encoded = stored
             ?.let { value -> value.copyOf(minOf(value.size, MAX_ENCODED_KEY_BYTES)) }
             ?.decodeToString()
             ?.trim()
-            ?: return null
-        if (encoded.isBlank()) return null
-        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
+            ?: return missingKey()
+        if (encoded.isBlank()) return missingKey()
+        return runCatching { Base64.getDecoder().decode(encoded) }.getOrNull() ?: missingKey()
+    }
+
+    private fun missingKey(): ByteArray? {
+        if (legacySecretRequired()) {
+            throw DesktopSecretStoreUnavailableException(
+                "The Deck draft encryption key is missing while encrypted drafts still exist.",
+            )
+        }
+        return null
     }
 
     private companion object {

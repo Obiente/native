@@ -161,6 +161,18 @@ fun cleanupJvmFileSyncOwnedUploads(
     return JvmFileSyncUploadCleanupResult(updated, unresolved)
 }
 
+internal fun JvmResumableNextcloudUploadRemote.discardCheckpointUpload(
+    checkpoint: FileSyncUploadCheckpoint,
+    relativePath: String,
+): Boolean = discardOwnedUpload(
+    uploadId = checkpoint.uploadId,
+    relativePath = relativePath,
+    assembledStageEtag = checkpoint.assembledStageEtag,
+    expectedStageSizeBytes = checkpoint.contentHash?.let { checkpoint.sizeBytes },
+    expectedStageContentHash = checkpoint.contentHash,
+    publicationInFlight = checkpoint.commitInFlight && checkpoint.assembledStageEtag != null,
+)
+
 /**
  * Runs the same crash-safe chunk state machine for every JVM platform.
  *
@@ -253,7 +265,7 @@ fun jvmResumableNextcloudUpload(
     }
     if (plan is NextcloudUploadTransferPlan.Direct) {
         checkpoint?.let {
-            check(remote.discardOwnedUpload(it.uploadId, relativePath, it.assembledStageEtag)) {
+            check(remote.discardCheckpointUpload(it, relativePath)) {
                 "An unverified upload stage still requires recovery."
             }
         }
@@ -270,7 +282,7 @@ fun jvmResumableNextcloudUpload(
 
     val resumable = matchingCheckpoint?.takeIf { !it.commitInFlight }
     if (checkpoint != null && resumable == null) {
-        check(remote.discardOwnedUpload(checkpoint.uploadId, relativePath, checkpoint.assembledStageEtag)) {
+        check(remote.discardCheckpointUpload(checkpoint, relativePath)) {
             "An unverified upload stage still requires recovery."
         }
     }

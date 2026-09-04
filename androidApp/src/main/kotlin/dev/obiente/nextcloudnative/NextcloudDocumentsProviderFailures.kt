@@ -16,6 +16,7 @@ internal inline fun <T> documentMutationCall(operation: () -> T): T = try {
         DocumentWebDavError.InsufficientStorage,
         DocumentWebDavError.TooLarge,
         DocumentWebDavError.Throttled,
+        DocumentWebDavError.RedirectRejected,
         DocumentWebDavError.Server,
         -> throw IllegalStateException(failure.message, failure)
     }

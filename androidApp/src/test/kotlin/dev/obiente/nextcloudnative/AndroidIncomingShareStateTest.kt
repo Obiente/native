@@ -166,6 +166,16 @@ class AndroidIncomingShareStateTest {
                 mutationInFlight = true,
             ),
         )
+        assertFalse(
+            incomingShareMutationOutcomeUnknown(
+                DocumentWebDavException(
+                    DocumentWebDavError.RedirectRejected,
+                    307,
+                    "Unsafe redirect.",
+                ),
+                mutationInFlight = true,
+            ),
+        )
         assertTrue(
             incomingShareMutationOutcomeUnknown(
                 IllegalStateException("Connection closed"),

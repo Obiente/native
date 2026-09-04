@@ -4,7 +4,7 @@ This document defines the platform boundary for Nextcloud Native. It separates
 portable product behavior from operating-system integration so shared code does
 not erase native security, lifecycle, accessibility, or filesystem semantics.
 
-**Last reviewed: 2026-08-20.** Implementation and release availability may
+**Last reviewed: 2026-09-01.** Implementation and release availability may
 have changed. The [GitHub Releases page](https://github.com/Obiente/nc-native/releases)
 is the source of truth for published artifacts and their limitations.
 
@@ -28,7 +28,7 @@ its platform acceptance criteria pass and its limitations are documented.
 | Android | Compose Multiplatform | Active launcher and signed alpha APK/AAB | Keystore, WorkManager, DocumentsProvider, permissions, notifications, shares, media sessions, camera backup, and calls |
 | Linux | Compose Desktop | Primary interactive desktop target; alpha RPM/DEB | Secret Service, desktop file integration, notifications, media keys, portals, and conventional sync roots |
 | Windows | Compose Desktop | Unsigned x86-64 MSI with Credential Manager, attested builds, and Cloud Files integration under prerelease qualification | Explorer validation, free trusted signing when available, notifications, media controls, and updates |
-| macOS | Compose Desktop | Early DMG packaging artifact; no supported authenticated login yet | Keychain, File Provider/Finder integration, notifications, media controls, and updates |
+| macOS | Compose Desktop | Early DMG packaging artifact; Keychain storage is source-tested, but authenticated use has not been live-validated or qualified | Keychain, File Provider/Finder integration, notifications, media controls, and updates |
 | iOS / iPadOS | Planned Compose target | No supported launcher is shipped | Keychain, File Provider, background transfer, share extension, notifications, media, and CallKit |
 
 Packaging is not feature parity. A platform becomes supported for a workflow

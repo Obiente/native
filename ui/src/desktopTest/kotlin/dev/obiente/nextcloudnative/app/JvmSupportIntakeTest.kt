@@ -30,9 +30,6 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
 import okhttp3.OkHttpClient
 
-private fun JvmSupportIntake.submittedRecordId(): String =
-    (states().value as SupportDiagnosticsSubmissionState.Submitted).reports.single().recordId
-
 class JvmSupportIntakeTest {
     @Test
     fun supportConversationMessageBodiesCannotBeReplayed() {
@@ -1409,7 +1406,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             val persistedPending = File(fixture.temporaryRoot, "pending.json").readText().replace(
                 Regex("\\\"archiveName\\\":\\\"[^\\\"]+\\\""),
                 "\"archiveName\":null",
@@ -2219,7 +2218,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             assertTrue(fixture.intake.cancel())
             submission.join()
 
@@ -2405,7 +2406,9 @@ class JvmSupportIntakeTest {
             val submission = launch(Dispatchers.Default) {
                 fixture.intake.submit("A refresh failed.", "nightly", emptyList())
             }
-            val upload = requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
+            val upload = requireNotNull(
+                fixture.server.takeRequest(WINDOWS_REQUEST_START_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
             assertTrue(fixture.intake.cancel())
             submission.join()
             requireNotNull(fixture.server.takeRequest(2, TimeUnit.SECONDS))
