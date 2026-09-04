@@ -108,9 +108,11 @@ class DesktopAccountCredentialPersistenceTest {
             val persistence = persistence(preferences, secrets)
             persistence.saveSession(original)
 
-            persistence.saveSession(replacement)
+            val persisted = persistence.saveSession(replacement)
 
             val restored = persistence(preferences, secrets).loadActiveSession()
+            assertEquals(original.serverUrl, persisted.serverUrl)
+            assertEquals(replacement.appPassword, persisted.appPassword)
             assertEquals(original.serverUrl, restored?.serverUrl)
             assertEquals(replacement.appPassword, restored?.appPassword)
             assertEquals(desktopFileCacheAccountId(original), restored?.let(::desktopFileCacheAccountId))
@@ -162,12 +164,74 @@ class DesktopAccountCredentialPersistenceTest {
         var legacyPresentAtFlush = false
 
         val restored = persistence(preferences, secrets) {
-            legacyPresentAtFlush = secrets.load(legacyReference) != null
+            legacyPresentAtFlush = legacyPresentAtFlush || secrets.load(legacyReference) != null
         }.loadActiveSession()
 
         assertEquals(session, restored)
         assertTrue(legacyPresentAtFlush)
         assertNull(secrets.load(legacyReference))
+    }
+
+    @Test
+    fun failedLegacyCleanupIsRetriedAfterMigration() = withStore { preferences, secrets ->
+        val session = firstSession()
+        val legacyReference = desktopSessionSecretReference(session.serverUrl, session.loginName)
+        putLegacySession(preferences, secrets, session)
+        val persistence = persistence(preferences, secrets)
+        secrets.failClears = true
+
+        assertEquals(session, persistence.loadActiveSession())
+        assertNotNull(secrets.load(legacyReference))
+
+        secrets.failClears = false
+        assertEquals(session, persistence.loadActiveSession())
+        assertNull(secrets.load(legacyReference))
+    }
+
+    @Test
+    fun pendingCleanupNeverDeletesTheOnlyReadableLegacyCredential() = withStore { preferences, secrets ->
+        val session = firstSession()
+        val legacyReference = desktopSessionSecretReference(session.serverUrl, session.loginName)
+        putLegacySession(preferences, secrets, session)
+        secrets.failSaves = true
+
+        assertEquals(session, persistence(preferences, secrets).loadActiveSession())
+        assertNotNull(secrets.load(legacyReference))
+
+        secrets.failSaves = false
+        assertEquals(session, persistence(preferences, secrets).loadActiveSession())
+        assertNull(secrets.load(legacyReference))
+    }
+
+    @Test
+    fun accountRemovalRetriesPendingLegacyCleanupAfterSelectionChanged() =
+        withStore { preferences, secrets ->
+            val migrated = firstSession()
+            val other = secondSession()
+            val legacyReference = desktopSessionSecretReference(migrated.serverUrl, migrated.loginName)
+            putLegacySession(preferences, secrets, migrated)
+            val persistence = persistence(preferences, secrets)
+            secrets.failClears = true
+
+            assertEquals(migrated, persistence.loadActiveSession())
+            persistence.saveSession(other)
+            assertNotNull(secrets.load(legacyReference))
+
+            secrets.failClears = false
+            assertTrue(persistence.removeAccount(migrated.accountId))
+            assertNull(secrets.load(legacyReference))
+        }
+
+    @Test
+    fun secureStoreReadFailureIsNotReportedAsMissingCredentials() = withStore { preferences, secrets ->
+        val persistence = persistence(preferences, secrets)
+        persistence.saveSession(firstSession())
+        secrets.loadFailure = DesktopSecretStoreUnavailableException("synthetic locked keychain")
+
+        assertEquals(
+            NextcloudSessionLoadState.SecureStorageUnavailable,
+            loadNextcloudSessionSafely(persistence::loadActiveSession),
+        )
     }
 
     @Test
@@ -391,8 +455,12 @@ class DesktopAccountCredentialPersistenceTest {
         private val values = mutableMapOf<String, ByteArray>()
         var failSaves = false
         var failClears = false
+        var loadFailure: RuntimeException? = null
 
-        override fun load(reference: DesktopSecretReference): ByteArray? = values[reference.targetName]?.copyOf()
+        override fun load(reference: DesktopSecretReference): ByteArray? {
+            loadFailure?.let { throw it }
+            return values[reference.targetName]?.copyOf()
+        }
 
         override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
             if (failSaves) error("private-app-password at cloud.example.test for alice")

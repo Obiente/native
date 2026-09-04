@@ -3,7 +3,8 @@ package dev.obiente.nextcloudnative.app
 interface NextcloudAccountCredentialServices {
     fun loadSession(): NextcloudSession?
 
-    suspend fun saveSession(session: NextcloudSession)
+    /** Persists and returns the exact session identity published to account-scoped resources. */
+    suspend fun saveSession(session: NextcloudSession): NextcloudSession
 
     suspend fun clearSession()
 
