@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.fileSyncOwnedReplacementBackupEtags
@@ -15,6 +16,7 @@ internal fun androidFileSyncOwnedRemoteTree(
     transferCancellation: DocumentRequestCancellation = AndroidFileSyncRunCancellation {
         !Thread.currentThread().isInterrupted
     },
+    context: Context? = null,
 ): AndroidFileSyncRemoteTree {
     val ownedUploads = fileSyncOwnedUploads(pair)
     return AndroidFileSyncRemoteTree(
@@ -27,5 +29,6 @@ internal fun androidFileSyncOwnedRemoteTree(
         ownedStageEtags = fileSyncOwnedUploadStageEtags(pair),
         ownedUploadPaths = fileSyncOwnedUploadPaths(pair),
         ownedReplacementBackupEtags = fileSyncOwnedReplacementBackupEtags(pair),
+        documentWritebackContext = context?.applicationContext,
     )
 }

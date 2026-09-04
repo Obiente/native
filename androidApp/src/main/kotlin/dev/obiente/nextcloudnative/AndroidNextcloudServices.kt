@@ -35,7 +35,6 @@ import dev.obiente.nextcloudnative.app.normalizeServerUrl
 import dev.obiente.nextcloudnative.app.toApprovedDiagnostic
 import dev.obiente.nextcloudnative.app.toStartedDiagnostic
 import dev.obiente.nextcloudnative.app.confirmTextFileDavSave
-import dev.obiente.nextcloudnative.app.runCatchingPreservingCancellation
 import dev.obiente.nextcloudnative.app.textFileDavSaveRequest
 import dev.obiente.nextcloudnative.app.MAX_EDITABLE_TEXT_BYTES
 import dev.obiente.nextcloudnative.app.MAX_FILE_IDENTITY_SEARCH_BATCH
@@ -1598,6 +1597,7 @@ internal class AndroidNextcloudServices(
                 cloudMutationsAllowed = appContext.cloudMutationGate(),
             )
             documentWritebacks.forEach { discovered ->
+                currentCoroutineContext().ensureActive()
                 val pending = claimAndroidDocumentPendingWritebackForRecovery(
                     appContext,
                     session,
@@ -1612,34 +1612,43 @@ internal class AndroidNextcloudServices(
                         stagedBytes = pending.staging.length(),
                         availableBytes = pending.staging.parentFile?.usableSpace ?: 0L,
                     )
-                    val remote = compareAndroidDocumentWriteback(
-                        webDav = webDav,
-                        session = session,
-                        userId = userId,
-                        pending = pending,
-                    )
-                    if (remote.contentsMatch) {
-                        virtualFileCache.invalidate(session, pending.remotePath)
-                        notifyDocumentsDocumentChanged(session, pending.remotePath)
-                        pending.complete()
-                        return@runCatching
+                    CoroutineDocumentRequestCancellation(
+                        requireNotNull(currentCoroutineContext()[Job]),
+                    ).use { cancellation ->
+                        val remote = compareAndroidDocumentWriteback(
+                            webDav = webDav,
+                            session = session,
+                            userId = userId,
+                            pending = pending,
+                            cancellation = cancellation,
+                        )
+                        currentCoroutineContext().ensureActive()
+                        if (remote.contentsMatch) {
+                            virtualFileCache.invalidate(session, pending.remotePath)
+                            notifyDocumentsDocumentChanged(session, pending.remotePath)
+                            pending.complete()
+                            return@runCatching
+                        }
+                        if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
+                            pending.markConflict(remote.etag)
+                            pending.releaseActive()
+                            return@runCatching
+                        }
+                        webDav.replaceFileAtomically(
+                            session = session,
+                            userId = userId,
+                            path = pending.remotePath,
+                            source = pending.staging,
+                            expectedEtag = pending.expectedRemoteEtag,
+                            cancellation = cancellation,
+                        )
                     }
-                    if (remote.etag == null || remote.etag != pending.expectedRemoteEtag) {
-                        pending.markConflict(remote.etag)
-                        pending.releaseActive()
-                        return@runCatching
-                    }
-                    webDav.replaceFileAtomically(
-                        session = session,
-                        userId = userId,
-                        path = pending.remotePath,
-                        source = pending.staging,
-                        expectedEtag = pending.expectedRemoteEtag,
-                    )
                     virtualFileCache.invalidate(session, pending.remotePath)
                     notifyDocumentsDocumentChanged(session, pending.remotePath)
                     pending.complete()
-                }.onFailure { pending.releaseActive() }
+                }.onFailure { failure ->
+                    handleAndroidDocumentWritebackRecoveryFailure(failure, pending::releaseActive)
+                }
             }
         }
         val pendingWritebacks = androidDocumentPendingWritebackCount(appContext, session)
@@ -2662,20 +2671,26 @@ internal class AndroidNextcloudServices(
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        val specification = textFileDavSaveRequest(text, expectedEtag)
-        val response = request(
-            method = "PUT",
-            url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-            session = session,
-            rawBody = specification.body,
-            contentType = specification.contentType,
-            headers = specification.headers,
-        )
-        val confirmation = confirmTextFileDavSave(response.status)
-        val etag = response.etag ?:
-            runCatchingPreservingCancellation { loadFileEtag(session, userId, path) }.getOrNull()
-        runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-        SavedTextFile(etag, confirmation.created)
+        withNoBlockingAndroidDocumentWriteback(appContext, session, path) {
+            val specification = textFileDavSaveRequest(text, expectedEtag)
+            val response = request(
+                method = "PUT",
+                url = buildNextcloudFileUrl(session.serverUrl, userId, path),
+                session = session,
+                rawBody = specification.body,
+                contentType = specification.contentType,
+                headers = specification.headers,
+            )
+            val confirmation = confirmTextFileDavSave(response.status)
+            val etag = response.etag ?: try {
+                loadFileEtag(session, userId, path)
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                null
+            }
+            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
+            SavedTextFile(etag, confirmation.created)
+        }
     }
 
     override suspend fun createTextFileIfAbsent(
@@ -2728,28 +2743,34 @@ internal class AndroidNextcloudServices(
         mutation: NextcloudFileMutation,
     ): NextcloudFileMutationResult = withContext(Dispatchers.IO) {
         val spec = mutation.toWebDavMutationSpec()
-        val headers = buildMap {
-            put("Accept", "*/*")
-            putAll(spec.conflictConditionHeaders())
-            spec.destinationPath?.let { destinationPath ->
-                put("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-                put("Overwrite", if (spec.overwrite) "T" else "F")
+        withNoBlockingAndroidDocumentWriteback(
+            appContext,
+            session,
+            *listOfNotNull(spec.sourcePath, spec.destinationPath).toTypedArray(),
+        ) {
+            val headers = buildMap {
+                put("Accept", "*/*")
+                putAll(spec.conflictConditionHeaders())
+                spec.destinationPath?.let { destinationPath ->
+                    put("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
+                    put("Overwrite", if (spec.overwrite) "T" else "F")
+                }
             }
+            val response = request(
+                method = spec.method,
+                url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
+                session = session,
+                headers = headers,
+                maxResponseBytes = 64 * 1024,
+            )
+            if (response.status !in 200..299) throw fileOperationException(response.status)
+            val accountId = NextcloudDocumentIds.accountKey(session)
+            runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
+            spec.destinationPath?.let { destination ->
+                runCatching { fileReadCache.invalidate(accountId, destination) }
+            }
+            NextcloudFileMutationResult(spec.destinationPath, response.etag)
         }
-        val response = request(
-            method = spec.method,
-            url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
-            session = session,
-            headers = headers,
-            maxResponseBytes = 64 * 1024,
-        )
-        if (response.status !in 200..299) throw fileOperationException(response.status)
-        val accountId = NextcloudDocumentIds.accountKey(session)
-        runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
-        spec.destinationPath?.let { destination ->
-            runCatching { fileReadCache.invalidate(accountId, destination) }
-        }
-        NextcloudFileMutationResult(spec.destinationPath, response.etag)
     }
 
     override suspend fun executeNextcloudApi(
@@ -4121,6 +4142,7 @@ private fun compareAndroidDocumentWriteback(
     session: NextcloudSession,
     userId: String,
     pending: AndroidDocumentPendingWriteback,
+    cancellation: DocumentRequestCancellation,
 ): AndroidDocumentRemoteComparison = AndroidDocumentStagingComparator(pending.staging).use { comparison ->
     val result = webDav.readFile(
         session = session,
@@ -4128,6 +4150,7 @@ private fun compareAndroidDocumentWriteback(
         path = pending.remotePath,
         destination = comparison,
         maximumBytes = MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES,
+        cancellation = cancellation,
     )
     AndroidDocumentRemoteComparison(
         contentsMatch = comparison.matches(result.byteCount),

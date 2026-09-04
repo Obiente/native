@@ -32,7 +32,6 @@ import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import okhttp3.OkHttpClient
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
@@ -468,17 +467,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val parent = requireReference(parentDocumentId, session)
         val account = resolveAccount(session)
         requireDirectory(session, account, parent)
-        val safeName = requireSafeDisplayName(displayName)
-        val path = childPath(parent.path, safeName)
-        mutationCall {
-            if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-                webDav.createFolder(session, account.userId, path)
-            } else {
-                val empty = createLocalStagingFile()
-                try {
-                    webDav.createFile(session, account.userId, path, empty)
-                } finally {
-                    empty.delete()
+        val path = childPath(parent.path, requireSafeDisplayName(displayName))
+        withNoBlockingAndroidDocumentWriteback(context, session, path) {
+            mutationCall {
+                if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    webDav.createFolder(session, account.userId, path)
+                } else {
+                    val empty = createLocalStagingFile()
+                    try { webDav.createFile(session, account.userId, path, empty) } finally { empty.delete() }
                 }
             }
         }
@@ -495,7 +491,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val destination = childPath(NextcloudDocumentIds.parentPath(reference.path), requireSafeDisplayName(displayName))
         if (destination == reference.path) return documentId
         val etag = requireMutationEtag(file)
-        withNoActiveAndroidDocumentWriteback(session, reference.path, destination) {
+        withNoBlockingAndroidDocumentWriteback(context, session, reference.path, destination) {
             mutationCall { webDav.move(session, account.userId, reference.path, destination, etag) }
         }
         notifyMove(session, reference.path, destination)
@@ -508,7 +504,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         if (reference.isRoot) throw SecurityException("The Nextcloud root cannot be deleted.")
         val account = resolveAccount(session)
         val file = findDocument(session, account, reference.path)
-        withNoActiveAndroidDocumentWriteback(session, reference.path) {
+        withNoBlockingAndroidDocumentWriteback(context, session, reference.path) {
             mutationCall {
                 webDav.delete(
                     session,
@@ -540,7 +536,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val file = findDocument(session, account, source.path)
         val destination = childPath(targetParent.path, file.name)
         if (destination == source.path) return sourceDocumentId
-        withNoActiveAndroidDocumentWriteback(session, source.path, destination) {
+        withNoBlockingAndroidDocumentWriteback(context, session, source.path, destination) {
             mutationCall {
                 webDav.move(session, account.userId, source.path, destination, requireMutationEtag(file))
             }
@@ -1002,259 +998,3 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         )
     }
 }
-
-internal const val MAX_ANDROID_DOCUMENT_WRITEBACK_BYTES = Long.MAX_VALUE
-internal const val MIN_ANDROID_DOCUMENT_FREE_BYTES = 512L * 1024L * 1024L
-
-internal fun requireAndroidDocumentWritebackCapacity(remoteSize: Long, availableBytes: Long) {
-    require(remoteSize >= 0L && availableBytes >= 0L)
-    require(remoteSize <= (availableBytes - MIN_ANDROID_DOCUMENT_FREE_BYTES).coerceAtLeast(0L)) {
-        "There is not enough free space to stage this edit safely."
-    }
-}
-
-internal fun requireAndroidDocumentStagedWritebackCapacity(stagedBytes: Long, availableBytes: Long) {
-    require(stagedBytes >= 0L && availableBytes >= 0L)
-    require(availableBytes >= MIN_ANDROID_DOCUMENT_FREE_BYTES) {
-        "There is not enough free space to retain this edit safely."
-    }
-}
-
-internal data class AndroidDocumentPendingWriteback(
-    val staging: File,
-    val manifest: File,
-    val accountId: String,
-    val remotePath: String,
-    val expectedRemoteEtag: String,
-    val conflict: Boolean = false,
-) {
-    init {
-        require(accountId.isNotBlank())
-        require(remotePath.isNotBlank() && remotePath.split('/').none { it.isEmpty() || it == "." || it == ".." })
-        require(expectedRemoteEtag.isNotBlank() && '\r' !in expectedRemoteEtag && '\n' !in expectedRemoteEtag)
-        require(staging.isFile && manifest.isFile)
-    }
-
-    fun markReadyAndActive() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val payload = JSONObject(manifest.readText()).put("ready", true).toString().encodeToByteArray()
-        val temporary = File.createTempFile("manifest-", ".tmp", manifest.parentFile)
-        try {
-            FileOutputStream(temporary).use { output ->
-                output.write(payload)
-                output.fd.sync()
-            }
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    manifest.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temporary.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-            ACTIVE_ANDROID_DOCUMENT_WRITEBACKS += manifest.activeWritebackKey()
-        } finally {
-            temporary.delete()
-        }
-    }
-
-    fun markConflict(observedRemoteEtag: String?) = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val data = JSONObject(manifest.readText())
-            .put("conflict", true)
-            .put("observedEtag", observedRemoteEtag ?: JSONObject.NULL)
-        val payload = data.toString().encodeToByteArray()
-        require(payload.size <= 64 * 1024)
-        val temporary = File.createTempFile("manifest-", ".tmp", manifest.parentFile)
-        try {
-            FileOutputStream(temporary).use { output ->
-                output.write(payload)
-                output.fd.sync()
-            }
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    manifest.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temporary.toPath(), manifest.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-        } finally {
-            temporary.delete()
-        }
-    }
-
-    fun complete() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        staging.delete()
-        manifest.delete()
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS -= manifest.activeWritebackKey()
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS -= activeWritebackPath()
-    }
-
-    fun discard() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        manifest.delete()
-        staging.delete()
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS -= manifest.activeWritebackKey()
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS -= activeWritebackPath()
-    }
-
-    fun releaseActive() = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS -= manifest.activeWritebackKey()
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS -= activeWritebackPath()
-    }
-
-    private fun activeWritebackPath() = ActiveAndroidDocumentWritebackPath(accountId, remotePath)
-}
-
-internal fun androidDocumentPendingWritebackCount(context: android.content.Context, session: NextcloudSession): Int {
-    return androidDocumentPendingWritebacks(context, session).size
-}
-
-internal fun androidDocumentPendingWritebacks(
-    context: android.content.Context,
-    session: NextcloudSession,
-): List<AndroidDocumentPendingWriteback> = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val root = File(context.filesDir, "documents-recovery")
-    if (!root.isDirectory) return emptyList()
-    val account = NextcloudDocumentIds.accountKey(session)
-    return root.listFiles().orEmpty().mapNotNull { manifest ->
-        parseAndroidDocumentWriteback(root, manifest, account)
-    }.filterNot { writeback ->
-        writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
-    }.sortedBy { writeback -> writeback.manifest.lastModified() }
-}
-
-internal fun androidDocumentPendingWriteback(
-    context: android.content.Context?,
-    session: NextcloudSession,
-    remotePath: String,
-): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val root = context?.let { File(it.filesDir, "documents-recovery") } ?: return null
-    if (!root.isDirectory) return null
-    val account = NextcloudDocumentIds.accountKey(session)
-    return root.listFiles().orEmpty().asSequence()
-        .mapNotNull { manifest -> parseAndroidDocumentWriteback(root, manifest, account) }
-        .filter { writeback -> writeback.remotePath == remotePath }
-        .filterNot { writeback ->
-            writeback.manifest.activeWritebackKey() in ACTIVE_ANDROID_DOCUMENT_WRITEBACKS
-        }
-        .maxByOrNull { writeback -> writeback.manifest.lastModified() }
-}
-
-private fun claimAndroidDocumentPendingWriteback(
-    context: android.content.Context?,
-    session: NextcloudSession,
-    remotePath: String,
-): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    androidDocumentPendingWriteback(context, session, remotePath)?.also { writeback ->
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACKS += writeback.manifest.activeWritebackKey()
-    }
-}
-
-internal fun claimAndroidDocumentPendingWritebackForRecovery(
-    context: android.content.Context,
-    session: NextcloudSession,
-    remotePath: String,
-): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val activePath = ActiveAndroidDocumentWritebackPath(NextcloudDocumentIds.accountKey(session), remotePath)
-    if (!ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.add(activePath)) return null
-    val pending = androidDocumentPendingWriteback(context, session, remotePath)
-    if (pending == null) {
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS -= activePath
-        return null
-    }
-    ACTIVE_ANDROID_DOCUMENT_WRITEBACKS += pending.manifest.activeWritebackKey()
-    pending
-}
-
-private fun reserveAndroidDocumentWritebackPath(session: NextcloudSession, remotePath: String) =
-    synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val active = ActiveAndroidDocumentWritebackPath(NextcloudDocumentIds.accountKey(session), remotePath)
-        check(ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.add(active)) {
-            "This document already has an active local edit."
-        }
-    }
-
-private fun releaseAndroidDocumentWritebackPath(session: NextcloudSession, remotePath: String) =
-    synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS -=
-            ActiveAndroidDocumentWritebackPath(NextcloudDocumentIds.accountKey(session), remotePath)
-    }
-
-private fun <T> withNoActiveAndroidDocumentWriteback(
-    session: NextcloudSession,
-    vararg remotePaths: String,
-    operation: () -> T,
-): T = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val accountId = NextcloudDocumentIds.accountKey(session)
-    check(ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.none { active ->
-        active.accountId == accountId && androidDocumentWritebackPathBlocksMutation(active.remotePath, *remotePaths)
-    }) { "This document cannot be changed while a local edit is still open." }
-    operation()
-}
-
-internal fun androidDocumentWritebackPathBlocksMutation(
-    activePath: String,
-    vararg mutationPaths: String,
-): Boolean = mutationPaths.any { path -> activePath == path || activePath.startsWith("$path/") }
-
-private fun parseAndroidDocumentWriteback(
-    root: File,
-    manifest: File,
-    expectedAccount: String?,
-): AndroidDocumentPendingWriteback? = runCatching {
-    require(manifest.isFile && manifest.name.endsWith(".stage.json") && manifest.length() <= 64 * 1024L)
-    val data = JSONObject(manifest.readText())
-    val stageName = data.getString("stage")
-    require(data.getInt("version") == 1 && data.optBoolean("ready", false))
-    val account = data.getString("account")
-    require(expectedAccount == null || account == expectedAccount)
-    require(data.getLong("startedAt") >= 0L)
-    require(stageName.startsWith("writeback-") && stageName.endsWith(".stage"))
-    require('/' !in stageName && '\\' !in stageName)
-    require(manifest.name == "$stageName.json")
-    val stage = File(root, stageName)
-    require(stage.isFile)
-    AndroidDocumentPendingWriteback(
-        staging = stage,
-        manifest = manifest,
-        accountId = account,
-        remotePath = data.getString("path"),
-        expectedRemoteEtag = data.getString("etag"),
-        conflict = data.optBoolean("conflict", false),
-    )
-}.getOrNull()
-
-/** Removes writeback transactions that could not reach the close-ready state before process death. */
-internal fun cleanupIncompleteAndroidDocumentWritebacks(context: android.content.Context): Int =
-    synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val root = File(context.filesDir, "documents-recovery")
-        if (!root.isDirectory) return 0
-        val files = root.listFiles().orEmpty().filter(File::isFile)
-        val retainedNames = files.mapNotNull { manifest ->
-            parseAndroidDocumentWriteback(root, manifest, expectedAccount = null)
-        }.flatMapTo(hashSetOf()) { writeback ->
-            listOf(writeback.staging.name, writeback.manifest.name)
-        }
-        return files.count { file ->
-            val owned =
-                (file.name.startsWith("writeback-") && file.name.endsWith(".stage")) ||
-                    (file.name.startsWith("writeback-") && file.name.endsWith(".stage.json")) ||
-                    (file.name.startsWith("manifest-") && file.name.endsWith(".tmp"))
-            owned && file.name !in retainedNames && file.delete()
-        }
-    }
-
-private fun File.activeWritebackKey(): String = absoluteFile.normalize().path
-
-private data class ActiveAndroidDocumentWritebackPath(
-    val accountId: String,
-    val remotePath: String,
-)
-
-private val ANDROID_DOCUMENT_WRITEBACK_LOCK = Any()
-private val ACTIVE_ANDROID_DOCUMENT_WRITEBACKS = ConcurrentHashMap.newKeySet<String>()
-private val ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS =
-    ConcurrentHashMap.newKeySet<ActiveAndroidDocumentWritebackPath>()
