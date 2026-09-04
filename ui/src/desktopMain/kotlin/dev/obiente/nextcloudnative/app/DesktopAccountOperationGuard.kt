@@ -67,6 +67,43 @@ internal fun desktopSyncRunMatchesActiveSession(
     requestedSession: NextcloudSession,
 ): Boolean = activeSession == requestedSession
 
+internal suspend fun <Result> DesktopAccountOperationGuard.withAuthenticatedMutationSession(
+    expectedSession: NextcloudSession,
+    resolveSession: suspend () -> NextcloudSession?,
+    action: suspend (NextcloudSession) -> Result,
+): Result = serialize {
+    val current = resolveSession()
+    check(desktopSyncRunMatchesActiveSession(current, expectedSession)) {
+        "The account changed before the authenticated change could be sent."
+    }
+    action(requireNotNull(current))
+}
+
+internal fun requireDesktopAccountRemovalWritebacksResolved(pendingWritebackCount: Int) {
+    check(pendingWritebackCount == 0) {
+        "Finish or discard pending virtual file changes before removing this account."
+    }
+}
+
+internal fun removeDesktopCredentialWithoutProviderReactivation(
+    providerWasEnabled: Boolean,
+    clearProviderPreference: () -> Unit,
+    restoreProviderPreference: (Boolean) -> Unit,
+    removeCredential: () -> Boolean,
+): Boolean {
+    clearProviderPreference()
+    return try {
+        removeCredential().also { removed ->
+            if (!removed) restoreProviderPreference(providerWasEnabled)
+        }
+    } catch (failure: Throwable) {
+        runCatching { restoreProviderPreference(providerWasEnabled) }
+            .exceptionOrNull()
+            ?.let(failure::addSuppressed)
+        throw failure
+    }
+}
+
 internal fun requireDesktopSessionSaveAllowed(
     allowed: Boolean,
     recordBlocked: (SupportDiagnosticEventDraft) -> Unit,

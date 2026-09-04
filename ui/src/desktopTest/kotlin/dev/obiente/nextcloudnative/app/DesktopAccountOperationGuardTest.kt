@@ -335,4 +335,83 @@ class DesktopAccountOperationGuardTest {
         removal.await()
         assertTrue(removalEntered)
     }
+
+    @Test
+    fun authenticatedMutationWaitsForSelectionAndRejectsTheStaleSession() = runBlocking {
+        val first = NextcloudSession("https://first.example.test", "alice", "one")
+        val second = NextcloudSession("https://second.example.test", "bob", "two")
+        val guard = DesktopAccountOperationGuard()
+        val selectionEntered = CompletableDeferred<Unit>()
+        val releaseSelection = CompletableDeferred<Unit>()
+        var current = first
+        var requestSent = false
+        val selection = async {
+            guard.serialize {
+                current = second
+                selectionEntered.complete(Unit)
+                releaseSelection.await()
+            }
+        }
+        selectionEntered.await()
+
+        val mutation = async {
+            runCatching {
+                guard.withAuthenticatedMutationSession(first, { current }) {
+                    requestSent = true
+                }
+            }
+        }
+        yield()
+
+        assertFalse(mutation.isCompleted)
+        releaseSelection.complete(Unit)
+        selection.await()
+        assertTrue(mutation.await().isFailure)
+        assertFalse(requestSent)
+    }
+
+    @Test
+    fun pendingLinuxWritebackBlocksAccountRemoval() {
+        requireDesktopAccountRemovalWritebacksResolved(0)
+        assertFailsWith<IllegalStateException> { requireDesktopAccountRemovalWritebacksResolved(1) }
+    }
+
+    @Test
+    fun failedCredentialRemovalRestoresProviderActivationPreference() = runBlocking {
+        val events = mutableListOf<String>()
+
+        val failure = runCatching {
+            removeDesktopCredentialWithoutProviderReactivation(
+                providerWasEnabled = true,
+                clearProviderPreference = { events += "cleared" },
+                restoreProviderPreference = { enabled -> events += "restored:$enabled" },
+                removeCredential = {
+                    events += "remove"
+                    error("credential removal failed")
+                },
+            )
+        }
+
+        assertTrue(failure.isFailure)
+        assertEquals(listOf("cleared", "remove", "restored:true"), events)
+    }
+
+    @Test
+    fun successfulCredentialRemovalLeavesProviderPreferenceDisabled() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertTrue(
+            removeDesktopCredentialWithoutProviderReactivation(
+                providerWasEnabled = true,
+                clearProviderPreference = { events += "cleared" },
+                restoreProviderPreference = { enabled -> events += "restored:$enabled" },
+                removeCredential = {
+                    events += "remove"
+                    true
+                },
+            ),
+        )
+
+        assertEquals(listOf("cleared", "remove"), events)
+    }
 }
