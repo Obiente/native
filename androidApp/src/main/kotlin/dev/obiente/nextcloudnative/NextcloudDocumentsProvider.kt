@@ -467,17 +467,14 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val parent = requireReference(parentDocumentId, session)
         val account = resolveAccount(session)
         requireDirectory(session, account, parent)
-        val safeName = requireSafeDisplayName(displayName)
-        val path = childPath(parent.path, safeName)
-        mutationCall {
-            if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
-                webDav.createFolder(session, account.userId, path)
-            } else {
-                val empty = createLocalStagingFile()
-                try {
-                    webDav.createFile(session, account.userId, path, empty)
-                } finally {
-                    empty.delete()
+        val path = childPath(parent.path, requireSafeDisplayName(displayName))
+        withNoBlockingAndroidDocumentWriteback(context, session, path) {
+            mutationCall {
+                if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    webDav.createFolder(session, account.userId, path)
+                } else {
+                    val empty = createLocalStagingFile()
+                    try { webDav.createFile(session, account.userId, path, empty) } finally { empty.delete() }
                 }
             }
         }

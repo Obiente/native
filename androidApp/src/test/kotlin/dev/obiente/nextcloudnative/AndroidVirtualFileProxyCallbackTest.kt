@@ -119,6 +119,18 @@ class AndroidVirtualFileProxyCallbackTest {
                 "Projects/Archive",
             ),
         )
+        assertTrue(
+            androidDocumentMutationPathsOverlap(
+                setOf("Projects/Active"),
+                setOf("Projects/Active/notes.txt"),
+            ),
+        )
+        assertFalse(
+            androidDocumentMutationPathsOverlap(
+                setOf("Projects/Active"),
+                setOf("Projects/Archive"),
+            ),
+        )
     }
 
     @Test

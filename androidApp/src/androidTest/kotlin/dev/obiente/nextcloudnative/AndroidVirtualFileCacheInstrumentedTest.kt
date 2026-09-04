@@ -7,6 +7,9 @@ import dev.obiente.nextcloudnative.app.NextcloudFile
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.VirtualFileCachePolicy
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import org.junit.After
@@ -205,6 +208,44 @@ class AndroidVirtualFileCacheInstrumentedTest {
                 remote.delete("Projects/Active/notes.txt", "\"v1\"")
             }
             assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun mutationReservationReleasesTheGlobalLockAndBlocksOnlyOverlappingEdits() {
+        val operationStarted = CountDownLatch(1)
+        val finishOperation = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val mutation = executor.submit {
+                withNoBlockingAndroidDocumentWriteback(context, session, "Projects/Active") {
+                    operationStarted.countDown()
+                    check(finishOperation.await(10, TimeUnit.SECONDS))
+                }
+            }
+            org.junit.Assert.assertTrue(operationStarted.await(10, TimeUnit.SECONDS))
+
+            reserveAndroidDocumentWritebackPath(session, "Projects/Archive/notes.txt")
+            releaseAndroidDocumentWritebackPath(session, "Projects/Archive/notes.txt")
+            org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+                reserveAndroidDocumentWritebackPath(session, "Projects/Active/notes.txt")
+            }
+
+            finishOperation.countDown()
+            mutation.get(10, TimeUnit.SECONDS)
+            reserveAndroidDocumentWritebackPath(session, "Projects/Active/notes.txt")
+            releaseAndroidDocumentWritebackPath(session, "Projects/Active/notes.txt")
+
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                withNoBlockingAndroidDocumentWriteback(context, session, "Projects/Failed") {
+                    throw IllegalArgumentException("synthetic mutation failure")
+                }
+            }
+            reserveAndroidDocumentWritebackPath(session, "Projects/Failed/notes.txt")
+            releaseAndroidDocumentWritebackPath(session, "Projects/Failed/notes.txt")
+        } finally {
+            finishOperation.countDown()
+            executor.shutdownNow()
         }
     }
 

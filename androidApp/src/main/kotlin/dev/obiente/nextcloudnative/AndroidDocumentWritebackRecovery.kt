@@ -167,7 +167,9 @@ internal fun claimAndroidDocumentPendingWritebackForRecovery(
     session: NextcloudSession,
     remotePath: String,
 ): AndroidDocumentPendingWriteback? = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val activePath = ActiveAndroidDocumentWritebackPath(NextcloudDocumentIds.accountKey(session), remotePath)
+    val accountId = NextcloudDocumentIds.accountKey(session)
+    if (androidDocumentMutationBlocksWriteback(accountId, remotePath)) return null
+    val activePath = ActiveAndroidDocumentWritebackPath(accountId, remotePath)
     if (!ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.add(activePath)) return null
     val pending = androidDocumentPendingWriteback(context, session, remotePath)
     if (pending == null) {
@@ -180,7 +182,11 @@ internal fun claimAndroidDocumentPendingWritebackForRecovery(
 
 internal fun reserveAndroidDocumentWritebackPath(session: NextcloudSession, remotePath: String) =
     synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-        val active = ActiveAndroidDocumentWritebackPath(NextcloudDocumentIds.accountKey(session), remotePath)
+        val accountId = NextcloudDocumentIds.accountKey(session)
+        check(!androidDocumentMutationBlocksWriteback(accountId, remotePath)) {
+            "This document is already being changed by another local operation."
+        }
+        val active = ActiveAndroidDocumentWritebackPath(accountId, remotePath)
         check(ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.add(active)) {
             "This document already has an active local edit."
         }
@@ -197,19 +203,37 @@ internal fun <T> withNoBlockingAndroidDocumentWriteback(
     session: NextcloudSession,
     vararg remotePaths: String,
     operation: () -> T,
-): T = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
-    val accountId = NextcloudDocumentIds.accountKey(session)
-    val activePaths = ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.asSequence()
-        .filter { active -> active.accountId == accountId }
-        .map(ActiveAndroidDocumentWritebackPath::remotePath)
+): T {
     val providerContext = requireNotNull(context) { "Provider context is unavailable." }
-    val retainedPaths = androidDocumentPendingWritebacks(providerContext, session)
-        .asSequence()
-        .map(AndroidDocumentPendingWriteback::remotePath)
-    check(!androidDocumentWritebacksBlockMutation(activePaths, retainedPaths, *remotePaths)) {
-        "This document cannot be changed while a local edit still needs recovery."
+    val accountId = NextcloudDocumentIds.accountKey(session)
+    val paths = remotePaths.toSet()
+    require(paths.isNotEmpty() && paths.none(String::isBlank))
+    val reservation = synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+        val activePaths = ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS.asSequence()
+            .filter { active -> active.accountId == accountId }
+            .map(ActiveAndroidDocumentWritebackPath::remotePath)
+        val retainedPaths = androidDocumentPendingWritebacks(providerContext, session)
+            .asSequence()
+            .map(AndroidDocumentPendingWriteback::remotePath)
+        check(!androidDocumentWritebacksBlockMutation(activePaths, retainedPaths, *remotePaths)) {
+            "This document cannot be changed while a local edit still needs recovery."
+        }
+        check(
+            ACTIVE_ANDROID_DOCUMENT_MUTATIONS.none { active ->
+                active.accountId == accountId && androidDocumentMutationPathsOverlap(active.remotePaths, paths)
+            },
+        ) {
+            "This document is already being changed by another local operation."
+        }
+        ActiveAndroidDocumentMutation(accountId, paths).also(ACTIVE_ANDROID_DOCUMENT_MUTATIONS::add)
     }
-    operation()
+    return try {
+        operation()
+    } finally {
+        synchronized(ANDROID_DOCUMENT_WRITEBACK_LOCK) {
+            check(ACTIVE_ANDROID_DOCUMENT_MUTATIONS.remove(reservation))
+        }
+    }
 }
 
 internal fun androidDocumentWritebacksBlockMutation(
@@ -224,6 +248,19 @@ internal fun androidDocumentWritebackPathBlocksMutation(
     activePath: String,
     vararg mutationPaths: String,
 ): Boolean = mutationPaths.any { path -> activePath == path || activePath.startsWith("$path/") }
+
+internal fun androidDocumentMutationPathsOverlap(first: Set<String>, second: Set<String>): Boolean =
+    first.any { left ->
+        second.any { right ->
+            left == right || left.startsWith("$right/") || right.startsWith("$left/")
+        }
+    }
+
+private fun androidDocumentMutationBlocksWriteback(accountId: String, remotePath: String): Boolean =
+    ACTIVE_ANDROID_DOCUMENT_MUTATIONS.any { active ->
+        active.accountId == accountId &&
+            androidDocumentWritebackPathBlocksMutation(remotePath, *active.remotePaths.toTypedArray())
+    }
 
 internal inline fun handleAndroidDocumentWritebackRecoveryFailure(
     failure: Throwable,
@@ -333,7 +370,13 @@ private data class ActiveAndroidDocumentWritebackPath(
     val remotePath: String,
 )
 
+private class ActiveAndroidDocumentMutation(
+    val accountId: String,
+    val remotePaths: Set<String>,
+)
+
 private val ANDROID_DOCUMENT_WRITEBACK_LOCK = Any()
 private val ACTIVE_ANDROID_DOCUMENT_WRITEBACKS = ConcurrentHashMap.newKeySet<String>()
 private val ACTIVE_ANDROID_DOCUMENT_WRITEBACK_PATHS =
     ConcurrentHashMap.newKeySet<ActiveAndroidDocumentWritebackPath>()
+private val ACTIVE_ANDROID_DOCUMENT_MUTATIONS = mutableSetOf<ActiveAndroidDocumentMutation>()
