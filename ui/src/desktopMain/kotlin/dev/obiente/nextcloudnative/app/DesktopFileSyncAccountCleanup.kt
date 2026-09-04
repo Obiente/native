@@ -5,6 +5,9 @@ internal fun DesktopFileSyncStore.removeDesktopFileSyncAccountPairs(accountId: S
     withExclusiveAccess {
         val current = load()
         val removed = current.coordinator.pairs.filter { pair -> pair.accountId == accountId }
+        check(removed.none { pair -> fileSyncOwnedUploads(pair).isNotEmpty() }) {
+            "Owned remote upload state must be recovered before removing this account."
+        }
         val retainedRootIds = current.coordinator.pairs.asSequence()
             .filterNot { pair -> pair.accountId == accountId }
             .mapTo(mutableSetOf(), FileSyncPair::localRootId)
