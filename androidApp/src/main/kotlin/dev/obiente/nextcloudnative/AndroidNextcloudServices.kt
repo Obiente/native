@@ -927,7 +927,7 @@ internal class AndroidNextcloudServices(
                     restoreAndroidPersistedSession(
                         encoded = sessionCipher.decrypt(encrypted),
                         persistMigrated = { migrated ->
-                            preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)).apply()
+                            preferences.edit().putString(KEY_SESSION, sessionCipher.encrypt(migrated)).commit()
                         },
                         recordDiagnostic = ::recordSupportDiagnostic,
                     )

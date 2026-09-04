@@ -20,7 +20,10 @@ class AndroidPersistedSessionTest {
 
         val first = restoreAndroidPersistedSession(
             encoded = legacyPayload(),
-            persistMigrated = { encoded -> migrated = encoded },
+            persistMigrated = { encoded ->
+                migrated = encoded
+                true
+            },
             recordDiagnostic = diagnostics::add,
         )
         val migratedPayload = requireNotNull(migrated)
@@ -34,7 +37,10 @@ class AndroidPersistedSessionTest {
         var unexpectedSecondMigration = false
         val restarted = restoreAndroidPersistedSession(
             encoded = migratedPayload,
-            persistMigrated = { unexpectedSecondMigration = true },
+            persistMigrated = {
+                unexpectedSecondMigration = true
+                true
+            },
             recordDiagnostic = diagnostics::add,
         )
         assertEquals(first, restarted)
@@ -52,7 +58,10 @@ class AndroidPersistedSessionTest {
 
         val session = restoreAndroidPersistedSession(
             encoded = malformed,
-            persistMigrated = { encoded -> migrated = encoded },
+            persistMigrated = { encoded ->
+                migrated = encoded
+                true
+            },
             recordDiagnostic = diagnostics::add,
         )
         val restoredRegistry = restoreNextcloudAccountRegistry(
@@ -80,7 +89,10 @@ class AndroidPersistedSessionTest {
 
         val session = restoreAndroidPersistedSession(
             encoded = payload,
-            persistMigrated = { migrated = true },
+            persistMigrated = {
+                migrated = true
+                true
+            },
             recordDiagnostic = diagnostics::add,
         )
 
@@ -93,7 +105,7 @@ class AndroidPersistedSessionTest {
     fun savedPayloadKeepsCredentialsOutsideTheRegistry() {
         val session = restoreAndroidPersistedSession(
             encoded = legacyPayload(),
-            persistMigrated = {},
+            persistMigrated = { true },
             recordDiagnostic = {},
         )
 
@@ -124,6 +136,20 @@ class AndroidPersistedSessionTest {
         assertFalse(rendered.contains("private-app-password"))
         assertFalse(rendered.contains("cloud.example.test"))
         assertFalse(rendered.contains("alice"))
+    }
+
+    @Test
+    fun rejectedMigrationCommitIsReportedWithoutDiscardingTheLegacySession() {
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+
+        val session = restoreAndroidPersistedSession(
+            encoded = legacyPayload(),
+            persistMigrated = { false },
+            recordDiagnostic = diagnostics::add,
+        )
+
+        assertEquals("alice", session.loginName)
+        assertEquals(listOf("ACCOUNT_REGISTRY_MIGRATION_FAILED"), diagnostics.mapNotNull { it.code })
     }
 
     private fun legacyPayload(): String = JSONObject()

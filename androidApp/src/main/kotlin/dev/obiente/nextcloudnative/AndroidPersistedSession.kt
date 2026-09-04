@@ -12,7 +12,7 @@ import org.json.JSONObject
 
 internal fun restoreAndroidPersistedSession(
     encoded: String,
-    persistMigrated: (String) -> Unit,
+    persistMigrated: (String) -> Boolean,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
 ): NextcloudSession {
     val json = JSONObject(encoded)
@@ -40,9 +40,12 @@ internal fun restoreAndroidPersistedSession(
     }
     if (restored.needsPersistence) {
         runCatching {
-            persistMigrated(
-                json.put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(restored.registry)).toString(),
-            )
+            val migrated = json
+                .put(KEY_ACCOUNT_REGISTRY, encodeNextcloudAccountRegistry(restored.registry))
+                .toString()
+            check(persistMigrated(migrated)) {
+                "Could not persist the migrated account registry."
+            }
         }.onFailure { failure ->
             recordDiagnostic(
                 SupportDiagnosticEventDraft(
