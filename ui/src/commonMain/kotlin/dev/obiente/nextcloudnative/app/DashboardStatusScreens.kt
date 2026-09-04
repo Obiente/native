@@ -74,11 +74,11 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 
 internal sealed interface DashboardSurfaceState {
@@ -240,9 +240,9 @@ internal fun NativeDashboardScreen(
             formFactor = formFactor,
         )
     }
-    var workspaceLayout by remember(workspaceScope, workspacePersistenceScopes.legacy) {
-        mutableStateOf(workspaceRepository.load(workspaceScope, workspacePersistenceScopes.legacy))
-    }
+    var workspaceLayout by rememberMigratedHomeWorkspaceLayout(
+        workspaceRepository, workspaceScope, workspacePersistenceScopes.legacy,
+    )
 
     NativeDashboardPresentation(
         state = state,

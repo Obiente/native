@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -22,7 +23,7 @@ class AppWorkspacePinsTest {
     }
 
     @Test
-    fun `legacy account key is copied to the canonical key on first load`() {
+    fun `legacy account key returns a migration plan without writing during load`() {
         val storage = MemoryStorage()
         val repository = AppWorkspacePinsRepository(storage)
         val current = "a".repeat(64)
@@ -32,9 +33,27 @@ class AppWorkspacePinsTest {
         val loaded = repository.loadWithProvenance(current, legacy)
 
         assertEquals(listOf("files", "deck"), loaded.appIds)
-        assertTrue(loaded.storageAuthoritative)
-        assertEquals(listOf("files", "deck"), repository.load(current))
+        assertFalse(loaded.storageAuthoritative)
+        assertTrue(loaded.legacyMigrationRequired)
+        assertEquals(defaultAppWorkspacePinnedIds(), repository.load(current))
+        assertTrue(repository.save(current, loaded.appIds))
         assertTrue(storage.values.keys.any { key -> key.endsWith(current) })
+    }
+
+    @Test
+    fun `legacy pin read cancellation remains control flow`() {
+        val current = "e".repeat(64)
+        val legacy = "f".repeat(64)
+        val repository = AppWorkspacePinsRepository(object : HomeWorkspaceLayoutStorage {
+            override fun read(persistenceKey: String): String? =
+                if (persistenceKey.endsWith(current)) null else throw CancellationException("synthetic cancellation")
+
+            override fun write(persistenceKey: String, encodedSnapshot: String) = Unit
+        })
+
+        assertFailsWith<CancellationException> {
+            repository.loadWithProvenance(current, legacy)
+        }
     }
 
     @Test

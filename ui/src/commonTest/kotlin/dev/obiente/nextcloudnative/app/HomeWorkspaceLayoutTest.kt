@@ -290,7 +290,7 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
-    fun `legacy account layout is rebound and copied to the canonical key`() {
+    fun `legacy account layout returns a migration plan without writing during load`() {
         val storage = RecordingHomeWorkspaceStorage()
         val repository = HomeWorkspaceLayoutRepository(storage)
         val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
@@ -300,11 +300,14 @@ class HomeWorkspaceLayoutTest {
             .resize(HomeSectionIds.Activity, HomeSectionSize.Dense)
         assertTrue(repository.save(legacyLayout))
 
-        val loaded = repository.load(currentScope, legacyScope.accountScopeDigest)
+        val loaded = repository.loadWithMigration(currentScope, legacyScope.accountScopeDigest)
 
-        assertEquals(currentScope, loaded.scope)
-        assertEquals(legacyLayout.sections, loaded.sections)
-        assertEquals(loaded, repository.load(currentScope))
+        assertEquals(currentScope, loaded.layout.scope)
+        assertEquals(legacyLayout.sections, loaded.layout.sections)
+        assertTrue(loaded.legacyMigrationRequired)
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), repository.load(currentScope))
+        assertTrue(repository.save(loaded.layout))
+        assertEquals(loaded.layout, repository.load(currentScope))
         assertEquals(currentScope.persistenceKey, storage.lastKey)
     }
 
