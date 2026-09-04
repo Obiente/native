@@ -107,6 +107,23 @@ class JvmLoginFlowHttpPolicyTest {
     }
 
     @Test
+    fun `blank login name is rejected before account registry construction`() {
+        val interpretation = interpretLoginPollHttpResponse(
+            status = 200,
+            body = """{
+                "server": "https://cloud.example.test",
+                "loginName": "   ",
+                "appPassword": "private-app-password"
+            }""".trimIndent(),
+            challenge = challenge(),
+        )
+
+        val failure = assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(interpretation.result)
+        assertEquals("LOGIN_POLL_RESPONSE_INVALID", failure.code)
+        assertNull(interpretation.approvedLoginName)
+    }
+
+    @Test
     fun `oversized login name is rejected before account registry construction`() {
         val interpretation = interpretLoginPollHttpResponse(
             status = 200,
