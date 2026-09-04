@@ -34,8 +34,9 @@ internal fun AndroidAccountDocumentGrantScope.uri(authority: String, rootId: Str
     AndroidAccountDocumentGrantScope.Tree -> DocumentsContract.buildTreeDocumentUri(authority, rootId)
 }
 
-internal fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
+internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     requireAndroidAccountRemovalWritebacksResolved(androidDocumentPendingWritebacks(context, session).isEmpty())
+    requireAndroidFileSyncAccountRemovalReady(context, NextcloudDocumentIds.accountKey(session))
     AndroidAccountDocumentGrantScope.entries.forEach { scope ->
         context.revokeUriPermission(
             scope.uri(nextcloudDocumentsAuthority(context.packageName), NextcloudDocumentIds.rootId(session)),

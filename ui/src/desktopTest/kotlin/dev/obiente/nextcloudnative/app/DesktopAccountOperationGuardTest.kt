@@ -436,6 +436,27 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun committedRemovalPreservesPairCleanupCancellation() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<CancellationException> {
+            removeDesktopAccountBeforeSyncPairCleanup(
+                removeCredential = {
+                    events += "remove-credential"
+                    true
+                },
+                removeSyncPairs = {
+                    events += "remove-pairs"
+                    throw CancellationException("pair cleanup owner stopped")
+                },
+                recordCleanupFailure = { events += "diagnose-cleanup" },
+            )
+        }
+
+        assertEquals(listOf("remove-credential", "remove-pairs"), events)
+    }
+
+    @Test
     fun failedActiveCredentialCommitPreservesSyncPairs() = runBlocking {
         val events = mutableListOf<String>()
 
