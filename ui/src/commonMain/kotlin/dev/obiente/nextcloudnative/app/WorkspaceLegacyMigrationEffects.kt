@@ -37,7 +37,7 @@ internal fun rememberMigratedHomeWorkspaceLayout(
     val layout = remember(scope, legacyAccountScopeDigest) { mutableStateOf(loaded.layout) }
     LaunchedEffect(scope, loaded.legacyMigrationRequired) {
         if (loaded.legacyMigrationRequired) {
-            withContext(Dispatchers.Default) { repository.save(loaded.layout) }
+            withContext(Dispatchers.Default) { repository.saveIfAbsent(loaded.layout) }
         }
     }
     return layout

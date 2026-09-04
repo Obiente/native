@@ -4,9 +4,31 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 class NextcloudSessionLoadingTest {
+    @Test
+    fun coordinatorDefersSessionMigrationUntilItsEffectRuns() = runBlocking {
+        var loads = 0
+        val expected = NextcloudSession("https://cloud.invalid", "alice", "synthetic-secret")
+        val coordinator = NextcloudSessionLoadCoordinator {
+            loads += 1
+            expected
+        }
+
+        assertNull(coordinator.state)
+        assertEquals(0, loads)
+
+        val loaded = assertIs<NextcloudSessionLoadState.Loaded>(coordinator.load(Dispatchers.Unconfined))
+
+        assertEquals(expected, loaded.session)
+        assertEquals(loaded, coordinator.state)
+        assertEquals(1, loads)
+    }
+
     @Test
     fun secureStorageFailureBecomesRetryableWithoutExposingItsMessage() {
         var attempts = 0

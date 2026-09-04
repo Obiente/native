@@ -82,6 +82,7 @@ fun interpretLoginPollHttpResponse(
         val resultServerUrl = normalizeServerUrl(json.getString("server"), challenge.transportSecurity)
         val loginName = json.getString("loginName")
         val appPassword = json.getString("appPassword")
+        require(resultServerUrl.length <= MAX_ACCOUNT_SERVER_URL_LENGTH) { "The server URL is too long." }
         require(loginName.isNotEmpty()) { "The login name is empty." }
         require(loginName.length <= MAX_ACCOUNT_LOGIN_NAME_LENGTH) { "The login name is too long." }
         require(appPassword.isNotEmpty()) { "The app password is empty." }

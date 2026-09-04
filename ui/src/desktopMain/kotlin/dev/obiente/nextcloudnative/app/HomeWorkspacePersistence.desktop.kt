@@ -12,11 +12,26 @@ internal actual fun rememberHomeWorkspaceLayoutStorage(): HomeWorkspaceLayoutSto
             preferences.get(persistenceKey, null)
 
         override fun write(persistenceKey: String, encodedSnapshot: String) {
-            preferences.put(persistenceKey, encodedSnapshot)
-            preferences.flush()
+            synchronized(DESKTOP_HOME_WORKSPACE_STORAGE_LOCK) {
+                preferences.put(persistenceKey, encodedSnapshot)
+                preferences.flush()
+            }
         }
+
+        override fun writeIfAbsent(persistenceKey: String, encodedSnapshot: String): Boolean =
+            synchronized(DESKTOP_HOME_WORKSPACE_STORAGE_LOCK) {
+                if (preferences.get(persistenceKey, null) != null) {
+                    false
+                } else {
+                    preferences.put(persistenceKey, encodedSnapshot)
+                    preferences.flush()
+                    true
+                }
+            }
     }
 }
 
 @Composable
 internal actual fun rememberHomeFormFactor(): HomeFormFactor = HomeFormFactor.Desktop
+
+private val DESKTOP_HOME_WORKSPACE_STORAGE_LOCK = Any()

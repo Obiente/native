@@ -124,6 +124,23 @@ class JvmLoginFlowHttpPolicyTest {
     }
 
     @Test
+    fun `oversized approved server URL is rejected before account registry construction`() {
+        val interpretation = interpretLoginPollHttpResponse(
+            status = 200,
+            body = """{
+                "server": "https://${"x".repeat(MAX_ACCOUNT_SERVER_URL_LENGTH)}.example.test",
+                "loginName": "person",
+                "appPassword": "private-app-password"
+            }""".trimIndent(),
+            challenge = challenge(),
+        )
+
+        val failure = assertIs<LoginPollResult.AmbiguousAfterExchangeFailure>(interpretation.result)
+        assertEquals("LOGIN_POLL_RESPONSE_INVALID", failure.code)
+        assertNull(interpretation.approvedLoginName)
+    }
+
+    @Test
     fun `fallback diagnostic distinguishes a routed 404 from a pre exchange failure`() {
         val routed = loginPollEndpointFallbackDiagnostic(
             LoginPollFallbackReason.AdvertisedEndpointNotFound,

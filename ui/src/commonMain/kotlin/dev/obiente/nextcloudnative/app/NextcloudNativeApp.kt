@@ -535,12 +535,9 @@ fun NextcloudNativeApp(
     NextcloudNativeTheme(darkTheme = darkTheme) {
         NextcloudAppBackground {
             var sessionLoadAttempt by remember { mutableStateOf(0) }
-            val sessionLoad = remember(services, sessionLoadAttempt) {
-                loadNextcloudSessionSafely(services::loadSession)
-            }
-            var session by remember(services, sessionLoadAttempt) {
-                mutableStateOf((sessionLoad as? NextcloudSessionLoadState.Loaded)?.session)
-            }
+            val sessionComposition = rememberNextcloudSessionCompositionState(services, sessionLoadAttempt)
+            val sessionLoad = sessionComposition.loadState
+            var session by sessionComposition.session
             val signInAgain = {
                 scope.launch {
                     try {
@@ -554,7 +551,9 @@ fun NextcloudNativeApp(
                 }
                 Unit
             }
-            if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
+            if (sessionLoad == null) {
+                LoadingMessage("Loading account")
+            } else if (sessionLoad == NextcloudSessionLoadState.SecureStorageUnavailable) {
                 SecureSessionStorageUnavailable(
                     onRetry = { sessionLoadAttempt += 1 },
                     onSignInAgain = signInAgain,
