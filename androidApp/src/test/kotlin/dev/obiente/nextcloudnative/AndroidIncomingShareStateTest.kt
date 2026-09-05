@@ -783,6 +783,28 @@ class AndroidIncomingShareStateTest {
     }
 
     @Test
+    fun credentiallessRecoveryAbandonsRemoteChunkAndRemovesPrivateStagingOnce() = runBlocking {
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+        val events = mutableListOf<String>()
+
+        removeAndroidIncomingShareRequests(
+            requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+            cancelWork = { events += "cancel" },
+            releaseChunk = null,
+            recordChunkAbandonment = { _, _ -> events += "abandon-remote" },
+            removeRequest = { events += "remove" },
+        )
+
+        assertEquals(listOf("cancel", "abandon-remote", "remove"), events)
+    }
+
+    @Test
     fun accountRemovalPreservesChunkCleanupCancellation() = runBlocking {
         val staged = request(AndroidIncomingShareState.Uploading).copy(
             chunkSession = AndroidIncomingShareChunkSession(

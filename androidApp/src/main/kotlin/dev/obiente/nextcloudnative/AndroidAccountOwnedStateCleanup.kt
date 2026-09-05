@@ -33,4 +33,16 @@ internal class AndroidAccountOwnedStateCleanup(context: Context) {
             ),
         )
     }
+
+    suspend fun retryWithoutCredentials(accountIdentity: String) {
+        runAndroidAccountRemovalCleanups(
+            listOf(
+                { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
+                { fileOffline.removeForAccount(accountIdentity) },
+                { incomingShares.removeForAccount(accountIdentity) },
+                { durableUploads.removeForAccount(accountIdentity) },
+                { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+            ),
+        )
+    }
 }

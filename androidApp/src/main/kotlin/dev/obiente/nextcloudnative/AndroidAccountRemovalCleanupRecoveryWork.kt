@@ -1,0 +1,111 @@
+package dev.obiente.nextcloudnative
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
+import androidx.work.BackoffPolicy
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.withLock
+
+internal fun installAndroidAccountRemovalCleanupRecovery(
+    context: Context,
+): SharedPreferences.OnSharedPreferenceChangeListener {
+    val appContext = context.applicationContext
+    val preferences = appContext.getSharedPreferences(ANDROID_ACCOUNT_PREFERENCES, Context.MODE_PRIVATE)
+    val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY) {
+            AndroidAccountRemovalCleanupRecoveryWork.schedule(appContext, preferences)
+        }
+    }
+    preferences.registerOnSharedPreferenceChangeListener(listener)
+    AndroidAccountRemovalCleanupRecoveryWork.schedule(appContext, preferences)
+    return listener
+}
+
+internal object AndroidAccountRemovalCleanupRecoveryWork {
+    private const val UNIQUE_WORK = "nextcloud-native-account-removal-cleanup"
+
+    fun schedule(context: Context, preferences: SharedPreferences) {
+        if (!preferences.contains(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY)) return
+        val request = OneTimeWorkRequestBuilder<AndroidAccountRemovalCleanupRecoveryWorker>()
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+            UNIQUE_WORK,
+            ANDROID_ACCOUNT_REMOVAL_CLEANUP_WORK_POLICY,
+            request,
+        )
+    }
+}
+
+internal class AndroidAccountRemovalCleanupRecoveryWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
+        val preferences = applicationContext.getSharedPreferences(
+            ANDROID_ACCOUNT_PREFERENCES,
+            Context.MODE_PRIVATE,
+        )
+        val journal = AndroidAccountRemovalCleanupJournal(
+            preferences = preferences,
+            commit = { editor -> ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
+                requireCommittedAndroidAccountCredentialEdit(editor)
+            } },
+            recordMalformed = { Log.w(LOG_TAG, "Malformed account-removal cleanup journal repaired") },
+        )
+        val registry = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
+            ?.let(::restoreAndroidCredentialFreeRegistry)
+            ?.registry
+        val cleanup = AndroidAccountOwnedStateCleanup(applicationContext)
+        val completed = recoverPendingAndroidAccountRemovalCleanups(
+            pending = journal.pending(),
+            accountOwnedByRegistry = { accountStorageKey ->
+                registry?.accounts?.any { account -> account.id.storageKey == accountStorageKey }
+            },
+            removeAccountOwnedWork = { pending ->
+                ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(pending.workIdentity) {
+                    cleanup.retryWithoutCredentials(pending.workIdentity)
+                }
+            },
+            clearCleanup = journal::clear,
+            recordFailure = { Log.w(LOG_TAG, "Account-removal cleanup recovery deferred", it) },
+        )
+        if (completed) Result.success() else Result.retry()
+    }
+}
+
+internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
+    pending: Collection<AndroidPendingAccountRemovalCleanup>,
+    accountOwnedByRegistry: (String) -> Boolean?,
+    removeAccountOwnedWork: suspend (AndroidPendingAccountRemovalCleanup) -> Unit,
+    clearCleanup: suspend (String) -> Unit,
+    recordFailure: (Exception) -> Unit,
+): Boolean {
+    var completed = true
+    pending.forEach { cleanup ->
+        try {
+            retryAndroidAccountRemovalCleanup(
+                accountOwnedByRegistry = accountOwnedByRegistry(cleanup.accountStorageKey),
+                removeAccountOwnedWork = { removeAccountOwnedWork(cleanup) },
+                clearCleanup = { clearCleanup(cleanup.accountStorageKey) },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            completed = false
+            recordFailure(failure)
+        }
+    }
+    return completed
+}
+
+private const val ANDROID_ACCOUNT_PREFERENCES = "nextcloud_native"
+private const val LOG_TAG = "AccountCleanupRecovery"
+internal val ANDROID_ACCOUNT_REMOVAL_CLEANUP_WORK_POLICY = ExistingWorkPolicy.APPEND_OR_REPLACE
