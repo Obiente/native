@@ -26,7 +26,7 @@ grep -Fq 'channel-nightly' \
   "$project_root/tools/promote-app-update-channel.sh"
 grep -Fq 'desktop-update-manifest.json' \
   "$project_root/.github/workflows/prerelease.yml"
-grep -Fq 'https://github.com/Obiente/nc-native/releases/download/$pointerTag/update-manifest.json' \
+grep -Fq 'https://github.com/obiente/native/releases/download/$pointerTag/update-manifest.json' \
   "$project_root/ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ProjectNewsAndUpdates.kt"
 node --test "$project_root/tools/legacy-update-manifest-compatibility.test.mjs"
 
