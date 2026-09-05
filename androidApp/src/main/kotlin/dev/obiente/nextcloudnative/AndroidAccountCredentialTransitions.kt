@@ -20,7 +20,17 @@ internal fun NextcloudAccountRegistry?.asAccountRetentionSnapshot(): AndroidAcco
         ?: AndroidAccountRetentionSnapshot.Unavailable
 
 internal fun SharedPreferences.durableUploadAccountResolutionAvailable(): Boolean =
-    androidCredentialFreeRegistryAllowsAccountResolution(getString(ANDROID_ACCOUNT_REGISTRY_KEY, null))
+    durableUploadAccountResolutionAvailable {
+        getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
+    }
+
+internal fun durableUploadAccountResolutionAvailable(
+    readRegistry: () -> String?,
+): Boolean = try {
+    androidCredentialFreeRegistryAllowsAccountResolution(readRegistry())
+} catch (_: ClassCastException) {
+    false
+}
 
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
     active: Boolean = false,
