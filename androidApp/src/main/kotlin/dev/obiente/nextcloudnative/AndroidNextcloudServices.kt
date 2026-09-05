@@ -23,6 +23,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
+import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.app.LoginChallenge
 import dev.obiente.nextcloudnative.app.LoginPollResult
 import dev.obiente.nextcloudnative.app.LoginTransportSecurity
@@ -250,9 +251,6 @@ import java.io.IOException
 import java.io.OutputStream
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -372,34 +370,6 @@ internal suspend fun executeAndroidDynamicApiGet(
     )
 }
 
-/** Publishes a pre-synced mutation marker before its non-idempotent request may start. */
-internal fun publishAndroidPendingMutation(temporary: File, target: File) {
-    require(temporary.isFile)
-    require(temporary.parentFile == target.parentFile)
-    try {
-        Files.move(
-            temporary.toPath(),
-            target.toPath(),
-            StandardCopyOption.ATOMIC_MOVE,
-            StandardCopyOption.REPLACE_EXISTING,
-        )
-    } catch (_: AtomicMoveNotSupportedException) {
-        copyAndSyncAndroidPendingMutation(temporary, target)
-    }
-}
-
-internal fun copyAndSyncAndroidPendingMutation(temporary: File, target: File) {
-    require(temporary.isFile)
-    require(temporary.parentFile == target.parentFile)
-    FileInputStream(temporary).use { input ->
-        FileOutputStream(target).use { output ->
-            input.copyTo(output)
-            output.fd.sync()
-        }
-    }
-    check(temporary.delete()) { "Could not clear the published pending mutation staging file." }
-}
-
 internal class AndroidNextcloudServices(
     context: Context,
     private val fileSyncRootPicker: AndroidFileSyncRootPicker? = null,
@@ -452,12 +422,13 @@ internal class AndroidNextcloudServices(
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
     private val nativeMediaPreviewCache =
         AndroidNativeMediaPreviewCache(File(appContext.cacheDir, "native-media-previews-v1"))
-    private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
-    private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
+    private val dynamicApiState = androidDynamicApiProcessState(File(appContext.cacheDir, "dynamic-api-v1"))
+    private val dynamicApiReadCache = dynamicApiState.cache
+    private val dynamicApiRequestCoalescer = dynamicApiState.coalescer
     private val accountOwnedStateCleanup =
         AndroidAccountOwnedStateCleanup(
             appContext, fileReadCache, virtualFileCache, nativeMediaPreviewCache::clearAccount,
-            dynamicApiReadCache, dynamicApiRequestCoalescer,
+            dynamicApiState,
         )
     private val nativeMediaPreviewDecodeMutex = Mutex()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
@@ -793,18 +764,28 @@ internal class AndroidNextcloudServices(
     }
 
     override suspend fun saveDurableMutationRecovery(
+        session: NextcloudSession,
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
     ): Boolean = withContext(Dispatchers.IO) {
         if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext false
+        if (durableMutationAccountScope(session) != accountScope) return@withContext false
         if (encoded.isEmpty() || encoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES) {
             return@withContext false
         }
-        synchronized(androidDurableMutationRecoveryLock) {
-            val key = androidDurableMutationRecoveryKey(accountScope, kind)
-            if (preferences.contains(key)) return@synchronized false
-            preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
+        withAndroidAccountPrivateStatePublication(
+            expectedSession = session,
+            credentialMutationMutex = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+            guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+            resolveSession = { accountCredentials.loadSession(session.accountId) },
+            unavailable = { false },
+        ) {
+            synchronized(androidDurableMutationRecoveryLock) {
+                val key = androidDurableMutationRecoveryKey(accountScope, kind)
+                if (preferences.contains(key)) return@synchronized false
+                preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
+            }
         }
     }
 
@@ -895,21 +876,29 @@ internal class AndroidNextcloudServices(
         targetRecordId: String,
         values: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
-        val encoded = requireNotNull(
-            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
-        ) { "The pending dynamic mutation is invalid." }
-        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
-            "The pending dynamic mutation identity is invalid."
+        withAndroidAccountPrivateStatePublication(
+            expectedSession = session,
+            credentialMutationMutex = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+            guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+            resolveSession = { accountCredentials.loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be recorded.") },
+        ) {
+            val encoded = requireNotNull(
+                encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+            ) { "The pending dynamic mutation is invalid." }
+            val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+                "The pending dynamic mutation identity is invalid."
+            }
+            check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
+                "Could not create the pending mutation store."
+            }
+            val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
+            FileOutputStream(temporary).use { output ->
+                output.write(encoded.encodeToByteArray())
+                output.fd.sync()
+            }
+            publishAndroidPendingMutation(temporary, target)
         }
-        check(pendingDynamicMutationDirectory.mkdirs() || pendingDynamicMutationDirectory.isDirectory) {
-            "Could not create the pending mutation store."
-        }
-        val temporary = File(pendingDynamicMutationDirectory, "${target.name}.part")
-        FileOutputStream(temporary).use { output ->
-            output.write(encoded.encodeToByteArray())
-            output.fd.sync()
-        }
-        publishAndroidPendingMutation(temporary, target)
     }
 
     override suspend fun clearPendingDynamicMutation(
@@ -918,8 +907,16 @@ internal class AndroidNextcloudServices(
         actionId: String,
         targetRecordId: String,
     ) = withContext(Dispatchers.IO) {
-        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
-            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        withAndroidAccountPrivateStatePublication(
+            expectedSession = session,
+            credentialMutationMutex = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+            guard = ANDROID_ACCOUNT_OPERATION_GUARD,
+            resolveSession = { accountCredentials.loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be cleared.") },
+        ) {
+            pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+                check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+            }
         }
         Unit
     }

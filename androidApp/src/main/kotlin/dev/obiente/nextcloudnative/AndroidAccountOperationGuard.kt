@@ -5,6 +5,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal class AndroidAccountOperationGuard {
     private val monitor = Any()
@@ -146,3 +147,14 @@ internal suspend fun <Result> AndroidAccountOperationGuard.withAuthenticatedMuta
     unavailable = { error("The account changed before the authenticated change could be sent.") },
     action = action,
 )
+
+internal suspend fun <Result> withAndroidAccountPrivateStatePublication(
+    expectedSession: dev.obiente.nextcloudnative.app.NextcloudSession,
+    credentialMutationMutex: Mutex,
+    guard: AndroidAccountOperationGuard,
+    resolveSession: suspend () -> dev.obiente.nextcloudnative.app.NextcloudSession?,
+    unavailable: suspend () -> Result,
+    publish: suspend () -> Result,
+): Result = credentialMutationMutex.withLock {
+    guard.withExactAccountSession(expectedSession, resolveSession, unavailable) { publish() }
+}
