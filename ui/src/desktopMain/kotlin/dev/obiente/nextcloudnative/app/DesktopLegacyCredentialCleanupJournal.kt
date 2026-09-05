@@ -42,17 +42,13 @@ internal class DesktopLegacyCredentialCleanupJournal(
             ) {
                 malformed = true
             }
-        }.distinctBy { cleanup -> deriveNextcloudAccountId(cleanup.serverUrl, cleanup.loginName) }
+        }.distinct()
         if (malformed && malformedReported.compareAndSet(false, true)) runCatching(recordMalformed)
         return cleanups
     }
 
     fun prepareAdd(cleanup: DesktopPendingLegacyCredentialCleanup) {
-        val accountId = deriveNextcloudAccountId(cleanup.serverUrl, cleanup.loginName)
-        if (pending().any { existing ->
-                deriveNextcloudAccountId(existing.serverUrl, existing.loginName) == accountId
-            }
-        ) return
+        if (cleanup in pending()) return
         val slot = (0 until MAX_LOCAL_ACCOUNTS).firstOrNull { index ->
             preferences.get(serverKey(index), null) == null && preferences.get(loginKey(index), null) == null
         } ?: error("The legacy credential cleanup journal is full.")
@@ -91,11 +87,11 @@ internal class DesktopLegacyCredentialCleanupJournal(
 
     fun restore(snapshot: DesktopLegacyCredentialCleanupSnapshot) {
         snapshot.slots.forEachIndexed { index, (server, login) ->
-            preferences.putOrRemove(serverKey(index), server)
-            preferences.putOrRemove(loginKey(index), login)
+            preferences.restoreString(serverKey(index), server)
+            preferences.restoreString(loginKey(index), login)
         }
-        preferences.putOrRemove(LEGACY_SERVER_KEY, snapshot.legacyServer)
-        preferences.putOrRemove(LEGACY_LOGIN_KEY, snapshot.legacyLogin)
+        preferences.restoreString(LEGACY_SERVER_KEY, snapshot.legacyServer)
+        preferences.restoreString(LEGACY_LOGIN_KEY, snapshot.legacyLogin)
     }
 
     private fun decode(serverKey: String, loginKey: String): DesktopPendingLegacyCredentialCleanup? {
@@ -115,4 +111,8 @@ internal class DesktopLegacyCredentialCleanupJournal(
         const val LEGACY_SERVER_KEY = "accountLegacyCleanupServer"
         const val LEGACY_LOGIN_KEY = "accountLegacyCleanupLogin"
     }
+}
+
+private fun Preferences.restoreString(key: String, value: String?) {
+    if (value == null) remove(key) else put(key, value)
 }
