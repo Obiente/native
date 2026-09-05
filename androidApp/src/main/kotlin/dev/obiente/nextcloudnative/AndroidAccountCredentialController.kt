@@ -59,7 +59,6 @@ internal class AndroidAccountCredentialController(
     fun accountRetentionSnapshot(): AndroidAccountRetentionSnapshot = readRegistryForCredentialLoad()
         ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
         ?: AndroidAccountRetentionSnapshot.Unavailable
-
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
