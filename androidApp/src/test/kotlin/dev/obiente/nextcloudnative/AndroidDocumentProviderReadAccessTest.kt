@@ -3,9 +3,11 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.io.FileNotFoundException
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -159,6 +161,27 @@ class AndroidDocumentProviderReadAccessTest {
 
         assertTrue(selectionEntered)
         lease.close()
+    }
+
+    @Test
+    fun readValidationLoadsTheIncarnationByCanonicalAccountIdentity() {
+        var loadedIdentity: String? = null
+
+        val lease = acquireAndroidDocumentProviderReadLease(
+            original,
+            originalIncarnation,
+            { original },
+            { accountIdentity ->
+                loadedIdentity = accountIdentity
+                originalIncarnation
+            },
+            AndroidAccountOperationGuard(),
+            AndroidAccountRemovalLifetimeGuard(),
+        )
+        lease.close()
+
+        assertEquals(original.accountId.storageKey, loadedIdentity)
+        assertNotEquals(NextcloudDocumentIds.accountKey(original), loadedIdentity)
     }
 
     private fun readLease(

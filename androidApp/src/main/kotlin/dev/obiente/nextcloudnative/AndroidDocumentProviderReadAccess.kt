@@ -63,7 +63,7 @@ private fun checkAndroidDocumentProviderReadAccess(
     loadCurrentSession: () -> NextcloudSession?,
     loadCurrentIncarnation: (String) -> NextcloudDocumentIncarnation,
 ) {
-    val accountIdentity = NextcloudDocumentIds.accountKey(expectedSession)
+    val accountIdentity = expectedSession.documentProviderIncarnationAccountIdentity()
     if (
         loadCurrentSession() != expectedSession ||
         loadCurrentIncarnation(accountIdentity) != expectedIncarnation

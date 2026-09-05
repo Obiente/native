@@ -90,8 +90,8 @@ class NextcloudDocumentsAccountResolverTest {
                     else -> null
                 }
             },
-            loadIncarnation = { accountKey ->
-                if (accountKey == NextcloudDocumentIds.accountKey(bob)) bobIncarnation else error("unreadable")
+            loadIncarnation = { accountIdentity ->
+                if (accountIdentity == bob.accountId.storageKey) bobIncarnation else error("unreadable")
             },
         )
 
@@ -99,6 +99,27 @@ class NextcloudDocumentsAccountResolverTest {
             listOf(ResolvedNextcloudDocumentsAccount(bob, bobIncarnation)),
             resolver.resolvableAccounts(),
         )
+    }
+
+    @Test
+    fun `incarnations load by canonical local account identity`() {
+        val equivalent = alice.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE:443///")
+        var loadedIdentity: String? = null
+        val resolver = resolver(
+            accounts = listOf(equivalent.accountRecord()),
+            loadSession = { equivalent },
+            loadIncarnation = { accountIdentity ->
+                loadedIdentity = accountIdentity
+                aliceIncarnation
+            },
+        )
+
+        assertEquals(alice.accountId, equivalent.accountId)
+        assertEquals(
+            listOf(ResolvedNextcloudDocumentsAccount(equivalent, aliceIncarnation)),
+            resolver.resolvableAccounts(),
+        )
+        assertEquals(alice.accountId.storageKey, loadedIdentity)
     }
 
     @Test
@@ -136,10 +157,10 @@ class NextcloudDocumentsAccountResolverTest {
     private fun resolver(
         accounts: List<NextcloudAccountRecord>,
         loadSession: (NextcloudAccountId) -> NextcloudSession?,
-        loadIncarnation: (String) -> NextcloudDocumentIncarnation = { accountKey ->
-            when (accountKey) {
-                NextcloudDocumentIds.accountKey(alice) -> aliceIncarnation
-                NextcloudDocumentIds.accountKey(bob) -> bobIncarnation
+        loadIncarnation: (String) -> NextcloudDocumentIncarnation = { accountIdentity ->
+            when (accountIdentity) {
+                alice.accountId.storageKey -> aliceIncarnation
+                bob.accountId.storageKey -> bobIncarnation
                 else -> error("unknown account")
             }
         },

@@ -854,7 +854,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         session: NextcloudSession,
         incarnation: NextcloudDocumentIncarnation,
     ) {
-        require(documentIncarnations.activeIncarnation(NextcloudDocumentIds.accountKey(session)) == incarnation) {
+        require(
+            documentIncarnations.activeIncarnation(session.documentProviderIncarnationAccountIdentity()) == incarnation,
+        ) {
             "The document belongs to an earlier account incarnation."
         }
     }

@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlin.test.Test
@@ -10,7 +11,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class AndroidDocumentProviderIncarnationStoreTest {
-    private val accountIdentity = "a".repeat(32)
+    private val accountIdentity = "a".repeat(64)
 
     @Test
     fun legacyIdentityRemainsUsableUntilItsFirstRemoval() {
@@ -72,6 +73,47 @@ class AndroidDocumentProviderIncarnationStoreTest {
 
         assertNotEquals(first, replacement)
         assertEquals(NextcloudDocumentIncarnation.Versioned("2".repeat(32)), replacement)
+    }
+
+    @Test
+    fun canonicallyEquivalentServerSpellingsCannotReactivateAnEarlierIncarnation() {
+        val original = NextcloudSession(
+            serverUrl = "https://cloud.example.test/Cloud",
+            loginName = "alice",
+            appPassword = "synthetic-password",
+        )
+        val equivalent = original.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443/Cloud///")
+        val fixture = fixture(incarnations = listOf("1".repeat(32), "2".repeat(32)))
+
+        assertEquals(original.accountId, equivalent.accountId)
+        assertNotEquals(NextcloudDocumentIds.accountKey(original), NextcloudDocumentIds.accountKey(equivalent))
+        val first = fixture.store.prepareForAccountSave(
+            original.documentProviderIncarnationAccountIdentity(),
+            accountAlreadyStored = false,
+        )
+        val retainedDocumentId = NextcloudDocumentIds.documentId(original, first, "Documents/report.pdf")
+        assertEquals(
+            first,
+            fixture.store.prepareForAccountSave(
+                equivalent.documentProviderIncarnationAccountIdentity(),
+                accountAlreadyStored = true,
+            ),
+        )
+
+        fixture.store.complete(
+            fixture.store.retireForRemoval(equivalent.documentProviderIncarnationAccountIdentity()),
+        )
+        val replacement = fixture.store.prepareForAccountSave(
+            original.documentProviderIncarnationAccountIdentity(),
+            accountAlreadyStored = false,
+        )
+
+        assertNotEquals(first, replacement)
+        assertEquals(NextcloudDocumentIncarnation.Versioned("2".repeat(32)), replacement)
+        assertEquals(setOf(original.accountId.storageKey), fixture.records.keys)
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.requireForSession(retainedDocumentId, original, replacement)
+        }
     }
 
     @Test
@@ -311,7 +353,7 @@ class AndroidDocumentProviderIncarnationStoreTest {
     @Test
     fun malformedAndUnsupportedJournalsStayUnavailableWhileOtherAccountsRecover() {
         listOf("broken", "2:unsupported").forEach { malformed ->
-            val otherAccount = "b".repeat(32)
+            val otherAccount = "b".repeat(64)
             val otherActive = AndroidDocumentProviderIncarnationRecord.Active(
                 NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
             )
