@@ -453,11 +453,14 @@ internal class AndroidNextcloudServices(
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
     private val nativeMediaPreviewCache =
         AndroidNativeMediaPreviewCache(File(appContext.cacheDir, "native-media-previews-v1"))
-    private val accountOwnedStateCleanup =
-        AndroidAccountOwnedStateCleanup(appContext, fileReadCache, virtualFileCache, nativeMediaPreviewCache::clearAccount)
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
-    private val nativeMediaPreviewDecodeMutex = Mutex()
     private val dynamicApiRequestCoalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
+    private val accountOwnedStateCleanup =
+        AndroidAccountOwnedStateCleanup(
+            appContext, fileReadCache, virtualFileCache, nativeMediaPreviewCache::clearAccount,
+            dynamicApiReadCache, dynamicApiRequestCoalescer,
+        )
+    private val nativeMediaPreviewDecodeMutex = Mutex()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)

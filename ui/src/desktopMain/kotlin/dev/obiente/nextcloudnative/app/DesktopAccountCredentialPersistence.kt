@@ -691,6 +691,9 @@ private fun NextcloudAccountRecord.toSession(appPassword: String) = NextcloudSes
 internal fun desktopFileCacheAccountId(account: NextcloudAccountRecord): String =
     desktopFileCacheAccountId(account.toSession(appPassword = ""))
 
+internal fun desktopDurableMutationAccountScope(account: NextcloudAccountRecord): String =
+    durableMutationAccountScope(account.toSession(appPassword = ""))
+
 internal class DesktopAccountSessionPublication(
     private val registerPrivateValue: (String) -> Unit,
     private val publishAccountIdentity: (String) -> Unit,
