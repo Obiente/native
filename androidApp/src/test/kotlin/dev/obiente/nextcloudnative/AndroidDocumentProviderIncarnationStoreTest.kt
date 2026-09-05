@@ -101,6 +101,18 @@ class AndroidDocumentProviderIncarnationStoreTest {
     }
 
     @Test
+    fun oversizedMalformedStateCannotCreateAnUnreadableRetirementJournal() {
+        val malformed = "x".repeat(20_000)
+        val records = mutableMapOf(accountIdentity to malformed)
+        val store = fixture(records = records).store
+
+        assertFailsWith<IllegalArgumentException> { store.retireForRemoval(accountIdentity) }
+
+        assertEquals(mapOf(accountIdentity to malformed), records)
+        assertFailsWith<IllegalArgumentException> { store.activeIncarnation(accountIdentity) }
+    }
+
+    @Test
     fun aRetiredIdentityCannotBeReactivatedWhileCredentialsStillExist() {
         val fixture = fixture(incarnations = listOf("1".repeat(32)))
         fixture.store.retire(accountIdentity)
