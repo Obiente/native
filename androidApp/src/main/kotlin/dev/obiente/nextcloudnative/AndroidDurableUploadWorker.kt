@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.DurableUploadState
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
@@ -11,6 +12,7 @@ import dev.obiente.nextcloudnative.app.SupportDiagnosticSeverity
 import dev.obiente.nextcloudnative.app.SupportDiagnosticValuePrivacy
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
+import java.io.FileNotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,11 +21,21 @@ internal class DeckAttachmentUploadWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    override suspend fun doWork(): Result = runDurableUploadWorkerWithRecoverySignal(
+        requestRecovery = {
+            requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(id)
+        },
+    ) {
+        withContext(Dispatchers.IO) {
+            executeDurableUploadWork()
+        }
+    }
+
+    private suspend fun executeDurableUploadWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
+            ?: return Result.failure()
         val store = AndroidDurableMultipartUploadStore(applicationContext)
-        val initial = store.find(jobId) ?: return@withContext Result.success()
+        val initial = store.find(jobId) ?: return Result.success()
         val picker = AndroidLocalUploadPicker(applicationContext)
         if (initial.state.afterProcessRecovery() != initial.state) {
             store.transition(
@@ -32,18 +44,31 @@ internal class DeckAttachmentUploadWorker(
                 target = DurableUploadState.OutcomeUnknown,
                 message = "The app restarted while this upload was in progress. Check the card before uploading again.",
             )
-            picker.release(initial.request.file)
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Warning,
                 outcome = "process-recovery",
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return@withContext Result.success()
+            return resultAfterDurableUploadCapabilityRelease(
+                releaseCapability = { picker.release(initial.request.file) },
+                completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
+                onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                releasedResult = Result.success(),
+                retainedResult = Result.retry(),
+            )
         }
-        if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
+        if (initial.state != DurableUploadState.Queued) {
+            return resultAfterDurableUploadCapabilityRelease(
+                releaseCapability = { picker.release(initial.request.file) },
+                completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
+                onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                releasedResult = Result.success(),
+                retainedResult = Result.retry(),
+            )
+        }
 
-        return@withContext uploadQueuedJob(store, initial, picker, jobId)
+        return uploadQueuedJob(store, initial, picker, jobId)
     }
 
     private suspend fun uploadQueuedJob(
@@ -71,15 +96,19 @@ internal class DeckAttachmentUploadWorker(
         )
         val session = when (accountResolution) {
             is DurableUploadAccountResolution.Available -> accountResolution.session
-            DurableUploadAccountResolution.RegistryUnavailable,
-            DurableUploadAccountResolution.CredentialUnavailable,
-            -> {
+            DurableUploadAccountResolution.RegistryUnavailable -> {
                 recordUploadDiagnostic(
                     severity = SupportDiagnosticSeverity.Warning,
-                    outcome = when (accountResolution) {
-                        DurableUploadAccountResolution.RegistryUnavailable -> "account-registry-unavailable"
-                        else -> "account-resolution-deferred"
-                    },
+                    outcome = "account-registry-unavailable",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                return Result.retry()
+            }
+            DurableUploadAccountResolution.CredentialUnavailable -> {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "account-resolution-deferred",
                     accountId = initial.accountId,
                     jobId = jobId,
                 )
@@ -96,6 +125,8 @@ internal class DeckAttachmentUploadWorker(
                         )
                     },
                     releaseSelection = { picker.release(initial.request.file) },
+                    completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
+                    onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
                     recordFailure = {
                         recordUploadDiagnostic(
                             severity = SupportDiagnosticSeverity.Warning,
@@ -105,35 +136,65 @@ internal class DeckAttachmentUploadWorker(
                         )
                     },
                     failureResult = Result.failure(),
+                    retryResult = Result.retry(),
                 )
             }
         }
-        val capabilityReady = runCatching {
-            picker.requirePersisted(initial.request.file)
-            picker.open(initial.request.file).use { }
-        }.isSuccess
-        if (!capabilityReady) {
+        return processQueuedDurableUploadSource(
+            requireCapability = { picker.requirePersisted(initial.request.file) },
+            openSource = { picker.open(initial.request.file).use { } },
+            onCapabilityUnavailable = {
+                store.transition(
+                    jobId,
+                    expected = DurableUploadState.Queued,
+                    target = DurableUploadState.Failed,
+                    message = "The selected file is no longer available. Select it again to retry.",
+                )
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "source-unavailable",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                resultAfterDurableUploadCapabilityRelease(
+                    releaseCapability = { picker.release(initial.request.file) },
+                    completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
+                    onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+                    releasedResult = Result.failure(),
+                    retainedResult = Result.retry(),
+                )
+            },
+            onProviderUnavailable = { failure ->
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "source-open-deferred",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                    failure = failure,
+                )
+                Result.retry()
+            },
+            onReady = {
+                uploadReadyQueuedJob(store, initial, picker, jobId, session)
+            },
+        )
+    }
+
+    private suspend fun uploadReadyQueuedJob(
+        store: AndroidDurableMultipartUploadStore,
+        initial: AndroidDurableMultipartUploadJob,
+        picker: AndroidLocalUploadPicker,
+        jobId: String,
+        session: NextcloudSession,
+    ): Result {
+        val started = claimQueuedDurableUploadForExecution(jobId) {
             store.transition(
                 jobId,
                 expected = DurableUploadState.Queued,
-                target = DurableUploadState.Failed,
-                message = "The selected file is no longer available. Select it again to retry.",
+                target = DurableUploadState.Uploading,
+                message = null,
             )
-            picker.release(initial.request.file)
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
-                outcome = "source-unavailable",
-                accountId = initial.accountId,
-                jobId = jobId,
-            )
-            return Result.failure()
-        }
-        val started = store.transition(
-            jobId,
-            expected = DurableUploadState.Queued,
-            target = DurableUploadState.Uploading,
-            message = null,
-        ) ?: return Result.success()
+        } ?: return Result.success()
         val uploadServices = AndroidNextcloudServices(
             applicationContext,
             localUploadPicker = picker,
@@ -177,7 +238,6 @@ internal class DeckAttachmentUploadWorker(
                     code = "HTTP:${response.status}",
                 )
             }
-            picker.release(started.request.file)
         }.onFailure { failure ->
             // Once the request body starts, a transport exception cannot prove whether the server
             // created the attachment. Never replay it automatically and risk a duplicate.
@@ -194,9 +254,14 @@ internal class DeckAttachmentUploadWorker(
                 jobId = jobId,
                 failure = failure,
             )
-            picker.release(started.request.file)
         }
-        return Result.success()
+        return resultAfterDurableUploadCapabilityRelease(
+            releaseCapability = { picker.release(started.request.file) },
+            completeCapabilityCleanup = { store.completeCapabilityCleanup(jobId) },
+            onCleanupRetained = ::requestQueuedDurableUploadSchedulingRecovery,
+            releasedResult = Result.success(),
+            retainedResult = Result.retry(),
+        )
     }
 
     private fun recordUploadDiagnostic(
@@ -230,14 +295,81 @@ internal class DeckAttachmentUploadWorker(
 
 internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
     transitionToFailed: () -> Unit,
-    releaseSelection: () -> Unit,
+    releaseSelection: () -> Boolean,
+    completeCapabilityCleanup: () -> Unit = {},
+    onCleanupRetained: () -> Unit = {},
     recordFailure: () -> Unit,
     failureResult: Result,
+    retryResult: Result,
 ): Result {
     transitionToFailed()
-    releaseSelection()
+    val result = resultAfterDurableUploadCapabilityRelease(
+        releaseCapability = releaseSelection,
+        completeCapabilityCleanup = completeCapabilityCleanup,
+        onCleanupRetained = onCleanupRetained,
+        releasedResult = failureResult,
+        retainedResult = retryResult,
+    )
     recordFailure()
-    return failureResult
+    return result
+}
+
+internal fun <Result> resultAfterDurableUploadCapabilityRelease(
+    releaseCapability: () -> Boolean,
+    completeCapabilityCleanup: () -> Unit = {},
+    onCleanupRetained: () -> Unit = {},
+    releasedResult: Result,
+    retainedResult: Result,
+): Result = try {
+    if (releaseCapability()) {
+        completeCapabilityCleanup()
+        releasedResult
+    } else {
+        runCatching(onCleanupRetained)
+        retainedResult
+    }
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    runCatching(onCleanupRetained)
+    retainedResult
+}
+
+internal suspend fun <Result> processQueuedDurableUploadSource(
+    requireCapability: () -> Unit,
+    openSource: () -> Unit,
+    onCapabilityUnavailable: suspend () -> Result,
+    onProviderUnavailable: suspend (Exception) -> Result,
+    onReady: suspend () -> Result,
+): Result {
+    try {
+        requireCapability()
+        openSource()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: AndroidLocalUploadCapabilityUnavailableException) {
+        return onCapabilityUnavailable()
+    } catch (_: FileNotFoundException) {
+        return onCapabilityUnavailable()
+    } catch (_: SecurityException) {
+        return onCapabilityUnavailable()
+    } catch (failure: Exception) {
+        return onProviderUnavailable(failure)
+    }
+    return onReady()
+}
+
+internal suspend fun <WorkResult> runDurableUploadWorkerWithRecoverySignal(
+    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
+    work: suspend () -> WorkResult,
+): WorkResult = try {
+    work()
+} catch (cancelled: CancellationException) {
+    runCatching(requestRecovery)
+    throw cancelled
+} catch (failure: Exception) {
+    runCatching(requestRecovery)
+    throw failure
 }
 
 internal suspend fun <Result> captureDurableUploadRequestOutcome(
