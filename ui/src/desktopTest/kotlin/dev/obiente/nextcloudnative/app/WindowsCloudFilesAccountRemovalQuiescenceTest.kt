@@ -80,9 +80,10 @@ class WindowsCloudFilesAccountRemovalQuiescenceTest {
                 }
             }
             quiescence.start()
-            assertTrue(disconnected.await(5L, TimeUnit.SECONDS))
+            assertFalse(disconnected.await(250L, TimeUnit.MILLISECONDS))
             assertTrue(quiescence.isAlive)
             backend.releaseFirstDelete()
+            assertTrue(disconnected.await(5L, TimeUnit.SECONDS))
             quiescence.join(5_000L)
 
             assertFalse(quiescence.isAlive)
