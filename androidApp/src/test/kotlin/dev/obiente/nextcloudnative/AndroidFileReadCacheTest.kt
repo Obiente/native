@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -44,6 +45,19 @@ class AndroidFileReadCacheTest {
         cache.invalidate(ACCOUNT_A, "Notes/alice.md")
 
         assertNull(cache.cachedListing(ACCOUNT_A, "Notes"))
+        assertEquals(listOf(bob), cache.cachedListing(ACCOUNT_B, "Notes")?.files)
+    }
+
+    @Test
+    fun accountRemovalDeletesOnlyItsPrivateListingCache() = withCache { root, cache ->
+        val alice = file("Notes/alice.md", "\"a\"")
+        val bob = file("Notes/bob.md", "\"b\"")
+        cache.storeListing(ACCOUNT_A, "Notes", listOf(alice), 10)
+        cache.storeListing(ACCOUNT_B, "Notes", listOf(bob), 20)
+
+        cache.clearAccount(ACCOUNT_A)
+
+        assertFalse(File(root, ACCOUNT_A).exists())
         assertEquals(listOf(bob), cache.cachedListing(ACCOUNT_B, "Notes")?.files)
     }
 
