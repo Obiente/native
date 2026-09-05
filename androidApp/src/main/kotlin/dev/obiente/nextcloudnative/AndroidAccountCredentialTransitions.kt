@@ -17,6 +17,26 @@ internal suspend fun rollbackUnavailableAndroidAccountRemoval(
     clearCleanup()
 }
 
+internal suspend fun retryAndroidAccountRemovalCleanup(
+    accountOwnedByRegistry: Boolean?,
+    removeAccountOwnedWork: suspend () -> Unit,
+    clearCleanup: suspend () -> Unit,
+) {
+    when (accountOwnedByRegistry) {
+        true -> clearCleanup()
+        false -> {
+            removeAccountOwnedWork()
+            clearCleanup()
+        }
+        null -> error("Account ownership is unavailable; pending cleanup cannot run safely.")
+    }
+}
+
+internal fun androidAccountRemovalCleanupRetryFailure(failure: Exception) = IllegalStateException(
+    "Previous account cleanup must finish before this account can be added again.",
+    failure,
+)
+
 internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
     resume: suspend () -> Unit,
     notifyDocumentRootsChanged: () -> Unit,
