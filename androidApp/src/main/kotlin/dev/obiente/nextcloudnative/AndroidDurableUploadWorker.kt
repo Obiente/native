@@ -20,10 +20,16 @@ internal class DeckAttachmentUploadWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        runDurableUploadWorkerWithRecoverySignal {
+            executeDurableUploadWork()
+        }
+    }
+
+    private suspend fun executeDurableUploadWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
+            ?: return Result.failure()
         val store = AndroidDurableMultipartUploadStore(applicationContext)
-        val initial = store.find(jobId) ?: return@withContext Result.success()
+        val initial = store.find(jobId) ?: return Result.success()
         val picker = AndroidLocalUploadPicker(applicationContext)
         if (initial.state.afterProcessRecovery() != initial.state) {
             store.transition(
@@ -39,11 +45,11 @@ internal class DeckAttachmentUploadWorker(
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return@withContext Result.success()
+            return Result.success()
         }
-        if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
+        if (initial.state != DurableUploadState.Queued) return Result.success()
 
-        return@withContext uploadQueuedJob(store, initial, picker, jobId)
+        return uploadQueuedJob(store, initial, picker, jobId)
     }
 
     private suspend fun uploadQueuedJob(
@@ -253,6 +259,19 @@ internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
     releaseSelection()
     recordFailure()
     return failureResult
+}
+
+internal suspend fun <WorkResult> runDurableUploadWorkerWithRecoverySignal(
+    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
+    work: suspend () -> WorkResult,
+): WorkResult = try {
+    work()
+} catch (cancelled: CancellationException) {
+    runCatching(requestRecovery)
+    throw cancelled
+} catch (failure: Exception) {
+    runCatching(requestRecovery)
+    throw failure
 }
 
 internal suspend fun <Result> captureDurableUploadRequestOutcome(
