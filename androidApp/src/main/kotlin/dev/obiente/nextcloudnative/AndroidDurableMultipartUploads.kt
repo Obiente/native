@@ -207,23 +207,16 @@ internal suspend fun keepRetryingQueuedDurableUploadScheduling(
     }
 }
 
-internal enum class DurableUploadAccountMismatchOutcome {
-    DeferAccountRecovery,
-    AccountUnavailable,
+internal sealed interface DurableUploadAccountResolution {
+    data class Available(val session: NextcloudSession) : DurableUploadAccountResolution
+    data object RegistryUnavailable : DurableUploadAccountResolution
+    data object CredentialUnavailable : DurableUploadAccountResolution
+    data object AccountUnavailable : DurableUploadAccountResolution
 }
 
-internal fun durableUploadAccountMismatchOutcome(
-    expectedAccountId: String,
-    accountSnapshot: AndroidAccountRetentionSnapshot,
-): DurableUploadAccountMismatchOutcome = when (accountSnapshot) {
-    is AndroidAccountRetentionSnapshot.Available -> {
-        if (androidAccountIdentityIsRetained(expectedAccountId, accountSnapshot.accounts)) {
-            DurableUploadAccountMismatchOutcome.DeferAccountRecovery
-        } else {
-            DurableUploadAccountMismatchOutcome.AccountUnavailable
-        }
-    }
-    AndroidAccountRetentionSnapshot.Unavailable -> DurableUploadAccountMismatchOutcome.DeferAccountRecovery
+internal sealed interface DurableUploadAccountRegistry {
+    data class Available(val accounts: List<NextcloudAccountRecord>) : DurableUploadAccountRegistry
+    data object Unavailable : DurableUploadAccountRegistry
 }
 
 internal fun queuedDurableUploadsForAccount(
@@ -235,38 +228,44 @@ internal fun queuedDurableUploadsForAccount(
 
 internal fun resolveDurableUploadSession(
     expectedAccountId: String,
-    accounts: List<NextcloudAccountRecord>,
+    registry: DurableUploadAccountRegistry,
     loadSession: (NextcloudAccountId) -> NextcloudSession?,
-): NextcloudSession? {
+): DurableUploadAccountResolution {
+    val accounts = when (registry) {
+        is DurableUploadAccountRegistry.Available -> registry.accounts
+        DurableUploadAccountRegistry.Unavailable -> return DurableUploadAccountResolution.RegistryUnavailable
+    }
     val account = accounts.singleOrNull { record ->
         NextcloudDocumentIds.accountKey(record.serverUrl, record.loginName) == expectedAccountId
-    } ?: return null
-    return loadSession(account.id)?.takeIf { session ->
-        NextcloudDocumentIds.accountKey(session) == expectedAccountId
-    }
+    } ?: return DurableUploadAccountResolution.AccountUnavailable
+    val session = loadSession(account.id)
+        ?.takeIf { loaded -> NextcloudDocumentIds.accountKey(loaded) == expectedAccountId }
+        ?: return DurableUploadAccountResolution.CredentialUnavailable
+    return DurableUploadAccountResolution.Available(session)
 }
 
 internal fun resolveDurableUploadSessionWithRegistryRecovery(
     expectedAccountId: String,
-    listAccounts: () -> List<NextcloudAccountRecord>,
+    readRegistry: () -> DurableUploadAccountRegistry,
     recoverRegistry: () -> NextcloudSession?,
     loadSession: (NextcloudAccountId) -> NextcloudSession?,
-): NextcloudSession? {
-    val accounts = listAccounts()
-    val accountAvailable = accounts.any { account ->
-        NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == expectedAccountId
-    }
-    if (!accountAvailable) {
-        val recoveredSession = recoverRegistry()
-        if (
-            recoveredSession != null &&
-            NextcloudDocumentIds.accountKey(recoveredSession) == expectedAccountId
-        ) {
-            return recoveredSession
+): DurableUploadAccountResolution {
+    val initial = readRegistry()
+    val recoveryRequired = when (initial) {
+        DurableUploadAccountRegistry.Unavailable -> true
+        is DurableUploadAccountRegistry.Available -> initial.accounts.none { account ->
+            NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == expectedAccountId
         }
-        return resolveDurableUploadSession(expectedAccountId, listAccounts(), loadSession)
     }
-    return resolveDurableUploadSession(expectedAccountId, accounts, loadSession)
+    if (!recoveryRequired) return resolveDurableUploadSession(expectedAccountId, initial, loadSession)
+    val recoveredSession = recoverRegistry()
+    if (
+        recoveredSession != null &&
+        NextcloudDocumentIds.accountKey(recoveredSession) == expectedAccountId
+    ) {
+        return DurableUploadAccountResolution.Available(recoveredSession)
+    }
+    return resolveDurableUploadSession(expectedAccountId, readRegistry(), loadSession)
 }
 
 internal data class AndroidDurableMultipartUploadJob(
