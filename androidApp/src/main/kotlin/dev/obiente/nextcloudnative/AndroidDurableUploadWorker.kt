@@ -63,20 +63,50 @@ internal class DeckAttachmentUploadWorker(
     ): Result {
         val services = AndroidNextcloudServices(applicationContext)
         if (!services.isDurableUploadAccountResolutionAvailable()) return Result.retry()
-        val session = resolveDurableUploadSessionWithRegistryRecovery(
+        val accountResolution = resolveDurableUploadSessionWithRegistryRecovery(
             expectedAccountId = initial.accountId,
-            listAccounts = services::listAccounts,
+            readRegistry = services::durableUploadAccountRegistry,
             recoverRegistry = { services.loadSession() },
             loadSession = services::loadSession,
         )
-        if (session == null) {
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
-                outcome = "account-resolution-deferred",
-                accountId = initial.accountId,
-                jobId = jobId,
-            )
-            return Result.retry()
+        val session = when (accountResolution) {
+            is DurableUploadAccountResolution.Available -> accountResolution.session
+            DurableUploadAccountResolution.RegistryUnavailable,
+            DurableUploadAccountResolution.CredentialUnavailable,
+            -> {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = when (accountResolution) {
+                        DurableUploadAccountResolution.RegistryUnavailable -> "account-registry-unavailable"
+                        else -> "account-resolution-deferred"
+                    },
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                return Result.retry()
+            }
+            DurableUploadAccountResolution.AccountUnavailable -> {
+                return failQueuedDurableUploadForUnavailableAccount(
+                    transitionToFailed = {
+                        store.transition(
+                            jobId,
+                            expected = DurableUploadState.Queued,
+                            target = DurableUploadState.Failed,
+                            message = "The account used for this upload is no longer available.",
+                        )
+                    },
+                    releaseSelection = { picker.release(initial.request.file) },
+                    recordFailure = {
+                        recordUploadDiagnostic(
+                            severity = SupportDiagnosticSeverity.Warning,
+                            outcome = "account-unavailable",
+                            accountId = initial.accountId,
+                            jobId = jobId,
+                        )
+                    },
+                    failureResult = Result.failure(),
+                )
+            }
         }
         val capabilityReady = runCatching {
             picker.requirePersisted(initial.request.file)
@@ -196,6 +226,18 @@ internal class DeckAttachmentUploadWorker(
     internal companion object {
         const val KEY_JOB_ID = "job_id"
     }
+}
+
+internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
+    transitionToFailed: () -> Unit,
+    releaseSelection: () -> Unit,
+    recordFailure: () -> Unit,
+    failureResult: Result,
+): Result {
+    transitionToFailed()
+    releaseSelection()
+    recordFailure()
+    return failureResult
 }
 
 internal suspend fun <Result> captureDurableUploadRequestOutcome(
