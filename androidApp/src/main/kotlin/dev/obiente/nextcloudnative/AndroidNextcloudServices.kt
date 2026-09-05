@@ -939,8 +939,11 @@ internal class AndroidNextcloudServices(
     override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) =
         withContext(Dispatchers.IO) { deckCardDrafts.migrateLegacyEntries(session) }
 
-    override suspend fun saveSession(session: NextcloudSession): NextcloudSession =
-        accountCredentials.saveSession(session)
+    override suspend fun saveSession(session: NextcloudSession): NextcloudSession {
+        val persisted = accountCredentials.saveSession(session)
+        dynamicApiRequestCoalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(persisted))
+        return persisted
+    }
 
     internal fun accountRetentionSnapshot() = accountCredentials.accountRetentionSnapshot()
 
