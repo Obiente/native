@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONObject
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -157,6 +158,48 @@ class AndroidLocalUploadCapabilityLifecycleTest {
     }
 
     @Test
+    fun `release exception with exact read grant present retains metadata`() {
+        var metadataPresent = true
+
+        val released = releaseDurableUploadCapability(
+            releasePermission = { error("provider failure") },
+            isPermissionAbsent = { false },
+            removeMetadata = { true.also { metadataPresent = false } },
+        )
+
+        assertFalse(released)
+        assertTrue(metadataPresent)
+    }
+
+    @Test
+    fun `release exception with exact read grant absent deletes metadata`() {
+        var metadataPresent = true
+
+        val released = releaseDurableUploadCapability(
+            releasePermission = { error("grant already absent") },
+            isPermissionAbsent = { true },
+            removeMetadata = { true.also { metadataPresent = false } },
+        )
+
+        assertTrue(released)
+        assertFalse(metadataPresent)
+    }
+
+    @Test
+    fun `release verification failure retains metadata`() {
+        var metadataPresent = true
+
+        val released = releaseDurableUploadCapability(
+            releasePermission = { error("provider failure") },
+            isPermissionAbsent = { error("permission query failed") },
+            removeMetadata = { true.also { metadataPresent = false } },
+        )
+
+        assertFalse(released)
+        assertTrue(metadataPresent)
+    }
+
+    @Test
     fun `uncached unreadable encrypted metadata is retained without claiming capability release`() {
         var encryptedMetadata: String? = "unreadable-encrypted-capability"
         var permissionReleased = false
@@ -243,6 +286,340 @@ class AndroidLocalUploadCapabilityLifecycleTest {
             listOf("permission:content://cached/upload", "metadata"),
             events,
         )
+    }
+
+    @Test
+    fun `shared uri cleanup deletes only current capability metadata`() {
+        val events = mutableListOf<String>()
+
+        val released = releaseStoredDurableUploadCapability(
+            cachedCapability = "content://shared/upload",
+            loadCapability = { error("cache is authoritative") },
+            otherCapabilityOwnsPermission = { true },
+            releasePermission = { events += "permission" },
+            isPermissionAbsent = { error("shared grant must remain") },
+            removeMetadata = {
+                events += "metadata"
+                true
+            },
+        )
+
+        assertTrue(released)
+        assertEquals(listOf("metadata"), events)
+    }
+
+    @Test
+    fun `unreadable shared uri ownership retains current capability`() {
+        var metadataPresent = true
+
+        val released = releaseStoredDurableUploadCapability(
+            cachedCapability = "content://shared/upload",
+            loadCapability = { error("cache is authoritative") },
+            otherCapabilityOwnsPermission = { error("another capability is unreadable") },
+            releasePermission = { error("ownership must be known before release") },
+            isPermissionAbsent = { false },
+            removeMetadata = { true.also { metadataPresent = false } },
+        )
+
+        assertFalse(released)
+        assertTrue(metadataPresent)
+    }
+
+    @Test
+    fun `cached duplicate selection owns shared uri without reading redundant storage`() {
+        var storedLoads = 0
+
+        val capabilities = mergeDurableUploadCapabilities(
+            cachedCapabilities = mapOf("selection-cached" to "content://shared/upload"),
+            storedSelectionIds = listOf("selection-cached"),
+            loadStoredCapability = {
+                storedLoads += 1
+                error("cached capability must be authoritative")
+            },
+        )
+
+        assertEquals("content://shared/upload", capabilities["selection-cached"])
+        assertTrue(
+            durableUploadCapabilityPermissionOwnedByAnother(
+                capabilities = capabilities,
+                targetSelectionId = "selection-target",
+                targetPermission = "content://shared/upload",
+                permissionOf = { capability -> capability },
+                samePermission = String::equals,
+            ),
+        )
+        assertEquals(0, storedLoads)
+    }
+
+    @Test
+    fun `persisted duplicate selection owns shared uri`() {
+        val capabilities = mergeDurableUploadCapabilities(
+            cachedCapabilities = emptyMap(),
+            storedSelectionIds = listOf("selection-persisted"),
+            loadStoredCapability = { "content://shared/upload" },
+        )
+
+        assertEquals("content://shared/upload", capabilities["selection-persisted"])
+        assertTrue(
+            durableUploadCapabilityPermissionOwnedByAnother(
+                capabilities = capabilities,
+                targetSelectionId = "selection-target",
+                targetPermission = "content://shared/upload",
+                permissionOf = { capability -> capability },
+                samePermission = String::equals,
+            ),
+        )
+    }
+
+    @Test
+    fun `unreadable persisted duplicate ownership fails closed`() {
+        assertFailsWith<GeneralSecurityException> {
+            mergeDurableUploadCapabilities(
+                cachedCapabilities = emptyMap(),
+                storedSelectionIds = listOf("selection-unreadable"),
+                loadStoredCapability = { throw GeneralSecurityException("synthetic decryption failure") },
+            )
+        }
+    }
+
+    @Test
+    fun `failed acquisition rollback retains capability record for recovery`() {
+        var acquiringTracked = false
+        var capabilityClears = 0
+        var recoveryRequests = 0
+
+        assertFailsWith<IllegalStateException> {
+            acquireDurableUploadCapability(
+                persistAcquiring = { true.also { acquiringTracked = true } },
+                takePermission = {},
+                persistMetadata = { false },
+                releasePermission = { error("provider failure") },
+                isPermissionAbsent = { false },
+                removeCapability = { true.also { capabilityClears += 1 } },
+                onRollbackRetained = { recoveryRequests += 1 },
+            )
+        }
+
+        assertTrue(acquiringTracked)
+        assertEquals(0, capabilityClears)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `ambiguous permission acquisition retains capability record for recovery`() {
+        val expected = IllegalStateException("binder failure")
+        var capabilityClears = 0
+        var recoveryRequests = 0
+
+        val actual = assertFailsWith<IllegalStateException> {
+            acquireDurableUploadCapability(
+                persistAcquiring = { true },
+                takePermission = { throw expected },
+                persistMetadata = { error("metadata must not be written") },
+                releasePermission = { error("ambiguous acquisition is reconciled later") },
+                removeCapability = { true.also { capabilityClears += 1 } },
+                onRollbackRetained = { recoveryRequests += 1 },
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(0, capabilityClears)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `failed ready persistence cleans possibly written capability after grant release`() {
+        val events = mutableListOf<String>()
+        var persistedPhase: CapabilityPhase? = null
+
+        assertFailsWith<IllegalStateException> {
+            acquireDurableUploadCapability(
+                persistAcquiring = {
+                    events += "acquiring"
+                    true.also { persistedPhase = CapabilityPhase.Acquiring }
+                },
+                takePermission = { events += "permission" },
+                persistMetadata = {
+                    events += "ready-false"
+                    false.also { persistedPhase = CapabilityPhase.Ready }
+                },
+                markCleanupPending = {
+                    events += "cleanup-pending"
+                    true.also { persistedPhase = CapabilityPhase.CleanupPending }
+                },
+                releasePermission = { events += "release" },
+                removeCapability = {
+                    events += "metadata"
+                    true.also { persistedPhase = null }
+                },
+            )
+        }
+
+        assertEquals(
+            listOf("acquiring", "permission", "ready-false", "cleanup-pending", "release", "metadata"),
+            events,
+        )
+        assertEquals(null, persistedPhase)
+    }
+
+    @Test
+    fun `current ready record is retained unless cleanup was requested`() {
+        assertFalse(
+            shouldRecoverDurableUploadCapability(
+                phase = CapabilityPhase.Ready,
+                processGeneration = "current-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = false,
+                cleanupExplicitlyPending = false,
+            ),
+        )
+        assertTrue(
+            shouldRecoverDurableUploadCapability(
+                phase = CapabilityPhase.Ready,
+                processGeneration = "current-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = false,
+                cleanupExplicitlyPending = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `prior ready and cleanup phases recover unless durable job owns them`() {
+        assertTrue(
+            shouldRecoverDurableUploadCapability(
+                phase = CapabilityPhase.Ready,
+                processGeneration = "prior-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = false,
+                cleanupExplicitlyPending = false,
+            ),
+        )
+        assertTrue(
+            shouldRecoverDurableUploadCapability(
+                phase = CapabilityPhase.CleanupPending,
+                processGeneration = "current-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = false,
+                cleanupExplicitlyPending = false,
+            ),
+        )
+        assertFalse(
+            shouldRecoverDurableUploadCapability(
+                phase = CapabilityPhase.CleanupPending,
+                processGeneration = "prior-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = true,
+                cleanupExplicitlyPending = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `preexisting or shared grants are never revoked by capability cleanup`() {
+        assertFalse(
+            shouldReleaseDurableUploadPermission(
+                grantPreExisting = true,
+                ownedByAnotherCapability = false,
+            ),
+        )
+        assertFalse(
+            shouldReleaseDurableUploadPermission(
+                grantPreExisting = false,
+                ownedByAnotherCapability = true,
+            ),
+        )
+        assertTrue(
+            shouldReleaseDurableUploadPermission(
+                grantPreExisting = false,
+                ownedByAnotherCapability = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `failed acquiring commit clears possible record before taking permission`() {
+        val events = mutableListOf<String>()
+        var capabilityPresent = false
+        var recoveryRequests = 0
+
+        assertFailsWith<IllegalStateException> {
+            acquireDurableUploadCapability(
+                persistAcquiring = {
+                    events += "acquiring-false"
+                    capabilityPresent = true
+                    false
+                },
+                takePermission = { events += "permission" },
+                persistMetadata = {
+                    events += "ready"
+                    true
+                },
+                releasePermission = { events += "release" },
+                removeCapability = {
+                    events += "metadata"
+                    true.also { capabilityPresent = false }
+                },
+                onRollbackRetained = { recoveryRequests += 1 },
+            )
+        }
+
+        assertEquals(listOf("acquiring-false", "metadata"), events)
+        assertFalse(capabilityPresent)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `only ready capability phase may open or enqueue`() {
+        assertTrue(isDurableUploadCapabilityReady(CapabilityPhase.Ready))
+        assertFalse(isDurableUploadCapabilityReady(CapabilityPhase.Acquiring))
+        assertFalse(isDurableUploadCapabilityReady(CapabilityPhase.CleanupPending))
+    }
+
+    @Test
+    fun `cancelled capability delivery publishes then cleans without leaking cleanup failure`() {
+        val events = mutableListOf<String>()
+
+        val delivered = finalizeDurableUploadCapabilityDelivery(
+            publishReady = { events += "ready" },
+            continuationIsActive = { false },
+            cleanupUndelivered = {
+                events += "cleanup"
+                error("synthetic retained cleanup")
+            },
+        )
+
+        assertFalse(delivered)
+        assertEquals(listOf("ready", "cleanup"), events)
+    }
+
+    @Test
+    fun `retained cleanup requests recovery and reports false`() {
+        var recoveryRequests = 0
+
+        val released = retainDurableUploadCapabilityCleanup { recoveryRequests += 1 }
+
+        assertFalse(released)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `legacy nullable generation stays absent across cleanup serialization`() {
+        val payload = JSONObject().put("phase", CapabilityPhase.CleanupPending.persistedValue)
+
+        assertEquals(null, payload.optionalStrictString("processGeneration"))
+        assertFalse(payload.has("processGeneration"))
+    }
+
+    @Test
+    fun `grant ownership flag requires a raw boolean and legacy defaults conservatively`() {
+        val legacy = JSONObject()
+        val malformed = JSONObject().put("grantPreExisting", "false")
+
+        assertTrue(legacy.optionalStrictBoolean("grantPreExisting") ?: true)
+        assertFailsWith<IllegalArgumentException> {
+            malformed.optionalStrictBoolean("grantPreExisting")
+        }
     }
 
     @Test
