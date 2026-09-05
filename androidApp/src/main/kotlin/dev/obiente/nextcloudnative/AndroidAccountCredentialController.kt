@@ -736,7 +736,7 @@ internal class AndroidAccountCredentialController(
         state: AndroidAccountCredentialState,
     ): SharedPreferences.Editor = editor.apply {
         remove(ANDROID_QUARANTINED_SESSION_KEY)
-        val retainedKeys = state.sessions.keys.mapTo(hashSetOf(), ::androidAccountCredentialSlotKey)
+        val retainedKeys = retainedAndroidAccountCredentialSlotKeys(state)
         preferences.all.keys
             .filter { key -> key.startsWith(ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX) && key !in retainedKeys }
             .forEach(::remove)
