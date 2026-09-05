@@ -18,7 +18,6 @@ import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.LocalUploadFile
 import dev.obiente.nextcloudnative.app.MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS
 import dev.obiente.nextcloudnative.app.MultipartTextField
-import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -191,8 +190,8 @@ internal class DeckAttachmentUploadWorker(
         val accountServices = AndroidNextcloudServices(applicationContext)
         val session = accountServices.loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
-            if (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.listAccounts()) ==
-                DurableUploadAccountMismatchOutcome.DeferRetainedAccount
+            if (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.accountRetentionSnapshot()) ==
+                DurableUploadAccountMismatchOutcome.DeferAccountRecovery
             ) {
                 recordUploadDiagnostic(
                     severity = SupportDiagnosticSeverity.Warning,
@@ -338,19 +337,23 @@ internal class DeckAttachmentUploadWorker(
 }
 
 internal enum class DurableUploadAccountMismatchOutcome {
-    DeferRetainedAccount,
+    DeferAccountRecovery,
     AccountUnavailable,
 }
 
 internal fun durableUploadAccountMismatchOutcome(
     expectedAccountId: String,
-    retainedAccounts: List<NextcloudAccountRecord>,
-): DurableUploadAccountMismatchOutcome =
-    if (androidAccountIdentityIsRetained(expectedAccountId, retainedAccounts)) {
-        DurableUploadAccountMismatchOutcome.DeferRetainedAccount
-    } else {
-        DurableUploadAccountMismatchOutcome.AccountUnavailable
+    accountSnapshot: AndroidAccountRetentionSnapshot,
+): DurableUploadAccountMismatchOutcome = when (accountSnapshot) {
+    is AndroidAccountRetentionSnapshot.Available -> {
+        if (androidAccountIdentityIsRetained(expectedAccountId, accountSnapshot.accounts)) {
+            DurableUploadAccountMismatchOutcome.DeferAccountRecovery
+        } else {
+            DurableUploadAccountMismatchOutcome.AccountUnavailable
+        }
     }
+    AndroidAccountRetentionSnapshot.Unavailable -> DurableUploadAccountMismatchOutcome.DeferAccountRecovery
+}
 
 internal fun queuedDurableUploadsForAccount(
     jobs: List<AndroidDurableMultipartUploadJob>,
