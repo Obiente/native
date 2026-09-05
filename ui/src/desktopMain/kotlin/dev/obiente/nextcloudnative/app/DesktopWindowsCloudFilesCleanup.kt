@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative.app
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.prefs.Preferences
 
@@ -15,6 +17,7 @@ internal fun windowsCloudFilesFailureAfterFallbackCleanup(
 internal const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 internal const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 internal const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
+private const val WINDOWS_CLOUD_FILES_REMOVAL_RECOVERY_SUFFIX = "-removal-recovery"
 
 internal fun desktopWindowsCloudFilesRoot(
     accountId: String,
@@ -119,18 +122,96 @@ internal fun unregisterWindowsCloudFilesRootsForAccountRemoval(
     val currentRoot = validatedWindowsCloudFilesRoot(desktopWindowsCloudFilesRoot(accountId, userHome), userHome)
     val legacyRoot = validatedWindowsCloudFilesRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome), userHome)
     val roots = listOf(currentRoot, legacyRoot)
+    val recoveryRoot = windowsCloudFilesRemovalRecoveryRoot(accountId, userHome)
+    val existingRecoveryRoot = persistedWindowsCloudFilesPreservedRoot(preferences, accountId)
+    check(existingRecoveryRoot == null || existingRecoveryRoot == recoveryRoot) {
+        "Review and acknowledge the previous preserved Windows Cloud Files folder before removing this account."
+    }
     val api = apiFactory()
     var firstFailure: Throwable? = null
     try {
         roots.forEach { root ->
             runCatching { api.unregisterSyncRoot(root) }
-                .onSuccess { clearWindowsCloudFilesRootPreferences(preferences, accountId, root) }
                 .onFailure { failure -> if (firstFailure == null) firstFailure = failure }
         }
+        firstFailure?.let { throw it }
+        removeOrPreserveWindowsCloudFilesRoots(
+            preferences = preferences,
+            accountId = accountId,
+            recoveryRoot = recoveryRoot,
+            roots = roots,
+            api = api,
+        )
+        roots.forEach { root -> clearWindowsCloudFilesRootPreferences(preferences, accountId, root) }
     } finally {
         api.close()
     }
-    firstFailure?.let { throw it }
+}
+
+private fun windowsCloudFilesRemovalRecoveryRoot(accountId: String, userHome: File): Path =
+    File(File(userHome, "Nextcloud Native"), accountId + WINDOWS_CLOUD_FILES_REMOVAL_RECOVERY_SUFFIX)
+        .toPath()
+        .toAbsolutePath()
+        .normalize()
+
+private fun removeOrPreserveWindowsCloudFilesRoots(
+    preferences: Preferences,
+    accountId: String,
+    recoveryRoot: Path,
+    roots: List<Path>,
+    api: WindowsCloudFilesApi,
+) {
+    val stagedRoots = roots.mapIndexed { index, root -> root to recoveryRoot.resolve("root-$index") }
+    val recoveryRegistered = persistedWindowsCloudFilesPreservedRoot(preferences, accountId) == recoveryRoot
+    if (stagedRoots.none { (root, staged) ->
+            Files.exists(root, LinkOption.NOFOLLOW_LINKS) || Files.exists(staged, LinkOption.NOFOLLOW_LINKS)
+        } && !recoveryRegistered
+    ) return
+    if (Files.notExists(recoveryRoot, LinkOption.NOFOLLOW_LINKS)) {
+        Files.createDirectory(recoveryRoot)
+        try {
+            persistWindowsCloudFilesPreservedRoot(preferences, accountId, recoveryRoot)
+        } catch (failure: Throwable) {
+            runCatching { Files.deleteIfExists(recoveryRoot) }.exceptionOrNull()?.let(failure::addSuppressed)
+            throw failure
+        }
+    } else {
+        check(recoveryRegistered) { "The Windows Cloud Files removal recovery folder is not owned by this account." }
+        check(Files.isDirectory(recoveryRoot, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(recoveryRoot)) {
+            "The Windows Cloud Files removal recovery folder is invalid."
+        }
+        persistWindowsCloudFilesPreservedRoot(preferences, accountId, recoveryRoot)
+    }
+    stagedRoots.forEach { (root, staged) ->
+        val sourceExists = Files.exists(root, LinkOption.NOFOLLOW_LINKS)
+        val stagedExists = Files.exists(staged, LinkOption.NOFOLLOW_LINKS)
+        check(!sourceExists || !stagedExists) { "Windows Cloud Files removal found duplicate recovery roots." }
+        if (sourceExists) Files.move(root, staged)
+        if (Files.exists(staged, LinkOption.NOFOLLOW_LINKS) && windowsCloudFilesTreeIsDisposable(staged, api)) {
+            deleteWindowsCloudFilesTree(staged)
+        }
+    }
+    Files.list(recoveryRoot).use { entries ->
+        if (entries.findAny().isPresent) return
+    }
+    Files.delete(recoveryRoot)
+    acknowledgeWindowsCloudFilesPreservedRoot(preferences, accountId)
+}
+
+private fun windowsCloudFilesTreeIsDisposable(root: Path, api: WindowsCloudFilesApi): Boolean =
+    runCatching {
+        Files.walk(root).use { entries ->
+            entries.filter { path -> path != root }.allMatch { path ->
+                !Files.isSymbolicLink(path) &&
+                    api.inspectPlaceholder(path).state == WindowsCloudPlaceholderEntryState.InSync
+            }
+        }
+    }.getOrDefault(false)
+
+private fun deleteWindowsCloudFilesTree(root: Path) {
+    Files.walk(root).use { entries ->
+        entries.sorted(Comparator.reverseOrder()).forEach(Files::delete)
+    }
 }
 
 internal fun validatedWindowsCloudFilesRoot(root: File, userHome: File): Path {
