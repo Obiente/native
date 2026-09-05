@@ -4,6 +4,14 @@ import java.io.File
 import java.nio.file.Path
 import java.util.prefs.Preferences
 
+internal fun windowsCloudFilesFailureAfterFallbackCleanup(
+    providerFailure: String?,
+    fallbackFailure: Throwable?,
+    defaultMessage: String,
+): String? = fallbackFailure?.let { failure ->
+    providerFailure ?: failure.message ?: defaultMessage
+}
+
 internal const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 internal const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 internal const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
