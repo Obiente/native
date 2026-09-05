@@ -523,9 +523,6 @@ internal class DesktopAccountCredentialPersistence(
             pendingCredentialRemovals = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null),
         )
         try {
-            registryStore.write(encodedRegistry)
-            preferences.putOrRemove(KEY_SERVER, activeAccount?.serverUrl)
-            preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
             pendingLegacyCleanupAccount?.let { account ->
                 preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, account.serverUrl)
                 preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, account.loginName)
@@ -537,6 +534,10 @@ internal class DesktopAccountCredentialPersistence(
                     removals.joinToString(",") { pending -> pending.storageKey },
                 )
             }
+            if (pendingLegacyCleanupAccount != null || pendingCredentialRemoval != null) flushPreferences()
+            registryStore.write(encodedRegistry)
+            preferences.putOrRemove(KEY_SERVER, activeAccount?.serverUrl)
+            preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
             flushPreferences()
         } catch (failure: Exception) {
             runCatching { previous.restore(preferences, registryStore) }
