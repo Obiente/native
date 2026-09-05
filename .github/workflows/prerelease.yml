@@ -593,7 +593,7 @@ jobs:
                 'The Windows MSI is currently unsigned. Windows may show a Microsoft Defender SmartScreen warning. After confirming that the download came from this release, choose `More info > Run anyway` to continue. Managed devices may block unsigned installers.'
               printf '\n'
               printf '%s\n' \
-                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo Obiente/nc-native` and compare the file with `SHA256SUMS`.'
+                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo obiente/native` and compare the file with `SHA256SUMS`.'
             } >>"${RUNNER_TEMP}/release-notes.md"
           fi
 
@@ -691,7 +691,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           else
             test "${#assets[@]}" -gt 0
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
@@ -701,7 +701,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           fi
 
           if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then
@@ -725,7 +725,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0

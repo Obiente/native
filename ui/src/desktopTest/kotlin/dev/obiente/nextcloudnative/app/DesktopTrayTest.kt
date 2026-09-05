@@ -32,7 +32,7 @@ class DesktopTrayTest {
         )
         val activated = CountDownLatch(1)
         val registration = registerDesktopTray(
-            "Nextcloud Native - all files are synced",
+            "nati.ve - all files are synced",
             { action ->
                 if (action == DesktopTrayAction.ShowActivity) activated.countDown()
             },
@@ -75,7 +75,7 @@ class DesktopTrayTest {
                 output
             }
             assertTrue(layout.contains("Show sync activity"), layout)
-            assertTrue(layout.contains("Open Nextcloud Native"), layout)
+            assertTrue(layout.contains("Open nati.ve"), layout)
             assertTrue(layout.contains("Quit"), layout)
 
             val activation = ProcessBuilder(
@@ -163,7 +163,7 @@ class DesktopTrayTest {
             menu.GetGroupProperties(emptyList(), emptyList()).map(DBusMenuItemProperties::id),
         )
         assertEquals(
-            listOf("Show sync activity", "Open Nextcloud Native", "Quit"),
+            listOf("Show sync activity", "Open nati.ve", "Quit"),
             layout.children.map { child ->
                 child.value.properties.getValue("label").value
             },

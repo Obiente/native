@@ -5,7 +5,7 @@ completeness contract. It is organized by reusable capability instead of
 assuming that opening an app proves compatibility.
 
 **Last reviewed: 2026-08-20.** Implementation, server APIs, and app behavior
-may have changed. The [GitHub Releases page](https://github.com/Obiente/nc-native/releases)
+may have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
 is the source of truth for published compatibility limitations.
 
 ## Reviewed implementation snapshot

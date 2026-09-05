@@ -16,7 +16,7 @@ desktop_manifest="$6"
 # The seventh argument is reserved for a future signed pointer inventory version.
 pointer_schema="$7"
 [[ "$pointer_schema" == "1" ]]
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 [[ "$immutable_sha" =~ ^[a-f0-9]{40}$ ]]
 max_android_apk_bytes=268435456
 
@@ -279,5 +279,5 @@ gh release create "$pointer_tag" "${publish_assets[@]}" \
     --verify-tag \
     --prerelease \
     --latest=false \
-    --title "Nextcloud Native ${expected_channel} update channel" \
+    --title "nati.ve ${expected_channel} update channel" \
     --notes-file "$temporary/notes.md"

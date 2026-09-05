@@ -15,10 +15,10 @@ apk_name="$6"
 apk_size="$7"
 apk_sha256="$8"
 signer_digests_json="$9"
-repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
+repository="${GITHUB_REPOSITORY:-Obiente/native}"
 max_android_apk_bytes=268435456
 
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 case "$channel" in
     prerelease-v1)
         [[ "$version" =~ ^0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]
@@ -56,11 +56,11 @@ jq -n \
   --argjson versionCode "$version_code" \
   --arg packageName "dev.obiente.nextcloudnative" \
   --argjson minimumAndroidSdk 26 \
-  --arg apkUrl "https://github.com/${repository}/releases/download/${tag}/${apk_name}" \
+  --arg apkUrl "https://github.com/${release_url_repository}/releases/download/${tag}/${apk_name}" \
   --argjson apkSize "$apk_size" \
   --arg apkSha256 "$apk_sha256" \
   --argjson signingCertificateSha256Digests "$signer_digests_json" \
-  --arg releaseNotesUrl "https://github.com/${repository}/releases/tag/${tag}" \
+  --arg releaseNotesUrl "https://github.com/${release_url_repository}/releases/tag/${tag}" \
   '{
     schemaVersion: $schemaVersion,
     channel: $channel,

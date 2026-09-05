@@ -184,7 +184,7 @@ internal class DesktopAudioPlaybackEngine : PlatformAudioPlaybackEngine {
             .url(nativeAudioPlaybackUrl(session, source))
             .header("Authorization", Credentials.basic(session.loginName, session.appPassword))
             .header("Accept", source.mimeType)
-            .header("User-Agent", "Nextcloud Native")
+            .header("User-Agent", "nati.ve")
             .get()
             .build()
         val suffix = source.mimeType.audioFileSuffix()

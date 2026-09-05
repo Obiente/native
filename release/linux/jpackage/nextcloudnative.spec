@@ -6,7 +6,7 @@ Version: APPLICATION_VERSION
 Release: APPLICATION_RELEASE
 License: AGPL-3.0-or-later
 Vendor: Obiente
-URL: https://nc-native.obiente.dev/
+URL: https://nati.ve/
 
 %if "xAPPLICATION_PREFIX" != "x"
 Prefix: APPLICATION_PREFIX
@@ -28,7 +28,7 @@ Requires: PACKAGE_DEFAULT_DEPENDENCIES PACKAGE_CUSTOM_DEPENDENCIES
 %define default_filesystem / /opt /usr /usr/bin /usr/lib /usr/local /usr/local/bin /usr/local/lib
 
 %description
-Nextcloud Native brings files, photos, media, collaboration, and installed
+nati.ve brings files, photos, media, collaboration, and installed
 Nextcloud apps together in one coherent native desktop client.
 
 %global __os_install_post %{nil}

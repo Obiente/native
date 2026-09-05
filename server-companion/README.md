@@ -8,7 +8,7 @@ manifest and [`openapi.json`](obiente_native_bridge/openapi.json) interface.
 
 This directory contains independently installable server apps that add a
 narrow capability where an upstream app does not expose a complete native
-client API. Nextcloud Native must continue to work without these modules and
+client API. nati.ve must continue to work without these modules and
 must discover each bridge through the normal capabilities response.
 
 - [`obiente_native_bridge`](obiente_native_bridge/README.md) exposes

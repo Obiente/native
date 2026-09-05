@@ -360,7 +360,7 @@ export function composeReleaseNotes(version, fragments) {
   });
   if (!body) fail("No user-facing unreleased fragments are available.");
   return [
-    `# Nextcloud Native ${version}`,
+    `# nati.ve ${version}`,
     "",
     body,
     "",

@@ -63,6 +63,7 @@ node --test tools/legacy-update-manifest-compatibility.test.mjs
 node --test tools/nightly-release-notes.test.mjs
 node --test tools/release-download-table.test.mjs
 bash tools/test-desktop-package-version.sh
+bash tools/test-release-repository.sh
 bash tools/test-android-update-manifest-assets.sh
 bash tools/test-nightly-release-workflow.sh
 bash tools/test-marketing-capture-workflow.sh

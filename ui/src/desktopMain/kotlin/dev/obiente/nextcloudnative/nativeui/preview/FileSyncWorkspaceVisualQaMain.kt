@@ -99,7 +99,7 @@ fun main() = application {
 
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Nextcloud Native folder sync QA",
+        title = "nati.ve folder sync QA",
         state = rememberWindowState(width = width.dp, height = height.dp),
     ) {
         NextcloudNativeTheme(darkTheme = false) {

@@ -94,7 +94,7 @@ fun DesktopFileSyncTrayPopup(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onOpenApp) { Text("Open Nextcloud Native") }
+                TextButton(onClick = onOpenApp) { Text("Open nati.ve") }
                 TextButton(onClick = onQuit) { Text("Quit") }
             }
         }
@@ -150,7 +150,7 @@ private fun TrayHeader(
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                snapshot.accountLabel ?: "Nextcloud Native",
+                snapshot.accountLabel ?: "nati.ve",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,

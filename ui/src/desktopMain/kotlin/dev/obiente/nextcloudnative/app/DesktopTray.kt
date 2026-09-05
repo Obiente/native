@@ -434,7 +434,7 @@ private class LinuxStatusNotifierTray private constructor(
                 }
             }.onFailure { failure ->
                 System.err.println(
-                    "Nextcloud Native could not register its Linux tray: " +
+                    "nati.ve could not register its Linux tray: " +
                         "${failure::class.simpleName}: ${failure.message.orEmpty()}",
                 )
             }.getOrNull()
@@ -509,7 +509,7 @@ private const val MENU_OPEN_APP_ID = 2
 private const val MENU_QUIT_ID = 3
 private val MENU_ITEMS = listOf(
     MENU_SHOW_ACTIVITY_ID to "Show sync activity",
-    MENU_OPEN_APP_ID to "Open Nextcloud Native",
+    MENU_OPEN_APP_ID to "Open nati.ve",
     MENU_QUIT_ID to "Quit",
 )
 private val allMenuIds = listOf(MENU_ROOT_ID) + MENU_ITEMS.map(Pair<Int, String>::first)

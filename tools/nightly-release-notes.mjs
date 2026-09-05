@@ -92,7 +92,7 @@ export function composeNightlyReleaseNotes({
   });
   const shortSha = sourceSha.slice(0, 8);
   const lines = [
-    `# Nextcloud Native ${tag}`,
+    `# nati.ve ${tag}`,
     "",
     composeReleaseDownloadTable({ assetNames, repository, tag }),
     "This is an automated prerelease built from the exact `main` revision that passed the repository's build and test workflow. Nightlies are intended for testing and may include unfinished behavior. Keep a backup of important data.",

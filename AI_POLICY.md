@@ -1,10 +1,10 @@
 # AI assistance policy
 
-Nextcloud Native welcomes responsible use of AI-assisted development tools.
+nati.ve welcomes responsible use of AI-assisted development tools.
 The project does not accept autonomous AI contributions.
 
 **Last reviewed: 2026-08-20.** Project governance may have changed. The
-[default-branch policy](https://github.com/Obiente/nc-native/blob/main/AI_POLICY.md)
+[default-branch policy](https://github.com/obiente/native/blob/main/AI_POLICY.md)
 is the source of truth for contribution requirements.
 
 The idea, purpose, judgment, passion, and responsibility behind a contribution

@@ -1,4 +1,4 @@
-# Nextcloud Native agent and contributor guide
+# nati.ve agent and contributor guide
 
 This file is the implementation contract for automated agents and contributors
 working in this repository. It applies to the entire tree unless a more
@@ -6,7 +6,7 @@ specific `AGENTS.md` narrows a rule for a subdirectory.
 
 ## 1. Mission and current phase
 
-Nextcloud Native is an independent Obiente project building one coherent,
+nati.ve is an independent Obiente project building one coherent,
 native client for a complete Nextcloud account. It is not a launcher for web
 pages and it is not an API response browser.
 

@@ -1,13 +1,13 @@
 /* Shared editorial system: the same identity from the landing page to the docs. */
 :root {
   --content-width: 1240px;
-  --background: #121016;
-  --surface-low: #19161f;
-  --surface: #211d28;
-  --surface-high: #2c2635;
-  --outline: #332d3d;
-  --section-alt: #19161f;
-  --text-subtle: #aaa2b5;
+  --background: #101418;
+  --surface-low: #151b20;
+  --surface: #1c242b;
+  --surface-high: #253039;
+  --outline: #2d3942;
+  --section-alt: #151b20;
+  --text-subtle: #a8b6c2;
   --primary: var(--native-accent);
   --primary-strong: var(--native-accent);
   --primary-action: var(--native-button);
@@ -16,13 +16,13 @@
 }
 
 :root[data-theme="light"] {
-  --background: #faf9fb;
-  --surface-low: #f3f0f7;
+  --background: #f8fafb;
+  --surface-low: #f0f4f6;
   --surface: #ffffff;
-  --surface-high: #ede8f4;
-  --outline: #e4dfea;
-  --section-alt: #f3f0f7;
-  --text-subtle: #70677e;
+  --surface-high: #eaf0f3;
+  --outline: #e1e7ec;
+  --section-alt: #f0f4f6;
+  --text-subtle: #596775;
   --primary: var(--native-accent);
   --primary-strong: var(--native-accent);
   --primary-action: var(--native-button);

@@ -73,7 +73,7 @@ internal fun SettingsScreen(
             title = { Text("Stop trusting this certificate?") },
             text = {
                 Text(
-                    "Nextcloud Native will return to Android's normal certificate checks. " +
+                    "nati.ve will return to Android's normal certificate checks. " +
                         "The account may stop connecting until the server uses a trusted certificate.",
                 )
             },
@@ -140,7 +140,7 @@ internal fun SettingsScreen(
                             label = "Explicitly trusted server certificate",
                             description =
                                 "Android could not verify this server through its certificate authorities. " +
-                                    "Nextcloud Native accepts only this SHA-256 fingerprint: " +
+                                    "nati.ve accepts only this SHA-256 fingerprint: " +
                                     certificate.sha256Fingerprint,
                             removalError = trustRemovalError,
                         )

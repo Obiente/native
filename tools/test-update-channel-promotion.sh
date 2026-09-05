@@ -69,7 +69,7 @@ if PATH="$fake_bin:$PATH" \
     FAKE_POINTER_MANIFEST="$candidate" \
     FAKE_UPLOADED_MANIFEST="$temporary_directory/unexpected-oversized-upload.json" \
     "$project_root/tools/promote-app-update-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     "$immutable_tag" \
     0123456789abcdef0123456789abcdef01234567 \
@@ -88,7 +88,7 @@ jq -n --arg code "$malicious_code" \
 
 if PATH="$fake_bin:$PATH" FAKE_POINTER_MANIFEST="$existing" \
     "$project_root/tools/promote-app-update-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     "$immutable_tag" \
     0123456789abcdef0123456789abcdef01234567 \
@@ -112,7 +112,7 @@ while IFS='^' read -r corruption mutation; do
         FAKE_POINTER_MANIFEST="$pointer" \
         FAKE_UPLOADED_MANIFEST="$uploaded" \
         "$project_root/tools/promote-app-update-channel.sh" \
-        Obiente/nc-native \
+        Obiente/native \
         channel-nightly \
         "$immutable_tag" \
         0123456789abcdef0123456789abcdef01234567 \
@@ -166,7 +166,7 @@ if PATH="$fake_bin:$PATH" \
     FAKE_POINTER_MANIFEST_NAME=desktop-update-manifest.json \
     FAKE_UPLOADED_MANIFEST="$temporary_directory/unexpected-desktop-upload.json" \
     "$project_root/tools/promote-app-update-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     "$immutable_tag" \
     0123456789abcdef0123456789abcdef01234567 \
@@ -186,7 +186,7 @@ PATH="$fake_bin:$PATH" \
     FAKE_POINTER_MANIFEST_NAME=desktop-update-manifest.json \
     FAKE_UPLOADED_MANIFEST="$uploaded_desktop" \
     "$project_root/tools/promote-app-update-channel.sh" \
-    Obiente/nc-native \
+    Obiente/native \
     channel-nightly \
     "$immutable_tag" \
     0123456789abcdef0123456789abcdef01234567 \

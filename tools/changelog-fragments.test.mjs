@@ -200,7 +200,7 @@ test("website changelog composition replaces only the live Unreleased section", 
 test("release note preparation shares the user-facing aggregation", () => {
   const parsed = parseFragment(fragment(), "changes/unreleased/42.md");
   const notes = composeReleaseNotes("0.2.0-alpha.1", [parsed]);
-  assert.match(notes, /^# Nextcloud Native 0\.2\.0-alpha\.1/m);
+  assert.match(notes, /^# nati\.ve 0\.2\.0-alpha\.1/m);
   assert.match(notes, /^## Features$/m);
   assert.match(notes, /\[Android, Desktop\]/);
   assert.doesNotMatch(notes, /issue #42/);

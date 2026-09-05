@@ -16,7 +16,7 @@ prerequisites: A connected Linux or Windows account, Calendar installed on Nextc
 # Use Nextcloud Calendar on Linux and Windows
 
 **Last reviewed: 2026-08-30.** The software and published packages may have
-changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Navigation instructions and synthetic screenshots reflect the reviewed source implementation; published packages may differ.
@@ -25,7 +25,7 @@ The desktop Calendar workspace uses the available window for calendar sources, m
 
 ## 1. Navigate month, week, and agenda views
 
-@capture-alt: Nextcloud Native desktop Calendar month workspace with source list, date grid, event rows, search, selected event inspector, Today, refresh, and view controls
+@capture-alt: nati.ve desktop Calendar month workspace with source list, date grid, event rows, search, selected event inspector, Today, refresh, and view controls
 @capture-caption: The desktop Calendar workspace keeps the calendar grid visible, with optional source and event-detail panels.
 
 Open **Calendar** from the sidebar or Apps. Choose month, week, or agenda according to the task. Previous and next move through the active range, while **Today** returns to the current date. Use search to narrow the events already loaded for the view.
@@ -36,7 +36,7 @@ Choose **Calendars** to show or hide sources and **Details** to show or hide the
 
 ## 2. Filter sources and inspect event authority
 
-@capture-alt: Nextcloud Native desktop Calendar with multiple named sources, visibility controls, writable and read-only labels, event counts, and selected-day details
+@capture-alt: nati.ve desktop Calendar with multiple named sources, visibility controls, writable and read-only labels, event counts, and selected-day details
 @capture-caption: Source controls hide or show calendars without deleting them and disclose which collections can accept a new or changed event.
 
 Choose **Calendars**, then use the named checkboxes to hide or show a calendar. Visibility is a local workspace choice and does not delete the CalDAV collection. Read-only sources remain useful for planning but cannot accept edits. The create action is enabled only when at least one writable calendar is available.
@@ -47,7 +47,7 @@ Choose **Day schedule** in the inspector to return to the other events on that d
 
 ## 3. Create, update, or delete with conflict protection
 
-@capture-alt: Nextcloud Native desktop event editor with title, recurrence, date, all-day toggle, start and end time, location, description, calendar selection, and Save
+@capture-alt: nati.ve desktop event editor with title, recurrence, date, all-day toggle, start and end time, location, description, calendar selection, and Save
 @capture-caption: The desktop editor gathers a complete CalDAV event and keeps calendar selection and recurrence consequences visible before submission.
 
 Choose **New event**, complete the title and schedule, then add times or select **All day**. Calendar and clock buttons open date and time pickers; typing remains available. Timed editor fields use UTC, matching the saved event values. Use **Repeats** for recurrence, add location and description, and pick the correct writable calendar. Save once and wait for the refreshed view rather than submitting a duplicate after an uncertain network result.

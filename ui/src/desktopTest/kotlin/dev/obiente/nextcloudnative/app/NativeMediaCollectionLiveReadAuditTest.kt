@@ -84,7 +84,7 @@ class NativeMediaCollectionLiveReadAuditTest {
         )
 
         val createPlan = planCreateMediaAlbum(
-            name = "Nextcloud Native audit candidate",
+            name = "nati.ve audit candidate",
             currentUserId = server.userId,
         )
         val addPlan = planAddFileToMediaCollection(ownAlbum, source, server.userId)

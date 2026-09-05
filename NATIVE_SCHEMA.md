@@ -1,4 +1,4 @@
-# Nextcloud Native Schema 0.1
+# nati.ve Schema 0.1
 
 The schema is the trust boundary between discovery and presentation. Discovery
 may use deterministic inspection, verified adapters or local AI, but a renderer

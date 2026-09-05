@@ -344,7 +344,7 @@ reuse_desktop_session() {
     "$adb" -s "$serial" get-state >/dev/null 2>&1 ||
         fail "emulator instance '$instance' is not running"
     "$adb" -s "$serial" shell run-as "$package_name" true >/dev/null 2>&1 ||
-        fail "install a debuggable Nextcloud Native APK on '$instance' first"
+        fail "install a debuggable nati.ve APK on '$instance' first"
 
     "$adb" -s "$serial" shell run-as "$package_name" mkdir -p files
     java "$project_root/tools/DesktopSessionExport.java" |

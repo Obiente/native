@@ -53,6 +53,6 @@ class AppLifecycleSmokeTest {
             Until.findObject(By.pkg("dev.obiente.nextcloudnative").depth(0)),
             10_000,
         )
-        assertNotNull("Nextcloud Native did not expose a window within 10 seconds.", appSurface)
+        assertNotNull("nati.ve did not expose a window within 10 seconds.", appSurface)
     }
 }

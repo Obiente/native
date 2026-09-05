@@ -13,7 +13,7 @@ API on 2026-07-24. Its SHA-256 digest is
 `a20433eeda834a418f92d76853633b4fc9115ad3006c5622ce2611432dc1f14d`.
 
 It is used only as the synthetic Obiente account avatar in deterministic,
-offline product captures. It is not the Nextcloud Native app icon.
+offline product captures. It is not the nati.ve app icon.
 
 The asset in this directory is canonical. The website content generator copies it to
 `website/public/obiente-avatar.png` for static hosting; that generated copy is

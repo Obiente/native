@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 class VirtualFileProviderLocationTest {
     @Test
     fun acceptsReadableCrossPlatformFolderNames() {
-        assertTrue("Nextcloud Native".isValidVirtualFileProviderFolderName())
+        assertTrue("nati.ve".isValidVirtualFileProviderFolderName())
         assertTrue("Photography Library".isValidVirtualFileProviderFolderName())
         assertTrue("Cloud-2".isValidVirtualFileProviderFolderName())
     }

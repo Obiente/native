@@ -405,7 +405,7 @@ internal fun settingsDesktopPreferences(
             SettingsDesktopPreferenceItem(
                 SettingsDesktopPreferenceId.StartOnLogin,
                 "Start on login",
-                "Open Nextcloud Native when you sign in to this device",
+                "Open nati.ve when you sign in to this device",
                 enabled,
                 startOnLoginMessage,
                 startOnLoginMessage != null,

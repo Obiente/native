@@ -4,7 +4,7 @@ Use this index to find the maintained document for a question instead of
 copying status or policy into another file.
 
 **Last reviewed: 2026-08-20.** The documentation set may have changed. The
-[default-branch index](https://github.com/Obiente/nc-native/blob/main/docs/README.md)
+[default-branch index](https://github.com/obiente/native/blob/main/docs/README.md)
 is the source of truth for maintained public documents.
 
 ## Product direction and compatibility

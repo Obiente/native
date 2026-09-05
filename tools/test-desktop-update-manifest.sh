@@ -14,7 +14,7 @@ printf 'dmg fixture' >"$temporary/NextcloudNative-1.0.2921.dmg"
 "$project_root/tools/has-direct-linux-update-assets.sh" "$temporary"
 "$project_root/tools/has-direct-desktop-update-assets.sh" "$temporary"
 
-GITHUB_REPOSITORY=Obiente/nc-native \
+GITHUB_REPOSITORY=Obiente/native \
     "$project_root/tools/create-desktop-update-manifest.sh" \
     "$temporary/desktop-update-manifest.json" \
     nightly-v1 \
@@ -27,7 +27,7 @@ GITHUB_REPOSITORY=Obiente/nc-native \
 "$project_root/tools/verify-desktop-update-manifest-assets.sh" \
     "$temporary/desktop-update-manifest.json" \
     "$temporary" \
-    Obiente/nc-native \
+    Obiente/native \
     "$tag" \
     nightly-v1 \
     "$tag" \
@@ -40,7 +40,7 @@ jq '.assets[0].futureField = "unsupported"' \
 if "$project_root/tools/verify-desktop-update-manifest-assets.sh" \
     "$expanded_manifest" \
     "$temporary" \
-    Obiente/nc-native \
+    Obiente/native \
     "$tag" \
     nightly-v1 \
     "$tag" \
@@ -67,7 +67,7 @@ if ! "$project_root/tools/has-direct-desktop-update-assets.sh" "$non_linux"; the
     echo "A Windows MSI must advance the direct desktop update channel." >&2
     exit 1
 fi
-GITHUB_REPOSITORY=Obiente/nc-native \
+GITHUB_REPOSITORY=Obiente/native \
     "$project_root/tools/create-desktop-update-manifest.sh" \
     "$non_linux/desktop-update-manifest.json" \
     nightly-v1 \

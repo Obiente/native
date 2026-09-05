@@ -32,6 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import dev.obiente.nextcloudnative.app.design.NextcloudIcons
 import dev.obiente.nextcloudnative.app.design.NextcloudRadii
 import dev.obiente.nextcloudnative.app.design.NextcloudSpacing
@@ -69,20 +71,7 @@ internal fun FilesCommandBar(
                 Text("Files", style = MaterialTheme.typography.titleLarge)
             }
             if (desktop) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChanged,
-                    modifier = Modifier.weight(1f).heightIn(max = 52.dp),
-                    placeholder = {
-                        Text(if (searchScope == FileSearchScope.AllFiles) "Search all files" else "Search this folder")
-                    },
-                    leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(NextcloudRadii.Medium),
-                )
+                FilesSearchField(query, onQueryChanged, searchScope, searchLoading, Modifier.weight(1f))
                 SearchScopeControl(searchScope, onSearchScopeChanged)
             }
             Button(onClick = onCreate) {
@@ -98,34 +87,49 @@ internal fun FilesCommandBar(
             paneActions()
         }
         if (!desktop) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(if (searchScope == FileSearchScope.AllFiles) "Search all files" else "Search this folder")
-                },
-                leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
-                trailingIcon = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (searchLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        SearchScopeControl(searchScope, onSearchScopeChanged)
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(NextcloudRadii.Medium),
-            )
+            FilesSearchField(query, onQueryChanged, searchScope, searchLoading, Modifier.fillMaxWidth())
         }
-        if (searchScope == FileSearchScope.CurrentFolder) {
-            FilesBreadcrumbs(path, onOpenPath)
-        } else if (query.isNotBlank()) {
-            Text(
-                "Searching across your entire Nextcloud",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!desktop) SearchScopeControl(searchScope, onSearchScopeChanged)
+            if (searchScope == FileSearchScope.CurrentFolder) {
+                FilesBreadcrumbs(path, onOpenPath)
+            } else if (query.isNotBlank()) {
+                Text(
+                    "Searching across your entire Nextcloud",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun FilesSearchField(
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    scope: FileSearchScope,
+    loading: Boolean,
+    modifier: Modifier,
+) {
+    val label = if (scope == FileSearchScope.AllFiles) "Search all files" else "Search this folder"
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChanged,
+        modifier = modifier.semantics { contentDescription = label },
+        placeholder = { Text(label) },
+        leadingIcon = { Icon(NextcloudIcons.Search, contentDescription = null) },
+        trailingIcon = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                if (query.isNotEmpty()) IconButton(onClick = { onQueryChanged("") }) {
+                    Icon(NextcloudIcons.Close, contentDescription = "Clear file search")
+                }
+            }
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(NextcloudRadii.Medium),
+    )
 }
 
 @Composable
@@ -155,7 +159,7 @@ private fun LayoutControl(layout: FileLayout, onChanged: (FileLayout) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(NextcloudIcons.ListView, contentDescription = "Layout: ${layout.name}. Change view")
+            Icon(if (layout == FileLayout.Grid) NextcloudIcons.Apps else NextcloudIcons.ListView, contentDescription = "Layout: ${layout.name}. Change view")
         }
         DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
             FileLayout.entries.forEach { candidate ->
@@ -173,11 +177,12 @@ private fun LayoutControl(layout: FileLayout, onChanged: (FileLayout) -> Unit) {
 
 @Composable
 private fun FilesBreadcrumbs(path: String, onOpenPath: (String) -> Unit) {
+    val breadcrumbs = remember(path) { fileBreadcrumbs(path) }
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        fileBreadcrumbs(path).forEachIndexed { index, breadcrumb ->
+        breadcrumbs.forEachIndexed { index, breadcrumb ->
             if (index > 0) {
                 Icon(
                     NextcloudIcons.ChevronRight,
@@ -189,7 +194,7 @@ private fun FilesBreadcrumbs(path: String, onOpenPath: (String) -> Unit) {
             TextButton(onClick = { onOpenPath(breadcrumb.path) }, contentPadding = PaddingValues(horizontal = 6.dp)) {
                 Text(
                     breadcrumb.label,
-                    color = if (index == fileBreadcrumbs(path).lastIndex) {
+                    color = if (index == breadcrumbs.lastIndex) {
                         MaterialTheme.colorScheme.onSurface
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant

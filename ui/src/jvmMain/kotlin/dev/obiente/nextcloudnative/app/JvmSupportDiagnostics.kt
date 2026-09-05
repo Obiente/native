@@ -601,7 +601,7 @@ private fun moveAtomically(source: File, destination: File) {
 }
 
 private fun supportBundleReadme(): String = """
-    Nextcloud Native anonymized support report
+    nati.ve anonymized support report
 
     This archive was created locally after an explicit export request.
 

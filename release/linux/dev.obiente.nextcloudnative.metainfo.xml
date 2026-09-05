@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>dev.obiente.nextcloudnative</id>
   <pkgname>nextcloudnative</pkgname>
-  <name>Nextcloud Native</name>
+  <name>nati.ve</name>
   <summary>One native client for your complete Nextcloud account</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
@@ -10,14 +10,14 @@
     <name>Obiente</name>
   </developer>
   <icon type="stock">dev.obiente.nextcloudnative</icon>
-  <icon type="remote" width="512" height="512">https://nc-native.obiente.dev/icon-512.png</icon>
+  <icon type="remote" width="512" height="512">https://nati.ve/icon-512.png</icon>
   <launchable type="desktop-id">nextcloudnative-NextcloudNative.desktop</launchable>
   <provides>
     <binary>NextcloudNative</binary>
   </provides>
-  <url type="homepage">https://nc-native.obiente.dev/</url>
-  <url type="bugtracker">https://github.com/Obiente/nc-native/issues</url>
-  <url type="vcs-browser">https://github.com/Obiente/nc-native</url>
+  <url type="homepage">https://nati.ve/</url>
+  <url type="bugtracker">https://github.com/obiente/native/issues</url>
+  <url type="vcs-browser">https://github.com/obiente/native</url>
   <categories>
     <category>Network</category>
     <category>FileTransfer</category>
@@ -25,7 +25,7 @@
   </categories>
   <description>
     <p>
-      Nextcloud Native brings files, photos, media, collaboration, and installed
+      nati.ve brings files, photos, media, collaboration, and installed
       Nextcloud apps together in one coherent native desktop client.
     </p>
     <p>
@@ -41,19 +41,19 @@
   </description>
   <screenshots>
     <screenshot type="default">
-      <image type="source" width="1440" height="900">https://nc-native.obiente.dev/screenshots/desktop-home.png</image>
+      <image type="source" width="1440" height="900">https://nati.ve/screenshots/desktop-home.png</image>
       <caption>A native desktop workspace for a complete Nextcloud account</caption>
     </screenshot>
     <screenshot>
-      <image type="source" width="1440" height="900">https://nc-native.obiente.dev/screenshots/photo-folder-browser-desktop.png</image>
+      <image type="source" width="1440" height="900">https://nati.ve/screenshots/photo-folder-browser-desktop.png</image>
       <caption>Native photo and folder browsing</caption>
     </screenshot>
     <screenshot>
-      <image type="source" width="1280" height="800">https://nc-native.obiente.dev/screenshots/transfer-desktop-active.png</image>
+      <image type="source" width="1280" height="800">https://nati.ve/screenshots/transfer-desktop-active.png</image>
       <caption>Visible file transfer and synchronization progress</caption>
     </screenshot>
     <screenshot>
-      <image type="source" width="1440" height="900">https://nc-native.obiente.dev/screenshots/deck-board-desktop.png</image>
+      <image type="source" width="1440" height="900">https://nati.ve/screenshots/deck-board-desktop.png</image>
       <caption>A native Nextcloud Deck board</caption>
     </screenshot>
   </screenshots>

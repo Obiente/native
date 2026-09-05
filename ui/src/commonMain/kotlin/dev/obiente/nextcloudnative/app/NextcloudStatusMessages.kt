@@ -58,7 +58,7 @@ internal fun SecureSessionStorageUnavailable(
             Icon(NextcloudIcons.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
             Text(
                 "Secure session storage is locked or unavailable. Unlock it or allow " +
-                    "Nextcloud Native access, then try again, or discard the stored session and sign in again.",
+                    "nati.ve access, then try again, or discard the stored session and sign in again.",
                 color = MaterialTheme.colorScheme.error,
             )
             OutlinedButton(onClick = onRetry) { Text("Try again") }

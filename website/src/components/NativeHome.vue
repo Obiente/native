@@ -15,7 +15,7 @@ const props = defineProps({
 defineEmits(["download"]);
 const captures = new Map(marketingCaptures.map((capture) => [capture.scenario, capture]));
 const heroDesktopCapture = computed(() => captures.get(props.theme === "light"
-  ? "homepage-overview-desktop-light" : "homepage-overview-desktop-dark")
+  ? "homepage-files-desktop-light" : "homepage-files-desktop-dark")
   ?? captures.get("desktop-home"));
 const mobileHomeCapture = computed(() => captures.get(props.theme === "light"
   ? "homepage-overview-mobile-light" : "homepage-overview-mobile-dark")
@@ -42,20 +42,20 @@ async function onAppTabKeydown(event) {
     <section id="product" class="native-hero section-width" aria-labelledby="home-title">
       <div class="native-hero-copy">
         <p class="native-eyebrow">Independent. Open source.</p>
-        <h1 id="home-title">Your whole Nextcloud.<br />One native workspace.</h1>
-        <p class="native-lede">Files, photos, conversations and planning,<br class="desktop-break" /> together in a real app.</p>
+        <h1 id="home-title">Your cloud,<br /><span>natively.</span></h1>
+        <p class="native-lede">A native workspace for your Nextcloud.</p>
         <div class="native-hero-actions">
-          <button class="native-button" type="button" @click="$emit('download')">Get Nextcloud Native</button>
+          <button class="native-button" type="button" @click="$emit('download')">Explore the alpha</button>
           <a class="native-text-link" href="#apps">Explore the app <ArrowRight :size="20" aria-hidden="true" /></a>
         </div>
         <p class="native-alpha">Alpha for Android, Linux and Windows</p>
       </div>
       <figure class="native-hero-visual">
         <img class="native-hero-desktop" :src="heroDesktopCapture.websitePath"
-          alt="Nextcloud Native desktop home view with account status, recent files, activity, events, and photo backup"
+          alt="nati.ve Files workspace with folders, search, offline availability, and file details"
           :width="heroDesktopCapture.width" :height="heroDesktopCapture.height" fetchpriority="high" />
         <img class="native-hero-mobile" :src="mobileHomeCapture.websitePath"
-          alt="Nextcloud Native mobile home with files, conversations, events, and sync status"
+          alt="nati.ve mobile home with files, conversations, events, and sync status"
           :width="mobileHomeCapture.width" :height="mobileHomeCapture.height" />
         <figcaption class="sr-only">Real native UI. Synthetic private data.</figcaption>
       </figure>
@@ -73,7 +73,7 @@ async function onAppTabKeydown(event) {
     <section id="apps" class="native-apps section-width" aria-labelledby="apps-title">
       <div class="native-apps-copy">
         <h2 id="apps-title">Every app keeps<br />what makes it useful.</h2>
-        <p class="native-app-intro">Mail is a mailbox, Deck is a board, Tables is a table, and Memories is a photo library. Shared native building blocks make navigation and actions predictable without flattening everything into a generic data screen.</p>
+        <p class="native-app-intro">Find a file, revisit a photo, pick up a conversation, or plan your next project. Your Nextcloud apps, together in a workspace that feels at home on your device.</p>
         <div class="native-app-tabs" role="tablist" aria-label="Explore Nextcloud apps" @keydown="onAppTabKeydown">
           <button v-for="(family, index) in appFamilies" :id="`app-tab-${index}`" :key="family.title"
             type="button" role="tab" :aria-selected="activeAppFamily === index" aria-controls="app-preview"
@@ -88,7 +88,7 @@ async function onAppTabKeydown(event) {
         <div class="native-app-capture" :style="{ aspectRatio: `${selectedAppCapture.width} / ${selectedAppCapture.height}` }">
           <Transition name="capture-swap">
             <img :key="selectedAppCapture.scenario" :src="selectedAppCapture.websitePath"
-              :alt="`${selectedAppFamily.title} shown in the real Nextcloud Native Compose interface with synthetic data`"
+              :alt="`${selectedAppFamily.title} shown in the real nati.ve Compose interface with synthetic data`"
               :width="selectedAppCapture.width" :height="selectedAppCapture.height" loading="lazy" />
           </Transition>
         </div>

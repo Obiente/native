@@ -1151,16 +1151,13 @@ private fun LoginScreen(
                 color = NextcloudTheme.colors.appIconContainer,
                 shape = RoundedCornerShape(NextcloudRadii.Medium),
             ) {
-                Icon(
-                    NextcloudIcons.Cloud,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(14.dp).size(34.dp),
+                dev.obiente.nextcloudnative.app.design.NativeBrandMark(
+                    modifier = Modifier.size(64.dp),
                 )
             }
-            Text("Nextcloud Native", style = MaterialTheme.typography.headlineLarge)
+            Text("nati.ve", style = MaterialTheme.typography.headlineLarge)
             Text(
-                "Your cloud, in one native app.",
+                "Your cloud, natively.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -4,7 +4,7 @@ This document defines the qualification and integrity requirements for the
 per-user x86-64 Windows MSI.
 
 **Last reviewed: 2026-08-20.** Package availability, signing, and qualification
-state may have changed. Check the [latest releases](https://github.com/Obiente/nc-native/releases)
+state may have changed. Check the [latest releases](https://github.com/obiente/native/releases)
 and their release notes before installing or publishing an MSI. The
 [Publish prerelease workflow](../.github/workflows/prerelease.yml) and
 [`tools/verify-windows-package.ps1`](../tools/verify-windows-package.ps1) define
@@ -46,7 +46,7 @@ Verify a downloaded MSI's provenance with GitHub CLI:
 
 ```powershell
 gh attestation verify .\NextcloudNative-<version>.msi `
-  --repo Obiente/nc-native
+  --repo obiente/native
 ```
 
 Verify its release checksum with PowerShell:

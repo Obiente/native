@@ -1316,15 +1316,15 @@ class WindowsCloudFilesProviderTest {
     @Test
     fun `callback paths are rooted on the reported Windows volume`() {
         assertEquals(
-            "D:\\Users\\runner\\Nextcloud Native\\Apps",
-            windowsCloudAbsoluteCallbackPath("D:", "\\Users\\runner\\Nextcloud Native\\Apps"),
+            "D:\\Users\\runner\\nati.ve\\Apps",
+            windowsCloudAbsoluteCallbackPath("D:", "\\Users\\runner\\nati.ve\\Apps"),
         )
         assertEquals(
-            "C:\\Users\\runner\\Nextcloud Native\\Apps",
-            windowsCloudAbsoluteCallbackPath("D:", "C:\\Users\\runner\\Nextcloud Native\\Apps"),
+            "C:\\Users\\runner\\nati.ve\\Apps",
+            windowsCloudAbsoluteCallbackPath("D:", "C:\\Users\\runner\\nati.ve\\Apps"),
         )
         assertFailsWith<IllegalArgumentException> {
-            windowsCloudAbsoluteCallbackPath("", "\\Users\\runner\\Nextcloud Native\\Apps")
+            windowsCloudAbsoluteCallbackPath("", "\\Users\\runner\\nati.ve\\Apps")
         }
     }
 
@@ -2904,7 +2904,7 @@ class WindowsCloudFilesProviderTest {
         private val blockFirstDelete: Boolean = false,
     ) : WindowsCloudFilesBackend {
         override val accountId: String = "account-01"
-        override val displayName: String = "Nextcloud Native - account@example.test"
+        override val displayName: String = "nati.ve - account@example.test"
         private val uploadLatch = CountDownLatch(expectedUploads)
         private val firstUploadStarted = CountDownLatch(if (blockFirstUpload) 1 else 0)
         private val firstUploadRelease = CountDownLatch(if (blockFirstUpload) 1 else 0)

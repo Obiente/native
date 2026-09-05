@@ -16,7 +16,7 @@ prerequisites: Calendar installed on the connected Nextcloud server, At least on
 # Use Nextcloud Calendar on Android
 
 **Last reviewed: 2026-08-30.** The software and published packages may have
-changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Navigation instructions and synthetic screenshots reflect the reviewed source implementation; published APKs may differ.
@@ -25,7 +25,7 @@ The Android Calendar workspace reads and writes events through CalDAV. It offers
 
 ## 1. Browse a month and switch to the agenda
 
-@capture-alt: Nextcloud Native Android Calendar month view with previous and next navigation, Today, visible events, selected date, source labels, refresh, and add action
+@capture-alt: nati.ve Android Calendar month view with previous and next navigation, Today, visible events, selected date, source labels, refresh, and add action
 @capture-caption: The compact Android month view keeps date navigation and event context touch-friendly without stretching the desktop layout onto a phone.
 
 Open **Calendar** from Apps or a pinned shortcut. Use the previous and next controls to change month and **Today** to return to the current date. The selected date is filled; today's date has an outline when it is not selected. Select a day to see time-first event rows below the grid. **Week** shows seven selectable days and the selected day's schedule. **Agenda** lists the loaded events chronologically. Multi-day events appear on every covered date, with an all-day event's exclusive end date left out.
@@ -36,7 +36,7 @@ Refresh keeps the last matching in-memory result visible while CalDAV reloads. I
 
 ## 2. Create an event in a writable calendar
 
-@capture-alt: Nextcloud Native Android Calendar agenda with touch-sized event rows, times, locations, multiple calendar sources, and the create-event control
+@capture-alt: nati.ve Android Calendar agenda with touch-sized event rows, times, locations, multiple calendar sources, and the create-event control
 @capture-caption: Agenda prioritizes readable event order on a phone while the add action remains disabled when no writable calendar is available.
 
 Choose the add action in the Calendar header. Enter a title, then complete **Schedule**. Choose the date using the calendar button or type YYYY-MM-DD. For a timed event, choose start and end times with the clock buttons or type them; editor times are shown and submitted in UTC. For an all-day event, enable **All day**. Open **Repeats** to choose no recurrence, daily, weekly, monthly, or a validated custom rule. Add a location or description when useful, then select the intended calendar if more than one writable source exists.
@@ -45,7 +45,7 @@ Save once and wait for the CalDAV result. A successful response triggers a fresh
 
 ## 3. Edit or delete only an authoritative event or series
 
-@capture-alt: Nextcloud Native Android event detail showing date, time, recurrence, Edit series, Delete series, and the authoritative recurring event context
+@capture-alt: nati.ve Android event detail showing date, time, recurrence, Edit series, Delete series, and the authoritative recurring event context
 @capture-caption: Android exposes edit and delete only for writable events with an ETag, and recurring occurrences direct changes to the authoritative series.
 
 Open an event. Editing is available only when its calendar is writable, its current ETag is known, and the row is not a generated recurrence occurrence. A generated occurrence is read-only to protect the series. Open the authoritative series to use **Edit series** or **Delete series**; deleting a repeating event permanently removes the complete series.

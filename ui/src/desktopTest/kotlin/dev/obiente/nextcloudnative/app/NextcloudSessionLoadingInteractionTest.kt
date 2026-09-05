@@ -19,7 +19,7 @@ class NextcloudSessionLoadingInteractionTest {
             assertTrue(
                 has(
                     "Secure session storage is locked or unavailable. Unlock it or allow " +
-                        "Nextcloud Native access, then try again, or discard the stored session and sign in again.",
+                        "nati.ve access, then try again, or discard the stored session and sign in again.",
                 ),
             )
             click("Try again")

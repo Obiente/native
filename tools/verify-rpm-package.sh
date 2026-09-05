@@ -79,10 +79,10 @@ assert root.tag == "component"
 assert root.attrib.get("type") == "desktop-application"
 assert root.findtext("id") == "dev.obiente.nextcloudnative"
 assert root.findtext("pkgname") == "nextcloudnative"
-assert root.findtext("name") == "Nextcloud Native"
+assert root.findtext("name") == "nati.ve"
 assert root.findtext("launchable") == "nextcloudnative-NextcloudNative.desktop"
 assert root.find("icon[@type='stock']").text == "dev.obiente.nextcloudnative"
-assert root.find("icon[@type='remote']").text == "https://nc-native.obiente.dev/icon-512.png"
+assert root.find("icon[@type='remote']").text == "https://nati.ve/icon-512.png"
 assert any(
     release.attrib.get("version") == package_version
     for release in root.findall("./releases/release")
@@ -90,7 +90,7 @@ assert any(
 assert len(root.findall("./screenshots/screenshot")) >= 3
 
 desktop_lines = set(Path(desktop_path).read_text(encoding="UTF-8").splitlines())
-assert "Name=Nextcloud Native" in desktop_lines
+assert "Name=nati.ve" in desktop_lines
 assert "Icon=dev.obiente.nextcloudnative" in desktop_lines
 
 with Path(icon_path).open("rb") as icon:

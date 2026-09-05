@@ -11,7 +11,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputDirectory,
 
-    [string]$Repository = "Obiente/nc-native"
+    [string]$Repository = "Obiente/native"
 )
 
 $ErrorActionPreference = "Stop"
@@ -160,17 +160,17 @@ PackageIdentifier: $packageIdentifier
 PackageVersion: $PackageVersion
 PackageLocale: en-US
 Publisher: Obiente
-PublisherUrl: https://nc-native.obiente.dev/
+PublisherUrl: https://nati.ve/
 PublisherSupportUrl: https://github.com/$Repository/issues
 Author: Obiente
-PackageName: Nextcloud Native
-PackageUrl: https://nc-native.obiente.dev/
+PackageName: nati.ve
+PackageUrl: https://nati.ve/
 License: AGPL-3.0-or-later
 LicenseUrl: $licenseUrl
 Copyright: Copyright 2026 Obiente
 ShortDescription: A native client for Nextcloud Files and installed Nextcloud apps.
 Description: |-
-  Nextcloud Native is an independent native client for Nextcloud Files and
+  nati.ve is an independent native client for Nextcloud Files and
   installed Nextcloud apps. It does not embed the Nextcloud web interface.
 Moniker: nextcloud-native
 Tags:

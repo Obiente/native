@@ -253,7 +253,7 @@ internal fun desktopSessionSecretReference(serverUrl: String, loginName: String)
         .toHexString()
     return DesktopSecretReference(
         targetName = "$WINDOWS_CREDENTIAL_PREFIX/session/$identity",
-        label = "Nextcloud Native app password",
+        label = "nati.ve app password",
         attributes = linkedMapOf(
             "application" to DESKTOP_APPLICATION_ID,
             "server" to serverUrl,
@@ -264,7 +264,7 @@ internal fun desktopSessionSecretReference(serverUrl: String, loginName: String)
 
 internal fun desktopDeckDraftSecretReference(): DesktopSecretReference = DesktopSecretReference(
     targetName = "$WINDOWS_CREDENTIAL_PREFIX/deck-card-drafts/v1",
-    label = "Nextcloud Native Deck draft encryption",
+    label = "nati.ve Deck draft encryption",
     attributes = linkedMapOf(
         "application" to DESKTOP_APPLICATION_ID,
         "purpose" to "deck-card-drafts",
@@ -791,6 +791,6 @@ private const val MACOS_CORE_FOUNDATION_FRAMEWORK =
 private const val MAX_SECRET_BYTES = 2_560
 private const val MAX_SECRET_SEARCH_BYTES = 256 * 1024
 private const val MISSING_SECRET_TOOL_MESSAGE =
-    "Secure credential storage is unavailable. Install libsecret-tools on Debian or Ubuntu, or libsecret on Fedora or RHEL, then restart Nextcloud Native."
+    "Secure credential storage is unavailable. Install libsecret-tools on Debian or Ubuntu, or libsecret on Fedora or RHEL, then restart nati.ve."
 private const val KEYRING_UNAVAILABLE_MESSAGE =
     "Secure credential storage is unavailable. Make sure your desktop keyring is running and unlocked, then try again."

@@ -1826,14 +1826,14 @@ private fun marketingVirtualFileStorageSnapshot(
     providerState = if (providerActive) VirtualFileProviderState.Active else VirtualFileProviderState.Inactive,
     providerActive = providerActive,
     providerLocation = when (integration) {
-        VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / Nextcloud Native"
-        VirtualFilePlatformIntegration.WindowsCloudFiles -> "Nextcloud Native in File Explorer"
+        VirtualFilePlatformIntegration.AndroidDocumentsProvider -> "System Files / nati.ve"
+        VirtualFilePlatformIntegration.WindowsCloudFiles -> "nati.ve in File Explorer"
         VirtualFilePlatformIntegration.LinuxFilesystemMount -> "~/Nextcloud Native"
-        VirtualFilePlatformIntegration.AppleFileProvider -> "Files / Nextcloud Native"
+        VirtualFilePlatformIntegration.AppleFileProvider -> "Files / nati.ve"
         VirtualFilePlatformIntegration.InAppOnDemandCache -> null
     },
     providerLocationConfiguration = if (integration == VirtualFilePlatformIntegration.LinuxFilesystemMount) {
-        VirtualFileProviderLocation("Home folder", "Nextcloud Native")
+        VirtualFileProviderLocation("Home folder", "nati.ve")
     } else {
         null
     },
@@ -2495,7 +2495,7 @@ internal val marketingDashboardSnapshot = NativeDashboardSnapshot(
             marketingDashboardItem("storage", "8.6 GB available offline", "4 folder sync pairs", "storage-1"),
         ),
         "talk" to listOf(
-            marketingDashboardItem("talk", "Nextcloud Native", "Mara: The updated brief is ready · 3 unread", "talk-4"),
+            marketingDashboardItem("talk", "nati.ve", "Mara: The updated brief is ready · 3 unread", "talk-4"),
             marketingDashboardItem("talk", "Design system", "Kai: I reviewed the new tokens · 1 unread", "talk-3"),
             marketingDashboardItem("talk", "Community", "Elena: See you at the call · 1 unread", "talk-2"),
             marketingDashboardItem("talk", "Release crew", "You: Desktop artifacts are ready", "talk-1"),
