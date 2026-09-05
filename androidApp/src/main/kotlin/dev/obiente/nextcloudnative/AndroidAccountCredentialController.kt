@@ -56,7 +56,7 @@ internal class AndroidAccountCredentialController(
         },
     )
 
-    fun listAccounts(): List<NextcloudAccountRecord> = readCredentialFreeRegistry()?.accounts.orEmpty()
+    fun listAccounts(): List<NextcloudAccountRecord> = readRegistryForCredentialLoad()?.accounts.orEmpty()
 
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
 
