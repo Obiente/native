@@ -185,6 +185,37 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun writableDescriptorLeaseRejectsAccountRemovalWithoutWaitingForClose() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val accountIdentity = NextcloudDocumentIds.accountKey(session)
+        val descriptorLease = acquireAndroidDocumentMutationAccountLease(session, { session }, guard)
+        var removalEntered = false
+
+        val failure = try {
+            assertFailsWith<IllegalStateException> {
+                withTimeout(1_000L) {
+                    withAndroidAccountRemovalLease(accountIdentity, guard) {
+                        removalEntered = true
+                    }
+                }
+            }
+        } finally {
+            descriptorLease.close()
+        }
+
+        assertEquals(
+            "Finish or discard pending document changes before removing this account.",
+            failure.message,
+        )
+        assertFalse(removalEntered)
+        withTimeout(1_000L) {
+            withAndroidAccountRemovalLease(accountIdentity, guard) { removalEntered = true }
+        }
+        assertTrue(removalEntered)
+    }
+
+    @Test
     fun directDocumentMutationLeaseRejectsReauthenticatedSessionAndReleasesTheGuard() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")

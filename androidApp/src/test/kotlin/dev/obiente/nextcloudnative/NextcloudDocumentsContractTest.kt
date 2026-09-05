@@ -1,11 +1,15 @@
 package dev.obiente.nextcloudnative
 
+import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.coroutines.runBlocking
 
 class NextcloudDocumentsContractTest {
     @Test
@@ -79,5 +83,46 @@ class NextcloudDocumentsContractTest {
         )
 
         assertEquals(listOf("preflight", "revoke", "remove-local"), events)
+    }
+
+    @Test
+    fun `remote revocation ambiguity still completes local removal`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IOException> {
+            revokeAndroidSessionAfterRemovalPreflight(
+                preflight = { events += "preflight" },
+                revoke = {
+                    events += "revoke"
+                    throw IOException("synthetic ambiguous response")
+                },
+                removeLocalAccount = { events += "remove-local" },
+            )
+        }
+
+        assertEquals(listOf("preflight", "revoke", "remove-local"), events)
+    }
+
+    @Test
+    fun `cancellation after remote revocation starts still completes local removal`() = runBlocking {
+        val revokeStarted = CompletableDeferred<Unit>()
+        val removalCompleted = CompletableDeferred<Unit>()
+
+        val operation = launch {
+            revokeAndroidSessionAfterRemovalPreflight(
+                preflight = {},
+                revoke = {
+                    revokeStarted.complete(Unit)
+                    awaitCancellation()
+                },
+                removeLocalAccount = { removalCompleted.complete(Unit) },
+            )
+        }
+        revokeStarted.await()
+        operation.cancel()
+        operation.join()
+
+        assertTrue(operation.isCancelled)
+        assertTrue(removalCompleted.isCompleted)
     }
 }

@@ -9,6 +9,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
@@ -72,8 +73,8 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
         ) ?: return@withLock Result.retry()
         val completed = recoverPendingAndroidAccountRemovalCleanups(
             pending = pending,
-            accountOwnedByRegistry = { accountStorageKey ->
-                registry?.accounts?.any { account -> account.id.storageKey == accountStorageKey }
+            accountOwnedByRegistry = { pendingCleanup ->
+                androidAccountRemovalCleanupOwnedByRegistry(pendingCleanup, registry?.accounts)
             },
             removeAccountOwnedWork = { pending ->
                 ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(pending.workIdentity) {
@@ -91,7 +92,7 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
 
 internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
     pending: Collection<AndroidPendingAccountRemovalCleanup>,
-    accountOwnedByRegistry: (String) -> Boolean?,
+    accountOwnedByRegistry: (AndroidPendingAccountRemovalCleanup) -> Boolean?,
     removeAccountOwnedWork: suspend (AndroidPendingAccountRemovalCleanup) -> Unit,
     clearCleanup: suspend (String) -> Unit,
     recordFailure: () -> Unit,
@@ -100,7 +101,7 @@ internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
     pending.forEach { cleanup ->
         try {
             retryAndroidAccountRemovalCleanup(
-                accountOwnedByRegistry = accountOwnedByRegistry(cleanup.accountStorageKey),
+                accountOwnedByRegistry = accountOwnedByRegistry(cleanup),
                 removeAccountOwnedWork = { removeAccountOwnedWork(cleanup) },
                 clearCleanup = { clearCleanup(cleanup.accountStorageKey) },
             )
@@ -112,6 +113,32 @@ internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
         }
     }
     return completed
+}
+
+internal fun androidAccountRemovalCleanupOwnedByRegistry(
+    cleanup: AndroidPendingAccountRemovalCleanup,
+    retainedAccounts: List<NextcloudAccountRecord>?,
+): Boolean? {
+    retainedAccounts ?: return null
+    val storageOwner = retainedAccounts.firstOrNull { account ->
+        account.id.storageKey == cleanup.accountStorageKey
+    }
+    if (storageOwner != null) {
+        val storageOwnerWorkIdentity = NextcloudDocumentIds.accountKey(
+            storageOwner.serverUrl,
+            storageOwner.loginName,
+        )
+        check(storageOwnerWorkIdentity == cleanup.workIdentity) {
+            "The account-removal cleanup identities do not match."
+        }
+        return true
+    }
+    check(retainedAccounts.none { account ->
+        NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == cleanup.workIdentity
+    }) {
+        "The account-removal cleanup identity belongs to a retained account."
+    }
+    return false
 }
 
 internal fun readPendingAndroidAccountRemovalCleanups(
