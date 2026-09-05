@@ -440,6 +440,64 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
+    fun legacyCleanupJournalKeepsDistinctRawSecretReferencesForOneCanonicalAccount() =
+        withStore { preferences, _ ->
+            val diagnostics = mutableListOf<String>()
+            val journal = DesktopLegacyCredentialCleanupJournal(preferences, preferences::flush) {
+                diagnostics += "malformed"
+            }
+            val withoutSlash = DesktopPendingLegacyCredentialCleanup("https://cloud.example.test", "alice")
+            val withSlash = DesktopPendingLegacyCredentialCleanup("https://cloud.example.test/", "alice")
+
+            journal.prepareAdd(withoutSlash)
+            journal.prepareAdd(withSlash)
+
+            assertEquals(listOf(withoutSlash, withSlash), journal.pending())
+            assertTrue(diagnostics.isEmpty())
+        }
+
+    @Test
+    fun fullLegacyCleanupJournalRejectsAnotherTargetWithoutOverwritingEntries() =
+        withStore { preferences, _ ->
+            repeat(MAX_LOCAL_ACCOUNTS) { index ->
+                preferences.put("accountLegacyCleanupV2.$index.server", "https://cloud$index.example.test")
+                preferences.put("accountLegacyCleanupV2.$index.login", "user$index")
+            }
+            val journal = DesktopLegacyCredentialCleanupJournal(preferences, preferences::flush) {}
+
+            assertFailsWith<IllegalStateException> {
+                journal.prepareAdd(DesktopPendingLegacyCredentialCleanup("https://overflow.example.test", "alice"))
+            }
+
+            assertEquals("https://cloud0.example.test", preferences.get("accountLegacyCleanupV2.0.server", null))
+            assertEquals(
+                "https://cloud63.example.test",
+                preferences.get("accountLegacyCleanupV2.63.server", null),
+            )
+        }
+
+    @Test
+    fun malformedLegacyCleanupSlotIsPreservedAndDoesNotHideValidTargets() =
+        withStore { preferences, _ ->
+            preferences.put("accountLegacyCleanupV2.0.server", "https://malformed.example.test")
+            var malformedReports = 0
+            val journal = DesktopLegacyCredentialCleanupJournal(preferences, preferences::flush) {
+                malformedReports += 1
+            }
+            val valid = DesktopPendingLegacyCredentialCleanup("https://cloud.example.test", "alice")
+
+            journal.prepareAdd(valid)
+
+            assertEquals(listOf(valid), journal.pending())
+            assertEquals(1, malformedReports)
+            assertEquals(
+                "https://malformed.example.test",
+                preferences.get("accountLegacyCleanupV2.0.server", null),
+            )
+            assertEquals(valid.serverUrl, preferences.get("accountLegacyCleanupV2.1.server", null))
+        }
+
+    @Test
     fun secureStoreReadFailureIsNotReportedAsMissingCredentials() = withStore { preferences, secrets ->
         val persistence = persistence(preferences, secrets)
         persistence.saveSession(firstSession())
