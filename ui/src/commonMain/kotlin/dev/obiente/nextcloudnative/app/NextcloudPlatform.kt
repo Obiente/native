@@ -935,7 +935,7 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
 
     /** Opens the native folder chooser and persists a least-privilege folder grant. */
     suspend fun chooseFileSyncLocalRoot(initialRootHint: String? = null): FileSyncLocalRoot? = null
-
+    fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) = Unit
     /** Lists durable share-sheet uploads that still need progress or user review. */
     suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
