@@ -113,7 +113,11 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 "The selected file could not be opened.",
             )
         }
-        selection.continuation.resume(result)
+        resumeLocalUploadSelectionResult(
+            continuation = selection.continuation,
+            result = result,
+            releaseSelected = { file -> release(file) },
+        )
     }
 
     fun open(file: LocalUploadFile): InputStream {
@@ -226,6 +230,18 @@ internal class AndroidLocalUploadCapabilityUnavailableException(
     message: String,
     cause: Throwable? = null,
 ) : IllegalStateException(message, cause)
+
+internal fun resumeLocalUploadSelectionResult(
+    continuation: CancellableContinuation<LocalUploadSelectionResult>,
+    result: LocalUploadSelectionResult,
+    releaseSelected: (LocalUploadFile) -> Unit,
+) {
+    continuation.resume(result) { _, undeliveredResult, _ ->
+        if (undeliveredResult is LocalUploadSelectionResult.Selected) {
+            runCatching { releaseSelected(undeliveredResult.file) }
+        }
+    }
+}
 
 /**
  * Acquires a durable picker capability without exposing an interval where a successful selection
