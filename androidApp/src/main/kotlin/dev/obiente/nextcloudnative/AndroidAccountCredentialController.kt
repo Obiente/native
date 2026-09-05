@@ -179,6 +179,7 @@ internal class AndroidAccountCredentialController(
                         rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
+                    onInactiveRemovalCommitted = notifyDocumentRootsChanged,
                     completeCommittedCleanup = {
                         accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, accountId.storageKey)
                     },
@@ -221,13 +222,13 @@ internal class AndroidAccountCredentialController(
                         },
                     )
                 },
+                onInactiveRemovalCommitted = notifyDocumentRootsChanged,
                 completeCommittedCleanup = {
                     accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, accountId.storageKey)
                 },
                 recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
             )
         }
-        notifyDocumentRootsChanged()
         return true
     }
     suspend fun revokeSession(

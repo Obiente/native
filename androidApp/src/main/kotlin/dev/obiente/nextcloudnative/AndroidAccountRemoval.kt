@@ -28,12 +28,11 @@ internal suspend fun <Result> withAndroidAccountRemovalLease(
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
     action: suspend () -> Result,
-): Result = lifetimeGuard.withRemoval(accountIdentity) {
-    guard.tryWithAccount(
-        accountId = accountIdentity,
-        unavailable = { rejectAndroidAccountRemovalForPendingDocumentChanges() },
-        action = action,
-    )
+): Result = guard.tryWithAccount(
+    accountId = accountIdentity,
+    unavailable = { rejectAndroidAccountRemovalForPendingDocumentChanges() },
+) {
+    lifetimeGuard.withRemoval(accountIdentity, action)
 }
 
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(

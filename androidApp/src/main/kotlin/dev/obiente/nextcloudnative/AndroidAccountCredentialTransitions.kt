@@ -95,6 +95,7 @@ internal suspend fun removeAndroidAccountCredentialData(
     rollbackActiveRemoval: suspend () -> Unit,
     persistInactiveRemoval: suspend () -> Unit,
     rollbackInactiveRemoval: suspend () -> Unit,
+    onInactiveRemovalCommitted: () -> Unit = {},
     completeCommittedCleanup: suspend () -> Unit = {},
     recordCommittedCleanupFailure: (Exception) -> Unit = {},
 ) {
@@ -126,6 +127,7 @@ internal suspend fun removeAndroidAccountCredentialData(
         }
         throw failure
     }
+    onInactiveRemovalCommitted()
     finishCommittedAndroidAccountRemovalCleanup(
         removeQueuedUploads,
         completeCommittedCleanup,
@@ -141,6 +143,7 @@ internal suspend fun removeUnavailableAndroidAccountCredentialData(
     persistRemoval: suspend () -> Unit,
     clearActiveAccount: suspend () -> Unit = persistRemoval,
     rollbackRemoval: suspend () -> Unit,
+    onInactiveRemovalCommitted: () -> Unit = {},
     completeCommittedCleanup: suspend () -> Unit = {},
     recordCommittedCleanupFailure: (Exception) -> Unit = {},
 ) {
@@ -153,6 +156,7 @@ internal suspend fun removeUnavailableAndroidAccountCredentialData(
         rollbackActiveRemoval = rollbackRemoval,
         persistInactiveRemoval = persistRemoval,
         rollbackInactiveRemoval = rollbackRemoval,
+        onInactiveRemovalCommitted = onInactiveRemovalCommitted,
         completeCommittedCleanup = completeCommittedCleanup,
         recordCommittedCleanupFailure = recordCommittedCleanupFailure,
     )
