@@ -540,7 +540,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FilesWorkspaceToolbar.kt": "644e576f094b73a78dae541d15621edf86e75c0408553f6319d4fcefe55ed3d2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GenericNativeFallback.kt": "768f8704a9999b45d06e39c61529bd9af370315ff1f33d7eb4f8b463aaaedbbf",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarComponents.kt": "84cca2c35c707d0c7915595d3fd7ebc463f40a31b59f44117210cb82b61716c2",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "86d8e7b52c78d6008a84fc1ba9c901659f1b657405358c4e5d9f027361373b8a",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareCalendarScreen.kt": "834df7daf341a78becd2eca3a1ffb3b6cb5e3e0950f279d5ce0212808ed00679",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactDetailDialog.kt": "ab6826a14ac9fbf62677bed2f6e93ef0fb1a57f1f074bb1a9e79fef212f715b3",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsLoading.kt": "b71a1bf898ad016af4e800d8c59778a844c1310a535ef0faf1f3f180bc0152d2",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/GroupwareContactsScreen.kt": "096a154e9d6169da4cc82c0f87d2c572a1a5e97e396cae9eb739d05ce05b0d82",
