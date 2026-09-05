@@ -193,7 +193,7 @@ internal fun finishCommittedDesktopAccountRemoval(
     var firstFailure: Throwable? = null
     listOf(teardownVirtualFiles, clearDiagnosticIdentity, clearIntakeIdentity).forEach { action ->
         runCatching(action).onFailure { failure ->
-            if (firstFailure == null) firstFailure = failure else firstFailure?.addSuppressed(failure)
+            if (firstFailure == null) firstFailure = failure else firstFailure.addSuppressed(failure)
         }
     }
     firstFailure?.let { throw it }
