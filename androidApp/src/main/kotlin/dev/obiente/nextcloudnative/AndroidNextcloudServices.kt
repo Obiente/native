@@ -436,7 +436,6 @@ internal class AndroidNextcloudServices(
     }
     private val nativeMediaPreviewDecodeMutex = Mutex()
     private val mediaTimelineCarryoverStore = MediaTimelineDavCarryoverStore()
-
     internal fun isDurableUploadAccountResolutionAvailable(): Boolean =
         androidCredentialFreeRegistryAllowsAccountResolution(
             preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null),
