@@ -17,7 +17,7 @@ max_android_apk_bytes=268435456
 
 [[ -f "$manifest" ]]
 [[ -f "$apk" ]]
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 [[ "$tag" =~ ^(v0\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*|nightly-[0-9]{8}-[0-9]{4}-run[1-9][0-9]*-[a-f0-9]{8})$ ]]
 [[ "$channel" == "prerelease-v1" || "$channel" == "nightly-v1" ]]
 [[ -n "$version_name" && "$version_name" != *$'\n'* ]]
@@ -31,8 +31,8 @@ jq -en \
     --argjson apk_size "$apk_size" \
     --argjson maximum "$max_android_apk_bytes" \
     '$apk_size <= $maximum and ($apk_size | floor) == $apk_size' >/dev/null
-apk_url="https://github.com/${repository}/releases/download/${tag}/${apk_name}"
-release_notes_url="https://github.com/${repository}/releases/tag/${tag}"
+apk_url="https://github.com/${release_url_repository}/releases/download/${tag}/${apk_name}"
+release_notes_url="https://github.com/${release_url_repository}/releases/tag/${tag}"
 
 jq -e \
     --arg channel "$channel" \

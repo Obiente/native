@@ -414,18 +414,18 @@ fun validateAndroidDirectRelease(
     )
     val tag = release.releaseTag(expectedChannel)
     require(
-        metadataUrl == expectedChannel.manifestUrl() ||
-            metadataUrl ==
+        metadataUrl.canonicalReleaseRepositoryUrl() == expectedChannel.manifestUrl() ||
+            metadataUrl.canonicalReleaseRepositoryUrl() ==
             "https://github.com/obiente/native/releases/download/$tag/update-manifest.json",
     )
     require(
-        release.apkUrl.hasCanonicalPathUnder(
+        release.apkUrl.canonicalReleaseRepositoryUrl().hasCanonicalPathUnder(
             "https://github.com/obiente/native/releases/download/$tag/",
             trailingSlash = false,
         ) && release.apkUrl.endsWith(".apk"),
     )
     require(
-        release.releaseNotesUrl ==
+        release.releaseNotesUrl.canonicalReleaseRepositoryUrl() ==
             "https://github.com/obiente/native/releases/tag/$tag",
     )
     validateAppUpdateChanges(release.versionCode, release.changes)
@@ -483,13 +483,13 @@ fun validateDesktopUpdateManifest(
     )
     val tag = releaseTag(expectedChannel, manifest.versionName)
     require(
-        metadataUrl == expectedChannel.desktopManifestUrl() ||
-            metadataUrl ==
+        metadataUrl.canonicalReleaseRepositoryUrl() == expectedChannel.desktopManifestUrl() ||
+            metadataUrl.canonicalReleaseRepositoryUrl() ==
             "https://github.com/obiente/native/releases/download/" +
             "$tag/desktop-update-manifest.json",
     )
     require(
-        manifest.releaseNotesUrl ==
+        manifest.releaseNotesUrl.canonicalReleaseRepositoryUrl() ==
             "https://github.com/obiente/native/releases/tag/$tag",
     )
     validateAppUpdateChanges(manifest.versionCode, manifest.changes)
@@ -507,7 +507,7 @@ fun validateDesktopUpdateManifest(
         require(asset.size in 1..MAX_DESKTOP_UPDATE_PACKAGE_BYTES)
         require(asset.sha256.isSha256())
         require(
-            asset.url.hasCanonicalPathUnder(
+            asset.url.canonicalReleaseRepositoryUrl().hasCanonicalPathUnder(
                 "https://github.com/obiente/native/releases/download/$tag/",
                 trailingSlash = false,
             ) && asset.url.endsWith(".${asset.format}"),
@@ -534,15 +534,25 @@ private fun validateAppUpdateChanges(versionCode: Long, changes: List<AppUpdateC
     }
 }
 
+private fun String.canonicalReleaseRepositoryUrl(): String {
+    val legacyPrefixes = listOf(
+        "https://github.com/Obiente/nc-native/releases/",
+        "https://github.com/Obiente/native/releases/",
+    )
+    val prefix = legacyPrefixes.firstOrNull(::startsWith) ?: return this
+    return "https://github.com/obiente/native/releases/" + removePrefix(prefix)
+}
+
 fun isCanonicalDesktopUpdateManifestUrl(
     url: String,
     channel: AndroidUpdateChannel,
 ): Boolean {
+    val canonicalUrl = url.canonicalReleaseRepositoryUrl()
     if (!channel.available) return false
-    if (url == channel.desktopManifestUrl()) return true
+    if (canonicalUrl == channel.desktopManifestUrl()) return true
     val prefix = "https://github.com/obiente/native/releases/download/"
-    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
-    val path = url.removePrefix(prefix).split('/')
+    if (!canonicalUrl.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = canonicalUrl.removePrefix(prefix).split('/')
     return path.size == 2 &&
         path[0].matches(channel.releaseTagPattern()) &&
         path[1] == "desktop-update-manifest.json"
@@ -561,11 +571,12 @@ fun isCanonicalAndroidUpdateManifestUrl(
     url: String,
     channel: AndroidUpdateChannel,
 ): Boolean {
+    val canonicalUrl = url.canonicalReleaseRepositoryUrl()
     if (!channel.available) return false
-    if (url == channel.manifestUrl()) return true
+    if (canonicalUrl == channel.manifestUrl()) return true
     val prefix = "https://github.com/obiente/native/releases/download/"
-    if (!url.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
-    val path = url.removePrefix(prefix).split('/')
+    if (!canonicalUrl.hasCanonicalPathUnder(prefix, trailingSlash = false)) return false
+    val path = canonicalUrl.removePrefix(prefix).split('/')
     return path.size == 2 &&
         path[0].matches(channel.releaseTagPattern()) &&
         path[1] == "update-manifest.json"

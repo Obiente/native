@@ -6,7 +6,7 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -r -- "$temporary_directory"' EXIT
 
 generated="$temporary_directory/update-manifest.json"
-GITHUB_REPOSITORY="Obiente/nc-native" \
+GITHUB_REPOSITORY="Obiente/native" \
   "$project_root/tools/create-prerelease-update-manifest.sh" \
   "$generated" \
   "0.1.0-alpha.1" \

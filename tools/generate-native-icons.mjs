@@ -23,7 +23,10 @@ async function save(relative, data) {
   await writeFile(target, data);
 }
 function raster(svg, size) {
-  return new Resvg(svg, { fitTo: { mode: "width", value: size } }).render().asPng();
+  return new Resvg(svg, {
+    fitTo: { mode: "width", value: size },
+    font: { loadSystemFonts: false },
+  }).render().asPng();
 }
 for (const [density, size] of Object.entries({ mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 })) {
   await save(`androidApp/src/main/res/mipmap-${density}/ic_launcher.png`, raster(square, size));
@@ -76,8 +79,13 @@ internal fun nativeBrandVector(ink: Color): ImageVector = ImageVector.Builder(
     .build()
 `);
 const banner = await readFile(path.join(root, "design/brand/banner.svg"), "utf8");
+if (/<text\b/i.test(banner)) {
+  throw new Error("Outline banner text before exporting; system fonts are disabled.");
+}
 await save("website/public/brand/banner.svg", banner);
+const socialPreview = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1536 768"><rect width="1536" height="768" fill="#101418"/><g transform="translate(0 128)">${banner}</g></svg>`;
+await save("design/brand/social-preview.svg", socialPreview);
 for (const target of ["website/public/social-preview.png", ".github/social-preview.png"]) {
-  await save(target, raster(banner, 1536));
+  await save(target, raster(socialPreview, 1280));
 }
 console.log("Generated platform exports from editable nati.ve SVG masters.");

@@ -13,9 +13,9 @@ version="$4"
 version_code="$5"
 package_version="$6"
 asset_directory="$7"
-repository="${GITHUB_REPOSITORY:-Obiente/nc-native}"
+repository="${GITHUB_REPOSITORY:-Obiente/native}"
 
-[[ "$repository" == "Obiente/nc-native" ]]
+source "$(dirname "${BASH_SOURCE[0]}")/release-repository.sh"
 [[ -d "$asset_directory" ]]
 "$(dirname "$0")/has-direct-desktop-update-assets.sh" "$asset_directory"
 case "$channel" in
@@ -55,7 +55,7 @@ append_asset() {
         --arg platform "$platform" \
         --arg format "$format" \
         --arg architecture "$architecture" \
-        --arg url "https://github.com/${repository}/releases/download/${tag}/${name}" \
+        --arg url "https://github.com/${release_url_repository}/releases/download/${tag}/${name}" \
         --argjson size "$size" \
         --arg sha256 "$digest" \
         '{platform:$platform,format:$format,architecture:$architecture,url:$url,size:$size,sha256:$sha256}' \
@@ -86,7 +86,7 @@ jq -n \
     --arg versionName "$version" \
     --argjson versionCode "$version_code" \
     --arg packageVersion "$package_version" \
-    --arg releaseNotesUrl "https://github.com/${repository}/releases/tag/${tag}" \
+    --arg releaseNotesUrl "https://github.com/${release_url_repository}/releases/tag/${tag}" \
     --argjson assets "$assets" \
     '{schemaVersion:$schemaVersion,channel:$channel,versionName:$versionName,versionCode:$versionCode,packageVersion:$packageVersion,releaseNotesUrl:$releaseNotesUrl,assets:$assets}' \
     >"$output"

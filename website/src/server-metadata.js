@@ -122,7 +122,7 @@ export function socialImageDetailsFor(metadata) {
     url: socialImageFor(metadata),
     alt:
       metadata.imageAlt ??
-      "nati.ve desktop and mobile clients connected to Nextcloud",
+      "nati.ve wordmark with mint and blue curves on charcoal",
     width: metadata.imageWidth ?? 1280,
     height: metadata.imageHeight ?? 640,
     type: "image/png",

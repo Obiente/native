@@ -12,7 +12,9 @@ The tagline is "Your cloud, natively." The repository is
 - [Repository banner](brand/banner.svg): charcoal, mint and blue.
 
 These SVG files are the authoritative masters. Their named elements remain
-editable; wordmarks use Inter with Arial fallback. The website uses SVG and
+editable. The text wordmark uses Inter with Arial fallback; the banner wordmark
+uses paths outlined from the bundled Inter at weight 750, so its exports do not
+depend on installed fonts. The website uses SVG and
 Compose renders the same path geometry as an ImageVector. Android adaptive
 launchers use a vector drawable. PNG/ICO exports are only for platforms and
 social preview consumers that require raster images. Product screenshots
@@ -28,6 +30,9 @@ node tools/generate-native-icons.mjs
 The generator uses the locked resvg dependency and exports the native vector,
 Android vector and legacy launchers, desktop icons, website icons and social
 preview images. Edit the SVG master rather than generated path data.
+The generated [social preview vector](brand/social-preview.svg) frames the banner
+at 1280 by 640, matching the website's Open Graph dimensions. Rasterization
+disables system fonts; preserve the banner's wordmark as vector paths.
 
 ## Shared visual language
 
@@ -78,3 +83,8 @@ The frozen news-feed-v1 contract retains its legacy URLs; new clients accept
 both canonical article/image origins. Update manifest fields and asset names
 remain unchanged. DNS, deployment, GitHub social-preview settings and release
 publication are separate operational steps.
+
+Release scripts use the renamed repository for GitHub API operations, while
+`tools/release-repository.sh` retains `Obiente/nc-native` in v1 manifest URLs
+for installed clients. New Android and desktop clients accept both narrowly
+scoped repository URL prefixes without changing the original download URLs.
