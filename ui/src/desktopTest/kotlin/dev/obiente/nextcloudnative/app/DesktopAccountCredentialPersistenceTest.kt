@@ -610,6 +610,43 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun malformedCredentialRemovalJournalBlocksRecoveryAndLaterStorageRewrite() =
+        withStore { preferences, secrets ->
+            val removed = firstSession()
+            val retained = secondSession()
+            val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+            var persistenceFlushes = 0
+            val persistence = persistence(preferences, secrets, diagnostics) {
+                persistenceFlushes += 1
+                preferences.flush()
+            }
+            persistence.saveSession(removed)
+            persistence.saveSession(retained)
+            DesktopAccountRegistryPreferenceStore(preferences).write(
+                encodeNextcloudAccountRegistry(decodeRegistry(preferences).remove(removed.accountId)),
+            )
+            val malformedJournal = "${removed.accountId.storageKey},truncated"
+            preferences.put("accountCredentialRemovals", malformedJournal)
+            preferences.flush()
+            val flushesBeforeRecovery = persistenceFlushes
+
+            assertEquals(retained, persistence.loadActiveSession())
+            assertNotNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
+            assertEquals(malformedJournal, preferences.get("accountCredentialRemovals", null))
+
+            assertFailsWith<IllegalStateException> { persistence.removeAccount(retained.accountId) }
+
+            assertEquals(retained.accountId, persistence.activeAccountId())
+            assertNotNull(secrets.load(desktopAccountSecretReference(retained.accountId)))
+            assertEquals(malformedJournal, preferences.get("accountCredentialRemovals", null))
+            assertEquals(flushesBeforeRecovery, persistenceFlushes)
+            assertEquals(
+                listOf("ACCOUNT_CREDENTIAL_REMOVAL_JOURNAL_INVALID"),
+                diagnostics.mapNotNull { it.code },
+            )
+        }
+
+    @Test
     fun removalMarkersSurviveProcessExitAfterTheRegistryCommit() = withStore { preferences, secrets ->
         val first = firstSession()
         val removed = secondSession()
