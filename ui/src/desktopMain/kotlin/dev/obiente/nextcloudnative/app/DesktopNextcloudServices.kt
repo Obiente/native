@@ -3758,10 +3758,10 @@ class DesktopNextcloudServices(
                 accountId
                     ?.also { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
                     ?.let { fileSyncEngine.requireAccountRemovalReady(it) }
-                expectedSession?.let { session ->
+                completeDesktopSignOutAfterRemoteRevocation(expectedSession, { session ->
                     remoteRevocationAttempted = true
                     revokeRemoteSession(session)
-                }
+                }) {
                 val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
                 rangeSessions.forEach { source -> runCatching(source::close) }
                 hydrationJobs.forEach { job -> job.join() }
@@ -3884,6 +3884,7 @@ class DesktopNextcloudServices(
                     ::removeDesktopAccountOwnedState,
                     ::recordSupportDiagnostic,
                 )
+                }
             }
         } catch (failure: Throwable) { removalFailure = failure; throw failure } finally {
             val reopen = shouldResumeDesktopWritesAfterRemovalFailure(
@@ -3904,7 +3905,6 @@ class DesktopNextcloudServices(
             }
         }
     }
-
     private suspend fun retryPendingAccountSyncPairCleanup(accountId: String) {
         val cleanup = accountSyncPairCleanupJournal.pending()
             .singleOrNull { pending -> pending.accountId == accountId }
