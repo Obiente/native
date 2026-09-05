@@ -1,7 +1,6 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
-import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 
 internal class AndroidMediaBackupAccountCleanup(
     private val removeFromLedger: suspend (String) -> Unit,

@@ -158,3 +158,21 @@ internal suspend fun <Result> withAndroidAccountPrivateStatePublication(
 ): Result = credentialMutationMutex.withLock {
     guard.withExactAccountSession(expectedSession, resolveSession, unavailable) { publish() }
 }
+
+internal suspend fun activateAndroidDynamicReadsAfterCredentialSave(
+    persistedSession: dev.obiente.nextcloudnative.app.NextcloudSession,
+    credentialMutationMutex: Mutex,
+    guard: AndroidAccountOperationGuard,
+    resolveSession: suspend () -> dev.obiente.nextcloudnative.app.NextcloudSession?,
+    activate: suspend (String) -> Unit,
+) {
+    withAndroidAccountPrivateStatePublication(
+        expectedSession = persistedSession,
+        credentialMutationMutex = credentialMutationMutex,
+        guard = guard,
+        resolveSession = resolveSession,
+        unavailable = {},
+    ) {
+        activate(NextcloudDocumentIds.cacheAccountId(persistedSession))
+    }
+}

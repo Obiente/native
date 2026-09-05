@@ -102,6 +102,13 @@ internal suspend fun <Result> DesktopAccountOperationGuard.withAccountPrivateSta
     if (current == expectedSession) publish() else unavailable()
 }
 
+internal suspend fun DesktopAccountOperationGuard.persistSessionAndActivateDynamicReads(
+    persist: suspend () -> NextcloudSession,
+    activate: suspend (NextcloudSession) -> Unit,
+): NextcloudSession = serializeWhenSyncIdle {
+    persist().also { persisted -> activate(persisted) }
+}
+
 internal fun requireDesktopAccountRemovalWritebacksResolved(pendingWritebackCount: Int) {
     check(pendingWritebackCount == 0) {
         "Finish or discard pending virtual file changes before removing this account."

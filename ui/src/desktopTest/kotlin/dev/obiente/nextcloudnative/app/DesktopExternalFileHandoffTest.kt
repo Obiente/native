@@ -213,9 +213,10 @@ class DesktopExternalFileHandoffTest {
     fun `desktop cache pruning removes expired detached copies`() {
         val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
         try {
-            val old = root.resolve("old").apply { mkdir() }
+            val accountRoot = root.resolve(accountId()).apply { mkdir() }
+            val old = accountRoot.resolve("old").apply { mkdir() }
             old.resolve("payload.bin").writeBytes(byteArrayOf(1, 2, 3))
-            val recent = root.resolve("recent").apply { mkdir() }
+            val recent = accountRoot.resolve("recent").apply { mkdir() }
             recent.resolve("payload.bin").writeBytes(byteArrayOf(4, 5, 6))
             val now = 2L * 24L * 60L * 60L * 1000L
             old.setLastModified(1L)
@@ -234,14 +235,43 @@ class DesktopExternalFileHandoffTest {
     fun `desktop cache pressure preserves newly handed off files`() {
         val root = Files.createTempDirectory("nextcloud-desktop-handoff-").toFile()
         try {
-            val recent = root.resolve("recent").apply { mkdir() }
+            val accountRoot = root.resolve(accountId()).apply { mkdir() }
+            val recent = accountRoot.resolve("recent").apply { mkdir() }
             recent.resolve("payload.bin").writeBytes(byteArrayOf(1, 2, 3))
             val now = 10L * 60L * 60L * 1000L
             recent.setLastModified(now)
 
-            pruneDesktopExternalFileCache(root, requiredBytes = Long.MAX_VALUE, nowMillis = now)
+            assertFailsWith<IllegalStateException> {
+                pruneDesktopExternalFileCache(root, requiredBytes = 2L, nowMillis = now, maximumBytes = 4L)
+            }
 
             assertTrue(recent.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `desktop cache pressure prunes operation copies across accounts to one global limit`() {
+        val root = Files.createTempDirectory("nextcloud-desktop-global-handoff-").toFile()
+        try {
+            val older = root.resolve("a".repeat(64)).resolve("older").apply { mkdirs() }
+            val newer = root.resolve("b".repeat(64)).resolve("newer").apply { mkdirs() }
+            older.resolve("payload.bin").writeBytes(ByteArray(6))
+            newer.resolve("payload.bin").writeBytes(ByteArray(6))
+            older.setLastModified(1L)
+            newer.setLastModified(2L)
+
+            val available = pruneDesktopExternalFileCache(
+                root = root,
+                requiredBytes = 4L,
+                nowMillis = 2L * 60L * 60L * 1000L,
+                maximumBytes = 10L,
+            )
+
+            assertFalse(older.exists())
+            assertTrue(newer.exists())
+            assertEquals(4L, available)
         } finally {
             root.deleteRecursively()
         }
@@ -291,6 +321,59 @@ class DesktopExternalFileHandoffTest {
             assertEquals("retained", root.resolve(retained).walkTopDown().first(File::isFile).readText())
         } finally {
             root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `account and legacy cleanup unlink nested symlinks without deleting their targets`() {
+        val root = Files.createTempDirectory("nextcloud-desktop-handoff-safe-delete-").toFile()
+        val scopedTarget = Files.createTempDirectory("nextcloud-desktop-handoff-scoped-target-").toFile()
+        val legacyTarget = Files.createTempDirectory("nextcloud-desktop-handoff-legacy-target-").toFile()
+        try {
+            val scoped = root.resolve(accountId()).apply { mkdir() }
+            val legacy = root.resolve("123e4567-e89b-12d3-a456-426614174000").apply { mkdir() }
+            scopedTarget.resolve("keep.txt").writeText("scoped-target")
+            legacyTarget.resolve("keep.txt").writeText("legacy-target")
+            val linksCreated = runCatching {
+                Files.createSymbolicLink(scoped.resolve("linked").toPath(), scopedTarget.toPath())
+                Files.createSymbolicLink(legacy.resolve("linked").toPath(), legacyTarget.toPath())
+            }.isSuccess
+            if (!linksCreated) return
+
+            DesktopExternalFileHandoff(root).removeAccount(accountId())
+
+            assertFalse(scoped.exists())
+            assertFalse(legacy.exists())
+            assertEquals("scoped-target", scopedTarget.resolve("keep.txt").readText())
+            assertEquals("legacy-target", legacyTarget.resolve("keep.txt").readText())
+        } finally {
+            deleteDesktopExternalFileTree(root.toPath())
+            scopedTarget.deleteRecursively()
+            legacyTarget.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `staging rejects an account cache directory replaced by a symlink`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-handoff-account-link-").toFile()
+        val target = Files.createTempDirectory("nextcloud-desktop-handoff-account-target-").toFile()
+        try {
+            target.resolve("keep.txt").writeText("outside")
+            val linked = runCatching {
+                Files.createSymbolicLink(root.resolve(accountId()).toPath(), target.toPath())
+            }.isSuccess
+            if (!linked) return@runBlocking
+
+            assertFailsWith<IllegalStateException> {
+                DesktopExternalFileHandoff(root).launch(
+                    accountId(), file(), ExternalFileHandoffAction.OpenWith, capability(),
+                ) { error("download must not start") }
+            }
+
+            assertEquals("outside", target.resolve("keep.txt").readText())
+        } finally {
+            deleteDesktopExternalFileTree(root.toPath())
+            target.deleteRecursively()
         }
     }
 
