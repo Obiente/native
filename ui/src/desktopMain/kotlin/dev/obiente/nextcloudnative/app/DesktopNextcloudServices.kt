@@ -3597,6 +3597,7 @@ class DesktopNextcloudServices(
                     val removed = removeDesktopAccountBeforeSyncPairCleanup(
                         accountId = providerAccountId,
                         durableMutationAccountScope = durableMutationScope,
+                        accountStorageKey = account.id.storageKey,
                         prepareCleanup = accountSyncPairCleanupJournal::prepare,
                         commitCleanup = accountSyncPairCleanupJournal::commit,
                         clearCleanup = accountSyncPairCleanupJournal::clear,
@@ -3648,6 +3649,7 @@ class DesktopNextcloudServices(
                 ?: activeRecord?.let(::desktopFileCacheAccountId)
             val durableMutationScope = activeSession?.let(::durableMutationAccountScope)
                 ?: activeRecord?.let(::desktopDurableMutationAccountScope)
+            val accountStorageKey = activeSession?.accountId?.storageKey ?: activeRecord?.id?.storageKey
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3768,7 +3770,8 @@ class DesktopNextcloudServices(
                 }
                 try {
                     clearDesktopActiveAccountBeforeSyncPairCleanup(
-                        accountId, durableMutationScope, accountSyncPairCleanupJournal, ::desktopAccountOwnership,
+                        accountId, durableMutationScope, accountStorageKey,
+                        accountSyncPairCleanupJournal, ::desktopAccountOwnership,
                         {
                             commitDesktopAccountRemovalBeforeVirtualFileTeardown(
                                 commitRemoval = {
@@ -3860,6 +3863,7 @@ class DesktopNextcloudServices(
         clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
+        cleanup.accountStorageKey?.let { deckCardDrafts.removeAccount(it, accountId) }
         externalFileHandoff.removeAccount(accountId)
         removeDesktopAccountPrivateStorage(accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId))
         if (!isWindowsDesktop()) return
@@ -3881,30 +3885,43 @@ class DesktopNextcloudServices(
 
     private fun desktopAccountOwnership(accountId: String): DesktopAccountOwnership =
         sessionPublicationGuard.serialize { accountCredentials.accountOwnership(accountId) }
+    override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) = withContext(Dispatchers.IO) {
+        withDesktopDeckCardDraftSession(session, accountOperationGuard, accountCredentials) {
+            deckCardDrafts.migrateLegacyEntries(session)
+        }
+    }
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
-        deckCardDrafts.load(session, key)
+        withDesktopDeckCardDraftSession(session, accountOperationGuard, accountCredentials) {
+            deckCardDrafts.load(session, key)
+        }
     }
     override suspend fun saveDeckCardDraft(
         session: NextcloudSession,
         draft: PersistedDeckCardDraft,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.save(session, draft)
+        withDesktopDeckCardDraftSession(session, accountOperationGuard, accountCredentials) {
+            deckCardDrafts.save(session, draft)
+        }
     }
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
         discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key, discardUnreadable)
+        withDesktopDeckCardDraftSession(session, accountOperationGuard, accountCredentials) {
+            deckCardDrafts.clear(session, key, discardUnreadable)
+        }
     }
     override suspend fun quarantineSubmittedDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.quarantineAfterSubmit(session, key)
+        withDesktopDeckCardDraftSession(session, accountOperationGuard, accountCredentials) {
+            deckCardDrafts.quarantineAfterSubmit(session, key)
+        }
     }
     override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {
         deckCardDrafts.discardAll()
