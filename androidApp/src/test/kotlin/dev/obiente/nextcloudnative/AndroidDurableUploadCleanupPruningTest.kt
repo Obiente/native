@@ -11,6 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.json.JSONArray
 
 class AndroidDurableUploadCleanupPruningTest {
     @Test
@@ -41,6 +42,22 @@ class AndroidDurableUploadCleanupPruningTest {
         assertTrue(AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list().single().capabilityCleanupPending)
         store.completeCapabilityCleanup(queued.id)
         assertFalse(AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list().single().capabilityCleanupPending)
+    }
+
+    @Test
+    fun `legacy terminal rows default to completed cleanup`() {
+        val storage = MemoryStorage()
+        val store = AndroidDurableMultipartUploadStore(storage, PlaintextCipher)
+        val queued = fixtureJob(index = 1, state = DurableUploadState.Queued)
+        store.add(queued)
+        store.transition(queued.id, DurableUploadState.Queued, DurableUploadState.Failed, "failed")
+        val legacy = JSONArray(checkNotNull(storage.value))
+        legacy.getJSONObject(0).remove("capabilityCleanupPending")
+        storage.value = legacy.toString()
+
+        val restored = AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list().single()
+
+        assertFalse(restored.capabilityCleanupPending)
     }
 
     @Test
