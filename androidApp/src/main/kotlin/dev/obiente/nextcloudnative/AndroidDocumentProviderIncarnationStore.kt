@@ -2,7 +2,9 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import android.provider.DocumentsContract
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import java.util.Base64
 import java.util.UUID
 
 internal sealed interface AndroidDocumentProviderIncarnationRecord {
@@ -24,9 +26,16 @@ internal data class AndroidDocumentProviderIncarnationRetirement(
     val incarnation: NextcloudDocumentIncarnation,
 )
 
+internal enum class AndroidDocumentProviderAccountOwnership {
+    Present,
+    Absent,
+    Unknown,
+}
+
 internal class AndroidDocumentProviderIncarnationStore(
     private val read: (String) -> String?,
     private val commit: (String, String?) -> Boolean,
+    private val keys: () -> Set<String> = { emptySet() },
     private val createIncarnation: () -> NextcloudDocumentIncarnation.Versioned = {
         NextcloudDocumentIncarnation.Versioned(UUID.randomUUID().toString().replace("-", ""))
     },
@@ -39,9 +48,13 @@ internal class AndroidDocumentProviderIncarnationStore(
                 if (encoded == null) remove(accountIdentity) else putString(accountIdentity, encoded)
             }.commit()
         },
+        keys = {
+            context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE).all.keys
+        },
     )
 
     fun activeIncarnation(accountIdentity: String): NextcloudDocumentIncarnation = synchronized(LOCK) {
+        requireNoPendingRetirement(accountIdentity)
         when (val record = readRecord(accountIdentity)) {
             null -> NextcloudDocumentIncarnation.Legacy
             is AndroidDocumentProviderIncarnationRecord.Active -> record.incarnation
@@ -54,6 +67,7 @@ internal class AndroidDocumentProviderIncarnationStore(
         accountIdentity: String,
         accountAlreadyStored: Boolean,
     ): NextcloudDocumentIncarnation = synchronized(LOCK) {
+        requireNoPendingRetirement(accountIdentity)
         when (val record = readRecord(accountIdentity)) {
             null -> if (accountAlreadyStored) {
                 NextcloudDocumentIncarnation.Legacy
@@ -74,6 +88,7 @@ internal class AndroidDocumentProviderIncarnationStore(
 
     fun retireForRemoval(accountIdentity: String): AndroidDocumentProviderIncarnationRetirement = synchronized(LOCK) {
         requireAccountIdentity(accountIdentity)
+        requireNoPendingRetirement(accountIdentity)
         val previousEncoded = read(accountIdentity)
         val incarnation = when (val record = decodeRecordOrNullOnMalformed(previousEncoded)) {
             null -> NextcloudDocumentIncarnation.Legacy
@@ -83,21 +98,53 @@ internal class AndroidDocumentProviderIncarnationStore(
         val retiredEncoded = encodeAndroidDocumentProviderIncarnationRecord(
             AndroidDocumentProviderIncarnationRecord.Retired(incarnation),
         )
-        persistEncoded(accountIdentity, retiredEncoded)
-        AndroidDocumentProviderIncarnationRetirement(
+        val retirement = AndroidDocumentProviderIncarnationRetirement(
             accountIdentity,
             previousEncoded,
             retiredEncoded,
             incarnation,
         )
+        persistEncoded(retirementJournalKey(accountIdentity), encodeAndroidDocumentProviderRetirement(retirement))
+        persistEncoded(accountIdentity, retiredEncoded)
+        retirement
     }
 
     fun rollback(retirement: AndroidDocumentProviderIncarnationRetirement) = synchronized(LOCK) {
-        requireAccountIdentity(retirement.accountIdentity)
-        check(read(retirement.accountIdentity) == retirement.retiredEncoded) {
-            "The document provider account incarnation changed during removal rollback."
+        if (!hasStoredRetirement(retirement)) {
+            check(read(retirement.accountIdentity) == retirement.previousEncoded) {
+                "The document provider removal rollback is not recoverable."
+            }
+            return@synchronized
         }
-        persistEncoded(retirement.accountIdentity, retirement.previousEncoded)
+        reconcile(retirement, AndroidDocumentProviderAccountOwnership.Present)
+    }
+
+    fun complete(retirement: AndroidDocumentProviderIncarnationRetirement) = synchronized(LOCK) {
+        if (!hasStoredRetirement(retirement)) {
+            check(read(retirement.accountIdentity) == retirement.retiredEncoded) {
+                "The document provider retirement is not committed."
+            }
+            return@synchronized
+        }
+        reconcile(retirement, AndroidDocumentProviderAccountOwnership.Absent)
+    }
+
+    fun reconcilePending(
+        ownership: (String) -> AndroidDocumentProviderAccountOwnership,
+    ) = synchronized(LOCK) {
+        keys().asSequence()
+            .filter { key -> key.startsWith(RETIREMENT_JOURNAL_KEY_PREFIX) }
+            .sorted()
+            .forEach { key ->
+                val accountIdentity = key.removePrefix(RETIREMENT_JOURNAL_KEY_PREFIX)
+                requireAccountIdentity(accountIdentity)
+                val encoded = read(key) ?: return@forEach
+                val retirement = decodeAndroidDocumentProviderRetirement(encoded)
+                require(retirement.accountIdentity == accountIdentity) {
+                    "The document provider retirement journal has the wrong account."
+                }
+                reconcile(retirement, ownership(accountIdentity))
+            }
     }
 
     fun retiredIncarnation(accountIdentity: String): NextcloudDocumentIncarnation? = synchronized(LOCK) {
@@ -138,12 +185,116 @@ internal class AndroidDocumentProviderIncarnationStore(
         require(ACCOUNT_IDENTITY_PATTERN.matches(accountIdentity)) { "Invalid document account." }
     }
 
+    private fun hasStoredRetirement(retirement: AndroidDocumentProviderIncarnationRetirement): Boolean {
+        requireAccountIdentity(retirement.accountIdentity)
+        val encoded = read(retirementJournalKey(retirement.accountIdentity))
+            ?: return false
+        check(decodeAndroidDocumentProviderRetirement(encoded) == retirement) {
+            "The document provider retirement journal changed."
+        }
+        return true
+    }
+
+    private fun requireNoPendingRetirement(accountIdentity: String) {
+        requireAccountIdentity(accountIdentity)
+        check(read(retirementJournalKey(accountIdentity)) == null) {
+            "The document provider account retirement must be reconciled."
+        }
+    }
+
+    private fun reconcile(
+        retirement: AndroidDocumentProviderIncarnationRetirement,
+        ownership: AndroidDocumentProviderAccountOwnership,
+    ) {
+        val currentEncoded = read(retirement.accountIdentity)
+        when (ownership) {
+            AndroidDocumentProviderAccountOwnership.Present -> when (currentEncoded) {
+                retirement.retiredEncoded -> persistEncoded(retirement.accountIdentity, retirement.previousEncoded)
+                retirement.previousEncoded -> Unit
+                else -> error("The document provider account incarnation changed during removal recovery.")
+            }
+            AndroidDocumentProviderAccountOwnership.Absent -> check(currentEncoded == retirement.retiredEncoded) {
+                "The document provider retirement is not committed."
+            }
+            AndroidDocumentProviderAccountOwnership.Unknown ->
+                error("Document provider account ownership is unavailable.")
+        }
+        persistEncoded(retirementJournalKey(retirement.accountIdentity), null)
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "documents-provider-incarnations-v1"
+        const val RETIREMENT_JOURNAL_KEY_PREFIX = "retirement:"
         val ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{32}")
         val LOCK = Any()
+
+        fun retirementJournalKey(accountIdentity: String): String =
+            "$RETIREMENT_JOURNAL_KEY_PREFIX$accountIdentity"
     }
 }
+
+internal fun encodeAndroidDocumentProviderRetirement(
+    retirement: AndroidDocumentProviderIncarnationRetirement,
+): String {
+    val previous = retirement.previousEncoded
+    val previousState = if (previous == null) "missing" else "present"
+    return listOf(
+        "1",
+        retirement.accountIdentity,
+        previousState,
+        encodeRetirementField(previous.orEmpty()),
+        encodeRetirementField(retirement.retiredEncoded),
+    ).joinToString(":")
+}
+
+internal fun decodeAndroidDocumentProviderRetirement(
+    encoded: String,
+): AndroidDocumentProviderIncarnationRetirement {
+    require(encoded.length <= MAX_RETIREMENT_JOURNAL_LENGTH) {
+        "The document provider retirement journal is too large."
+    }
+    val fields = encoded.split(':')
+    require(fields.size == 5 && fields[0] == "1") {
+        "Unsupported document provider retirement journal."
+    }
+    val previousEncoded = when (fields[2]) {
+        "missing" -> {
+            require(fields[3].isEmpty())
+            null
+        }
+        "present" -> decodeRetirementField(fields[3])
+        else -> throw IllegalArgumentException("Invalid document provider retirement prior state.")
+    }
+    val retiredEncoded = decodeRetirementField(fields[4])
+    val retired = decodeAndroidDocumentProviderIncarnationRecord(retiredEncoded)
+    require(retired is AndroidDocumentProviderIncarnationRecord.Retired) {
+        "The document provider retirement journal is not retired."
+    }
+    return AndroidDocumentProviderIncarnationRetirement(
+        accountIdentity = fields[1],
+        previousEncoded = previousEncoded,
+        retiredEncoded = retiredEncoded,
+        incarnation = retired.incarnation,
+    )
+}
+
+private fun encodeRetirementField(value: String): String =
+    Base64.getUrlEncoder().withoutPadding().encodeToString(value.encodeToByteArray())
+
+private fun decodeRetirementField(value: String): String {
+    val decoded = try {
+        Base64.getUrlDecoder().decode(value)
+    } catch (failure: IllegalArgumentException) {
+        throw IllegalArgumentException("Invalid document provider retirement journal encoding.", failure)
+    }
+    val decodedText = decoded.decodeToString(throwOnInvalidSequence = true)
+    require(encodeRetirementField(decodedText) == value) {
+        "The document provider retirement journal encoding is not canonical."
+    }
+    return decodedText
+}
+
+private const val MAX_RETIREMENT_JOURNAL_LENGTH = 16_384
 
 internal fun encodeAndroidDocumentProviderIncarnationRecord(
     record: AndroidDocumentProviderIncarnationRecord,
@@ -183,10 +334,36 @@ internal fun prepareAndroidDocumentProviderAccountSave(
     session: NextcloudSession,
     current: AndroidAccountCredentialState,
 ) {
-    AndroidDocumentProviderIncarnationStore(context).prepareForAccountSave(
+    val store = AndroidDocumentProviderIncarnationStore(context)
+    store.reconcilePending(current.registry::documentProviderAccountOwnership)
+    store.prepareForAccountSave(
         NextcloudDocumentIds.accountKey(session),
         session.accountId in current.sessions,
     )
+}
+
+internal fun reconcileAndroidDocumentProviderAccountRemovals(
+    context: Context,
+    registry: NextcloudAccountRegistry,
+): NextcloudAccountRegistry = registry.also {
+    AndroidDocumentProviderIncarnationStore(context).reconcilePending(registry::documentProviderAccountOwnership)
+}
+
+internal fun completeAndroidDocumentProviderAccountRemoval(
+    context: Context,
+    retirement: AndroidDocumentProviderIncarnationRetirement,
+) = AndroidDocumentProviderIncarnationStore(context).complete(retirement)
+
+private fun NextcloudAccountRegistry.documentProviderAccountOwnership(
+    accountIdentity: String,
+): AndroidDocumentProviderAccountOwnership = if (
+    accounts.any { account ->
+        NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == accountIdentity
+    }
+) {
+    AndroidDocumentProviderAccountOwnership.Present
+} else {
+    AndroidDocumentProviderAccountOwnership.Absent
 }
 
 internal fun notifyAndroidDocumentChanged(context: Context, session: NextcloudSession, path: String) {

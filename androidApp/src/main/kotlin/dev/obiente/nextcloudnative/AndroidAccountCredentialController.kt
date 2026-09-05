@@ -180,7 +180,7 @@ internal class AndroidAccountCredentialController(
                         rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
-                    completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
+                    completeCommittedCleanup = { completeDocumentRetirement(documentRetirement, accountId.storageKey) },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
             }
@@ -220,7 +220,7 @@ internal class AndroidAccountCredentialController(
                         },
                     )
                 },
-                completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
+                completeCommittedCleanup = { completeDocumentRetirement(documentRetirement, accountId.storageKey) },
                 recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
             )
         }
@@ -255,7 +255,7 @@ internal class AndroidAccountCredentialController(
                     persistInactiveRemoval = {},
                     rollbackInactiveRemoval = {},
                     completeCommittedCleanup = {
-                        accountRemovalCleanupJournal.clear(expectedSession.accountId.storageKey)
+                        completeDocumentRetirement(documentRetirement, expectedSession.accountId.storageKey)
                     },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
@@ -291,7 +291,7 @@ internal class AndroidAccountCredentialController(
                             persistInactiveRemoval = {},
                             rollbackInactiveRemoval = {},
                             completeCommittedCleanup = {
-                                accountRemovalCleanupJournal.clear(session.accountId.storageKey)
+                                completeDocumentRetirement(documentRetirement, session.accountId.storageKey)
                             },
                             recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                         )
@@ -325,7 +325,6 @@ internal class AndroidAccountCredentialController(
         clearPersistedSession(encodedReplacement, replacement, pendingCleanup = pendingCleanup)
         notifyDocumentRootsChanged()
     }
-
     private suspend fun clearInvalidStore(suspectEncrypted: String?) {
         clearPersistedSession(
             encodedReplacement = null,
@@ -366,7 +365,7 @@ internal class AndroidAccountCredentialController(
                         accountRemovalCleanupJournal.clear(activeSession.accountId.storageKey)
                     },
                     completeCommittedCleanup = {
-                        accountRemovalCleanupJournal.clear(activeSession.accountId.storageKey)
+                        completeDocumentRetirement(documentRetirement, activeSession.accountId.storageKey)
                     },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
@@ -375,7 +374,6 @@ internal class AndroidAccountCredentialController(
             persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted)
         }
     }
-
     private suspend fun persistRecoveredInvalidStoreAfterClear(
         current: AndroidAccountCredentialState,
         suspectEncrypted: String,
@@ -393,7 +391,6 @@ internal class AndroidAccountCredentialController(
         )
         notifyDocumentRootsChanged()
     }
-
     private suspend fun clearPersistedSession(
         encodedReplacement: String?,
         replacement: AndroidAccountCredentialState,
@@ -437,7 +434,6 @@ internal class AndroidAccountCredentialController(
             )
         }
     }
-
     private suspend fun replaceActiveState(
         replacement: AndroidAccountCredentialState,
         previousSession: NextcloudSession?,
@@ -542,7 +538,7 @@ internal class AndroidAccountCredentialController(
             val encoded = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null) ?: return@serialize null
             val restored = restoreAndroidCredentialFreeRegistry(encoded)
             recordCredentialFreeRegistryDiagnostic(restored)
-            restored.registry
+            restored.registry?.let { registry -> reconcileAndroidDocumentProviderAccountRemovals(appContext, registry) }
         }
 
     private fun readRegistryForCredentialLoad(): NextcloudAccountRegistry? =
@@ -565,7 +561,7 @@ internal class AndroidAccountCredentialController(
                     )
                 }
                 state.registry
-            }
+            }?.let { registry -> reconcileAndroidDocumentProviderAccountRemovals(appContext, registry) }
         }
 
     private fun recordCredentialFreeRegistryDiagnostic(restored: RestoredAndroidCredentialFreeRegistry) {
@@ -618,16 +614,22 @@ internal class AndroidAccountCredentialController(
             else -> AndroidAccountCredentialStoreRead.Invalid(encrypted)
         }
     }
-
     private fun availableCredentialStore(
         state: AndroidAccountCredentialState,
     ): AndroidAccountCredentialStoreRead.Available {
+        reconcileAndroidDocumentProviderAccountRemovals(appContext, state.registry)
         if (preferences.contains(ANDROID_QUARANTINED_SESSION_KEY)) {
             runCatching { commitPreferences(preferences.edit().remove(ANDROID_QUARANTINED_SESSION_KEY)) }
         }
         return AndroidAccountCredentialStoreRead.Available(state)
     }
 
+    private fun completeDocumentRetirement(
+        retirement: AndroidDocumentProviderIncarnationRetirement?, accountStorageKey: String,
+    ) {
+        completeAndroidDocumentProviderAccountRemoval(appContext, requireNotNull(retirement))
+        accountRemovalCleanupJournal.clear(accountStorageKey)
+    }
     private fun readIndependentCredentialSlotState(
         allowUnavailableActiveAccountId: NextcloudAccountId? = null,
     ): AndroidAccountCredentialState? {
