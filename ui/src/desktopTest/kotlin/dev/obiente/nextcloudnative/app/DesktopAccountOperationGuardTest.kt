@@ -478,7 +478,7 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
-    fun committedCredentialRemovalFailureDoesNotReactivateTheProvider() {
+    fun committedCredentialRemovalFailureFinishesProviderTeardownWithoutReactivation() {
         val events = mutableListOf<String>()
 
         assertFailsWith<IllegalStateException> {
@@ -487,6 +487,7 @@ class DesktopAccountOperationGuardTest {
                 clearProviderPreference = { events += "cleared" },
                 restoreProviderPreference = { enabled -> events += "restored:$enabled" },
                 removalCommitted = { true },
+                finishCommittedRemoval = { events += "finish" },
                 removeCredential = {
                     events += "remove"
                     error("synthetic post-commit credential cleanup failure")
@@ -494,7 +495,32 @@ class DesktopAccountOperationGuardTest {
             )
         }
 
-        assertEquals(listOf("cleared", "remove"), events)
+        assertEquals(listOf("cleared", "remove", "finish"), events)
+    }
+
+    @Test
+    fun unknownCredentialCommitStatusNeitherReactivatesNorTearsDownTheProvider() {
+        val events = mutableListOf<String>()
+
+        val failure = assertFailsWith<IllegalStateException> {
+            removeDesktopCredentialWithoutProviderReactivation(
+                providerWasEnabled = true,
+                clearProviderPreference = { events += "cleared" },
+                restoreProviderPreference = { enabled -> events += "restored:$enabled" },
+                removalCommitted = {
+                    events += "probe"
+                    error("synthetic registry read failure")
+                },
+                finishCommittedRemoval = { events += "finish" },
+                removeCredential = {
+                    events += "remove"
+                    error("synthetic credential removal failure")
+                },
+            )
+        }
+
+        assertEquals(listOf("cleared", "remove", "probe"), events)
+        assertEquals(1, failure.suppressedExceptions.size)
     }
 
     @Test

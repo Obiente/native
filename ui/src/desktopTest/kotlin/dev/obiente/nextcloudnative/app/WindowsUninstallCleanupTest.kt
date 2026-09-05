@@ -5,6 +5,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 import java.util.prefs.Preferences
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -242,6 +243,106 @@ class WindowsUninstallCleanupTest {
     }
 
     @Test
+    fun inactiveAccountRemovalUnregistersOnlyThatAccountsCloudFilesRoots() {
+        val preferences = Preferences.userRoot().node("windows-account-removal-test-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-removal-home").toFile()
+        val removedAccountId = "7".repeat(64)
+        val retainedAccountId = "8".repeat(64)
+        val removedRoot = desktopWindowsCloudFilesRoot(removedAccountId, home)
+        val retainedRoot = desktopWindowsCloudFilesRoot(retainedAccountId, home)
+        val api = RecordingWindowsCloudFilesApi()
+        try {
+            preferences.put(windowsCloudFilesRootPreferenceKey(removedAccountId), removedRoot.absolutePath)
+            preferences.put(windowsCloudFilesRootPreferenceKey(retainedAccountId), retainedRoot.absolutePath)
+            preferences.put("windows-cloud-files-root", retainedRoot.absolutePath)
+
+            unregisterWindowsCloudFilesRootsForAccountRemoval(
+                preferences = preferences,
+                accountId = removedAccountId,
+                userHome = home,
+                apiFactory = { api },
+            )
+
+            assertEquals(
+                listOf(
+                    removedRoot.toPath(),
+                    home.resolve("Nextcloud Native").resolve(removedAccountId).toPath(),
+                ),
+                api.unregisteredRoots,
+            )
+            assertEquals(null, preferences.get(windowsCloudFilesRootPreferenceKey(removedAccountId), null))
+            assertEquals(
+                retainedRoot.absolutePath,
+                preferences.get(windowsCloudFilesRootPreferenceKey(retainedAccountId), null),
+            )
+            assertEquals(retainedRoot.absolutePath, preferences.get("windows-cloud-files-root", null))
+            assertTrue(api.closed)
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun partialAccountRootCleanupRemainsJournaledUntilEveryRootIsUnregistered() = runBlocking {
+        val preferences = Preferences.userRoot().node("windows-account-cleanup-retry-${UUID.randomUUID()}")
+        val home = Files.createTempDirectory("windows-account-cleanup-retry-home").toFile()
+        val accountId = "9".repeat(64)
+        val currentRoot = desktopWindowsCloudFilesRoot(accountId, home).toPath()
+        val legacyRoot = desktopLegacyWindowsCloudFilesRoot(accountId, home).toPath()
+        val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+        val firstApi = RecordingWindowsCloudFilesApi().apply { failingRoot = legacyRoot }
+        try {
+            preferences.put(windowsCloudFilesRootPreferenceKey(accountId), currentRoot.toString())
+            val removed = removeDesktopAccountBeforeSyncPairCleanup(
+                accountId = accountId,
+                prepareCleanup = journal::prepare,
+                commitCleanup = journal::commit,
+                clearCleanup = journal::clear,
+                accountStillExists = { false },
+                removeCredential = { true },
+                removeSyncPairs = {
+                    unregisterWindowsCloudFilesRootsForAccountRemoval(
+                        preferences = preferences,
+                        accountId = accountId,
+                        userHome = home,
+                        apiFactory = { firstApi },
+                    )
+                },
+                recordCleanupFailure = {},
+            )
+
+            assertTrue(removed)
+            assertEquals(listOf(currentRoot, legacyRoot), firstApi.unregisterAttempts)
+            assertEquals(
+                listOf(DesktopAccountSyncPairCleanup(accountId, DesktopAccountSyncPairCleanupPhase.Committed)),
+                journal.pending(),
+            )
+
+            val retryApi = RecordingWindowsCloudFilesApi()
+            retryDesktopAccountSyncPairCleanup(
+                cleanup = journal.pending().single(),
+                accountStillExists = { false },
+                removeSyncPairs = {
+                    unregisterWindowsCloudFilesRootsForAccountRemoval(
+                        preferences = preferences,
+                        accountId = accountId,
+                        userHome = home,
+                        apiFactory = { retryApi },
+                    )
+                },
+                clearCleanup = journal::clear,
+            )
+
+            assertEquals(listOf(currentRoot, legacyRoot), retryApi.unregisterAttempts)
+            assertTrue(journal.pending().isEmpty())
+        } finally {
+            preferences.removeNode()
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun uninstallCanUseThePersistedRootAfterSessionMetadataIsGone() {
         val preferences = Preferences.userRoot().node("windows-uninstall-root-test-${UUID.randomUUID()}")
         val home = Files.createTempDirectory("windows-uninstall-root-home").toFile()
@@ -410,13 +511,17 @@ class WindowsUninstallCleanupTest {
     }
 
     private class RecordingWindowsCloudFilesApi : WindowsCloudFilesApi {
+        val unregisterAttempts = mutableListOf<Path>()
         val unregisteredRoots = mutableListOf<Path>()
         val unregisteredRoot: Path? get() = unregisteredRoots.lastOrNull()
         var prerequisiteRoot: Path? = null
         var dependentRoot: Path? = null
+        var failingRoot: Path? = null
         var closed = false
 
         override fun unregisterSyncRoot(root: Path) {
+            unregisterAttempts += root
+            if (root == failingRoot) error("Synthetic Cloud Files unregister failure")
             if (root == dependentRoot && prerequisiteRoot !in unregisteredRoots) {
                 error("The stable registration still points at another candidate root.")
             }
