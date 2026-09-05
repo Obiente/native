@@ -1028,6 +1028,46 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun failedUnavailableAccountRemovalRestoresRecoveredStateBeforeClearingCleanup() = runBlocking {
+        val recovered = AndroidAccountCredentialState.Empty
+            .upsertAndSelect(firstSession())
+            .upsertAndSelect(secondSession())
+        val removed = recovered.remove(firstSession().accountId)
+        var persisted = recovered
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidAccountCredentialData(
+                active = false,
+                removeQueuedUploads = { events += "remove-uploads" },
+                clearActiveAccount = { events += "clear-account" },
+                rollbackActiveRemoval = { events += "rollback-active" },
+                persistInactiveRemoval = {
+                    persisted = removed
+                    events += "persist-removal"
+                    error("synthetic commit result failure")
+                },
+                rollbackInactiveRemoval = {
+                    rollbackUnavailableAndroidAccountRemoval(
+                        recovered = recovered,
+                        persistRecovered = { state ->
+                            persisted = state
+                            events += "restore-recovered"
+                        },
+                        clearCleanup = { events += "clear-cleanup" },
+                    )
+                },
+            )
+        }
+
+        assertEquals(recovered, persisted)
+        assertEquals(
+            listOf("persist-removal", "restore-recovered", "clear-cleanup"),
+            events,
+        )
+    }
+
+    @Test
     fun cancelledInactiveAccountCleanupKeepsTheCredentialRemovalCommitted() = runBlocking {
         val cleanupEntered = CompletableDeferred<Unit>()
         val events = mutableListOf<String>()
