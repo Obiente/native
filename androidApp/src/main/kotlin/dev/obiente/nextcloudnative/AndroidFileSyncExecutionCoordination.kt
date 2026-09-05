@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
+import dev.obiente.nextcloudnative.app.FileSyncPair
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -234,26 +235,53 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
     AndroidFileSyncEngine.ENGINE_LOCK.withLock {
         val store = AndroidFileSyncStore(context)
         val current = store.load()
-        val retiredPairIds = current.coordinator.pairs
-            .filter { pair -> pair.accountId == accountId }
-            .map { pair -> pair.id }
-        if (retiredPairIds.isEmpty()) return@withLock
+        val (retiredPairs, retainedPairs) = current.coordinator.pairs.partition { pair ->
+            pair.accountId == accountId
+        }
+        if (retiredPairs.isEmpty()) return@withLock
         val scheduler = AndroidFileSyncScheduler(context)
-        cancelAndroidFileSyncPairSchedulesBeforeRetirement(
-            pairIds = retiredPairIds,
-            cancelSchedule = scheduler::cancel,
+        retireConfiguredFileSyncAccountPairs(
+            retiredPairs = retiredPairs,
+            retainedPairs = retainedPairs,
+            reconcileLocalDownloads = { pair ->
+                reconcileSafDownloadsBeforePairRemoval(context, pair.localRootId)
+            },
+            cancelSchedule = { pair -> scheduler.cancel(pair.id) },
             persistRetirement = { store.save(removeAndroidFileSyncAccountPairs(current, accountId)) },
+            releaseLocalGrant = { localRootId ->
+                releaseSafGrantAfterPairRemoval(context, localRootId, releasesLocalGrant = true)
+            },
         )
     }
 }
 
-internal suspend fun cancelAndroidFileSyncPairSchedulesBeforeRetirement(
-    pairIds: List<String>,
-    cancelSchedule: suspend (String) -> Unit,
-    persistRetirement: () -> Unit,
+internal suspend fun retireConfiguredFileSyncAccountPairs(
+    retiredPairs: List<FileSyncPair>,
+    retainedPairs: List<FileSyncPair>,
+    reconcileLocalDownloads: suspend (FileSyncPair) -> Boolean,
+    cancelSchedule: suspend (FileSyncPair) -> Unit,
+    persistRetirement: suspend () -> Unit,
+    releaseLocalGrant: suspend (String) -> Unit,
 ) {
-    pairIds.forEach { pairId -> cancelSchedule(pairId) }
-    persistRetirement()
+    retiredPairs.forEach { pair ->
+        check(reconcileLocalDownloads(pair)) {
+            "A local download still needs safe recovery. Run this folder sync before removing the account."
+        }
+        currentCoroutineContext().ensureActive()
+    }
+    retiredPairs.forEach { pair -> cancelSchedule(pair) }
+    currentCoroutineContext().ensureActive()
+
+    val retainedLocalRoots = retainedPairs.mapTo(hashSetOf()) { pair -> pair.localRootId }
+    val releasedLocalRoots = retiredPairs.asSequence()
+        .map { pair -> pair.localRootId }
+        .filter { localRootId -> localRootId.startsWith("content://") && localRootId !in retainedLocalRoots }
+        .distinct()
+        .toList()
+    withContext(NonCancellable) {
+        persistRetirement()
+        releasedLocalRoots.forEach { localRootId -> releaseLocalGrant(localRootId) }
+    }
 }
 
 internal suspend fun requireAndroidFileSyncAccountRemovalReady(context: Context, accountId: String) {
