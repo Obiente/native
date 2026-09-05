@@ -50,3 +50,22 @@ internal class LinuxVirtualMutationGate {
 
     fun isAcceptingNewOperations(): Boolean = lock.withLock { state == State.Open }
 }
+
+internal class LinuxVirtualWriteLifecycle(
+    private val hasOpenWriteHandles: () -> Boolean,
+    private val hasPendingCreatedFiles: () -> Boolean,
+) {
+    private val gate = LinuxVirtualMutationGate()
+
+    fun beginMutation() = gate.begin()
+
+    fun beginRelease(): Boolean = gate.beginRelease()
+
+    fun endOperation() = gate.end()
+
+    fun tryQuiesce(): Boolean = gate.tryQuiesce {
+        !hasOpenWriteHandles() && !hasPendingCreatedFiles()
+    }
+
+    fun resume() = gate.resume()
+}

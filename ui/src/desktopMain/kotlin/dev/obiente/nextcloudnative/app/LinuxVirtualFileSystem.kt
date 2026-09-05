@@ -1101,7 +1101,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     },
     private val mountOwnerUid: Long = linuxEffectiveProcessUid(),
     private val mountOwnerGid: Long = linuxEffectiveProcessGid(),
-) : FuseStubFS() {
+) : FuseStubFS(), DesktopLinuxProviderFileSystem {
     @Volatile
     private var mountedAt: Path? = null
     private val nextHandle = AtomicLong(1L)
@@ -1115,7 +1115,10 @@ internal class LinuxNextcloudVirtualFileSystem(
     private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
-    private val mutationGate = LinuxVirtualMutationGate()
+    private val writeLifecycle = LinuxVirtualWriteLifecycle(
+        hasOpenWriteHandles = { writeHandles.isNotEmpty() },
+        hasPendingCreatedFiles = { pendingCreatedFiles.isNotEmpty() },
+    )
     init {
         require(maximumOpenDirectoryEntries > 0)
         require(mountOwnerUid in 0L..MAX_UNSIGNED_UNIX_ID)
@@ -1234,7 +1237,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     override fun release(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
         val id = fileInfo.fh.get()
         val writeRelease = writeHandles.containsKey(id)
-        val releaseStarted = !writeRelease || mutationGate.beginRelease()
+        val releaseStarted = !writeRelease || writeLifecycle.beginRelease()
         if (!releaseStarted) return 0
         try {
             if (id != EMPTY_FILE_HANDLE) {
@@ -1245,7 +1248,7 @@ internal class LinuxNextcloudVirtualFileSystem(
                 releaseWriteHandle(id)
             }
         } finally {
-            if (writeRelease) mutationGate.end()
+            if (writeRelease) writeLifecycle.endOperation()
         }
         0
     }
@@ -1379,21 +1382,16 @@ internal class LinuxNextcloudVirtualFileSystem(
         mountedAt = mountPoint.toAbsolutePath().normalize()
     }
 
-    internal fun quiesceWrites(): Boolean = mutationGate.tryQuiesce {
-        writeHandles.isEmpty() && pendingCreatedFiles.isEmpty()
-    }
+    internal fun quiesceWrites(): Boolean = writeLifecycle.tryQuiesce()
 
-    internal fun resumeWrites() = mutationGate.resume()
+    internal fun resumeWrites() = writeLifecycle.resume()
 
-    fun unmount() {
-        var detached = false
+    override fun unmount() {
         val fuseAbortHandle = fuseAbortHandleProvider(mountedAt)
-        try {
-            unmountOperation(this)
-            detached = true
-        } finally {
-            fuseAbortHandle?.abortBestEffort()
-            runCatching { fuseAbortHandle?.close() }
+        runLinuxFuseUnmountLifecycle(
+            abortHandle = fuseAbortHandle,
+            detach = { unmountOperation(this) },
+        ) { detached ->
             readHandles.values.forEach { runCatching(it::close) }
             writeHandles.values.map(LinuxOpenWriteReference::shared).distinct().forEach { shared ->
                 runCatching(shared.delegate::close)
@@ -1617,11 +1615,11 @@ internal class LinuxNextcloudVirtualFileSystem(
     }
 
     private inline fun fuseMutationResult(operation: () -> Int): Int = fuseResult {
-        mutationGate.begin()
+        writeLifecycle.beginMutation()
         try {
             operation()
         } finally {
-            mutationGate.end()
+            writeLifecycle.endOperation()
         }
     }
 
