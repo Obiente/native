@@ -3668,7 +3668,9 @@ class DesktopNextcloudServices(
         }
     private fun hasLiveAccountResources(): Boolean =
         synchronized(fileRangeSessionLock) { activeFileRangeSessions.isNotEmpty() } ||
-            synchronized(virtualFolderHydrationJobs) { virtualFolderHydrationJobs.values.any { it.isActive } } ||
+            synchronized(virtualFolderHydrationJobs) {
+                hasLiveVirtualFolderHydrationJobs(virtualFolderHydrationJobs.values)
+            } ||
             synchronized(virtualFileProviderLock) {
                 linuxVirtualFileSystem != null || windowsCloudFilesProvider != null ||
                     virtualFileCacheTierMutations.isNotEmpty()
@@ -6175,8 +6177,6 @@ internal fun requireVirtualFolderListingCapacity(
 
 internal fun isCompleteRetainedTreeListing(listingPath: String, retainedRoot: String): Boolean =
     listingPath == retainedRoot || listingPath.startsWith("$retainedRoot/")
-
-internal fun Job?.occupiesVirtualFolderHydrationSlot(): Boolean = this != null && !isCompleted
 
 internal fun removeVirtualFolderHydrationJobIfOwned(
     jobs: MutableMap<String, Job>,
