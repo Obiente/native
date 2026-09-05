@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import java.io.FileNotFoundException
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -35,6 +36,38 @@ class AndroidDurableUploadSourcePreflightTest {
             assertFalse(providerOpened)
             assertFalse(queued)
             assertFalse(retained)
+        }
+    }
+
+    @Test
+    fun `permanently unavailable provider source terminally fails and releases`() = runBlocking {
+        listOf(
+            FileNotFoundException("document removed"),
+            SecurityException("grant revoked"),
+        ).forEach { failure ->
+            var queued = true
+            var retained = true
+            var starts = 0
+
+            val result = processQueuedDurableUploadSource(
+                requireCapability = { },
+                openSource = { throw failure },
+                onCapabilityUnavailable = {
+                    queued = false
+                    retained = false
+                    "failed"
+                },
+                onProviderUnavailable = { "retried" },
+                onReady = {
+                    starts += 1
+                    "started"
+                },
+            )
+
+            assertEquals("failed", result)
+            assertFalse(queued)
+            assertFalse(retained)
+            assertEquals(0, starts)
         }
     }
 
