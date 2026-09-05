@@ -15,6 +15,7 @@ import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import kotlin.coroutines.resume
@@ -125,9 +126,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     fun requirePersisted(file: LocalUploadFile) {
-        val source = load(file.selectionId)
-            ?: error("The local file selection was not durably saved.")
-        require(source.file == file) { "The persisted local file metadata changed." }
+        requiredSource(file, useCachedSource = false)
     }
 
     fun release(file: LocalUploadFile): Boolean {
@@ -165,9 +164,30 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     private fun persistedSource(file: LocalUploadFile): SelectedSource {
-        val source = selections[file.selectionId] ?: load(file.selectionId)
-            ?: error("The local file selection has expired.")
-        require(source.file == file) { "The local file selection metadata changed." }
+        return requiredSource(file, useCachedSource = true)
+    }
+
+    private fun requiredSource(
+        file: LocalUploadFile,
+        useCachedSource: Boolean,
+    ): SelectedSource {
+        val source = try {
+            selections[file.selectionId].takeIf { useCachedSource } ?: load(file.selectionId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw AndroidLocalUploadCapabilityUnavailableException(
+                "The local file selection metadata could not be read.",
+                failure,
+            )
+        } ?: throw AndroidLocalUploadCapabilityUnavailableException(
+            "The local file selection was not durably saved.",
+        )
+        if (source.file != file) {
+            throw AndroidLocalUploadCapabilityUnavailableException(
+                "The persisted local file metadata changed.",
+            )
+        }
         return source
     }
 
@@ -204,6 +224,11 @@ internal class AndroidLocalUploadPicker(context: Context) {
         const val PREFERENCE_PREFIX = "upload_"
     }
 }
+
+internal class AndroidLocalUploadCapabilityUnavailableException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
 
 /**
  * Acquires a durable picker capability without exposing an interval where a successful selection
