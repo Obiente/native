@@ -244,7 +244,11 @@ internal fun encodeAndroidDocumentProviderRetirement(
         previousState,
         encodeRetirementField(previous.orEmpty()),
         encodeRetirementField(retirement.retiredEncoded),
-    ).joinToString(":")
+    ).joinToString(":").also { encoded ->
+        require(encoded.length <= MAX_RETIREMENT_JOURNAL_LENGTH) {
+            "The document provider retirement journal is too large."
+        }
+    }
 }
 
 internal fun decodeAndroidDocumentProviderRetirement(
