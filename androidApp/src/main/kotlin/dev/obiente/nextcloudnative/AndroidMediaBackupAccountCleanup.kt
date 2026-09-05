@@ -4,23 +4,23 @@ import android.content.Context
 import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
 
 internal class AndroidMediaBackupAccountCleanup(
-    private val openStore: () -> MediaBackupLedgerStore,
+    private val removeFromLedger: suspend (String) -> Unit,
 ) {
     constructor(context: Context) : this(
-        openStore = {
-            createAndroidMediaBackupLedgerStore(
+        removeFromLedger = { accountId ->
+            val store = createAndroidMediaBackupLedgerStore(
                 context = context.applicationContext,
                 recoverInterruptedTransfers = false,
             )
+            try {
+                store.deleteAccount(accountId)
+            } finally {
+                store.close()
+            }
         },
     )
 
     suspend fun removeForAccount(accountId: String) {
-        val store = openStore()
-        try {
-            store.deleteAccount(accountId)
-        } finally {
-            store.close()
-        }
+        removeFromLedger(accountId)
     }
 }
