@@ -573,7 +573,33 @@ class AndroidLocalUploadCapabilityLifecycleTest {
     fun `only ready capability phase may open or enqueue`() {
         assertTrue(isDurableUploadCapabilityReady(CapabilityPhase.Ready))
         assertFalse(isDurableUploadCapabilityReady(CapabilityPhase.Acquiring))
+        assertFalse(isDurableUploadCapabilityReady(CapabilityPhase.OwnershipCheckPending))
         assertFalse(isDurableUploadCapabilityReady(CapabilityPhase.CleanupPending))
+    }
+
+    @Test
+    fun `ownership check intent restores only after the durable job is found`() {
+        assertTrue(
+            shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
+                phase = CapabilityPhase.OwnershipCheckPending,
+                ownedByDurableJob = true,
+            ),
+        )
+        assertFalse(
+            shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
+                phase = CapabilityPhase.OwnershipCheckPending,
+                ownedByDurableJob = false,
+            ),
+        )
+        assertTrue(
+            shouldRecoverDurableUploadCapability(
+                phase = CapabilityPhase.OwnershipCheckPending,
+                processGeneration = "current-generation",
+                currentProcessGeneration = "current-generation",
+                ownedByDurableJob = false,
+                cleanupExplicitlyPending = false,
+            ),
+        )
     }
 
     @Test
@@ -612,13 +638,17 @@ class AndroidLocalUploadCapabilityLifecycleTest {
     }
 
     @Test
-    fun `grant ownership flag requires a raw boolean and legacy defaults conservatively`() {
+    fun `legacy upload grants remain app owned while new provenance stays explicit`() {
         val legacy = JSONObject()
+        val preExisting = JSONObject().put("grantPreExisting", true)
+        val appOwned = JSONObject().put("grantPreExisting", false)
         val malformed = JSONObject().put("grantPreExisting", "false")
 
-        assertTrue(legacy.optionalStrictBoolean("grantPreExisting") ?: true)
+        assertFalse(persistedDurableUploadGrantPreExisting(legacy))
+        assertTrue(persistedDurableUploadGrantPreExisting(preExisting))
+        assertFalse(persistedDurableUploadGrantPreExisting(appOwned))
         assertFailsWith<IllegalArgumentException> {
-            malformed.optionalStrictBoolean("grantPreExisting")
+            persistedDurableUploadGrantPreExisting(malformed)
         }
     }
 
