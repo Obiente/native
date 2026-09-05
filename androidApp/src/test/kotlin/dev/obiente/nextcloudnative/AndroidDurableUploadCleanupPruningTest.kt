@@ -13,6 +13,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.json.JSONArray
+import org.json.JSONObject
 
 class AndroidDurableUploadCleanupPruningTest {
     @Test
@@ -121,6 +122,48 @@ class AndroidDurableUploadCleanupPruningTest {
         val restored = AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list().single()
 
         assertFalse(restored.capabilityCleanupPending)
+    }
+
+    @Test
+    fun `explicit cleanup marker booleans restore without coercion`() {
+        listOf(true, false).forEach { cleanupPending ->
+            val storage = MemoryStorage()
+            AndroidDurableMultipartUploadStore(storage, PlaintextCipher).add(
+                fixtureJob(index = 1, cleanupPending = cleanupPending),
+            )
+
+            val restored = AndroidDurableMultipartUploadStore(storage, PlaintextCipher).list().single()
+
+            assertEquals(cleanupPending, restored.capabilityCleanupPending)
+        }
+    }
+
+    @Test
+    fun `malformed cleanup markers leave the recovery queue unchanged`() {
+        val malformedValues = listOf(
+            "true",
+            "false",
+            1,
+            JSONObject.NULL,
+            JSONObject().put("pending", true),
+            JSONArray().put(true),
+        )
+
+        malformedValues.forEach { malformedValue ->
+            val storage = MemoryStorage()
+            val store = AndroidDurableMultipartUploadStore(storage, PlaintextCipher)
+            store.add(fixtureJob(index = 1, cleanupPending = true))
+            val malformedSnapshot = JSONArray(checkNotNull(storage.value)).also { array ->
+                array.getJSONObject(0).put("capabilityCleanupPending", malformedValue)
+            }.toString()
+            storage.value = malformedSnapshot
+
+            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { store.list() }
+            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+                store.add(fixtureJob(index = 2, state = DurableUploadState.Queued))
+            }
+            assertEquals(malformedSnapshot, storage.value)
+        }
     }
 
     @Test
