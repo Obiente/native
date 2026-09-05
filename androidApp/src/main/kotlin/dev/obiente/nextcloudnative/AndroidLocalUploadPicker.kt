@@ -91,6 +91,14 @@ internal class AndroidLocalUploadPicker(context: Context) {
                 synchronized(CAPABILITY_LOCK) {
                     val existing = loadCapabilitySnapshot()
                     check(
+                        durableUploadCapabilityHasCapacity(
+                            trackedCapabilityCount = existing.size,
+                            maximumTrackedCapabilities = MAX_TRACKED_CAPABILITIES,
+                        ),
+                    ) {
+                        "Too many picker capabilities are tracked."
+                    }
+                    check(
                         !durableUploadCapabilityPermissionOwnedByAnother(
                             capabilities = existing,
                             targetSelectionId = token,
@@ -493,6 +501,15 @@ internal fun JSONObject.optionalStrictBoolean(key: String): Boolean? {
 
 internal fun persistedDurableUploadGrantPreExisting(payload: JSONObject): Boolean =
     payload.optionalStrictBoolean("grantPreExisting") ?: false
+
+internal fun durableUploadCapabilityHasCapacity(
+    trackedCapabilityCount: Int,
+    maximumTrackedCapabilities: Int,
+): Boolean {
+    require(trackedCapabilityCount >= 0)
+    require(maximumTrackedCapabilities > 0)
+    return trackedCapabilityCount < maximumTrackedCapabilities
+}
 
 internal class AndroidLocalUploadCapabilityUnavailableException(
     message: String,
