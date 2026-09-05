@@ -520,7 +520,7 @@ class WindowsUninstallCleanupTest {
         var closed = false
 
         override fun unregisterSyncRoot(root: Path) {
-            unregisterAttempts += root
+            unregisterAttempts.add(root)
             if (root == failingRoot) error("Synthetic Cloud Files unregister failure")
             if (root == dependentRoot && prerequisiteRoot !in unregisteredRoots) {
                 error("The stable registration still points at another candidate root.")
