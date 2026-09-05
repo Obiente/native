@@ -588,6 +588,7 @@ class AndroidDurableMultipartUploadPolicyTest {
                     recoveryRuns += 1
                     if (recoveryRuns == 2) throw CancellationException("Lifecycle stopped")
                 },
+                wait = { error("an immediate wake must not wait") },
                 recoverySignal = recoverySignal,
             )
         }
@@ -596,45 +597,46 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `worker failure wake waits for WorkManager to relinquish ownership`() = runBlocking {
+    fun `repeated worker failure wakes wait for ownership and follow up delay`() = runBlocking {
         val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
         val workId = UUID.randomUUID()
-        val initialRecoveryFinished = CompletableDeferred<Unit>()
-        val readinessEntered = CompletableDeferred<Unit>()
-        val workStoppedRunning = CompletableDeferred<Unit>()
+        val expectedCancellation = CancellationException("recovery owner stopped")
         var workManagerOwnsJob = true
         var recoveryRuns = 0
+        var delayRuns = 0
+        recoverySignal.request()
+        recoverySignal.requestAfterWorkStopsRunning(workId)
 
-        val monitor = async {
+        val actual = assertFailsWith<CancellationException> {
             monitorQueuedDurableUploadScheduling(
                 recover = {
                     recoveryRuns += 1
-                    if (recoveryRuns == 1) {
-                        initialRecoveryFinished.complete(Unit)
-                    } else {
-                        assertFalse(workManagerOwnsJob)
-                        throw CancellationException("Test completed")
+                    when (recoveryRuns) {
+                        1 -> Unit
+                        2 -> {
+                            workManagerOwnsJob = true
+                            recoverySignal.requestAfterWorkStopsRunning(workId)
+                        }
+                        else -> error("worker recovery bypassed its follow-up delay")
                     }
                 },
                 awaitWorkStopsRunning = { requestedWorkId ->
                     assertEquals(workId, requestedWorkId)
-                    readinessEntered.complete(Unit)
-                    workStoppedRunning.await()
+                    assertTrue(workManagerOwnsJob)
+                    workManagerOwnsJob = false
+                },
+                wait = { delayMillis ->
+                    assertEquals(ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS, delayMillis)
+                    assertFalse(workManagerOwnsJob)
+                    if (++delayRuns == 2) throw expectedCancellation
                 },
                 recoverySignal = recoverySignal,
             )
         }
 
-        initialRecoveryFinished.await()
-        recoverySignal.requestAfterWorkStopsRunning(workId)
-        readinessEntered.await()
-        yield()
-        assertEquals(1, recoveryRuns)
-
-        workManagerOwnsJob = false
-        workStoppedRunning.complete(Unit)
-        assertFailsWith<CancellationException> { monitor.await() }
+        assertTrue(actual === expectedCancellation)
         assertEquals(2, recoveryRuns)
+        assertEquals(2, delayRuns)
     }
 
     @Test

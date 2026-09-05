@@ -77,6 +77,7 @@ class NextcloudNativeApplication : Application() {
                                 wait = { retryDelayMillis -> delay(retryDelayMillis) },
                             )
                         },
+                        wait = { retryDelayMillis -> delay(retryDelayMillis) },
                     )
                 },
                 recordRecoveryFailure = recordRecoveryFailure,

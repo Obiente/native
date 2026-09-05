@@ -35,6 +35,8 @@ internal class AndroidDurableUploadStartCoordinator {
 
 private val ANDROID_DURABLE_UPLOAD_START_COORDINATOR = AndroidDurableUploadStartCoordinator()
 
+internal const val ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS = 60_000L
+
 internal data class AndroidDurableUploadSchedulingRecoveryBatch(
     val immediate: Boolean,
     val workIdsToAwait: List<UUID>,
@@ -88,17 +90,21 @@ internal fun requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(w
 internal suspend fun monitorQueuedDurableUploadScheduling(
     recover: suspend () -> Unit,
     awaitWorkStopsRunning: suspend (UUID) -> Unit = {},
+    wait: suspend (Long) -> Unit,
+    workerFailureFollowUpDelayMillis: Long =
+        ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS,
     recoverySignal: AndroidDurableUploadSchedulingRecoverySignal =
         ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
 ) {
+    require(workerFailureFollowUpDelayMillis > 0L)
     recover()
     while (true) {
         val requests = recoverySignal.await()
-        if (requests.immediate) recover()
         if (requests.workIdsToAwait.isNotEmpty()) {
             requests.workIdsToAwait.forEach { workId -> awaitWorkStopsRunning(workId) }
-            recover()
+            wait(workerFailureFollowUpDelayMillis)
         }
+        if (requests.immediate || requests.workIdsToAwait.isNotEmpty()) recover()
     }
 }
 
@@ -192,7 +198,7 @@ internal suspend fun retryQueuedDurableUploadScheduling(
 
 internal suspend fun keepRetryingQueuedDurableUploadScheduling(
     retryDelaysMillis: List<Long> = listOf(1_000L, 5_000L),
-    followUpDelayMillis: Long = 60_000L,
+    followUpDelayMillis: Long = ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS,
     reconcile: suspend () -> Boolean,
     wait: suspend (Long) -> Unit,
     recordRecoveryFailure: () -> Unit = {},
