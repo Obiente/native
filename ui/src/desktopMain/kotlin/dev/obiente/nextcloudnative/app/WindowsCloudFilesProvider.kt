@@ -1341,7 +1341,7 @@ internal class WindowsCloudFilesProvider(
         awaitWindowsCloudFilesWritebackRecovery(deadline, ::accountRemovalMutationState)
         recoverUnmanagedLocalEntries(failClosed = true)
         synchronized(namespaceMutationLock) { deferredLocalChanges.clear() }
-        true
+        return true
     }
 
     private fun accountRemovalMutationState() = synchronized(queuedPathOperations) {
