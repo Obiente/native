@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import java.security.GeneralSecurityException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -59,6 +60,47 @@ class AndroidDurableUploadEnqueueCancellationTest {
         }
 
         assertEquals(0, releases)
+    }
+
+    @Test
+    fun `cancellation releases cached capability when encrypted storage is unreadable`() = runBlocking {
+        val expected = CancellationException("screen closed")
+        var cleanupResult: Boolean? = null
+        var encryptedMetadata: String? = "unreadable-encrypted-capability"
+        var loadAttempts = 0
+        val events = mutableListOf<String>()
+
+        val actual = assertFailsWith<CancellationException> {
+            runDurableUploadEnqueueWithCancellationCleanup<Unit>(
+                enqueue = { throw expected },
+                releaseUnownedSelection = {
+                    cleanupResult = releaseUnownedDurableUploadSelection(
+                        selectionId = "selection-123456",
+                        hasActiveSelection = { false },
+                        releaseSelection = {
+                            releaseStoredDurableUploadCapability(
+                                cachedCapability = "content://cached/upload",
+                                loadCapability = {
+                                    loadAttempts += 1
+                                    throw GeneralSecurityException("synthetic decryption failure")
+                                },
+                                releasePermission = { events += "permission:$it" },
+                                removeMetadata = {
+                                    events += "metadata"
+                                    true.also { encryptedMetadata = null }
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertTrue(cleanupResult == true)
+        assertEquals(0, loadAttempts)
+        assertEquals(listOf("permission:content://cached/upload", "metadata"), events)
+        assertEquals(null, encryptedMetadata)
     }
 
     @Test

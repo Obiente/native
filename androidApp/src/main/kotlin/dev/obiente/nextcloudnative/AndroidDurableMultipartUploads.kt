@@ -28,8 +28,12 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal class AndroidDurableMultipartUploads(context: Context) {
+internal class AndroidDurableMultipartUploads(
+    context: Context,
+    localUploadPicker: AndroidLocalUploadPicker? = null,
+) {
     private val appContext = context.applicationContext
+    private val picker = localUploadPicker ?: AndroidLocalUploadPicker(appContext)
     private val store = AndroidDurableMultipartUploadStore(appContext)
     private val workManager = WorkManager.getInstance(appContext)
 
@@ -39,7 +43,6 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         request: NextcloudMultipartUploadRequest,
     ): DurableUploadEnqueueResult {
         val accountId = NextcloudDocumentIds.accountKey(session)
-        val picker = AndroidLocalUploadPicker(appContext)
         return try {
             val safeRequest = request.requireSafe()
             picker.requirePersisted(safeRequest.file)
@@ -71,7 +74,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
     fun releaseIfUnowned(file: LocalUploadFile): Boolean = releaseUnownedDurableUploadSelection(
         selectionId = file.selectionId,
         hasActiveSelection = store::hasActiveSelection,
-        releaseSelection = { AndroidLocalUploadPicker(appContext).release(file) },
+        releaseSelection = { picker.release(file) },
     )
 
     suspend fun <Result> runEnqueueWithCancellationCleanup(
@@ -121,7 +124,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                     .any { work -> !work.state.isFinished }
             },
             cleanupCapability = { job ->
-                check(AndroidLocalUploadPicker(appContext).release(job.request.file)) {
+                check(picker.release(job.request.file)) {
                     "The durable upload capability cleanup remains pending."
                 }
                 store.completeCapabilityCleanup(job.id)
@@ -138,7 +141,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         ) {
             return false
         }
-        if (!AndroidLocalUploadPicker(appContext).release(job.request.file)) return false
+        if (!picker.release(job.request.file)) return false
         store.remove(uploadId)
         return true
     }
