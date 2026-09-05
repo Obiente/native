@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.prefs.Preferences
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 
 internal enum class DesktopAccountSyncPairCleanupPhase {
@@ -17,6 +18,8 @@ internal class DesktopAccountSyncPairCleanupJournal(
     private val preferences: Preferences,
     private val recordMalformed: () -> Unit = {},
 ) {
+    private val malformedReported = AtomicBoolean()
+
     fun prepare(accountId: String) = persist(accountId, DesktopAccountSyncPairCleanupPhase.Prepared)
 
     fun commit(accountId: String) = persist(accountId, DesktopAccountSyncPairCleanupPhase.Committed)
@@ -28,7 +31,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
     }
 
     fun pending(): List<DesktopAccountSyncPairCleanup> {
-        val malformedKeys = mutableListOf<String>()
+        var malformedEntryFound = false
         val cleanups = preferences.keys()
             .asSequence()
             .filter { key -> key.startsWith(KEY_PREFIX) }
@@ -43,31 +46,29 @@ internal class DesktopAccountSyncPairCleanupJournal(
                     }
                     DesktopAccountSyncPairCleanup(accountId, phase)
                 }.getOrNull()
-                if (cleanup == null) malformedKeys += key
+                if (cleanup == null) malformedEntryFound = true
                 cleanup
             }
             .toList()
-        if (malformedKeys.isNotEmpty()) quarantineMalformed(malformedKeys)
+        if (malformedEntryFound && malformedReported.compareAndSet(false, true)) runCatching(recordMalformed)
         check(cleanups.size <= MAX_LOCAL_ACCOUNTS) {
             "The desktop account sync cleanup journal is too large."
         }
         return cleanups
     }
 
-    private fun quarantineMalformed(keys: List<String>) {
-        keys.forEach { key -> runCatching { preferences.remove(key) } }
-        runCatching(preferences::flush)
-        runCatching(recordMalformed)
-    }
-
     private fun persist(accountId: String, phase: DesktopAccountSyncPairCleanupPhase) {
         validateDesktopSyncPairCleanupAccountId(accountId)
+        val key = cleanupKey(accountId)
+        check(preferences.get(key, null) in setOf(null, PREPARED, COMMITTED)) {
+            "The desktop account sync cleanup journal phase is unsupported."
+        }
         val pending = pending()
         check(pending.any { cleanup -> cleanup.accountId == accountId } || pending.size < MAX_LOCAL_ACCOUNTS) {
             "The desktop account sync cleanup journal is too large."
         }
         preferences.put(
-            cleanupKey(accountId),
+            key,
             if (phase == DesktopAccountSyncPairCleanupPhase.Prepared) PREPARED else COMMITTED,
         )
         preferences.flush()
@@ -286,5 +287,5 @@ internal fun desktopAccountSyncPairCleanupJournalMalformedDiagnostic() =
         severity = SupportDiagnosticSeverity.Warning,
         component = SupportDiagnosticComponent.Sync,
         operation = "account.remove-sync-cleanup-journal",
-        outcome = "malformed-entry-quarantined",
+        outcome = "unknown-entry-preserved",
     )

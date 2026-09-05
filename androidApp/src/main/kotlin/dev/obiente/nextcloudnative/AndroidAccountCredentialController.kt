@@ -684,20 +684,19 @@ internal class AndroidAccountCredentialController(
 
     private suspend fun retryPendingAccountRemovalCleanup(session: NextcloudSession) {
         val pending = pendingAndroidAccountRemovalCleanupForSession(
-            session,
-            accountRemovalCleanupJournal.pending(),
+            session, accountRemovalCleanupJournal.pending(),
         ) ?: return
         try {
-            retryQueuedUploadsCleanup(session, pending.workIdentity)
-            accountRemovalCleanupJournal.clear(pending.accountStorageKey)
+            retryAndroidAccountRemovalCleanup(
+                accountOwnedByRegistry = readCredentialFreeRegistry()?.accounts?.any { it.id == session.accountId },
+                removeAccountOwnedWork = { retryQueuedUploadsCleanup(session, pending.workIdentity) },
+                clearCleanup = { accountRemovalCleanupJournal.clear(pending.accountStorageKey) },
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             recordAccountRemovalCleanupFailure(failure)
-            throw IllegalStateException(
-                "Previous account cleanup must finish before this account can be added again.",
-                failure,
-            )
+            throw androidAccountRemovalCleanupRetryFailure(failure)
         }
     }
 

@@ -656,7 +656,7 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
-    fun malformedCleanupEntryDoesNotHideValidTombstonesOrBlockNewRemoval() {
+    fun futureCleanupEntryIsPreservedWithoutHidingValidTombstonesOrBlockingNewRemoval() {
         val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
         val malformedAccountId = "1".repeat(64)
         val validAccountId = "2".repeat(64)
@@ -676,7 +676,7 @@ class DesktopAccountOperationGuardTest {
                 ),
                 journal.pending(),
             )
-            assertNull(preferences.get("fsac.$malformedAccountId", null))
+            assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertEquals("committed", preferences.get("fsac.$validAccountId", null))
             assertEquals(1, malformedCount)
 
@@ -686,6 +686,9 @@ class DesktopAccountOperationGuardTest {
                 setOf(validAccountId, newAccountId),
                 journal.pending().mapTo(linkedSetOf(), DesktopAccountSyncPairCleanup::accountId),
             )
+            assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
+            assertFailsWith<IllegalStateException> { journal.prepare(malformedAccountId) }
+            assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertEquals(1, malformedCount)
         } finally {
             preferences.removeNode()
