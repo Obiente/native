@@ -59,7 +59,7 @@ class LinuxVirtualMutationGateTest {
         hasOpenWriteHandle = false
         lifecycle.endOperation()
         assertTrue(lifecycle.tryQuiesce())
-        assertFailsWith<LinuxVirtualFileSystemException>(lifecycle::beginMutation)
+        assertFailsWith<LinuxVirtualFileSystemException> { lifecycle.beginMutation() }
         lifecycle.resume()
     }
 
@@ -93,7 +93,7 @@ class LinuxVirtualMutationGateTest {
             allowClose.countDown()
             release.get(5, TimeUnit.SECONDS)
             assertTrue(quiescence.get(5, TimeUnit.SECONDS))
-            assertFailsWith<LinuxVirtualFileSystemException>(lifecycle::beginMutation)
+            assertFailsWith<LinuxVirtualFileSystemException> { lifecycle.beginMutation() }
             lifecycle.resume()
         } finally {
             allowClose.countDown()
