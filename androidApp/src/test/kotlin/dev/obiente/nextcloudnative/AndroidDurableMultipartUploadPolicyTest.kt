@@ -12,7 +12,6 @@ import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -694,54 +693,41 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `asynchronous scheduling failure requests recovery`() {
-        val schedulingResult = CompletableFuture<Unit>()
+    fun `queued status snapshot requests one scheduling recovery`() {
+        val first = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
+        val second = fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43)
         var recoveryRequests = 0
 
-        observeDurableUploadSchedulingResult(
-            result = schedulingResult,
-            addListener = { listener ->
-                schedulingResult.whenComplete { _, _ -> listener.run() }
-            },
+        requestDurableUploadSchedulingRecoveryForQueuedStatuses(
+            jobs = listOf(first, second),
             requestRecovery = { recoveryRequests += 1 },
         )
+
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `terminal status snapshot does not request scheduling recovery`() {
+        val completed = fixtureJob(
+            index = 1,
+            account = ACCOUNT_A,
+            cardId = 42,
+            state = DurableUploadState.Completed,
+        )
+        val failed = fixtureJob(
+            index = 2,
+            account = ACCOUNT_A,
+            cardId = 43,
+            state = DurableUploadState.Failed,
+        )
+        var recoveryRequests = 0
+
+        requestDurableUploadSchedulingRecoveryForQueuedStatuses(
+            jobs = listOf(completed, failed),
+            requestRecovery = { recoveryRequests += 1 },
+        )
+
         assertEquals(0, recoveryRequests)
-
-        schedulingResult.completeExceptionally(IOException("WorkManager rejected the request"))
-
-        assertEquals(1, recoveryRequests)
-    }
-
-    @Test
-    fun `cancelled scheduling result requests recovery without blocking`() {
-        val schedulingResult = CompletableFuture<Unit>()
-        var recoveryRequests = 0
-
-        observeDurableUploadSchedulingResult(
-            result = schedulingResult,
-            addListener = { listener ->
-                schedulingResult.whenComplete { _, _ -> listener.run() }
-            },
-            requestRecovery = { recoveryRequests += 1 },
-        )
-
-        assertTrue(schedulingResult.cancel(false))
-        assertEquals(1, recoveryRequests)
-    }
-
-    @Test
-    fun `premature scheduling listener requests recovery instead of blocking`() {
-        val schedulingResult = CompletableFuture<Unit>()
-        var recoveryRequests = 0
-
-        observeDurableUploadSchedulingResult(
-            result = schedulingResult,
-            addListener = Runnable::run,
-            requestRecovery = { recoveryRequests += 1 },
-        )
-
-        assertFalse(schedulingResult.isDone)
-        assertEquals(1, recoveryRequests)
     }
 
     @Test
