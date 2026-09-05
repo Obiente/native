@@ -107,6 +107,7 @@ internal class AndroidAccountCredentialController(
             when (val read = readStore()) {
                 is AndroidAccountCredentialStoreRead.Available -> {
                     requireSupportedCredentialSlots(read.state.registry)
+                    prepareAndroidDocumentProviderAccountSave(appContext, session, read.state)
                     replaceActiveState(
                         read.state.upsertAndSelect(session), read.state.activeSession,
                         read.state.sessions[session.accountId],
@@ -117,6 +118,7 @@ internal class AndroidAccountCredentialController(
                     check(retained != null || !hasAndroidIndependentCredentialState(preferences)) {
                         "The aggregate account credential store is invalid; reset it before signing in again."
                     }
+                    prepareAndroidDocumentProviderAccountSave(appContext, session, retained ?: AndroidAccountCredentialState.Empty)
                     replaceActiveState(
                         replacement = (retained ?: AndroidAccountCredentialState.Empty).upsertAndSelect(session),
                         previousSession = retained?.activeSession,
@@ -129,6 +131,7 @@ internal class AndroidAccountCredentialController(
                     check(retained != null || !hasAndroidIndependentCredentialState(preferences)) {
                         "The independent account credential slots could not be recovered."
                     }
+                    prepareAndroidDocumentProviderAccountSave(appContext, session, retained ?: AndroidAccountCredentialState.Empty)
                     replaceActiveState(
                         replacement = (retained ?: AndroidAccountCredentialState.Empty).upsertAndSelect(session),
                         previousSession = retained?.activeSession,
