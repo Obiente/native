@@ -25,13 +25,24 @@ internal fun createAndroidFileSyncLocalTree(
             root = resolveMediaStoreSyncRoot(rootId, Environment.getExternalStorageDirectory()),
         )
     } else {
-        requireExternalAndroidPickerUri(rootId, appContext.packageName)
+        androidFileSyncRootRejection(rootId, appContext.packageName)?.let { rejection ->
+            throw AndroidPickerUriRejectedException(rejection)
+        }
         AndroidSafFileSyncLocalTree(
             resolver = appContext.contentResolver,
             rootId = rootId,
             downloadOwnershipStore = createAndroidSafDownloadOwnershipStore(appContext, rootId),
         )
     }
+}
+
+internal fun androidFileSyncRootRejection(
+    rootId: String,
+    applicationId: String,
+): AndroidPickerUriRejection? = if (rootId.startsWith(MEDIA_STORE_SYNC_ROOT_PREFIX)) {
+    null
+} else {
+    androidPickerUriRejection(rootId, applicationId)
 }
 
 internal fun createAndroidSafDownloadOwnershipStore(

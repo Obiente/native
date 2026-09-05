@@ -39,10 +39,14 @@ internal object NextcloudDocumentIds {
         return "$PREFIX:$accountKey:"
     }
 
-    fun documentId(session: NextcloudSession, path: String): String {
+    fun documentId(session: NextcloudSession, path: String): String =
+        documentId(accountKey(session), path)
+
+    fun documentId(accountKey: String, path: String): String {
+        require(accountKeyPattern.matches(accountKey)) { "Invalid document account." }
         val normalizedPath = normalizePath(path)
         val encodedPath = encoder.encodeToString(normalizedPath.encodeToByteArray())
-        return "$PREFIX:${accountKey(session)}:$encodedPath"
+        return "$PREFIX:$accountKey:$encodedPath"
     }
 
     fun parse(documentId: String): NextcloudDocumentReference {
