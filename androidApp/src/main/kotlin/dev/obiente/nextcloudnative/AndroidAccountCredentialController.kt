@@ -58,7 +58,7 @@ internal class AndroidAccountCredentialController(
     )
 
     fun accountRetentionSnapshot(): AndroidAccountRetentionSnapshot = readRegistryForCredentialLoad()
-        ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
+        ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts, registry.activeAccountId) }
         ?: AndroidAccountRetentionSnapshot.Unavailable
 
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
@@ -295,8 +295,12 @@ internal class AndroidAccountCredentialController(
                     else -> clearInvalidStore(read.encrypted)
                 }
             }
-            AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable ->
-                error("The independent account credential slots could not be recovered.")
+            AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable -> {
+                requireAndroidIndependentCredentialStateCanBeExplicitlyReset(
+                    preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null),
+                )
+                clearInvalidStore(null)
+            }
             is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
         }
     }
@@ -314,7 +318,7 @@ internal class AndroidAccountCredentialController(
         notifyDocumentRootsChanged()
     }
 
-    private suspend fun clearInvalidStore(suspectEncrypted: String) {
+    private suspend fun clearInvalidStore(suspectEncrypted: String?) {
         clearPersistedSession(
             encodedReplacement = null,
             replacement = AndroidAccountCredentialState.Empty,
@@ -688,25 +692,25 @@ internal class AndroidAccountCredentialController(
     }
 
     private suspend fun retryPendingAccountRemovalCleanup(session: NextcloudSession) {
-        val pending = pendingAndroidAccountRemovalCleanupForSession(
-            session, accountRemovalCleanupJournal.pending(),
-        ) ?: return
-        try {
-            retryAndroidAccountRemovalCleanup(
-                accountOwnedByRegistry = androidAccountRemovalCleanupOwnedByRegistry(
-                    pending, readCredentialFreeRegistry()?.accounts,
-                ),
-                removeAccountOwnedWork = {
-                    retryAndroidAccountOwnedStateCleanup(session, pending, retryQueuedUploadsCleanup)
-                },
-                clearCleanup = { accountRemovalCleanupJournal.clear(pending.accountStorageKey) },
-            )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            recordAccountRemovalCleanupFailure(failure)
-            throw androidAccountRemovalCleanupRetryFailure(failure)
+        val snapshot = accountRemovalCleanupJournal.snapshot()
+        val pending = pendingAndroidAccountRemovalCleanupForSession(session, snapshot.cleanups)
+        if (pending != null) {
+            try {
+                retryAndroidAccountRemovalCleanup(
+                    accountOwnedByRegistry = androidAccountRemovalCleanupOwnedByRegistry(pending, readCredentialFreeRegistry()?.accounts),
+                    removeAccountOwnedWork = {
+                        retryAndroidAccountOwnedStateCleanup(session, pending, retryQueuedUploadsCleanup)
+                    },
+                    clearCleanup = { accountRemovalCleanupJournal.clear(pending.accountStorageKey) },
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                recordAccountRemovalCleanupFailure(failure)
+                throw androidAccountRemovalCleanupRetryFailure(failure)
+            }
         }
+        requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
     }
 
     private fun commitPreferences(editor: SharedPreferences.Editor) = ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {

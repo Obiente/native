@@ -3506,7 +3506,10 @@ class DesktopNextcloudServices(
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         val persistedSession = accountOperationGuard.persistSessionAndActivateDynamicReads(
             persist = {
-                retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(session))
+                retryPendingAccountSyncPairCleanup(
+                    desktopFileCacheAccountId(session),
+                    session.accountId.storageKey,
+                )
                 sessionPublicationGuard.serialize {
                     val activeAccountId = accountCredentials.activeAccountId()
                     val activeSession = activeAccountId?.let(accountCredentials::loadSession)
@@ -3518,10 +3521,12 @@ class DesktopNextcloudServices(
                     accountCredentials.saveSession(session).also(accountSessionPublication::publish)
                 }
             },
-            activate = { dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it)) },
+            activate = {
+                dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it))
+                synchronized(fileRangeSessionLock) { sessionClearing = false }
+                startDesktopSyncLifecycle()
+            },
         )
-        synchronized(fileRangeSessionLock) { sessionClearing = false }
-        startDesktopSyncLifecycle()
         persistedSession
     }
     override fun listAccounts() = sessionPublicationGuard.serialize(accountCredentials::listAccounts)
@@ -3557,7 +3562,10 @@ class DesktopNextcloudServices(
                                     accountCredentials.listAccounts().firstOrNull { account -> account.id == accountId }
                                 }
                                 selectedRecord?.let { record ->
-                                    retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(record))
+                                    retryPendingAccountSyncPairCleanup(
+                                        desktopFileCacheAccountId(record),
+                                        record.id.storageKey,
+                                    )
                                 }
                                 sessionPublicationGuard.serialize {
                                     accountCredentials.selectAccount(accountId)?.also { session ->
@@ -3827,8 +3835,8 @@ class DesktopNextcloudServices(
             }
         }
     }
-    private suspend fun retryPendingAccountSyncPairCleanup(accountId: String) {
-        accountSyncPairCleanupJournal.pending().singleOrNull { it.accountId == accountId }?.let { cleanup ->
+    private suspend fun retryPendingAccountSyncPairCleanup(accountId: String, accountStorageKey: String) {
+        accountSyncPairCleanupJournal.pendingForAccountActivation(accountId, accountStorageKey).forEach { cleanup ->
             retryDesktopAccountSyncPairCleanup(
                 cleanup, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState, accountSyncPairCleanupJournal::clear,
             )

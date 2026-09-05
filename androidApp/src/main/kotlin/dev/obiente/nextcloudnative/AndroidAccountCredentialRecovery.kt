@@ -253,6 +253,16 @@ internal fun androidCredentialStoreAllowsSessionRestore(
     -> true
 }
 
+internal fun androidIndependentCredentialStateCanBeExplicitlyReset(
+    registry: RestoredAndroidCredentialFreeRegistry?,
+): Boolean = registry == null || registry.credentialRecoveryRequired
+
+internal fun requireAndroidIndependentCredentialStateCanBeExplicitlyReset(encodedRegistry: String?) {
+    check(androidIndependentCredentialStateCanBeExplicitlyReset(encodedRegistry?.let(::restoreAndroidCredentialFreeRegistry))) {
+        "The independent account credential slots could not be recovered."
+    }
+}
+
 internal class AndroidAccountCredentialStoreGuard {
     private val monitor = Any()
 

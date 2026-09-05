@@ -7,8 +7,15 @@ internal class AndroidAccountRemovalCleanupJournal(
     private val commit: (SharedPreferences.Editor) -> Unit,
     private val recordMalformed: () -> Unit,
 ) {
-    fun pending(): Set<AndroidPendingAccountRemovalCleanup> {
-        val encoded = try {
+    fun pending(): Set<AndroidPendingAccountRemovalCleanup> = snapshot().cleanups
+
+    fun snapshot(): RestoredAndroidPendingAccountRemovalCleanups {
+        val restored = restoreAndroidPendingAccountRemovalCleanups(readEncoded())
+        if (restored.malformedEntryCount > 0) runCatching(recordMalformed)
+        return restored
+    }
+
+    private fun readEncoded(): Set<String> = try {
             preferences.getStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, emptySet()).orEmpty()
         } catch (failure: Exception) {
             runCatching(recordMalformed)
@@ -17,8 +24,6 @@ internal class AndroidAccountRemovalCleanupJournal(
                 failure,
             )
         }
-        return requireValidAndroidAccountRemovalCleanupJournal(encoded, recordMalformed)
-    }
 
     fun prepareEdit(
         editor: SharedPreferences.Editor,
@@ -26,23 +31,17 @@ internal class AndroidAccountRemovalCleanupJournal(
     ): SharedPreferences.Editor = if (pendingCleanup == null) {
         editor
     } else {
-        val retained = pending()
-            .filterNot { cleanup -> cleanup.accountStorageKey == pendingCleanup.accountStorageKey }
-            .toSet() + pendingCleanup
         editor.putStringSet(
             ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
-            retained.mapTo(linkedSetOf(), ::encodeAndroidPendingAccountRemovalCleanup),
+            replaceAndroidAccountRemovalCleanup(readEncoded(), pendingCleanup, recordMalformed),
         )
     }
 
     fun clear(accountStorageKey: String) {
-        val remaining = pending().filterNot { cleanup -> cleanup.accountStorageKey == accountStorageKey }
+        val remaining = removeAndroidAccountRemovalCleanup(readEncoded(), accountStorageKey, recordMalformed)
         val editor = preferences.edit()
         if (remaining.isEmpty()) editor.remove(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY)
-        else editor.putStringSet(
-            ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
-            remaining.mapTo(linkedSetOf(), ::encodeAndroidPendingAccountRemovalCleanup),
-        )
+        else editor.putStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, remaining)
         commit(editor)
     }
 }
@@ -59,9 +58,43 @@ internal fun requireValidAndroidAccountRemovalCleanupJournal(
     val restored = restoreAndroidPendingAccountRemovalCleanups(encoded)
     if (restored.malformedEntryCount > 0) {
         runCatching(recordMalformed)
-        throw AndroidAccountRemovalCleanupJournalException(
-            "The account-removal cleanup journal contains a malformed tombstone.",
-        )
     }
     return restored.cleanups
+}
+
+internal fun requireAndroidAccountRemovalCleanupJournalAllowsActivation(
+    snapshot: RestoredAndroidPendingAccountRemovalCleanups,
+) {
+    check(snapshot.malformedEntryCount == 0) {
+        "Reset the malformed account-removal cleanup state before signing in again."
+    }
+}
+
+internal fun replaceAndroidAccountRemovalCleanup(
+    encoded: Set<String>,
+    replacement: AndroidPendingAccountRemovalCleanup,
+    recordMalformed: () -> Unit,
+): Set<String> = removeAndroidAccountRemovalCleanup(
+    encoded,
+    replacement.accountStorageKey,
+    recordMalformed,
+) + encodeAndroidPendingAccountRemovalCleanup(replacement)
+
+internal fun removeAndroidAccountRemovalCleanup(
+    encoded: Set<String>,
+    accountStorageKey: String,
+    recordMalformed: () -> Unit,
+): Set<String> {
+    var malformedFound = false
+    val remaining = encoded.filterTo(linkedSetOf()) { entry ->
+        val cleanup = decodeAndroidPendingAccountRemovalCleanup(entry)
+        if (cleanup == null) {
+            malformedFound = true
+            true
+        } else {
+            cleanup.accountStorageKey != accountStorageKey
+        }
+    }
+    if (malformedFound) runCatching(recordMalformed)
+    return remaining
 }

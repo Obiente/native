@@ -549,6 +549,21 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun explicitResetDiscardsMalformedRegistryButPreservesFutureVersionState() {
+        assertTrue(
+            androidIndependentCredentialStateCanBeExplicitlyReset(
+                restoreAndroidCredentialFreeRegistry("{not-json"),
+            ),
+        )
+        assertFalse(
+            androidIndependentCredentialStateCanBeExplicitlyReset(
+                restoreAndroidCredentialFreeRegistry("""{"version":99,"accounts":[]}"""),
+            ),
+        )
+        assertTrue(androidIndependentCredentialStateCanBeExplicitlyReset(null))
+    }
+
+    @Test
     fun credentialSlotReadDecryptsOnlyTheRequestedAccount() {
         val first = firstSession()
         val second = secondSession()

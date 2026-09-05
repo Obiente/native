@@ -88,6 +88,34 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun cancelledSaveFinishesPostCommitActivationBeforeReleasingTheAccountFence() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val activationEntered = CompletableDeferred<Unit>()
+        val finishActivation = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "saved-password")
+        val save = async {
+            guard.persistSessionAndActivateDynamicReads(
+                persist = {
+                    events += "persist"
+                    session
+                },
+                activate = {
+                    activationEntered.complete(Unit)
+                    finishActivation.await()
+                    events += "activate"
+                },
+            )
+        }
+        activationEntered.await()
+        save.cancel()
+        finishActivation.complete(Unit)
+
+        assertFailsWith<CancellationException> { save.await() }
+        assertEquals(listOf("persist", "activate"), events)
+    }
+
+    @Test
     fun lateDurableWriterCannotPublishAfterRemovalAndCredentialReplacement() = runBlocking {
         val guard = DesktopAccountOperationGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
@@ -871,6 +899,32 @@ class DesktopAccountOperationGuardTest {
             assertFailsWith<IllegalStateException> { journal.prepare(malformedAccountId) }
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertEquals(1, malformedCount)
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
+    fun canonicalAccountStorageIdentityBlocksReactivationUntilPriorCleanupRuns() {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val oldCacheIdentity = "1".repeat(64)
+        val canonicalCacheIdentity = "2".repeat(64)
+        try {
+            val journal = DesktopAccountSyncPairCleanupJournal(preferences)
+            journal.prepare(oldCacheIdentity, MUTATION_SCOPE, ACCOUNT_STORAGE_KEY)
+            journal.commit(oldCacheIdentity)
+
+            assertEquals(
+                listOf(
+                    DesktopAccountSyncPairCleanup(
+                        oldCacheIdentity,
+                        DesktopAccountSyncPairCleanupPhase.Committed,
+                        MUTATION_SCOPE,
+                        ACCOUNT_STORAGE_KEY,
+                    ),
+                ),
+                journal.pendingForAccountActivation(canonicalCacheIdentity, ACCOUNT_STORAGE_KEY),
+            )
         } finally {
             preferences.removeNode()
         }

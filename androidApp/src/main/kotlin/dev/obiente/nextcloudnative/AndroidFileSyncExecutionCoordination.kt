@@ -287,8 +287,8 @@ internal suspend fun retireConfiguredFileSyncAccountPairs(
         .distinct()
         .toList()
     withContext(NonCancellable) {
-        persistRetirement()
         releasedLocalRoots.forEach { localRootId -> releaseLocalGrant(localRootId) }
+        persistRetirement()
     }
 }
 

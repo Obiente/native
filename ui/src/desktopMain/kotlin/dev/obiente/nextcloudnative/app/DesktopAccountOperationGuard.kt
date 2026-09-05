@@ -1,7 +1,11 @@
 package dev.obiente.nextcloudnative.app
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 internal class DesktopAccountOperationGuard {
     private val accountMutationMutex = Mutex()
@@ -106,7 +110,10 @@ internal suspend fun DesktopAccountOperationGuard.persistSessionAndActivateDynam
     persist: suspend () -> NextcloudSession,
     activate: suspend (NextcloudSession) -> Unit,
 ): NextcloudSession = serializeWhenSyncIdle {
-    persist().also { persisted -> activate(persisted) }
+    val persisted = persist()
+    withContext(NonCancellable) { activate(persisted) }
+    currentCoroutineContext().ensureActive()
+    persisted
 }
 
 internal fun requireDesktopAccountRemovalWritebacksResolved(pendingWritebackCount: Int) {
