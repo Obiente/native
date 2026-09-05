@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import androidx.work.ExistingWorkPolicy
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.accountRecord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -25,7 +27,7 @@ class AndroidAccountRemovalCleanupRecoveryWorkTest {
 
         val completed = recoverPendingAndroidAccountRemovalCleanups(
             pending = listOf(removed, restored),
-            accountOwnedByRegistry = { key -> key == restored.accountStorageKey },
+            accountOwnedByRegistry = { cleanup -> cleanup.accountStorageKey == restored.accountStorageKey },
             removeAccountOwnedWork = { events += "remove:${it.workIdentity}" },
             clearCleanup = { events += "clear:$it" },
             recordFailure = { events += "failure" },
@@ -130,6 +132,54 @@ class AndroidAccountRemovalCleanupRecoveryWorkTest {
         }
 
         assertFalse(recorded)
+    }
+
+    @Test
+    fun crossedCleanupIdentityCannotDeleteARetainedAccountsState() = runBlocking {
+        val retained = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "retained-user",
+            appPassword = "fixture-password",
+        )
+        val removed = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "removed-user",
+            appPassword = "fixture-password",
+        )
+        val crossed = pendingAndroidAccountRemovalCleanup(removed).copy(
+            workIdentity = NextcloudDocumentIds.accountKey(retained),
+        )
+        val events = mutableListOf<String>()
+
+        val completed = recoverPendingAndroidAccountRemovalCleanups(
+            pending = listOf(crossed),
+            accountOwnedByRegistry = { cleanup ->
+                androidAccountRemovalCleanupOwnedByRegistry(cleanup, listOf(retained.accountRecord()))
+            },
+            removeAccountOwnedWork = { events += "remove" },
+            clearCleanup = { events += "clear" },
+            recordFailure = { events += "failure" },
+        )
+
+        assertFalse(completed)
+        assertEquals(listOf("failure"), events)
+    }
+
+    @Test
+    fun matchingCleanupIdentityRecognizesItsRetainedAccount() {
+        val retained = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "retained-user",
+            appPassword = "fixture-password",
+        )
+
+        assertEquals(
+            true,
+            androidAccountRemovalCleanupOwnedByRegistry(
+                pendingAndroidAccountRemovalCleanup(retained),
+                listOf(retained.accountRecord()),
+            ),
+        )
     }
 
     private fun cleanup(accountCharacter: String, workCharacter: String) =

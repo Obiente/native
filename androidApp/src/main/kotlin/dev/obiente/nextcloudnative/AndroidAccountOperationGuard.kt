@@ -1,6 +1,8 @@
 package dev.obiente.nextcloudnative
 
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 
@@ -10,6 +12,20 @@ internal class AndroidAccountOperationGuard {
 
     suspend fun <Result> withAccount(accountId: String, action: suspend () -> Result): Result {
         val lease = acquire(accountId)
+        return try {
+            action()
+        } finally {
+            lease.close()
+        }
+    }
+
+    suspend fun <Result> tryWithAccount(
+        accountId: String,
+        unavailable: suspend () -> Result,
+        action: suspend () -> Result,
+    ): Result {
+        currentCoroutineContext().ensureActive()
+        val lease = tryAcquire(accountId) ?: return unavailable()
         return try {
             action()
         } finally {
@@ -63,6 +79,21 @@ internal class AndroidAccountOperationGuard {
         } catch (failure: Throwable) {
             releaseReference(accountId, lease)
             throw failure
+        }
+        return AndroidAccountOperationLease {
+            lease.mutex.unlock()
+            releaseReference(accountId, lease)
+        }
+    }
+
+    private fun tryAcquire(accountId: String): AndroidAccountOperationLease? {
+        require(accountId.isNotBlank())
+        val lease = synchronized(monitor) {
+            accountLeases.getOrPut(accountId) { AccountLease() }.also { it.references += 1 }
+        }
+        if (!lease.mutex.tryLock()) {
+            releaseReference(accountId, lease)
+            return null
         }
         return AndroidAccountOperationLease {
             lease.mutex.unlock()
