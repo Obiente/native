@@ -33,7 +33,6 @@ class AndroidAccountMutationRecoveryCleanupTest {
             val removedPublished = File(root, "$removed-notes-$digest.json").apply { writeText("removed") }
             val removedStaging = File(root, "$removed-calendar-$digest.json.part").apply { writeText("removed") }
             val retainedPublished = File(root, "$retained-notes-$digest.json").apply { writeText("retained") }
-            val malformedLookalike = File(root, "$removed-bad app-$digest.json").apply { writeText("retained") }
             val cleanup = AndroidAccountMutationRecoveryCleanup(recordingPreferences(values), root)
 
             repeat(2) {
@@ -49,11 +48,30 @@ class AndroidAccountMutationRecoveryCleanupTest {
             assertFalse(removedPublished.exists())
             assertFalse(removedStaging.exists())
             assertTrue(retainedPublished.isFile)
-            assertTrue(malformedLookalike.isFile)
             assertTrue(outside.isFile)
         } finally {
             root.deleteRecursively()
             outside.delete()
+        }
+    }
+
+    @Test
+    fun malformedOrNewerAccountEntryDefersCleanupInsteadOfBeingIgnored() {
+        val root = Files.createTempDirectory("android-account-mutation-unknown-").toFile()
+        try {
+            val removed = "d".repeat(64)
+            val unknown = File(root, "$removed-notes-${"2".repeat(64)}.json.v2").apply {
+                writeText("future-format")
+            }
+            val cleanup = AndroidAccountMutationRecoveryCleanup(recordingPreferences(linkedMapOf()), root)
+
+            assertFailsWith<IllegalStateException> {
+                cleanup.clearPendingDynamicMutations(removed)
+            }
+
+            assertTrue(unknown.isFile)
+        } finally {
+            root.deleteRecursively()
         }
     }
 

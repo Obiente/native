@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.DurableMutationRecoveryKind
 import dev.obiente.nextcloudnative.app.isSafePendingMutationId
 import java.io.File
+import java.nio.file.Files
 
 internal class AndroidAccountMutationRecoveryCleanup(
     private val preferences: SharedPreferences,
@@ -47,11 +48,18 @@ internal class AndroidAccountMutationRecoveryCleanup(
         }
         val candidates = pendingDynamicMutationDirectory.listFiles()
             ?: error("The pending mutation store could not be read.")
+        val ownedPrefix = "$accountIdentity-"
         candidates
-            .filter { candidate -> candidate.isOwnedPendingDynamicMutation(accountIdentity) }
+            .filter { candidate -> candidate.name.startsWith(ownedPrefix) }
             .forEach { candidate ->
+                check(candidate.isOwnedPendingDynamicMutation(accountIdentity)) {
+                    "The pending mutation store contains an unsupported account entry."
+                }
                 check(candidate.canonicalFile.parentFile == pendingDynamicMutationDirectory) {
                     "Unsafe pending mutation cleanup path."
+                }
+                check(candidate.isFile && !Files.isSymbolicLink(candidate.toPath())) {
+                    "The pending mutation account entry is not a regular file."
                 }
                 check(!candidate.exists() || candidate.delete() && !candidate.exists()) {
                     "Could not clear this account's pending mutation."

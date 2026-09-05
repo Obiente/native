@@ -109,15 +109,48 @@ class DynamicApiRequestCoalescerTest {
     }
 
     @Test
-    fun `read invoked after an account removal fence uses the new generation`() = runBlocking {
+    fun `read invoked after an account removal fence stays closed until activation`() = runBlocking {
         val coalescer = DynamicApiRequestCoalescer<String>()
 
         coalescer.fenceAccount("account-a") {}
 
+        assertFailsWith<DynamicReadAccountFencedException> {
+            coalescer.execute("account-a", "GET items", load = { fail("must remain closed") })
+        }
+        coalescer.activateAccount("account-a")
         assertEquals(
             "re-added-account-data",
             coalescer.execute("account-a", "GET items", load = { "re-added-account-data" }),
         )
+    }
+
+    @Test
+    fun `readding an account does not let its stale read commit`() = runBlocking {
+        supervisorScope {
+            val coalescer = DynamicApiRequestCoalescer<String>()
+            val readStarted = CompletableDeferred<Unit>()
+            val finishRead = CompletableDeferred<Unit>()
+            val committed = mutableListOf<String>()
+            val stale = async {
+                coalescer.execute("account-a", "GET items", load = {
+                    readStarted.complete(Unit)
+                    finishRead.await()
+                    "removed-account-data"
+                }, commit = committed::add)
+            }
+
+            readStarted.await()
+            coalescer.fenceAccount("account-a") { committed.clear() }
+            coalescer.activateAccount("account-a")
+            val replacement = async {
+                coalescer.execute("account-a", "GET items", load = { "replacement-account-data" }, commit = committed::add)
+            }
+            finishRead.complete(Unit)
+
+            assertFailsWith<DynamicReadAccountFencedException> { stale.await() }
+            assertEquals("replacement-account-data", replacement.await())
+            assertEquals(listOf("replacement-account-data"), committed)
+        }
     }
 
     @Test
