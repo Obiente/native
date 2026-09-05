@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import java.io.File
 
 internal class AndroidAccountOwnedStateCleanup(
@@ -18,6 +19,7 @@ internal class AndroidAccountOwnedStateCleanup(
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
     private val incomingShares = AndroidIncomingShareAccountCleanup(appContext)
     private val durableUploads = AndroidDurableUploadAccountCleanup(appContext)
+    private val mutationRecovery = AndroidAccountMutationRecoveryCleanup(appContext)
 
     suspend fun remove(session: NextcloudSession) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
@@ -32,6 +34,8 @@ internal class AndroidAccountOwnedStateCleanup(
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
+                { mutationRecovery.clearDurableRecoveries(durableMutationAccountScope(session)) },
+                { mutationRecovery.clearPendingDynamicMutations(NextcloudDocumentIds.cacheAccountId(session)) },
             ),
         )
     }
@@ -40,6 +44,7 @@ internal class AndroidAccountOwnedStateCleanup(
         session: NextcloudSession,
         accountIdentity: String,
         previewCacheIdentity: String?,
+        durableMutationIdentity: String?,
     ) {
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,
@@ -52,11 +57,17 @@ internal class AndroidAccountOwnedStateCleanup(
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
+                { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
+                { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
             ),
         )
     }
 
-    suspend fun retryWithoutCredentials(accountIdentity: String, previewCacheIdentity: String? = null) {
+    suspend fun retryWithoutCredentials(
+        accountIdentity: String,
+        previewCacheIdentity: String? = null,
+        durableMutationIdentity: String? = null,
+    ) {
         runAndroidAccountOwnedStateCleanups(
             previewCacheIdentity,
             clearPreviewAccount,
@@ -68,6 +79,8 @@ internal class AndroidAccountOwnedStateCleanup(
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
+                { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
+                { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
             ),
         )
     }
