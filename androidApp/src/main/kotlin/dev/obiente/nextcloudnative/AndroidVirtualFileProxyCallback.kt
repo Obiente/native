@@ -117,6 +117,7 @@ internal class AndroidVirtualFileProxyCallback(
     fun cancel() {
         cancelled.set(true)
         runCatching(::closeSource)
+        onRelease()
     }
 
     private fun closeSource() {
