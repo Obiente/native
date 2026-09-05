@@ -104,6 +104,7 @@ internal class DesktopAccountCredentialPersistence(
         } catch (failure: Exception) {
             var credentialRollbackCompleted = false
             try {
+                markPendingCredentialSaveRollback()
                 if (previousSecret == null) {
                     secretStore.clear(secretReference)
                 } else {
@@ -385,6 +386,20 @@ internal class DesktopAccountCredentialPersistence(
         flushPreferences()
     }
 
+    private fun markPendingCredentialSaveRollback() {
+        val previousPhase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
+        try {
+            preferences.put(KEY_PENDING_CREDENTIAL_SAVE_PHASE, CREDENTIAL_SAVE_ROLLBACK)
+            flushPreferences()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_PHASE, previousPhase)
+            runCatching(flushPreferences)
+            throw failure
+        }
+    }
+
     private fun clearPendingCredentialSave() {
         val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
         val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
@@ -659,6 +674,7 @@ internal class DesktopAccountCredentialPersistence(
         const val KEY_PENDING_CREDENTIAL_REMOVALS = "accountCredentialRemovals"
         const val CREDENTIAL_SAVE_PREPARED = "prepared"
         const val CREDENTIAL_SAVE_SECRET_WRITTEN = "secret-written"
+        const val CREDENTIAL_SAVE_ROLLBACK = "rollback"
     }
 }
 

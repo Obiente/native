@@ -275,6 +275,35 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
+    fun crashDuringFailedReauthenticationRollbackDoesNotSelectTheInactiveAccount() =
+        withStore { preferences, secrets ->
+            val inactive = firstSession()
+            val active = secondSession()
+            var flushCount = 0
+            var failFlushOnAttempt: Int? = null
+            val persistence = persistence(preferences, secrets) {
+                flushCount += 1
+                if (flushCount == failFlushOnAttempt) error("synthetic registry flush failure")
+                preferences.flush()
+            }
+            persistence.saveSession(inactive)
+            persistence.saveSession(active)
+            failFlushOnAttempt = flushCount + 3
+            secrets.crashSaveOnAttempt = secrets.saveCount + 2
+
+            assertFailsWith<SimulatedProcessExit> {
+                persistence.saveSession(inactive.copy(appPassword = "replacement-password"))
+            }
+
+            assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
+            failFlushOnAttempt = null
+            val restarted = persistence(preferences, secrets)
+            assertEquals(active, restarted.loadActiveSession())
+            assertEquals(active.accountId, restarted.activeAccountId())
+            assertNull(preferences.get("accountCredentialSavePhase", null))
+        }
+
+    @Test
     fun canonicalEquivalentReauthenticationPreservesDesktopStorageIdentity() =
         withStore { preferences, secrets ->
             val original = NextcloudSession(
