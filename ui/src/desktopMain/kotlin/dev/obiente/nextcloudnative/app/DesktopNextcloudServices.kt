@@ -909,6 +909,7 @@ class DesktopNextcloudServices(
     private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
     private var linuxVirtualFileFailure: String? = null
+    private val linuxProviderCleanup = DesktopLinuxProviderCleanupSlot()
     @Volatile
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
     @Volatile
@@ -961,6 +962,7 @@ class DesktopNextcloudServices(
         accountId: String,
         cache: DesktopVirtualRangeCache,
     ) {
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
         if (sessionClearing) return
         if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
         if (cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) return
@@ -1478,6 +1480,7 @@ class DesktopNextcloudServices(
         if (!isLinuxDesktop()) return
         session ?: return
         val accountId = desktopFileCacheAccountId(session)
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
         val cache = virtualRangeCache(accountId)
         val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
             rule.retention == VirtualFolderRetention.KeepOnDevice
@@ -1816,6 +1819,10 @@ class DesktopNextcloudServices(
             )
         }
         val accountId = desktopFileCacheAccountId(session)
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return unknownCleanupStateRejection()
+        runCatching(linuxProviderCleanup::retry).exceptionOrNull()?.let {
+            return VirtualFileStorageActionResult.Rejected(it.message ?: "The earlier Linux mount is still active.")
+        }
         var windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
             persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
         } else {
@@ -2502,6 +2509,7 @@ class DesktopNextcloudServices(
         // A retained-metadata persistence callback can briefly enter virtualFileProviderLock.
         // Closing its backend while holding the same lock reverses that order and deadlocks.
         runCatching { providersToClose.first?.unmount() }
+        runCatching(linuxProviderCleanup::retry)
         runCatching { providersToClose.second?.close() }
         supportIntake.close()
         supportDiagnostics.close()
@@ -2840,6 +2848,9 @@ class DesktopNextcloudServices(
                     ?: return@syncRun FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
                 val accountId = desktopFileCacheAccountId(session)
                 diagnosticAccountId = accountId
+                if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE)
+                }
                 val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
                     return@syncRun FileSyncCenterActionResult.Rejected(
                         failure.message ?: "Could not load the signed-in account.",
@@ -3613,7 +3624,11 @@ class DesktopNextcloudServices(
     override suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         withContext(Dispatchers.IO) {
             accountOperationGuard.serialize operation@{
-                if (activeAccountId() == accountId) return@operation loadSession(accountId)
+                if (activeAccountId() == accountId) {
+                    listAccounts().firstOrNull { it.id == accountId }
+                        ?.let(accountSyncPairCleanupJournal::requireAccountActivationAllowed)
+                    return@operation loadSession(accountId)
+                }
                 if (hasLiveAccountResources()) {
                     recordSupportDiagnostic(desktopAccountSelectionBlockedDiagnostic())
                     return@operation null
@@ -3699,6 +3714,13 @@ class DesktopNextcloudServices(
             activeFileRangeSessions.toList()
         }
         var cleared = false
+        var quiescedLinuxFileSystem: LinuxNextcloudVirtualFileSystem? = null
+        var linuxFileSystemQuiesced = false
+        var providerPreferenceAccountId: String? = null
+        var providerWasEnabledBeforeRemoval = false
+        var remoteRevocationAttempted = false
+        var credentialRemovalStatus: Boolean? = false
+        var removalFailure: Throwable? = null
         try {
             val activeAccountId = activeAccountId()
             val activeSession = activeAccountId?.let(::loadSession)
@@ -3718,10 +3740,26 @@ class DesktopNextcloudServices(
             syncJob?.cancel()
             syncJob?.join()
             accountOperationGuard.withSyncRunLock {
+                quiescedLinuxFileSystem = synchronized(virtualFileProviderLock) {
+                    linuxVirtualFileSystem?.takeIf { linuxVirtualFileMountIdentity == accountId }
+                }
+                linuxFileSystemQuiesced = quiescedLinuxFileSystem?.quiesceWrites() == true
+                check(quiescedLinuxFileSystem == null || linuxFileSystemQuiesced) {
+                    "Close files being edited through the Linux virtual filesystem before removing this account."
+                }
+                accountId?.let { currentAccountId ->
+                    providerPreferenceAccountId = currentAccountId
+                    val key = virtualFileProviderPreferenceKey(currentAccountId)
+                    providerWasEnabledBeforeRemoval = preferences.getBoolean(key, false)
+                    setDesktopVirtualFileProviderPreference(preferences, currentAccountId, enabled = false)
+                }
                 accountId
                     ?.also { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
                     ?.let { fileSyncEngine.requireAccountRemovalReady(it) }
-                expectedSession?.let { session -> revokeRemoteSession(session) }
+                expectedSession?.let { session ->
+                    remoteRevocationAttempted = true
+                    revokeRemoteSession(session)
+                }
                 val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
                 rangeSessions.forEach { source -> runCatching(source::close) }
                 hydrationJobs.forEach { job -> job.join() }
@@ -3734,12 +3772,18 @@ class DesktopNextcloudServices(
                     }
                 }
                 val teardownVirtualFiles = {
+                    val linuxProvider = synchronized(virtualFileProviderLock) {
+                        detachedDesktopLinuxProvider(
+                            linuxVirtualFileSystem, linuxVirtualMetadataBackend, linuxVirtualFileMountIdentity,
+                        ).also {
+                            linuxVirtualFileSystem = null
+                            linuxVirtualMetadataBackend = null
+                            linuxVirtualFileMountIdentity = null
+                            linuxVirtualFileFailure = null
+                        }
+                    }
+                    linuxProvider?.let(linuxProviderCleanup::unmountOrRetain)
                     synchronized(virtualFileProviderLock) {
-                        linuxVirtualFileSystem?.unmount()
-                        linuxVirtualFileSystem = null
-                        linuxVirtualMetadataBackend = null
-                        linuxVirtualFileMountIdentity = null
-                        linuxVirtualFileFailure = null
                         val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
                         val provider = windowsCloudFilesProvider
                         try {
@@ -3818,6 +3862,7 @@ class DesktopNextcloudServices(
                                                         account.id == activeAccountId
                                                     }
                                                 },
+                                                commitStatusObserved = { credentialRemovalStatus = it },
                                                 finishCommittedRemoval = { committedFailure = true },
                                             ) { accountCredentials.removeAccount(activeAccountId) },
                                         )
@@ -3838,10 +3883,22 @@ class DesktopNextcloudServices(
                     ::recordSupportDiagnostic,
                 )
             }
-        } finally {
-            if (!cleared) {
-                synchronized(fileRangeSessionLock) { sessionClearing = false }
-                if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
+        } catch (failure: Throwable) { removalFailure = failure; throw failure } finally {
+            val reopen = shouldResumeDesktopWritesAfterRemovalFailure(
+                cleared, remoteRevocationAttempted, credentialRemovalStatus,
+            )
+            if (reopen) {
+                val recoveryFailure = recoverDesktopAccountAfterPrecommitFailure(
+                    restoreProviderPreference = { providerPreferenceAccountId?.let {
+                        setDesktopVirtualFileProviderPreference(preferences, it, providerWasEnabledBeforeRemoval)
+                    } },
+                    resumeVirtualFileSystem = { if (linuxFileSystemQuiesced) quiescedLinuxFileSystem?.resumeWrites() },
+                    reopenSession = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
+                    restartLifecycle = {
+                        if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
+                    },
+                )
+                recoveryFailure?.let { removalFailure?.addSuppressed(it) ?: throw it }
             }
         }
     }
@@ -3849,13 +3906,15 @@ class DesktopNextcloudServices(
     private suspend fun retryPendingAccountSyncPairCleanup(accountId: String) {
         val cleanup = accountSyncPairCleanupJournal.pending()
             .singleOrNull { pending -> pending.accountId == accountId }
-            ?: return
-        retryDesktopAccountSyncPairCleanup(
-            cleanup = cleanup,
-            accountStillExists = ::desktopAccountExists,
-            removeSyncPairs = ::removeDesktopAccountOwnedState,
-            clearCleanup = accountSyncPairCleanupJournal::clear,
-        )
+        if (cleanup != null) {
+            retryDesktopAccountSyncPairCleanup(
+                cleanup = cleanup,
+                accountStillExists = ::desktopAccountExists,
+                removeSyncPairs = ::removeDesktopAccountOwnedState,
+                clearCleanup = accountSyncPairCleanupJournal::clear,
+            )
+        }
+        requireDesktopAccountActivationAllowed(accountSyncPairCleanupJournal.blocksAccountActivation(accountId))
     }
 
     private suspend fun retryPendingAccountSyncPairCleanups() {

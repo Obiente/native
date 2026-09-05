@@ -511,6 +511,7 @@ class DesktopAccountOperationGuardTest {
                     events += "probe"
                     error("synthetic registry read failure")
                 },
+                commitStatusObserved = { events += "status:$it" },
                 finishCommittedRemoval = { events += "finish" },
                 removeCredential = {
                     events += "remove"
@@ -519,8 +520,22 @@ class DesktopAccountOperationGuardTest {
             )
         }
 
-        assertEquals(listOf("cleared", "remove", "probe"), events)
+        assertEquals(listOf("cleared", "remove", "probe", "status:null"), events)
         assertEquals(1, failure.suppressedExceptions.size)
+    }
+
+    @Test
+    fun linuxWritesResumeOnlyAfterPositivelyKnownPrecommitFailure() {
+        assertTrue(
+            shouldResumeDesktopWritesAfterRemovalFailure(
+                removalCommitted = false,
+                remoteRevocationAttempted = false,
+                credentialRemovalStatus = false,
+            ),
+        )
+        assertFalse(shouldResumeDesktopWritesAfterRemovalFailure(false, false, null))
+        assertFalse(shouldResumeDesktopWritesAfterRemovalFailure(false, true, false))
+        assertFalse(shouldResumeDesktopWritesAfterRemovalFailure(true, false, true))
     }
 
     @Test
@@ -678,6 +693,9 @@ class DesktopAccountOperationGuardTest {
             )
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertEquals("committed", preferences.get("fsac.$validAccountId", null))
+            assertTrue(journal.blocksAccountActivation(malformedAccountId))
+            assertFailsWith<IllegalStateException> { requireDesktopAccountActivationAllowed(true) }
+            assertFalse(journal.blocksAccountActivation(validAccountId))
             assertEquals(1, malformedCount)
 
             journal.prepare(newAccountId)
@@ -686,6 +704,7 @@ class DesktopAccountOperationGuardTest {
                 setOf(validAccountId, newAccountId),
                 journal.pending().mapTo(linkedSetOf(), DesktopAccountSyncPairCleanup::accountId),
             )
+            assertFalse(journal.blocksAccountActivation(newAccountId))
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
             assertFailsWith<IllegalStateException> { journal.prepare(malformedAccountId) }
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
