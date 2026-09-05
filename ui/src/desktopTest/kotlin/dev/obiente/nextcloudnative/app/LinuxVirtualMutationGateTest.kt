@@ -3,14 +3,10 @@ package dev.obiente.nextcloudnative.app
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import jnr.ffi.Runtime
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import ru.serce.jnrfuse.ErrorCodes
-import ru.serce.jnrfuse.struct.FuseFileInfo
 
 class LinuxVirtualMutationGateTest {
     @Test
@@ -52,96 +48,56 @@ class LinuxVirtualMutationGateTest {
 
     @Test
     fun `failed quiescence reopens automatically so an unreleased writer can close`() {
-        val fileSystem = LinuxNextcloudVirtualFileSystem(
-            backend = QuiescenceBackend(),
-            mountOwnerUid = TEST_MOUNT_OWNER_UID,
-            mountOwnerGid = TEST_MOUNT_OWNER_GID,
+        var hasOpenWriteHandle = true
+        val lifecycle = LinuxVirtualWriteLifecycle(
+            hasOpenWriteHandles = { hasOpenWriteHandle },
+            hasPendingCreatedFiles = { false },
         )
-        val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256)).apply {
-            flags.set(1L)
-        }
 
-        assertEquals(0, fileSystem.open("/draft.txt", fileInfo))
-        assertFalse(fileSystem.quiesceWrites())
-        assertEquals(0, fileSystem.release("/draft.txt", fileInfo))
-        assertTrue(fileSystem.quiesceWrites())
-        assertEquals(-ErrorCodes.EBUSY(), fileSystem.mkdir("/still-blocked", 0L))
-        fileSystem.resumeWrites()
+        assertFalse(lifecycle.tryQuiesce())
+        assertTrue(lifecycle.beginRelease())
+        hasOpenWriteHandle = false
+        lifecycle.endOperation()
+        assertTrue(lifecycle.tryQuiesce())
+        assertFailsWith<LinuxVirtualFileSystemException>(lifecycle::beginMutation)
+        lifecycle.resume()
     }
 
     @Test
     fun `quiescence drains final pending file close through a read alias release`() {
         val closeStarted = CountDownLatch(1)
         val allowClose = CountDownLatch(1)
-        val fileSystem = LinuxNextcloudVirtualFileSystem(
-            backend = QuiescenceBackend {
-                closeStarted.countDown()
-                check(allowClose.await(5, TimeUnit.SECONDS))
-            },
-            mountOwnerUid = TEST_MOUNT_OWNER_UID,
-            mountOwnerGid = TEST_MOUNT_OWNER_GID,
+        var hasOpenWriteHandle = true
+        var hasPendingCreatedFile = true
+        val lifecycle = LinuxVirtualWriteLifecycle(
+            hasOpenWriteHandles = { hasOpenWriteHandle },
+            hasPendingCreatedFiles = { hasPendingCreatedFile },
         )
-        val runtime = Runtime.getSystemRuntime()
-        val writer = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
-        val reader = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
         val workers = Executors.newFixedThreadPool(2)
         try {
-            assertEquals(0, fileSystem.create("/pending.txt", 0L, writer))
-            assertEquals(0, fileSystem.open("/pending.txt", reader))
-            assertEquals(0, fileSystem.release("/pending.txt", writer))
-
-            val release = workers.submit<Int> { fileSystem.release("/pending.txt", reader) }
+            val release = workers.submit {
+                check(lifecycle.beginRelease())
+                try {
+                    closeStarted.countDown()
+                    check(allowClose.await(5, TimeUnit.SECONDS))
+                    hasOpenWriteHandle = false
+                    hasPendingCreatedFile = false
+                } finally {
+                    lifecycle.endOperation()
+                }
+            }
             assertTrue(closeStarted.await(5, TimeUnit.SECONDS))
-            val quiescence = workers.submit<Boolean> { fileSystem.quiesceWrites() }
+            val quiescence = workers.submit<Boolean> { lifecycle.tryQuiesce() }
             assertFalse(quiescence.isDone)
 
             allowClose.countDown()
-            assertEquals(0, release.get(5, TimeUnit.SECONDS))
+            release.get(5, TimeUnit.SECONDS)
             assertTrue(quiescence.get(5, TimeUnit.SECONDS))
-            assertEquals(-ErrorCodes.EBUSY(), fileSystem.open("/draft.txt", reader))
-            fileSystem.resumeWrites()
+            assertFailsWith<LinuxVirtualFileSystemException>(lifecycle::beginMutation)
+            lifecycle.resume()
         } finally {
             allowClose.countDown()
             workers.shutdownNow()
         }
     }
-}
-
-private const val TEST_MOUNT_OWNER_UID = 2_001L
-private const val TEST_MOUNT_OWNER_GID = 2_002L
-
-private class QuiescenceBackend(
-    private val onWriteClose: () -> Unit = {},
-) : LinuxVirtualFileBackend {
-    private val file = LinuxVirtualFileNode("draft.txt", "draft.txt", false, 5L, "etag")
-
-    override fun resolve(path: String): LinuxVirtualFileNode? = when (path.trim('/')) {
-        "" -> LinuxVirtualFileNode("", "", true, 0L, "root")
-        "draft.txt" -> file
-        else -> null
-    }
-
-    override fun list(path: String): List<LinuxVirtualFileNode> =
-        if (path.trim('/').isEmpty()) listOf(file) else emptyList()
-
-    override fun open(node: LinuxVirtualFileNode): LinuxVirtualFileReadHandle = error("Not used")
-    override fun openWrite(path: String, existing: LinuxVirtualFileNode?, truncate: Boolean) =
-        object : LinuxVirtualFileWriteHandle {
-            override val size: Long = 5L
-            override fun read(offset: Long, length: Int) = ByteArray(length)
-            override fun write(offset: Long, bytes: ByteArray) = bytes.size
-            override fun truncate(size: Long) = Unit
-            override fun flush() = Unit
-            override fun close() = onWriteClose()
-        }
-
-    override fun createDirectory(path: String) = Unit
-    override fun delete(node: LinuxVirtualFileNode) = Unit
-    override fun move(node: LinuxVirtualFileNode, destinationPath: String) = Unit
-    override fun moveReplacing(
-        node: LinuxVirtualFileNode,
-        destination: LinuxVirtualFileNode,
-        destinationPath: String,
-    ) = Unit
-    override fun close() = Unit
 }

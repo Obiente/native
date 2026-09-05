@@ -46,6 +46,22 @@ internal interface LinuxFuseAbortHandle : AutoCloseable {
     fun abortBestEffort()
 }
 
+internal fun runLinuxFuseUnmountLifecycle(
+    abortHandle: LinuxFuseAbortHandle?,
+    detach: () -> Unit,
+    cleanup: (detached: Boolean) -> Unit,
+) {
+    var detached = false
+    try {
+        detach()
+        detached = true
+    } finally {
+        abortHandle?.abortBestEffort()
+        runCatching { abortHandle?.close() }
+        cleanup(detached)
+    }
+}
+
 private class ChannelLinuxFuseAbortHandle(
     private val channel: SeekableByteChannel,
 ) : LinuxFuseAbortHandle {

@@ -1,10 +1,14 @@
 package dev.obiente.nextcloudnative.app
 
 internal data class DetachedDesktopLinuxProvider(
-    val fileSystem: LinuxNextcloudVirtualFileSystem,
+    val fileSystem: DesktopLinuxProviderFileSystem,
     val metadataBackend: CachingLinuxVirtualFileBackend?,
     val accountId: String?,
 )
+
+internal interface DesktopLinuxProviderFileSystem {
+    fun unmount()
+}
 
 internal fun detachedDesktopLinuxProvider(
     fileSystem: LinuxNextcloudVirtualFileSystem?,
