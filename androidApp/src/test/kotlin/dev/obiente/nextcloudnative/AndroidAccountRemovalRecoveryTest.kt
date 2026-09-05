@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidAccountRemovalRecoveryTest {
@@ -43,6 +44,36 @@ class AndroidAccountRemovalRecoveryTest {
 
         assertEquals(session.accountRecord(), target.record)
         assertTrue(target.wasActive)
+    }
+
+    @Test
+    fun activeFallbackIsExcludedFromThePersistedReplacement() {
+        val fallback = NextcloudSession("https://cloud.example.test", "alice", "must-not-persist")
+        val recovered = AndroidAccountCredentialState(
+            registry = NextcloudAccountRegistry.Empty.upsertAndSelect(fallback.accountRecord())
+                .copy(activeAccountId = null),
+            sessions = emptyMap(),
+        )
+
+        val removal = requireNotNull(resolveAndroidActiveAccountRemovalTransition(recovered, fallback))
+
+        assertTrue(removal.replacement.registry.accounts.isEmpty())
+        assertTrue(removal.replacement.sessions.isEmpty())
+        assertFalse(encodeAndroidAccountCredentialState(removal.replacement).contains("must-not-persist"))
+    }
+
+    @Test
+    fun failedActiveRemovalPersistenceDoesNotOverwriteCredentialFreeOwnership() = runBlocking {
+        val events = mutableListOf<String>()
+
+        rollbackUnavailableAndroidAccountRemoval(
+            active = true,
+            recovered = AndroidAccountCredentialState.Empty,
+            persistRecovered = { events += "persist-reconstructed-state" },
+            clearCleanup = { events += "clear-uncommitted-cleanup" },
+        )
+
+        assertEquals(listOf("clear-uncommitted-cleanup"), events)
     }
 
     @Test
