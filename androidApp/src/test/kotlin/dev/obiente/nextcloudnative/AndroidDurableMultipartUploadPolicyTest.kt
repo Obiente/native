@@ -26,6 +26,51 @@ import org.json.JSONArray
 
 class AndroidDurableMultipartUploadPolicyTest {
     @Test
+    fun `successful worker execution does not request scheduling recovery`() = runBlocking {
+        var recoveryRequests = 0
+
+        val result = runDurableUploadWorkerWithRecoverySignal(
+            requestRecovery = { recoveryRequests += 1 },
+            work = { "completed" },
+        )
+
+        assertEquals("completed", result)
+        assertEquals(0, recoveryRequests)
+    }
+
+    @Test
+    fun `worker failure requests scheduling recovery before preserving the failure`() = runBlocking {
+        var recoveryRequests = 0
+        val expected = IOException("journal read failed")
+
+        val actual = assertFailsWith<IOException> {
+            runDurableUploadWorkerWithRecoverySignal<Unit>(
+                requestRecovery = { recoveryRequests += 1 },
+                work = { throw expected },
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `worker cancellation requests scheduling recovery before preserving cancellation`() = runBlocking {
+        var recoveryRequests = 0
+        val expected = CancellationException("worker stopped")
+
+        val actual = assertFailsWith<CancellationException> {
+            runDurableUploadWorkerWithRecoverySignal<Unit>(
+                requestRecovery = { recoveryRequests += 1 },
+                work = { throw expected },
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
     fun `worker cancellation does not become a terminal upload outcome`() = runBlocking {
         assertFailsWith<CancellationException> {
             captureDurableUploadRequestOutcome<Unit> {
