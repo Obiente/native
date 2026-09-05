@@ -324,18 +324,45 @@ class AndroidDurableMultipartUploadPolicyTest {
         val accountId = NextcloudDocumentIds.accountKey(retainedSession)
 
         assertEquals(
-            DurableUploadAccountMismatchOutcome.DeferRetainedAccount,
-            durableUploadAccountMismatchOutcome(accountId, listOf(retainedSession.accountRecord())),
+            DurableUploadAccountMismatchOutcome.DeferAccountRecovery,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(listOf(retainedSession.accountRecord())),
+            ),
         )
+    }
+
+    @Test
+    fun `unreadable account registry defers queued upload recovery`() {
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.DeferAccountRecovery,
+            durableUploadAccountMismatchOutcome(ACCOUNT_A, AndroidAccountRetentionSnapshot.Unavailable),
+        )
+    }
+
+    @Test
+    fun `valid account registry without expected account makes upload unavailable`() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+
         assertEquals(
             DurableUploadAccountMismatchOutcome.AccountUnavailable,
-            durableUploadAccountMismatchOutcome(accountId, emptyList()),
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(emptyList()),
+            ),
         )
         assertEquals(
             DurableUploadAccountMismatchOutcome.AccountUnavailable,
             durableUploadAccountMismatchOutcome(
                 accountId,
-                listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+                AndroidAccountRetentionSnapshot.Available(
+                    listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+                ),
             ),
         )
     }
