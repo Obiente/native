@@ -628,6 +628,8 @@ class AndroidPersistedSessionTest {
         val pending = pendingAndroidAccountRemovalCleanupForSession(replacement, listOf(decoded))
 
         assertEquals(NextcloudDocumentIds.accountKey(original), requireNotNull(pending).workIdentity)
+        assertEquals(NextcloudDocumentIds.cacheAccountId(original), pending.previewCacheIdentity)
+        assertFalse(pending.previewCacheIdentity == NextcloudDocumentIds.cacheAccountId(replacement))
         assertEquals(original.accountId.storageKey, pending.accountStorageKey)
     }
 

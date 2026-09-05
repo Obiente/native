@@ -28,7 +28,7 @@ internal class AndroidAccountCredentialController(
     private val resumeQueuedUploads: suspend (String) -> Unit,
     private val prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
     private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
-    private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String) -> Unit,
+    private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String, String?) -> Unit,
     private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String, String?) -> Unit,
 ) {
     private val appContext = context.applicationContext
@@ -686,7 +686,9 @@ internal class AndroidAccountCredentialController(
                 accountOwnedByRegistry = androidAccountRemovalCleanupOwnedByRegistry(
                     pending, readCredentialFreeRegistry()?.accounts,
                 ),
-                removeAccountOwnedWork = { retryQueuedUploadsCleanup(session, pending.workIdentity) },
+                removeAccountOwnedWork = {
+                    retryAndroidAccountOwnedStateCleanup(session, pending, retryQueuedUploadsCleanup)
+                },
                 clearCleanup = { accountRemovalCleanupJournal.clear(pending.accountStorageKey) },
             )
         } catch (cancelled: CancellationException) {
