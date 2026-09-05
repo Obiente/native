@@ -48,7 +48,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     private lateinit var offline: AndroidFileOfflineRepository
     private lateinit var virtualFiles: AndroidVirtualFileCache
     private lateinit var webDav: NextcloudDocumentWebDav
-
+    private lateinit var documentIncarnations: AndroidDocumentProviderIncarnationStore
     @Volatile
     private var cachedAccount: ResolvedAccount? = null
 
@@ -59,6 +59,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         AndroidExternalFileHandoffRegistry.bind(AndroidExternalFileHandoffStore(providerContext))
         offline = AndroidFileOfflineRepository(providerContext)
         virtualFiles = AndroidVirtualFileCache(providerContext)
+        documentIncarnations = AndroidDocumentProviderIncarnationStore(providerContext)
         webDav = NextcloudDocumentWebDav(
             client = OkHttpClient.Builder()
                 .useAndroidNextcloudCertificateTrust(providerContext)
@@ -72,11 +73,12 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val columns = projection?.copyOf() ?: DEFAULT_ROOT_PROJECTION
         val cursor = MatrixCursor(columns)
         val session = services.loadSession() ?: return cursor
+        val incarnation = runCatching { activeIncarnation(session) }.getOrElse { return cursor }
         val host = runCatching { URI(session.serverUrl).host }.getOrNull().orEmpty()
         cursor.addNamedRow(
             mapOf(
-                DocumentsContract.Root.COLUMN_ROOT_ID to NextcloudDocumentIds.accountKey(session),
-                DocumentsContract.Root.COLUMN_DOCUMENT_ID to NextcloudDocumentIds.rootId(session),
+                DocumentsContract.Root.COLUMN_ROOT_ID to NextcloudDocumentIds.providerRootId(session, incarnation),
+                DocumentsContract.Root.COLUMN_DOCUMENT_ID to NextcloudDocumentIds.rootId(session, incarnation),
                 DocumentsContract.Root.COLUMN_TITLE to context?.getString(R.string.documents_provider_root_name),
                 DocumentsContract.Root.COLUMN_SUMMARY to buildString {
                     append(session.loginName)
@@ -97,24 +99,24 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         )
         return cursor
     }
-
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
         val session = requireSession()
+        val incarnation = activeIncarnation(session)
         if (AndroidExternalFileHandoffRegistry.isHandoffDocumentId(documentId)) {
             val handoff = AndroidExternalFileHandoffRegistry.peek(documentId, session)
                 ?: throw FileNotFoundException("This external file handoff has expired.")
             cursor.addExternalHandoffRow(handoff)
             return cursor
         }
-        val reference = requireReference(documentId, session)
+        val reference = requireReference(documentId, session, incarnation)
         if (reference.isRoot) {
-            cursor.addDocumentRow(session, null)
+            cursor.addDocumentRow(session, incarnation, null)
             return cursor
         }
 
-        cursor.addDocumentRow(session, findDocumentWithOfflineFallback(session, reference.path))
+        cursor.addDocumentRow(session, incarnation, findDocumentWithOfflineFallback(session, reference.path))
         return cursor
     }
 
@@ -126,7 +128,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
         val session = requireSession()
-        val parent = requireReference(parentDocumentId, session)
+        val incarnation = activeIncarnation(session)
+        val parent = requireReference(parentDocumentId, session, incarnation)
         val children = runCatching {
             val account = resolveAccount(session)
             runBlocking(Dispatchers.IO) { services.listFiles(session, account.userId, parent.path) }
@@ -140,7 +143,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 }
             }
         }
-        children.forEach { cursor.addDocumentRow(session, it) }
+        children.forEach { cursor.addDocumentRow(session, incarnation, it) }
         return cursor
     }
 
@@ -152,7 +155,8 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val columns = projection?.copyOf() ?: DEFAULT_DOCUMENT_PROJECTION
         val cursor = MatrixCursor(columns)
         val session = requireSession()
-        require(rootId == NextcloudDocumentIds.accountKey(session)) {
+        val incarnation = activeIncarnation(session)
+        require(rootId == NextcloudDocumentIds.providerRootId(session, incarnation)) {
             "The document root belongs to another account."
         }
         val account = resolveAccount(session)
@@ -162,16 +166,17 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         ) {
             webDav.searchFiles(session, account.userId, query)
         }
-        result.files.forEach { cursor.addDocumentRow(session, it) }
+        result.files.forEach { cursor.addDocumentRow(session, incarnation, it) }
         return cursor
     }
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
         val session = services.loadSession() ?: return false
-        val parent = runCatching { NextcloudDocumentIds.requireForSession(parentDocumentId, session) }.getOrNull()
-            ?: return false
-        val child = runCatching { NextcloudDocumentIds.requireForSession(documentId, session) }.getOrNull()
-            ?: return false
+        val incarnation = runCatching { activeIncarnation(session) }.getOrNull() ?: return false
+        val parent = runCatching { NextcloudDocumentIds.requireForSession(parentDocumentId, session, incarnation) }
+            .getOrNull() ?: return false
+        val child = runCatching { NextcloudDocumentIds.requireForSession(documentId, session, incarnation) }
+            .getOrNull() ?: return false
         if (child.isRoot || parent.path == child.path) return false
         return parent.isRoot || child.path.startsWith(parent.path + "/")
     }
@@ -479,7 +484,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 }
             }
             notifyDocumentChanged(session, path)
-            NextcloudDocumentIds.documentId(session, path)
+            documentId(session, path)
         }
 
     override fun renameDocument(documentId: String, displayName: String): String =
@@ -495,7 +500,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 mutationCall { webDav.move(session, account.userId, reference.path, destination, etag) }
             }
             notifyMove(session, reference.path, destination)
-            NextcloudDocumentIds.documentId(session, destination)
+            documentId(session, destination)
         }
 
     override fun deleteDocument(documentId: String) =
@@ -542,7 +547,7 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                 }
             }
             notifyMove(session, source.path, destination)
-            NextcloudDocumentIds.documentId(session, destination)
+            documentId(session, destination)
         }
 
     private fun openWritableDocument(
@@ -772,29 +777,21 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
         val providerContext = context ?: return
         val resolver = providerContext.contentResolver
         val authority = nextcloudDocumentsAuthority(providerContext.packageName)
+        resolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId(session, path)), null)
         resolver.notifyChange(
-            DocumentsContract.buildDocumentUri(
-                authority,
-                NextcloudDocumentIds.documentId(session, path),
-            ),
-            null,
-        )
-        resolver.notifyChange(
-            DocumentsContract.buildChildDocumentsUri(
-                authority,
-                NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
-            ),
+            DocumentsContract.buildChildDocumentsUri(authority, documentId(session, NextcloudDocumentIds.parentPath(path))),
             null,
         )
     }
-
-    private fun MatrixCursor.addDocumentRow(session: NextcloudSession, file: NextcloudFile?) {
+    private fun MatrixCursor.addDocumentRow(
+        session: NextcloudSession, incarnation: NextcloudDocumentIncarnation, file: NextcloudFile?,
+    ) {
         val isDirectory = file?.isDirectory ?: true
         val path = file?.path.orEmpty()
         val displayName = file?.name ?: context?.getString(R.string.documents_provider_root_name).orEmpty()
         addNamedRow(
             mapOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID to NextcloudDocumentIds.documentId(session, path),
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID to NextcloudDocumentIds.documentId(session, incarnation, path),
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME to displayName,
                 DocumentsContract.Document.COLUMN_MIME_TYPE to when {
                     isDirectory -> DocumentsContract.Document.MIME_TYPE_DIR
@@ -849,14 +846,21 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
     private fun requireSession(): NextcloudSession = services.loadSession()
         ?: throw FileNotFoundException("Sign in to nati.ve to browse files.")
 
-    private fun requireReference(documentId: String, session: NextcloudSession): NextcloudDocumentReference =
+    private fun requireReference(
+        documentId: String, session: NextcloudSession,
+        incarnation: NextcloudDocumentIncarnation = activeIncarnation(session),
+    ): NextcloudDocumentReference =
         providerCall(
             message = "This Nextcloud document ID is no longer valid.",
             accountIdentity = NextcloudDocumentIds.accountKey(session),
         ) {
-            NextcloudDocumentIds.requireForSession(documentId, session)
+            NextcloudDocumentIds.requireForSession(documentId, session, incarnation)
         }
 
+    private fun activeIncarnation(session: NextcloudSession): NextcloudDocumentIncarnation = documentIncarnations
+        .activeIncarnation(NextcloudDocumentIds.accountKey(session))
+    private fun documentId(session: NextcloudSession, path: String): String = NextcloudDocumentIds
+        .documentId(session, activeIncarnation(session), path)
     private fun resolveAccount(session: NextcloudSession): ResolvedAccount {
         val accountKey = NextcloudDocumentIds.accountKey(session)
         cachedAccount?.takeIf { it.accountKey == accountKey }?.let { return it }
