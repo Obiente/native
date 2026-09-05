@@ -58,10 +58,15 @@ internal fun requireValidAndroidAccountCredentialState(
 internal data class AndroidPendingAccountRemovalCleanup(
     val accountStorageKey: String,
     val workIdentity: String,
+    val previewCacheIdentity: String? = null,
 ) {
     init {
         require(ACCOUNT_STORAGE_KEY_PATTERN.matches(accountStorageKey))
         require(WORK_IDENTITY_PATTERN.matches(workIdentity))
+        previewCacheIdentity?.let { identity ->
+            require(ACCOUNT_STORAGE_KEY_PATTERN.matches(identity))
+            require(identity.startsWith(workIdentity))
+        }
     }
 }
 
@@ -98,18 +103,29 @@ internal fun pendingAndroidAccountRemovalCleanup(
 ): AndroidPendingAccountRemovalCleanup = AndroidPendingAccountRemovalCleanup(
     accountStorageKey = session.accountId.storageKey,
     workIdentity = NextcloudDocumentIds.accountKey(session),
+    previewCacheIdentity = NextcloudDocumentIds.cacheAccountId(session),
 )
 
 internal fun encodeAndroidPendingAccountRemovalCleanup(
     cleanup: AndroidPendingAccountRemovalCleanup,
-): String = "${cleanup.accountStorageKey}:${cleanup.workIdentity}"
+): String = listOfNotNull(
+    cleanup.accountStorageKey,
+    cleanup.workIdentity,
+    cleanup.previewCacheIdentity,
+).joinToString(":")
 
 internal fun decodeAndroidPendingAccountRemovalCleanup(
     encoded: String,
 ): AndroidPendingAccountRemovalCleanup? {
-    val accountStorageKey = encoded.substringBefore(':', missingDelimiterValue = "")
-    val workIdentity = encoded.substringAfter(':', missingDelimiterValue = "")
-    return runCatching { AndroidPendingAccountRemovalCleanup(accountStorageKey, workIdentity) }.getOrNull()
+    val fields = encoded.split(':')
+    if (fields.size !in 2..3) return null
+    return runCatching {
+        AndroidPendingAccountRemovalCleanup(
+            accountStorageKey = fields[0],
+            workIdentity = fields[1],
+            previewCacheIdentity = fields.getOrNull(2),
+        )
+    }.getOrNull()
 }
 
 internal data class RestoredAndroidPendingAccountRemovalCleanups(
