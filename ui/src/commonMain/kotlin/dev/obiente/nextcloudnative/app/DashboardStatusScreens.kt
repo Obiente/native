@@ -288,10 +288,7 @@ internal fun NativeDashboardPresentation(
         mutableStateOf(false)
     }
     var workspacePersistenceError by remember(workspaceLayout.scope) { mutableStateOf<String?>(null) }
-    var activeWorkspaceLayout by remember(workspaceLayout.scope) { mutableStateOf(workspaceLayout) }
-    LaunchedEffect(workspaceLayout) {
-        if (workspaceLayout != activeWorkspaceLayout) activeWorkspaceLayout = workspaceLayout
-    }
+    var activeWorkspaceLayout by remember(workspaceLayout) { mutableStateOf(workspaceLayout) }
     val widgetsAuthoritative = (state as? DashboardSurfaceState.Available)?.widgetsAuthoritative != false
     val workspaceWritesEnabled = widgetsAuthoritative && workspaceLayoutAuthoritative
     LaunchedEffect(workspaceWritesEnabled) {
