@@ -13,7 +13,6 @@ import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
@@ -24,8 +23,6 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.PosixFilePermission
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
@@ -684,27 +681,6 @@ private fun desktopContractCacheDirectory(name: String): File {
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
 
-internal fun desktopPendingDynamicMutationDirectory(
-    osName: String = System.getProperty("os.name").orEmpty(),
-    environment: Map<String, String> = System.getenv(),
-    userHome: File = File(System.getProperty("user.home")),
-): File = when {
-    osName.startsWith("Windows", ignoreCase = true) -> {
-        val localAppData = environment["LOCALAPPDATA"]?.takeIf(String::isNotBlank)
-            ?.let(::File)
-            ?: File(userHome, "AppData/Local")
-        File(localAppData, "Nextcloud Native/State/Pending Mutations")
-    }
-    osName.startsWith("Mac", ignoreCase = true) ->
-        File(userHome, "Library/Application Support/Nextcloud Native/Pending Mutations")
-    else -> {
-        val stateRoot = environment["XDG_STATE_HOME"]?.takeIf(String::isNotBlank)
-            ?.let(::File)
-            ?: File(userHome, ".local/state")
-        File(stateRoot, "nextcloud-native/pending-mutations-v1")
-    }
-}.absoluteFile
-
 internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
 internal const val DESKTOP_PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
@@ -736,80 +712,6 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
             destination.toPath(),
             StandardCopyOption.REPLACE_EXISTING,
         )
-    }
-}
-
-private val PENDING_MUTATION_DIRECTORY_PERMISSIONS = setOf(
-    PosixFilePermission.OWNER_READ,
-    PosixFilePermission.OWNER_WRITE,
-    PosixFilePermission.OWNER_EXECUTE,
-)
-private val PENDING_MUTATION_FILE_PERMISSIONS = setOf(
-    PosixFilePermission.OWNER_READ,
-    PosixFilePermission.OWNER_WRITE,
-)
-
-internal fun ensurePrivatePendingMutationDirectory(directory: File) {
-    Files.createDirectories(directory.toPath())
-    setPendingMutationPosixPermissions(directory.toPath(), PENDING_MUTATION_DIRECTORY_PERMISSIONS)
-}
-
-internal fun setPrivatePendingMutationFilePermissions(file: File) {
-    setPendingMutationPosixPermissions(file.toPath(), PENDING_MUTATION_FILE_PERMISSIONS)
-}
-
-private fun setPendingMutationPosixPermissions(path: Path, permissions: Set<PosixFilePermission>) {
-    if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
-        Files.setPosixFilePermissions(path, permissions)
-    }
-}
-
-private fun createPrivatePendingMutationTemporary(directory: File, targetName: String): Path {
-    val directoryPath = directory.toPath()
-    return if (Files.getFileStore(directoryPath).supportsFileAttributeView("posix")) {
-        Files.createTempFile(
-            directoryPath,
-            "$targetName-",
-            ".part",
-            PosixFilePermissions.asFileAttribute(PENDING_MUTATION_FILE_PERMISSIONS),
-        )
-    } else {
-        Files.createTempFile(directoryPath, "$targetName-", ".part")
-    }
-}
-
-internal fun writePrivatePendingMutationFile(
-    directory: File,
-    target: File,
-    bytes: ByteArray,
-) {
-    require(target.parentFile?.absoluteFile == directory.absoluteFile) {
-        "The pending mutation target must be inside its private directory."
-    }
-    ensurePrivatePendingMutationDirectory(directory)
-    val temporary = createPrivatePendingMutationTemporary(directory, target.name)
-    try {
-        FileOutputStream(temporary.toFile()).use { output ->
-            output.write(bytes)
-            output.fd.sync()
-        }
-        try {
-            Files.move(
-                temporary,
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(
-                temporary,
-                target.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
-        setPrivatePendingMutationFilePermissions(target)
-    } finally {
-        Files.deleteIfExists(temporary)
     }
 }
 
@@ -3669,11 +3571,13 @@ class DesktopNextcloudServices(
                 val account = listAccounts().firstOrNull { record -> record.id == accountId }
                     ?: return@serialize false
                 val providerAccountId = desktopFileCacheAccountId(account)
+                val durableMutationScope = desktopDurableMutationAccountScope(account)
                 requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
                 accountOperationGuard.withSyncRunLock {
                     fileSyncEngine.requireAccountRemovalReady(providerAccountId)
                     val removed = removeDesktopAccountBeforeSyncPairCleanup(
                         accountId = providerAccountId,
+                        durableMutationAccountScope = durableMutationScope,
                         prepareCleanup = accountSyncPairCleanupJournal::prepare,
                         commitCleanup = accountSyncPairCleanupJournal::commit,
                         clearCleanup = accountSyncPairCleanupJournal::clear,
@@ -3685,7 +3589,7 @@ class DesktopNextcloudServices(
                                 accountCredentials.removeAccount(accountId)
                             }
                         } },
-                        removeSyncPairs = { removeDesktopAccountOwnedState(providerAccountId) },
+                        removeSyncPairs = ::removeDesktopAccountOwnedState,
                     ) {
                         recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
                     }
@@ -3723,6 +3627,8 @@ class DesktopNextcloudServices(
             val activeSession = loadDesktopRemoteRevocationSession(activeAccountId, expectedSession, ::loadSession)
             val accountId = activeSession?.let(::desktopFileCacheAccountId)
                 ?: activeRecord?.let(::desktopFileCacheAccountId)
+            val durableMutationScope = activeSession?.let(::durableMutationAccountScope)
+                ?: activeRecord?.let(::desktopDurableMutationAccountScope)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
@@ -3843,7 +3749,7 @@ class DesktopNextcloudServices(
                 }
                 try {
                     clearDesktopActiveAccountBeforeSyncPairCleanup(
-                        accountId, accountSyncPairCleanupJournal, ::desktopAccountOwnership,
+                        accountId, durableMutationScope, accountSyncPairCleanupJournal, ::desktopAccountOwnership,
                         {
                             commitDesktopAccountRemovalBeforeVirtualFileTeardown(
                                 commitRemoval = {
@@ -3930,7 +3836,11 @@ class DesktopNextcloudServices(
         }
     }
 
-    private suspend fun removeDesktopAccountOwnedState(accountId: String) {
+    private suspend fun removeDesktopAccountOwnedState(cleanup: DesktopAccountSyncPairCleanup) {
+        val accountId = cleanup.accountId
+        clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
+        removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
+        cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
         removeDesktopAccountPrivateStorage(accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId))
         if (!isWindowsDesktop()) return
         try {

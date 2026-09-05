@@ -1,8 +1,11 @@
 package dev.obiente.nextcloudnative
 
 import android.content.Context
+import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
+import dev.obiente.nextcloudnative.app.NextcloudApiResponse
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
+import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import java.io.File
 
 internal class AndroidAccountOwnedStateCleanup(
@@ -14,6 +17,11 @@ internal class AndroidAccountOwnedStateCleanup(
     private val clearPreviewAccount: (String) -> Unit = AndroidNativeMediaPreviewCache(
         File(context.applicationContext.cacheDir, "native-media-previews-v1"),
     )::clearAccount,
+    private val dynamicApiReadCache: DynamicApiResponseCache = DynamicApiResponseCache(
+        File(context.applicationContext.cacheDir, "dynamic-api-v1"),
+    ),
+    private val dynamicApiRequestCoalescer: DynamicApiRequestCoalescer<NextcloudApiResponse> =
+        DynamicApiRequestCoalescer(),
 ) {
     private val appContext = context.applicationContext
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
@@ -23,8 +31,9 @@ internal class AndroidAccountOwnedStateCleanup(
 
     suspend fun remove(session: NextcloudSession) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
+        val cacheIdentity = NextcloudDocumentIds.cacheAccountId(session)
         runAndroidAccountOwnedStateCleanups(
-            NextcloudDocumentIds.cacheAccountId(session),
+            cacheIdentity,
             clearPreviewAccount,
             listOf(
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
@@ -35,7 +44,8 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { mutationRecovery.clearDurableRecoveries(durableMutationAccountScope(session)) },
-                { mutationRecovery.clearPendingDynamicMutations(NextcloudDocumentIds.cacheAccountId(session)) },
+                { clearDynamicApiState(cacheIdentity) },
+                { mutationRecovery.clearPendingDynamicMutations(cacheIdentity) },
             ),
         )
     }
@@ -58,6 +68,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
+                { previewCacheIdentity?.let { clearDynamicApiState(it) } },
                 { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
             ),
         )
@@ -80,11 +91,21 @@ internal class AndroidAccountOwnedStateCleanup(
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
+                { previewCacheIdentity?.let { clearDynamicApiState(it) } },
                 { previewCacheIdentity?.let(mutationRecovery::clearPendingDynamicMutations) },
             ),
         )
     }
+
+    private suspend fun clearDynamicApiState(accountIdentity: String) =
+        clearAndroidDynamicApiState(accountIdentity, dynamicApiRequestCoalescer, dynamicApiReadCache)
 }
+
+internal suspend fun <T> clearAndroidDynamicApiState(
+    accountIdentity: String,
+    coalescer: DynamicApiRequestCoalescer<T>,
+    cache: DynamicApiResponseCache,
+) = coalescer.fenceAccount(accountIdentity) { cache.invalidateAccount(accountIdentity) }
 
 internal suspend fun runAndroidAccountOwnedStateCleanups(
     previewCacheIdentity: String?,
