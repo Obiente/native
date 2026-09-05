@@ -472,6 +472,49 @@ class AndroidFileSyncCapabilityLifecycleTest {
         assertFalse(fixture.grants.writeGranted)
     }
 
+    @Test
+    fun `pair cleanup retries an unavailable grant query against authoritative removal`() {
+        val fixture = preparedCleanup()
+        fixture.grants.failQueryCount = 1
+
+        fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() }
+
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `pair cleanup retries a failed grant release against authoritative removal`() {
+        val fixture = preparedCleanup()
+        fixture.grants.failReleaseCount = 1
+
+        fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() }
+
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+        assertEquals(2, fixture.grants.releaseRequests.size)
+    }
+
+    @Test
+    fun `pair cleanup retries a failed capability record removal`() {
+        val fixture = preparedCleanup()
+        fixture.storage.failWriteNumber = fixture.storage.writes + 1
+
+        fixture.lifecycle.finishPairCleanupOrRetry(PAIR_ID) { state() }
+
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
+    private fun preparedCleanup(): Fixture = fixture().also {
+        it.lifecycle.acquire(ROOT_URI, "Notes")
+        it.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        it.lifecycle.preparePairCleanup(PAIR_ID)
+    }
+
     private fun fixture(
         generation: String = NEW_GENERATION,
         readGranted: Boolean = false,
@@ -539,13 +582,18 @@ class AndroidFileSyncCapabilityLifecycleTest {
         var writeGranted: Boolean,
     ) : AndroidFileSyncGrantAccess {
         var failQuery = false
+        var failQueryCount = 0
         var failRelease = false
+        var failReleaseCount = 0
         val events = mutableListOf<String>()
         val releaseRequests = mutableListOf<Pair<Boolean, Boolean>>()
 
         override fun exactGrant(uri: String): AndroidFileSyncGrantState {
             events += "query"
-            if (failQuery) error("grant metadata unavailable")
+            if (failQuery || failQueryCount > 0) {
+                failQueryCount = (failQueryCount - 1).coerceAtLeast(0)
+                error("grant metadata unavailable")
+            }
             return AndroidFileSyncGrantState(readGranted, writeGranted)
         }
 
@@ -558,7 +606,10 @@ class AndroidFileSyncCapabilityLifecycleTest {
         override fun releaseExactGrant(uri: String, read: Boolean, write: Boolean) {
             events += "release"
             releaseRequests += read to write
-            if (failRelease) error("release failed")
+            if (failRelease || failReleaseCount > 0) {
+                failReleaseCount = (failReleaseCount - 1).coerceAtLeast(0)
+                error("release failed")
+            }
             if (read) readGranted = false
             if (write) writeGranted = false
         }
