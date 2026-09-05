@@ -498,6 +498,42 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
+    fun removalMarkersSurviveProcessExitAfterTheRegistryCommit() = withStore { preferences, secrets ->
+        val first = firstSession()
+        val removed = secondSession()
+        var crashDuringRemoval = false
+        val persistence = persistence(preferences, secrets) {
+            preferences.flush()
+            if (crashDuringRemoval && decodeRegistry(preferences).accounts.none { it.id == removed.accountId }) {
+                throw SimulatedProcessExit()
+            }
+        }
+        persistence.saveSession(first)
+        persistence.saveSession(removed)
+        secrets.save(
+            desktopSessionSecretReference(removed.serverUrl, removed.loginName),
+            removed.loginName,
+            removed.appPassword.encodeToByteArray(),
+        )
+        crashDuringRemoval = true
+
+        assertFailsWith<SimulatedProcessExit> { persistence.removeAccount(removed.accountId) }
+
+        assertFalse(decodeRegistry(preferences).accounts.any { it.id == removed.accountId })
+        assertEquals(removed.accountId.storageKey, preferences.get("accountCredentialRemovals", null))
+        assertEquals(removed.serverUrl, preferences.get("accountLegacyCleanupServer", null))
+        assertNotNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
+        assertNotNull(secrets.load(desktopSessionSecretReference(removed.serverUrl, removed.loginName)))
+
+        crashDuringRemoval = false
+        persistence(preferences, secrets).loadActiveSession()
+        assertNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
+        assertNull(secrets.load(desktopSessionSecretReference(removed.serverUrl, removed.loginName)))
+        assertNull(preferences.get("accountCredentialRemovals", null))
+        assertNull(preferences.get("accountLegacyCleanupServer", null))
+    }
+
+    @Test
     fun removalJournalNeverDeletesAStillRegisteredCredential() = withStore { preferences, secrets ->
         val session = firstSession()
         val persistence = persistence(preferences, secrets)
@@ -667,3 +703,5 @@ class DesktopAccountCredentialPersistenceTest {
         }
     }
 }
+
+private class SimulatedProcessExit : Error()
