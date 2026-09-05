@@ -73,13 +73,14 @@ class DesktopVirtualFileProviderPreferencesTest {
 
         val recoveryFailure = recoverDesktopAccountAfterPrecommitFailure(
             restoreProviderPreference = { events += "restore"; throw restoreFailure },
-            resumeVirtualFileSystem = { events += "resume" },
+            resumeVirtualFileSystem = { events += "resume-linux" },
+            resumeWindowsCloudFiles = { events += "resume-windows" },
             reopenSession = { events += "reopen" },
             restartLifecycle = { events += "restart" },
         )
 
         assertSame(restoreFailure, recoveryFailure)
-        assertEquals(listOf("restore", "resume", "reopen", "restart"), events)
+        assertEquals(listOf("restore", "resume-linux", "resume-windows", "reopen", "restart"), events)
     }
 
     @Test

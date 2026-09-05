@@ -382,21 +382,6 @@ internal fun virtualFileLocationActionMessage(prefix: String, targetPath: String
     return "$prefix$displayedTarget."
 }
 
-internal fun desktopWindowsCloudFilesRoot(
-    accountId: String,
-    userHome: File = File(System.getProperty("user.home")),
-): File {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return File(File(userHome, "Nextcloud Native"), accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
-}
-
-internal fun windowsCloudFilesRootPreferenceKey(accountId: String): String {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return "$KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX$accountId".also { key ->
-        check(key.length <= Preferences.MAX_KEY_LENGTH)
-    }
-}
-
 internal fun windowsCloudFilesPreservedRootPreferenceKey(accountId: String): String {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
     return "$KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX$accountId".also { key ->
@@ -3717,7 +3702,9 @@ class DesktopNextcloudServices(
         }
         var cleared = false
         var quiescedLinuxFileSystem: LinuxNextcloudVirtualFileSystem? = null
+        var quiescedWindowsCloudFiles: WindowsCloudFilesProvider? = null
         var linuxFileSystemQuiesced = false
+        var windowsCloudFilesQuiesced = false
         var providerPreferenceAccountId: String? = null
         var providerWasEnabledBeforeRemoval = false
         var remoteRevocationAttempted = false
@@ -3748,6 +3735,13 @@ class DesktopNextcloudServices(
                 linuxFileSystemQuiesced = quiescedLinuxFileSystem?.quiesceWrites() == true
                 check(quiescedLinuxFileSystem == null || linuxFileSystemQuiesced) {
                     "Close files being edited through the Linux virtual filesystem before removing this account."
+                }
+                quiescedWindowsCloudFiles = synchronized(virtualFileProviderLock) {
+                    windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }
+                }
+                windowsCloudFilesQuiesced = quiescedWindowsCloudFiles?.quiesceWritesForAccountRemoval() == true
+                check(quiescedWindowsCloudFiles == null || windowsCloudFilesQuiesced) {
+                    "Finish local Windows Cloud Files changes before removing this account."
                 }
                 accountId?.let { currentAccountId ->
                     providerPreferenceAccountId = currentAccountId
@@ -3896,6 +3890,9 @@ class DesktopNextcloudServices(
                         setDesktopVirtualFileProviderPreference(preferences, it, providerWasEnabledBeforeRemoval)
                     } },
                     resumeVirtualFileSystem = { if (linuxFileSystemQuiesced) quiescedLinuxFileSystem?.resumeWrites() },
+                    resumeWindowsCloudFiles = {
+                        if (windowsCloudFilesQuiesced) quiescedWindowsCloudFiles?.resumeWritesAfterAccountRemovalFailure()
+                    },
                     reopenSession = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
                     restartLifecycle = {
                         if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()

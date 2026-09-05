@@ -143,11 +143,14 @@ internal fun shouldResumeDesktopWritesAfterRemovalFailure(
 internal fun recoverDesktopAccountAfterPrecommitFailure(
     restoreProviderPreference: () -> Unit,
     resumeVirtualFileSystem: () -> Unit,
+    resumeWindowsCloudFiles: () -> Unit = {},
     reopenSession: () -> Unit,
     restartLifecycle: () -> Unit,
 ): Throwable? {
     var recoveryFailure: Throwable? = null
-    listOf(restoreProviderPreference, resumeVirtualFileSystem, reopenSession, restartLifecycle).forEach { action ->
+    listOf(
+        restoreProviderPreference, resumeVirtualFileSystem, resumeWindowsCloudFiles, reopenSession, restartLifecycle,
+    ).forEach { action ->
         runCatching(action).exceptionOrNull()?.let { failure ->
             recoveryFailure?.addSuppressed(failure) ?: run { recoveryFailure = failure }
         }
