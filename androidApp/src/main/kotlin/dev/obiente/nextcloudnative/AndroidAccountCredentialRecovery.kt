@@ -194,6 +194,20 @@ internal fun reconstructAndroidAccountCredentialStateForRemoval(
     return reconstructAndroidAccountCredentialState(recoverableRegistry, loadSession)
 }
 
+internal data class AndroidUnavailableAccountRemovalTarget(
+    val record: NextcloudAccountRecord,
+    val wasActive: Boolean,
+)
+
+internal fun resolveAndroidUnavailableAccountRemovalTarget(
+    registry: NextcloudAccountRegistry?,
+    accountId: NextcloudAccountId,
+): AndroidUnavailableAccountRemovalTarget? {
+    val available = registry ?: return null
+    val record = available.accounts.firstOrNull { account -> account.id == accountId } ?: return null
+    return AndroidUnavailableAccountRemovalTarget(record, available.activeAccountId == accountId)
+}
+
 internal fun restoreAndroidAccountCredentialStateWithoutAggregate(
     encodedRegistry: String?,
     loadSession: (NextcloudAccountId) -> NextcloudSession?,
