@@ -22,7 +22,9 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -58,18 +60,27 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            val selectionIsDefinitelyInactive = runCatching {
-                !store.hasActiveSelection(request.file.selectionId)
-            }.getOrNull() == true
-            if (selectionIsDefinitelyInactive) {
-                picker.release(request.file)
-            }
+            releaseIfUnowned(request.file)
             DurableUploadEnqueueResult.Rejected(
                 error.message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS)
                     ?: "The background upload could not be scheduled.",
             )
         }
     }
+
+    fun releaseIfUnowned(file: LocalUploadFile): Boolean = releaseUnownedDurableUploadSelection(
+        selectionId = file.selectionId,
+        hasActiveSelection = store::hasActiveSelection,
+        releaseSelection = { AndroidLocalUploadPicker(appContext).release(file) },
+    )
+
+    suspend fun <Result> runEnqueueWithCancellationCleanup(
+        file: LocalUploadFile,
+        enqueue: suspend () -> Result,
+    ): Result = runDurableUploadEnqueueWithCancellationCleanup(
+        enqueue = { withContext(Dispatchers.IO) { enqueue() } },
+        releaseUnownedSelection = { releaseIfUnowned(file) },
+    )
 
     fun statuses(session: NextcloudSession, scope: DurableUploadScope): List<DurableUploadStatus> {
         val jobs = store.list(NextcloudDocumentIds.accountKey(session), scope)
@@ -145,6 +156,28 @@ internal class AndroidDurableMultipartUploads(context: Context) {
     private companion object {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
     }
+}
+
+internal fun releaseUnownedDurableUploadSelection(
+    selectionId: String,
+    hasActiveSelection: (String) -> Boolean,
+    releaseSelection: () -> Boolean,
+): Boolean = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
+    val selectionIsDefinitelyInactive = runCatching {
+        !hasActiveSelection(selectionId)
+    }.getOrNull() == true
+    if (!selectionIsDefinitelyInactive) return@synchronized false
+    runCatching(releaseSelection).getOrDefault(false)
+}
+
+internal suspend fun <Result> runDurableUploadEnqueueWithCancellationCleanup(
+    enqueue: suspend () -> Result,
+    releaseUnownedSelection: () -> Unit,
+): Result = try {
+    enqueue()
+} catch (cancelled: CancellationException) {
+    runCatching(releaseUnownedSelection)
+    throw cancelled
 }
 
 internal val DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY = ExistingWorkPolicy.REPLACE
