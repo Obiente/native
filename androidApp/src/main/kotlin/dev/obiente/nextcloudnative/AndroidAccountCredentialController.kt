@@ -30,6 +30,7 @@ internal class AndroidAccountCredentialController(
     private val prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
     private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
     private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String) -> Unit,
+    private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val accountRemovalCleanupJournal = AndroidAccountRemovalCleanupJournal(
@@ -189,13 +190,12 @@ internal class AndroidAccountCredentialController(
         val accountIdentity = NextcloudDocumentIds.accountKey(unavailableSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(unavailableSession)
         ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountIdentity) {
-            removeAndroidAccountCredentialData(
-                active = false,
+            removeUnavailableAndroidAccountCredentialData(
+                accountIdentity = accountIdentity,
                 prepareAccountRemoval = { prepareAccountRemoval(unavailableSession) },
-                removeQueuedUploads = { retryQueuedUploadsCleanup(unavailableSession, accountIdentity) },
-                clearActiveAccount = {}, rollbackActiveRemoval = {},
-                persistInactiveRemoval = { persistState(recovered.remove(accountId), pendingCleanup) },
-                rollbackInactiveRemoval = {
+                removeAccountOwnedWorkWithoutCredentials = retryQueuedUploadsCleanupWithoutCredentials,
+                persistRemoval = { persistState(recovered.remove(accountId), pendingCleanup) },
+                rollbackRemoval = {
                     rollbackUnavailableAndroidAccountRemoval(
                         recovered = recovered, persistRecovered = { state -> persistState(state) },
                         clearCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },

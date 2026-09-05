@@ -99,6 +99,29 @@ internal suspend fun removeAndroidAccountCredentialData(
     )
 }
 
+internal suspend fun removeUnavailableAndroidAccountCredentialData(
+    accountIdentity: String,
+    prepareAccountRemoval: suspend () -> Unit,
+    removeAccountOwnedWorkWithoutCredentials: suspend (String) -> Unit,
+    persistRemoval: suspend () -> Unit,
+    rollbackRemoval: suspend () -> Unit,
+    completeCommittedCleanup: suspend () -> Unit = {},
+    recordCommittedCleanupFailure: (Exception) -> Unit = {},
+) {
+    require(accountIdentity.isNotBlank())
+    removeAndroidAccountCredentialData(
+        active = false,
+        prepareAccountRemoval = prepareAccountRemoval,
+        removeQueuedUploads = { removeAccountOwnedWorkWithoutCredentials(accountIdentity) },
+        clearActiveAccount = {},
+        rollbackActiveRemoval = {},
+        persistInactiveRemoval = persistRemoval,
+        rollbackInactiveRemoval = rollbackRemoval,
+        completeCommittedCleanup = completeCommittedCleanup,
+        recordCommittedCleanupFailure = recordCommittedCleanupFailure,
+    )
+}
+
 private suspend fun finishCommittedAndroidAccountRemovalCleanup(
     removeQueuedUploads: suspend () -> Unit,
     completeCommittedCleanup: suspend () -> Unit,

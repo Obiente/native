@@ -8,15 +8,16 @@ internal class AndroidAccountRemovalCleanupJournal(
     private val recordMalformed: () -> Unit,
 ) {
     fun pending(): Set<AndroidPendingAccountRemovalCleanup> {
-        val encoded = runCatching {
+        val encoded = try {
             preferences.getStringSet(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY, emptySet()).orEmpty()
-        }.getOrElse {
-            repair(emptySet())
-            return emptySet()
+        } catch (failure: Exception) {
+            runCatching(recordMalformed)
+            throw AndroidAccountRemovalCleanupJournalException(
+                "The account-removal cleanup journal is unreadable.",
+                failure,
+            )
         }
-        val restored = restoreAndroidPendingAccountRemovalCleanups(encoded)
-        if (restored.malformedEntryCount > 0) repair(restored.cleanups)
-        return restored.cleanups
+        return requireValidAndroidAccountRemovalCleanupJournal(encoded, recordMalformed)
     }
 
     fun prepareEdit(
@@ -44,17 +45,23 @@ internal class AndroidAccountRemovalCleanupJournal(
         )
         commit(editor)
     }
+}
 
-    private fun repair(retained: Set<AndroidPendingAccountRemovalCleanup>) {
-        recordMalformed()
-        runCatching {
-            val editor = preferences.edit()
-            if (retained.isEmpty()) editor.remove(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY)
-            else editor.putStringSet(
-                ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY,
-                retained.mapTo(linkedSetOf(), ::encodeAndroidPendingAccountRemovalCleanup),
-            )
-            commit(editor)
-        }
+internal class AndroidAccountRemovalCleanupJournalException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+internal fun requireValidAndroidAccountRemovalCleanupJournal(
+    encoded: Set<String>,
+    recordMalformed: () -> Unit,
+): Set<AndroidPendingAccountRemovalCleanup> {
+    val restored = restoreAndroidPendingAccountRemovalCleanups(encoded)
+    if (restored.malformedEntryCount > 0) {
+        runCatching(recordMalformed)
+        throw AndroidAccountRemovalCleanupJournalException(
+            "The account-removal cleanup journal contains a malformed tombstone.",
+        )
     }
+    return restored.cleanups
 }
