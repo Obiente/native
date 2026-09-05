@@ -7,11 +7,16 @@ import java.awt.Frame
 import java.awt.GraphicsEnvironment
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
@@ -105,7 +110,7 @@ internal class DesktopExternalFileHandoff(
                     if (launchFile(staged)) {
                         ExternalFileHandoffResult.Launched(action)
                     } else {
-                        staged.parentFile?.deleteRecursively()
+                        staged.parentFile?.let { deleteDesktopExternalFileTree(it.toPath()) }
                         ExternalFileHandoffResult.NoCompatibleApplication(action)
                     }
                 }
@@ -117,7 +122,7 @@ internal class DesktopExternalFileHandoff(
                             ExternalFileHandoffResult.NoCompatibleApplication(action)
                     }
                 } finally {
-                    staged.parentFile?.deleteRecursively()
+                    staged.parentFile?.let { deleteDesktopExternalFileTree(it.toPath()) }
                 }
             }
         }
@@ -130,14 +135,17 @@ internal class DesktopExternalFileHandoff(
         download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
     ): File {
         val canonicalRoot = prepareAccountRoot(accountId)
-        pruneDesktopExternalFileCache(canonicalRoot, declaredByteCount ?: 0L)
+        val cacheMaximumBytes = pruneDesktopExternalFileCache(
+            requireNotNull(canonicalRoot.parentFile),
+            declaredByteCount ?: 0L,
+        )
         val reservation = reservations.reserve(
             root = canonicalRoot,
             declaredByteCount = declaredByteCount,
             reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
         )
         reservation.use {
-            val maximumBytes = reservation.maximumBytes
+            val maximumBytes = minOf(reservation.maximumBytes, cacheMaximumBytes)
             val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
             check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
             check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
@@ -174,7 +182,7 @@ internal class DesktopExternalFileHandoff(
                 return target
             } catch (failure: Throwable) {
                 temporary.delete()
-                operationDirectory.deleteRecursively()
+                deleteDesktopExternalFileTree(operationDirectory.toPath())
                 throw failure
             }
         }
@@ -183,7 +191,7 @@ internal class DesktopExternalFileHandoff(
     private fun stageDetachedCopy(accountId: String, sourceName: String, bytes: ByteArray): File {
         require(bytes.size.toLong() <= MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES)
         val canonicalRoot = prepareAccountRoot(accountId)
-        pruneDesktopExternalFileCache(canonicalRoot, bytes.size.toLong())
+        pruneDesktopExternalFileCache(requireNotNull(canonicalRoot.parentFile), bytes.size.toLong())
         reservations.reserve(
             root = canonicalRoot,
             declaredByteCount = bytes.size.toLong(),
@@ -215,7 +223,7 @@ internal class DesktopExternalFileHandoff(
                 return target
             } catch (failure: Throwable) {
                 temporary.delete()
-                operationDirectory.deleteRecursively()
+                deleteDesktopExternalFileTree(operationDirectory.toPath())
                 throw failure
             }
         }
@@ -237,7 +245,7 @@ internal class DesktopExternalFileHandoff(
         check(Files.isDirectory(accountPath, LinkOption.NOFOLLOW_LINKS)) {
             "The desktop external-file account entry is not a directory."
         }
-        check(accountPath.toFile().deleteRecursively() && !Files.exists(accountPath, LinkOption.NOFOLLOW_LINKS)) {
+        check(deleteDesktopExternalFileTree(accountPath) && !Files.exists(accountPath, LinkOption.NOFOLLOW_LINKS)) {
             "Could not clear this account's desktop external-file copies."
         }
     }
@@ -245,16 +253,20 @@ internal class DesktopExternalFileHandoff(
     private fun prepareAccountRoot(accountId: String): File {
         requireDesktopExternalFileHandoffAccountId(accountId)
         pruneLegacyDesktopExternalFileCache(root)
-        check(root.isDirectory || root.mkdirs()) { "Could not create the desktop external-file cache." }
-        val canonicalRoot = root.canonicalFile
-        val accountRoot = File(canonicalRoot, accountId)
-        check(accountRoot.isDirectory || accountRoot.mkdir()) {
+        val rootPath = root.toPath().toAbsolutePath().normalize()
+        if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) Files.createDirectories(rootPath)
+        check(Files.isDirectory(rootPath, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(rootPath)) {
+            "The desktop external-file cache root is not a safe directory."
+        }
+        val accountPath = rootPath.resolve(accountId)
+        if (!Files.exists(accountPath, LinkOption.NOFOLLOW_LINKS)) Files.createDirectory(accountPath)
+        check(Files.isDirectory(accountPath, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(accountPath)) {
             "Could not create the desktop external-file account cache."
         }
-        check(accountRoot.canonicalFile.parentFile == canonicalRoot) {
+        check(accountPath.parent == rootPath) {
             "Unsafe desktop external-file account directory."
         }
-        return accountRoot.canonicalFile
+        return accountPath.toFile()
     }
 
     private sealed interface DesktopStagedExternalFile {
@@ -275,10 +287,13 @@ internal suspend fun <Result> DesktopAccountOperationGuard.withExternalFileHando
 )
 
 private fun requireDesktopExternalFileHandoffAccountId(accountId: String) {
-    require(accountId.length == 64 && accountId.all { character ->
-        character in '0'..'9' || character in 'a'..'f'
-    }) { "The desktop external-file account identity is invalid." }
+    require(accountId.isDesktopExternalFileHandoffAccountId()) {
+        "The desktop external-file account identity is invalid."
+    }
 }
+
+private fun String.isDesktopExternalFileHandoffAccountId(): Boolean =
+    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
 
 internal enum class DesktopStagedFileExport {
     Exported,
@@ -309,10 +324,15 @@ internal fun pruneLegacyDesktopExternalFileCache(
         entries.forEach { entry ->
             val name = entry.fileName.toString()
             if (!name.matches(LEGACY_EXTERNAL_FILE_OPERATION_DIRECTORY)) return@forEach
-            if (!Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(entry)) return@forEach
+            if (!Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(entry)) {
+                val deleted = deleteDesktopExternalFileTree(entry)
+                check(!removeAll || deleted) { "Could not clear a legacy desktop external-file cache entry." }
+                return@forEach
+            }
             val modified = Files.getLastModifiedTime(entry, LinkOption.NOFOLLOW_LINKS).toMillis()
             if (removeAll || nowMillis >= modified && nowMillis - modified > DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS) {
-                entry.toFile().deleteRecursively()
+                val deleted = deleteDesktopExternalFileTree(entry)
+                check(!removeAll || deleted) { "Could not clear a legacy desktop external-file copy." }
             }
         }
     }
@@ -322,30 +342,107 @@ internal fun pruneDesktopExternalFileCache(
     root: File,
     requiredBytes: Long,
     nowMillis: Long = System.currentTimeMillis(),
-) {
-    require(root.isDirectory) { "The desktop external-file cache root is not a directory." }
+    maximumBytes: Long = MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES,
+): Long {
+    val rootPath = root.toPath().toAbsolutePath().normalize()
+    require(Files.isDirectory(rootPath, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(rootPath)) {
+        "The desktop external-file cache root is not a safe directory."
+    }
     require(requiredBytes >= 0L)
-    val entries = root.listFiles().orEmpty().sortedBy(File::lastModified).toMutableList()
-    entries.filter { nowMillis - it.lastModified() > DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS }.forEach { expired ->
-        expired.deleteRecursively()
-        entries.remove(expired)
+    require(maximumBytes > 0L && requiredBytes <= maximumBytes) {
+        "The desktop external-file copy exceeds the cache limit."
+    }
+    val entries = desktopExternalFileCacheEntries(rootPath).sortedBy(DesktopExternalFileCacheEntry::modifiedAt)
+        .toMutableList()
+    entries.filter { entry ->
+        nowMillis >= entry.modifiedAt && nowMillis - entry.modifiedAt > DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS
+    }.forEach { expired ->
+        if (deleteDesktopExternalFileTree(expired.path)) entries.remove(expired)
     }
     var storedBytes = entries.fold(0L) { total, entry ->
-        saturatingDesktopFileBytes(total, desktopRecursiveFileBytes(entry))
+        saturatingDesktopFileBytes(total, entry.bytes)
     }
-    val retainedBeforeCopy = if (requiredBytes >= MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES) {
-        0L
-    } else {
-        MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES - requiredBytes
-    }
+    val retainedBeforeCopy = maximumBytes - requiredBytes
     val iterator = entries.filter { entry ->
-        nowMillis >= entry.lastModified() &&
-            nowMillis - entry.lastModified() >= DESKTOP_EXTERNAL_FILE_MINIMUM_RETENTION_MILLIS
+        nowMillis >= entry.modifiedAt &&
+            nowMillis - entry.modifiedAt >= DESKTOP_EXTERNAL_FILE_MINIMUM_RETENTION_MILLIS
     }.iterator()
     while (storedBytes > retainedBeforeCopy && iterator.hasNext()) {
         val oldest = iterator.next()
-        val bytes = desktopRecursiveFileBytes(oldest)
-        if (oldest.deleteRecursively()) storedBytes = (storedBytes - bytes).coerceAtLeast(0L)
+        if (deleteDesktopExternalFileTree(oldest.path)) {
+            storedBytes = (storedBytes - oldest.bytes).coerceAtLeast(0L)
+        }
+    }
+    check(storedBytes <= retainedBeforeCopy) {
+        "Recent desktop external-file copies already use the cache limit."
+    }
+    return maximumBytes - storedBytes
+}
+
+private data class DesktopExternalFileCacheEntry(
+    val path: Path,
+    val bytes: Long,
+    val modifiedAt: Long,
+)
+
+private fun desktopExternalFileCacheEntries(root: Path): List<DesktopExternalFileCacheEntry> = buildList {
+    Files.newDirectoryStream(root).use { rootEntries ->
+        rootEntries.forEach { entry ->
+            val name = entry.fileName.toString()
+            when {
+                name.matches(LEGACY_EXTERNAL_FILE_OPERATION_DIRECTORY) -> addDesktopExternalFileCacheEntry(entry)
+                name.isDesktopExternalFileHandoffAccountId() -> {
+                    if (!Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(entry)) {
+                        check(deleteDesktopExternalFileTree(entry)) {
+                            "Could not clear an unsafe desktop external-file account entry."
+                        }
+                        return@forEach
+                    }
+                    Files.newDirectoryStream(entry).use { accountEntries ->
+                        accountEntries.forEach { operation -> addDesktopExternalFileCacheEntry(operation) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun MutableList<DesktopExternalFileCacheEntry>.addDesktopExternalFileCacheEntry(path: Path) {
+    if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path)) {
+        check(deleteDesktopExternalFileTree(path)) {
+            "Could not clear an unsafe desktop external-file cache entry."
+        }
+        return
+    }
+    add(
+        DesktopExternalFileCacheEntry(
+            path = path,
+            bytes = desktopExternalFileTreeBytes(path),
+            modifiedAt = Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toMillis(),
+        ),
+    )
+}
+
+internal fun deleteDesktopExternalFileTree(root: Path): Boolean {
+    if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return true
+    return try {
+        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.delete(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(directory: Path, failure: IOException?): FileVisitResult {
+                failure?.let { throw it }
+                Files.delete(directory)
+                return FileVisitResult.CONTINUE
+            }
+        })
+        !Files.exists(root, LinkOption.NOFOLLOW_LINKS)
+    } catch (_: IOException) {
+        false
+    } catch (_: SecurityException) {
+        false
     }
 }
 
@@ -443,10 +540,15 @@ private fun moveAtomicallyOrReplace(source: File, destination: File, replaceExis
     }
 }
 
-private fun desktopRecursiveFileBytes(file: File): Long = when {
-    file.isFile -> file.length()
-    file.isDirectory -> file.listFiles().orEmpty().sumOf(::desktopRecursiveFileBytes)
-    else -> 0L
+private fun desktopExternalFileTreeBytes(root: Path): Long {
+    var total = 0L
+    Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+        override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+            total = saturatingDesktopFileBytes(total, attrs.size())
+            return FileVisitResult.CONTINUE
+        }
+    })
+    return total
 }
 
 private const val DESKTOP_EXTERNAL_FILE_MINIMUM_RETENTION_MILLIS = 60L * 60L * 1000L

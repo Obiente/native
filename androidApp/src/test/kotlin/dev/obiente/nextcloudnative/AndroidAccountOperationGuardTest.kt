@@ -17,6 +17,37 @@ import kotlinx.coroutines.yield
 
 class AndroidAccountOperationGuardTest {
     @Test
+    fun removalInThePostSaveGapCannotReopenDynamicReads() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val credentialMutations = Mutex()
+        val persisted = NextcloudSession("https://cloud.example.test", "alice", "saved-password")
+        val saveReturned = CompletableDeferred<Unit>()
+        val continueAfterSave = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = persisted
+        var activatedAccountId: String? = null
+        val save = async {
+            saveReturned.complete(Unit)
+            continueAfterSave.await()
+            activateAndroidDynamicReadsAfterCredentialSave(
+                persistedSession = persisted,
+                credentialMutationMutex = credentialMutations,
+                guard = guard,
+                resolveSession = { current },
+                activate = { activatedAccountId = it },
+            )
+        }
+        saveReturned.await()
+
+        credentialMutations.withLock {
+            guard.withAccount(NextcloudDocumentIds.accountKey(persisted)) { current = null }
+        }
+        continueAfterSave.complete(Unit)
+        save.await()
+
+        assertEquals(null, activatedAccountId)
+    }
+
+    @Test
     fun lateDurableWriterCannotPublishAfterRemovalAndCredentialReplacement() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val credentialMutations = Mutex()
