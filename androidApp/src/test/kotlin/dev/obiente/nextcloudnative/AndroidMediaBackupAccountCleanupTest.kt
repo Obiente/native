@@ -1,135 +1,75 @@
 package dev.obiente.nextcloudnative
 
-import dev.obiente.nextcloudnative.app.LocalMediaObject
-import dev.obiente.nextcloudnative.app.MediaBackupLedgerRecord
-import dev.obiente.nextcloudnative.app.MediaBackupLedgerStore
-import dev.obiente.nextcloudnative.app.MediaBackupTransferState
-import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AndroidMediaBackupAccountCleanupTest {
     @Test
-    fun cleanupDeletesOnlyTheRemovedAccountsLedgerRowsAndIsIdempotent() = runBlocking {
-        val database = Files.createTempDirectory("android-media-cleanup-").resolve("ledger.db").toFile()
+    fun cleanupDeletesOnlyTheRemovedAccountsLedgerRowsAndIsIdempotent(): Unit = runBlocking {
         val removed = "a".repeat(64)
         val retained = "b".repeat(64)
-        try {
-            MediaBackupLedgerStore(database.absolutePath).also { store ->
-                store.upsert(record(removed, "removed"))
-                store.upsert(record(retained, "retained"))
-                store.close()
-            }
-            val cleanup = AndroidMediaBackupAccountCleanup {
-                MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false)
-            }
+        val rows = mutableMapOf(removed to mutableSetOf("removed"), retained to mutableSetOf("retained"))
+        val cleanup = AndroidMediaBackupAccountCleanup { accountId -> rows.remove(accountId) }
 
-            repeat(2) { cleanup.removeForAccount(removed) }
+        repeat(2) { cleanup.removeForAccount(removed) }
 
-            MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false).also { store ->
-                assertNull(store.load(removed, "removed"))
-                assertNotNull(store.load(retained, "retained"))
-                store.close()
-            }
-        } finally {
-            database.parentFile.deleteRecursively()
-        }
+        assertEquals(mapOf(retained to setOf("retained")), rows)
     }
 
     @Test
-    fun failedOpenLeavesRowsForJournaledRetry() = runBlocking {
-        val database = Files.createTempDirectory("android-media-cleanup-retry-").resolve("ledger.db").toFile()
+    fun failedOpenLeavesRowsForJournaledRetry(): Unit = runBlocking {
         val removed = "c".repeat(64)
-        try {
-            MediaBackupLedgerStore(database.absolutePath).also { store ->
-                store.upsert(record(removed, "pending"))
-                store.close()
-            }
-            var failOpen = true
-            val cleanup = AndroidMediaBackupAccountCleanup {
-                if (failOpen) error("synthetic ledger open failure")
-                MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false)
-            }
-
-            assertFailsWith<IllegalStateException> { cleanup.removeForAccount(removed) }
-            failOpen = false
-            MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false).also { store ->
-                assertNotNull(store.load(removed, "pending"))
-                store.close()
-            }
-
-            cleanup.removeForAccount(removed)
-
-            MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false).also { store ->
-                assertNull(store.load(removed, "pending"))
-                store.close()
-            }
-        } finally {
-            database.parentFile.deleteRecursively()
+        val rows = mutableMapOf(removed to mutableSetOf("pending"))
+        var failOpen = true
+        val cleanup = AndroidMediaBackupAccountCleanup { accountId ->
+            if (failOpen) error("synthetic ledger open failure")
+            rows.remove(accountId)
         }
+
+        assertFailsWith<IllegalStateException> { cleanup.removeForAccount(removed) }
+        assertTrue(rows[removed] == mutableSetOf("pending"))
+        failOpen = false
+
+        cleanup.removeForAccount(removed)
+
+        assertTrue(rows.isEmpty())
     }
 
     @Test
-    fun accountRemovalWaitsForAStartedLedgerWriterAndDeletesItsResult() = runBlocking {
-        val database = Files.createTempDirectory("android-media-cleanup-race-").resolve("ledger.db").toFile()
+    fun accountRemovalWaitsForAStartedLedgerWriterAndDeletesItsResult(): Unit = runBlocking {
         val accountId = "d".repeat(64)
+        val rows = mutableMapOf<String, MutableSet<String>>()
         val guard = AndroidAccountOperationGuard()
         val writerStarted = CompletableDeferred<Unit>()
         val finishWriter = CompletableDeferred<Unit>()
         var removalFinished = false
-        try {
-            val cleanup = AndroidMediaBackupAccountCleanup {
-                MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false)
+        val cleanup = AndroidMediaBackupAccountCleanup { removedAccountId -> rows.remove(removedAccountId) }
+        val writer = async {
+            guard.withAccount(accountId) {
+                writerStarted.complete(Unit)
+                finishWriter.await()
+                rows.getOrPut(accountId, ::mutableSetOf).add("late")
             }
-            val writer = async {
-                guard.withAccount(accountId) {
-                    writerStarted.complete(Unit)
-                    finishWriter.await()
-                    MediaBackupLedgerStore(database.absolutePath).also { store ->
-                        store.upsert(record(accountId, "late"))
-                        store.close()
-                    }
-                }
-            }
-            writerStarted.await()
-            val removal = async(start = CoroutineStart.UNDISPATCHED) {
-                guard.withAccount(accountId) {
-                    cleanup.removeForAccount(accountId)
-                    removalFinished = true
-                }
-            }
-
-            assertFalse(removalFinished)
-            finishWriter.complete(Unit)
-            writer.await()
-            removal.await()
-            MediaBackupLedgerStore(database.absolutePath, recoverInterruptedTransfers = false).also { store ->
-                assertNull(store.load(accountId, "late"))
-                store.close()
-            }
-        } finally {
-            database.parentFile.deleteRecursively()
         }
-    }
+        writerStarted.await()
+        val removal = async(start = CoroutineStart.UNDISPATCHED) {
+            guard.withAccount(accountId) {
+                cleanup.removeForAccount(accountId)
+                removalFinished = true
+            }
+        }
 
-    private fun record(accountId: String, key: String) = MediaBackupLedgerRecord(
-        accountId = accountId,
-        local = LocalMediaObject(
-            key = key,
-            displayName = "$key.jpg",
-            size = 4,
-            revision = "generation-1",
-        ),
-        receipt = null,
-        transferState = MediaBackupTransferState.Pending,
-        attemptCount = 0,
-        updatedAtEpochMillis = 1,
-    )
+        assertFalse(removalFinished)
+        finishWriter.complete(Unit)
+        writer.await()
+        removal.await()
+        assertTrue(rows.isEmpty())
+    }
 }
