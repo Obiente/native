@@ -2950,7 +2950,7 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         scope: DurableUploadScope,
         request: NextcloudMultipartUploadRequest,
-    ): DurableUploadEnqueueResult = withContext(Dispatchers.IO) {
+    ): DurableUploadEnqueueResult = durableMultipartUploads.runEnqueueWithCancellationCleanup(request.file) {
         ANDROID_ACCOUNT_OPERATION_GUARD.withExactAccountSession(
             expectedSession = session,
             resolveSession = ::loadSession,
