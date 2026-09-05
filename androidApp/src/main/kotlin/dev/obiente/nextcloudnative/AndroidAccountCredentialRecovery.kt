@@ -71,6 +71,12 @@ internal fun unsupportedCredentialStoreMutation(version: Int): Nothing =
 internal fun androidAccountCredentialSlotKey(accountId: NextcloudAccountId): String =
     "$ANDROID_ACCOUNT_CREDENTIAL_SLOT_KEY_PREFIX${accountId.storageKey}"
 
+internal fun retainedAndroidAccountCredentialSlotKeys(
+    state: AndroidAccountCredentialState,
+): Set<String> = state.registry.accounts.mapTo(hashSetOf()) { account ->
+    androidAccountCredentialSlotKey(account.id)
+}
+
 internal fun readAndroidAccountCredentialSlot(
     accountId: NextcloudAccountId,
     readEncrypted: (String) -> String?,
