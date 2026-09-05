@@ -154,13 +154,9 @@ internal class DesktopExternalFileHandoff(
                 val maximumBytes = minOf(reservation.maximumBytes, cacheReservation.maximumBytes)
                 val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
                 check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
-                check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
-                    "Unsafe desktop handoff directory."
-                }
+                requireSafeDesktopExternalFileOperation(canonicalRoot, operationDirectory)
                 val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
-                check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
-                    "Unsafe desktop handoff filename."
-                }
+                requireSafeDesktopExternalFileTarget(operationDirectory, target)
                 val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
                 try {
                     val downloaded = FileOutputStream(temporary).use { output ->
@@ -212,13 +208,9 @@ internal class DesktopExternalFileHandoff(
             ).use {
                 val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
                 check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
-                check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
-                    "Unsafe desktop handoff directory."
-                }
+                requireSafeDesktopExternalFileOperation(canonicalRoot, operationDirectory)
                 val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
-                check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
-                    "Unsafe desktop handoff filename."
-                }
+                requireSafeDesktopExternalFileTarget(operationDirectory, target)
                 val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
                 try {
                     FileOutputStream(temporary).use { output ->
@@ -286,6 +278,21 @@ internal class DesktopExternalFileHandoff(
     private sealed interface DesktopStagedExternalFile {
         data class Ready(val file: File) : DesktopStagedExternalFile
         data class Rejected(val result: ExternalFileHandoffResult.Rejected) : DesktopStagedExternalFile
+    }
+}
+
+private fun requireSafeDesktopExternalFileOperation(accountRoot: File, operationDirectory: File) {
+    val operationPath = operationDirectory.toPath()
+    check(
+        Files.isDirectory(operationPath, LinkOption.NOFOLLOW_LINKS) &&
+            !Files.isSymbolicLink(operationPath) &&
+            Files.isSameFile(requireNotNull(operationPath.parent), accountRoot.toPath()),
+    ) { "Unsafe desktop handoff directory." }
+}
+
+private fun requireSafeDesktopExternalFileTarget(operationDirectory: File, target: File) {
+    check(Files.isSameFile(requireNotNull(target.toPath().parent), operationDirectory.toPath())) {
+        "Unsafe desktop handoff filename."
     }
 }
 
