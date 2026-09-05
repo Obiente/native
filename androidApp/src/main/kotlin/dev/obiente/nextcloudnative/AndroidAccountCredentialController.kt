@@ -185,19 +185,20 @@ internal class AndroidAccountCredentialController(
         accountId: NextcloudAccountId,
         recovered: AndroidAccountCredentialState,
     ): Boolean {
-        val record = readCredentialFreeRegistry()?.accounts?.firstOrNull { account -> account.id == accountId }
-            ?: return false
-        val unavailableSession = NextcloudSession(record.serverUrl, record.loginName, appPassword = "")
+        val target = resolveAndroidUnavailableAccountRemovalTarget(readCredentialFreeRegistry(), accountId) ?: return false
+        val unavailableSession = NextcloudSession(target.record.serverUrl, target.record.loginName, appPassword = "")
         val accountIdentity = NextcloudDocumentIds.accountKey(unavailableSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(unavailableSession)
         withAndroidAccountRemovalLease(accountIdentity) {
             removeUnavailableAndroidAccountCredentialData(
                 accountIdentity = accountIdentity,
+                active = target.wasActive,
                 prepareAccountRemoval = { prepareAccountRemoval(unavailableSession) },
                 removeAccountOwnedWorkWithoutCredentials = { identity ->
                     retryQueuedUploadsCleanupWithoutCredentials(identity, pendingCleanup.previewCacheIdentity)
                 },
                 persistRemoval = { persistState(recovered.remove(accountId), pendingCleanup) },
+                clearActiveAccount = { clearSession(recovered, pendingCleanup, unavailableSession) },
                 rollbackRemoval = {
                     rollbackUnavailableAndroidAccountRemoval(
                         recovered = recovered, persistRecovered = { state -> persistState(state) },
@@ -298,8 +299,9 @@ internal class AndroidAccountCredentialController(
     private suspend fun clearSession(
         current: AndroidAccountCredentialState,
         pendingCleanup: AndroidPendingAccountRemovalCleanup? = null,
+        activeFallback: NextcloudSession? = null,
     ) {
-        val activeSession = current.activeSession ?: return
+        val activeSession = current.activeSession ?: activeFallback ?: return
         val replacement = current.remove(activeSession.accountId)
         val encodedReplacement = replacement.takeUnless { state ->
             state.registry.accounts.isEmpty() && state.sessions.isEmpty()
