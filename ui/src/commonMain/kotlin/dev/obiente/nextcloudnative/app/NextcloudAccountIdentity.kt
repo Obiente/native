@@ -5,8 +5,8 @@ package dev.obiente.nextcloudnative.app
  *
  * The value is a one-way digest of the normalized server address and login name. Callers keep the
  * type intact so account-scoped state cannot accidentally use a path, username, or password as its
- * owner. A future persistent account registry can replace the derivation without changing cache
- * owners again.
+ * owner. The persistent account registry stores the same identity, so account-scoped state keeps a
+ * stable owner across process restarts.
  */
 @JvmInline
 value class NextcloudAccountId internal constructor(val storageKey: String) {
