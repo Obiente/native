@@ -685,6 +685,10 @@ class DesktopAccountOperationGuardTest {
             assertEquals(
                 listOf(
                     DesktopAccountSyncPairCleanup(
+                        malformedAccountId,
+                        DesktopAccountSyncPairCleanupPhase.Unknown,
+                    ),
+                    DesktopAccountSyncPairCleanup(
                         validAccountId,
                         DesktopAccountSyncPairCleanupPhase.Committed,
                     ),
@@ -701,7 +705,7 @@ class DesktopAccountOperationGuardTest {
             journal.prepare(newAccountId)
 
             assertEquals(
-                setOf(validAccountId, newAccountId),
+                setOf(malformedAccountId, validAccountId, newAccountId),
                 journal.pending().mapTo(linkedSetOf(), DesktopAccountSyncPairCleanup::accountId),
             )
             assertFalse(journal.blocksAccountActivation(newAccountId))
@@ -798,6 +802,33 @@ class DesktopAccountOperationGuardTest {
         )
 
         assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun malformedCleanupUsesCredentialFreeOwnershipToRecover() = runBlocking {
+        val absentEvents = mutableListOf<String>()
+        retryDesktopAccountSyncPairCleanup(
+            cleanup = DesktopAccountSyncPairCleanup(
+                CLEANUP_ACCOUNT_ID,
+                DesktopAccountSyncPairCleanupPhase.Unknown,
+            ),
+            accountOwnership = { DesktopAccountOwnership.Absent },
+            removeSyncPairs = { absentEvents += "remove-pairs" },
+            clearCleanup = { absentEvents += "clear-cleanup" },
+        )
+        assertEquals(listOf("remove-pairs", "clear-cleanup"), absentEvents)
+
+        val presentEvents = mutableListOf<String>()
+        retryDesktopAccountSyncPairCleanup(
+            cleanup = DesktopAccountSyncPairCleanup(
+                CLEANUP_ACCOUNT_ID,
+                DesktopAccountSyncPairCleanupPhase.Unknown,
+            ),
+            accountOwnership = { DesktopAccountOwnership.Present },
+            removeSyncPairs = { presentEvents += "remove-pairs" },
+            clearCleanup = { presentEvents += "clear-cleanup" },
+        )
+        assertEquals(listOf("clear-cleanup"), presentEvents)
     }
 
     private companion object {
