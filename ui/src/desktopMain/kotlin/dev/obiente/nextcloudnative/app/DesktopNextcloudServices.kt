@@ -3839,45 +3839,40 @@ class DesktopNextcloudServices(
                         clearIntakeIdentity = { supportIntake.setActiveAccountIdentity(null) },
                     )
                 }
-                clearDesktopActiveAccountBeforeSyncPairCleanup(
-                    accountId,
-                    accountSyncPairCleanupJournal,
-                    ::desktopAccountOwnership,
-                    {
-                        commitDesktopAccountRemovalBeforeVirtualFileTeardown(
-                            commitRemoval = {
-                                var committedFailure = false
-                                try {
-                                    sessionPublicationGuard.serialize {
-                                        check(
-                                            activeAccountId == null || removeDesktopAccountCredential(
-                                                preferences,
-                                                accountId,
-                                                credentialStillExists = {
-                                                    accountCredentials.listAccounts().any { account ->
-                                                        account.id == activeAccountId
-                                                    }
-                                                },
-                                                commitStatusObserved = { credentialRemovalStatus = it },
-                                                finishCommittedRemoval = { committedFailure = true },
-                                            ) { accountCredentials.removeAccount(activeAccountId) },
-                                        )
+                try {
+                    clearDesktopActiveAccountBeforeSyncPairCleanup(
+                        accountId, accountSyncPairCleanupJournal, ::desktopAccountOwnership,
+                        {
+                            commitDesktopAccountRemovalBeforeVirtualFileTeardown(
+                                commitRemoval = {
+                                    var committedFailure = false
+                                    try {
+                                        sessionPublicationGuard.serialize {
+                                            check(
+                                                activeAccountId == null || removeDesktopAccountCredential(
+                                                    preferences, accountId,
+                                                    credentialStillExists = {
+                                                        accountCredentials.listAccounts().any { it.id == activeAccountId }
+                                                    },
+                                                    commitStatusObserved = { credentialRemovalStatus = it },
+                                                    finishCommittedRemoval = { committedFailure = true },
+                                                ) { accountCredentials.removeAccount(activeAccountId) },
+                                            )
+                                        }
+                                    } catch (failure: Throwable) {
+                                        if (committedFailure) runCatching(finishCommittedRemoval)
+                                            .exceptionOrNull()?.let(failure::addSuppressed)
+                                        throw failure
                                     }
-                                } catch (failure: Throwable) {
-                                    if (committedFailure) {
-                                        runCatching(finishCommittedRemoval)
-                                            .exceptionOrNull()
-                                            ?.let(failure::addSuppressed)
-                                    }
-                                    throw failure
-                                }
-                            },
-                            teardownVirtualFiles = finishCommittedRemoval,
-                        )
-                    },
-                    ::removeDesktopAccountOwnedState,
-                    ::recordSupportDiagnostic,
-                )
+                                },
+                                teardownVirtualFiles = finishCommittedRemoval,
+                            )
+                        },
+                        ::removeDesktopAccountOwnedState, ::recordSupportDiagnostic,
+                    )
+                } finally {
+                    if (cleared && accountId != null) schedulePendingAccountSyncPairCleanupRetry()
+                }
                 }
             }
         } catch (failure: Throwable) { removalFailure = failure; throw failure } finally {
@@ -3903,28 +3898,34 @@ class DesktopNextcloudServices(
         }
     }
     private suspend fun retryPendingAccountSyncPairCleanup(accountId: String) {
-        val cleanup = accountSyncPairCleanupJournal.pending()
-            .singleOrNull { pending -> pending.accountId == accountId }
-        if (cleanup != null) {
+        accountSyncPairCleanupJournal.pending().singleOrNull { it.accountId == accountId }?.let { cleanup ->
             retryDesktopAccountSyncPairCleanup(
-                cleanup = cleanup,
-                accountOwnership = ::desktopAccountOwnership,
-                removeSyncPairs = ::removeDesktopAccountOwnedState,
-                clearCleanup = accountSyncPairCleanupJournal::clear,
+                cleanup, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState, accountSyncPairCleanupJournal::clear,
             )
         }
         requireDesktopAccountActivationAllowed(accountSyncPairCleanupJournal.blocksAccountActivation(accountId))
     }
 
-    private suspend fun retryPendingAccountSyncPairCleanups() {
+    private suspend fun retryPendingAccountSyncPairCleanups() =
         retryPendingDesktopAccountSyncPairCleanups(
-            cleanupJournal = accountSyncPairCleanupJournal,
-            accountOwnership = ::desktopAccountOwnership,
-            removeSyncPairs = ::removeDesktopAccountOwnedState,
-            recordCleanupFailure = { accountId, failure ->
+            accountSyncPairCleanupJournal, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState,
+            { accountId, failure ->
                 recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
             },
         )
+
+    private fun schedulePendingAccountSyncPairCleanupRetry() = serviceScope.launch {
+        retryDesktopAccountSyncPairCleanupsBounded {
+            var pending = true
+            recoverDesktopBackgroundAccountSyncPairCleanups(
+                retry = { accountOperationGuard.serializeWhenSyncIdle {
+                    retryPendingAccountSyncPairCleanups()
+                    pending = accountSyncPairCleanupJournal.pending().isNotEmpty()
+                } },
+                recordFailure = { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalFailureDiagnostic(it)) },
+            )
+            pending
+        }
     }
 
     private suspend fun removeDesktopAccountOwnedState(accountId: String) {
@@ -3946,9 +3947,8 @@ class DesktopNextcloudServices(
         }
     }
 
-    private fun desktopAccountOwnership(accountId: String): DesktopAccountOwnership = sessionPublicationGuard.serialize {
-        accountCredentials.accountOwnership(accountId)
-    }
+    private fun desktopAccountOwnership(accountId: String): DesktopAccountOwnership =
+        sessionPublicationGuard.serialize { accountCredentials.accountOwnership(accountId) }
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,

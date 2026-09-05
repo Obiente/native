@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -342,6 +343,18 @@ internal suspend fun recoverDesktopBackgroundAccountSyncPairCleanups(
         throw cancelled
     } catch (failure: Exception) {
         runCatching { recordFailure(failure) }
+    }
+}
+
+internal suspend fun retryDesktopAccountSyncPairCleanupsBounded(
+    maximumAttempts: Int = 3,
+    waitBeforeNextAttempt: suspend () -> Unit = { delay(1_000L) },
+    retryPending: suspend () -> Boolean,
+) {
+    require(maximumAttempts > 0)
+    repeat(maximumAttempts) { attempt ->
+        if (!retryPending()) return
+        if (attempt + 1 < maximumAttempts) waitBeforeNextAttempt()
     }
 }
 
