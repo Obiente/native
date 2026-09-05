@@ -92,6 +92,16 @@ internal suspend fun <Result> DesktopAccountOperationGuard.withAuthenticatedMuta
     action(requireNotNull(current))
 }
 
+internal suspend fun <Result> DesktopAccountOperationGuard.withAccountPrivateStatePublication(
+    expectedSession: NextcloudSession,
+    resolveSession: suspend () -> NextcloudSession?,
+    unavailable: suspend () -> Result,
+    publish: suspend () -> Result,
+): Result = serialize {
+    val current = resolveSession()
+    if (current == expectedSession) publish() else unavailable()
+}
+
 internal fun requireDesktopAccountRemovalWritebacksResolved(pendingWritebackCount: Int) {
     check(pendingWritebackCount == 0) {
         "Finish or discard pending virtual file changes before removing this account."
