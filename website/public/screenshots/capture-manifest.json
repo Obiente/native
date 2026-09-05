@@ -458,7 +458,7 @@
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardOcsResponse.kt": "25780cc210c8e2f56fb2e45ab23a29a9030f6350a9a1ea29412650106a0d111f",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt": "427dd6352a5958a5fd31b9b8ed8cd0f8d1eac1b25800ea33b8bad171125e8f5e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusPresentation.kt": "96eb3aa478be8932e695e2dfe2067cc7b8dccf5ffa6cc1370f2db27b8119e0ff",
-        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt": "1093a865dfb98d585b14f9db21a7c082b0f37cd69a7936262e58ec2d74aae0f9",
+        "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt": "cf84b77e3d239161c1c84eae7ae949caeb5206c3f09346e61ead6a3ec99533c1",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardWidgetsAcquisition.kt": "7b646f0b992dddf9e16abbb497fc3832e284401d65fcc556a771aef00fc88a95",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckAsyncSafety.kt": "f6d939c1d1cf41b2421aad6906e9de7fb64800b146906312210472eebd22a93e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckCardDraftPersistence.kt": "f8aa5c05244022efd2b2c9cf356275f1a96812ebd5d44ec6a501d39c90413a0b",
