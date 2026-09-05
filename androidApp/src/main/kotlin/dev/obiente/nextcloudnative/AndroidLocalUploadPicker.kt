@@ -393,15 +393,8 @@ internal class AndroidLocalUploadPicker(context: Context) {
         file: LocalUploadFile,
         useCachedSource: Boolean,
     ): SelectedSource {
-        val source = try {
+        val source = readAndroidLocalUploadCapability {
             selections[file.selectionId].takeIf { useCachedSource } ?: load(file.selectionId)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            throw AndroidLocalUploadCapabilityReadException(
-                "The local file selection metadata could not be read.",
-                failure,
-            )
         } ?: throw AndroidLocalUploadCapabilityUnavailableException(
             "The local file selection was not durably saved.",
         )
@@ -419,30 +412,42 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     private fun load(selectionId: String): SelectedSource? {
-        val encrypted = preferences.getString(preferenceKey(selectionId), null) ?: return null
-        val payload = JSONObject(cipher.decrypt(encrypted))
-        val file = localUploadFile(
-            selectionId = payload.getString("selectionId"),
-            displayName = payload.getString("displayName"),
-            mimeType = if (payload.isNull("mimeType")) null else payload.getString("mimeType"),
-            sizeBytes = if (payload.isNull("sizeBytes")) null else payload.getLong("sizeBytes"),
-        )
-        require(file.selectionId == selectionId) { "The persisted upload capability changed." }
-        val phase = if (payload.has("phase")) {
-            CapabilityPhase.fromPersistedValue(payload.requireStrictString("phase"))
-        } else {
-            CapabilityPhase.Ready
+        val encrypted = readAndroidLocalUploadCapabilityPreference {
+            preferences.getString(preferenceKey(selectionId), null)
+        } ?: return null
+        val decrypted = cipher.decrypt(encrypted)
+        return try {
+            val payload = JSONObject(decrypted)
+            val file = localUploadFile(
+                selectionId = payload.getString("selectionId"),
+                displayName = payload.getString("displayName"),
+                mimeType = if (payload.isNull("mimeType")) null else payload.getString("mimeType"),
+                sizeBytes = if (payload.isNull("sizeBytes")) null else payload.getLong("sizeBytes"),
+            )
+            require(file.selectionId == selectionId) { "The persisted upload capability changed." }
+            val phase = if (payload.has("phase")) {
+                CapabilityPhase.fromPersistedValue(payload.requireStrictString("phase"))
+            } else {
+                CapabilityPhase.Ready
+            }
+            val processGeneration = payload.optionalStrictString("processGeneration")
+                ?.also(::requireSafeProcessGeneration)
+            val grantPreExisting = persistedDurableUploadGrantPreExisting(payload)
+            SelectedSource(
+                uri = Uri.parse(payload.getString("uri")),
+                file = file,
+                phase = phase,
+                processGeneration = processGeneration,
+                grantPreExisting = grantPreExisting,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw AndroidLocalUploadCapabilityMalformedException(
+                "The local file selection metadata is invalid.",
+                failure,
+            )
         }
-        val processGeneration = payload.optionalStrictString("processGeneration")
-            ?.also(::requireSafeProcessGeneration)
-        val grantPreExisting = persistedDurableUploadGrantPreExisting(payload)
-        return SelectedSource(
-            uri = Uri.parse(payload.getString("uri")),
-            file = file,
-            phase = phase,
-            processGeneration = processGeneration,
-            grantPreExisting = grantPreExisting,
-        )
     }
 
     private fun preferenceKey(selectionId: String): String = "$PREFERENCE_PREFIX$selectionId"
@@ -510,16 +515,6 @@ internal fun durableUploadCapabilityHasCapacity(
     require(maximumTrackedCapabilities > 0)
     return trackedCapabilityCount < maximumTrackedCapabilities
 }
-
-internal class AndroidLocalUploadCapabilityUnavailableException(
-    message: String,
-    cause: Throwable? = null,
-) : IllegalStateException(message, cause)
-
-internal class AndroidLocalUploadCapabilityReadException(
-    message: String,
-    cause: Throwable? = null,
-) : IllegalStateException(message, cause)
 
 internal fun resumeLocalUploadSelectionResult(
     continuation: CancellableContinuation<LocalUploadSelectionResult>,
