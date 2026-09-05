@@ -15,8 +15,13 @@ internal fun acquireAndroidDocumentProviderReadLease(
     lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
 ): AndroidAccountOperationLease {
     val accountIdentity = NextcloudDocumentIds.accountKey(expectedSession)
-    val lifetimeLease = lifetimeGuard.acquireReadBlocking(accountIdentity)
     val operationLease = operationGuard.acquireBlocking(accountIdentity)
+    val lifetimeLease = try {
+        lifetimeGuard.acquireReadBlocking(accountIdentity)
+    } catch (failure: Throwable) {
+        operationLease.close()
+        throw failure
+    }
     return try {
         checkAndroidDocumentProviderReadAccess(
             expectedSession,

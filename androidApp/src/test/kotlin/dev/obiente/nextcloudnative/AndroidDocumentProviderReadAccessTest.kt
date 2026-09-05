@@ -43,6 +43,48 @@ class AndroidDocumentProviderReadAccessTest {
     }
 
     @Test
+    fun removalOwnsDocumentMutationsBeforeWaitingForAnOpenDescriptor() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val openDescriptor = readLease(guard, lifetimeGuard)
+        val removalEntered = CompletableDeferred<Unit>()
+        val finishRemoval = CompletableDeferred<Unit>()
+        var currentSession: NextcloudSession? = original
+        val accountIdentity = NextcloudDocumentIds.accountKey(original)
+        val removal = async(Dispatchers.Default) {
+            withAndroidAccountRemovalLease(accountIdentity, guard, lifetimeGuard) {
+                currentSession = null
+                removalEntered.complete(Unit)
+                finishRemoval.await()
+            }
+        }
+        withTimeout(1_000L) {
+            while (guard.tryWithAccount(accountIdentity, unavailable = { false }) { true }) yield()
+        }
+
+        var mutationEntered = false
+        val mutation = async(Dispatchers.Default) {
+            runCatching {
+                acquireAndroidDocumentMutationAccountLease(original, { currentSession }, guard).use {
+                    mutationEntered = true
+                }
+            }
+        }
+        yield()
+        assertFalse(mutation.isCompleted)
+        assertFalse(mutationEntered)
+
+        openDescriptor.close()
+        removalEntered.await()
+        assertFalse(mutation.isCompleted)
+        finishRemoval.complete(Unit)
+        removal.await()
+
+        assertIs<FileNotFoundException>(mutation.await().exceptionOrNull())
+        assertFalse(mutationEntered)
+    }
+
+    @Test
     fun fileOpenWaitingForRemovalRejectsTheReplacementIncarnation() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()

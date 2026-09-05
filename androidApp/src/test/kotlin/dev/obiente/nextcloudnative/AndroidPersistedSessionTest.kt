@@ -942,6 +942,27 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun inactiveAccountRemovalNotifiesDocumentRootsAfterCredentialCommit() = runBlocking {
+        val events = mutableListOf<String>()
+
+        removeAndroidAccountCredentialData(
+            active = false,
+            removeQueuedUploads = { events += "remove-uploads" },
+            clearActiveAccount = { events += "clear-account" },
+            rollbackActiveRemoval = { events += "rollback-active" },
+            persistInactiveRemoval = { events += "persist-inactive" },
+            rollbackInactiveRemoval = { events += "rollback-inactive" },
+            onInactiveRemovalCommitted = { events += "notify-roots" },
+            completeCommittedCleanup = { events += "complete-cleanup" },
+        )
+
+        assertEquals(
+            listOf("persist-inactive", "notify-roots", "remove-uploads", "complete-cleanup"),
+            events,
+        )
+    }
+
+    @Test
     fun blockedAccountRemovalDoesNotDeleteCredentialsOrQueuedWork() = runBlocking {
         val events = mutableListOf<String>()
 
@@ -1114,13 +1135,14 @@ class AndroidPersistedSessionTest {
                 rollbackActiveRemoval = { events += "rollback-active" },
                 persistInactiveRemoval = { events += "persist-removal" },
                 rollbackInactiveRemoval = { events += "rollback" },
+                onInactiveRemovalCommitted = { events += "notify-roots" },
             )
         }
         cleanupEntered.await()
 
         removal.cancelAndJoin()
 
-        assertEquals(listOf("persist-removal", "remove-uploads"), events)
+        assertEquals(listOf("persist-removal", "notify-roots", "remove-uploads"), events)
     }
 
     private fun assertDiagnosticsExcludePrivateValues(diagnostics: List<SupportDiagnosticEventDraft>) {
