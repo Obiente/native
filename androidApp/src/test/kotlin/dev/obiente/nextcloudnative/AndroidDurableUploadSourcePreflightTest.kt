@@ -99,6 +99,38 @@ class AndroidDurableUploadSourcePreflightTest {
     }
 
     @Test
+    fun `transient capability metadata failure leaves queued capability retained`() = runBlocking {
+        var queued = true
+        var retained = true
+        var starts = 0
+
+        val result = processQueuedDurableUploadSource(
+            requireCapability = {
+                throw AndroidLocalUploadCapabilityReadException(
+                    "credential store unavailable",
+                    IOException("keystore restarting"),
+                )
+            },
+            openSource = { starts += 1 },
+            onCapabilityUnavailable = {
+                queued = false
+                retained = false
+                "failed"
+            },
+            onProviderUnavailable = { "retried" },
+            onReady = {
+                starts += 1
+                "started"
+            },
+        )
+
+        assertEquals("retried", result)
+        assertTrue(queued)
+        assertTrue(retained)
+        assertEquals(0, starts)
+    }
+
+    @Test
     fun `later provider success starts exactly once`() = runBlocking {
         var providerAttempts = 0
         var starts = 0

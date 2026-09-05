@@ -356,6 +356,8 @@ internal suspend fun <Result> processQueuedDurableUploadSource(
         openSource()
     } catch (cancelled: CancellationException) {
         throw cancelled
+    } catch (failure: AndroidLocalUploadCapabilityReadException) {
+        return onProviderUnavailable(failure)
     } catch (_: AndroidLocalUploadCapabilityUnavailableException) {
         return onCapabilityUnavailable()
     } catch (_: FileNotFoundException) {
