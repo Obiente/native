@@ -172,7 +172,7 @@ internal fun AppUpdateSettingsCard(
                 AppUpdateInstallResult.ConfirmationOpened ->
                     "The system installer opened the update confirmation."
                 AppUpdateInstallResult.Installed ->
-                    "The update was installed. Restart Nextcloud Native to use the new version."
+                    "The update was installed. Restart nati.ve to use the new version."
                 is AppUpdateInstallResult.Cancelled ->
                     if (install.canResume) {
                         "Download paused. You can resume it without starting over."
@@ -198,7 +198,7 @@ internal fun AppUpdateSettingsCard(
             title = { Text("Install app update?") },
             text = {
                 Text(
-                    "Nextcloud Native will download and verify version ${release.versionName}, then ask " +
+                    "nati.ve will download and verify version ${release.versionName}, then ask " +
                         "the system package service to install it. Restart the app after installation.",
                 )
             },
@@ -336,7 +336,7 @@ internal fun AppUpdateSettingsCard(
                 UpdatePreferenceRow(
                     label = "Check automatically",
                     description = if (support.channel == AppDistributionChannel.DirectDesktopPackage) {
-                        "Check the selected channel periodically while Nextcloud Native is running."
+                        "Check the selected channel periodically while nati.ve is running."
                     } else {
                         "Check the selected channel in the background without downloading packages."
                     },
@@ -527,7 +527,7 @@ internal fun AppUpdateSettingsCard(
                             color = NextcloudTheme.colors.success,
                         )
                         is AppUpdateInstallState.Installed -> Text(
-                            "The update was installed. Restart Nextcloud Native to use the new version.",
+                            "The update was installed. Restart nati.ve to use the new version.",
                             style = MaterialTheme.typography.bodySmall,
                             color = NextcloudTheme.colors.success,
                         )

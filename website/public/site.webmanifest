@@ -1,11 +1,11 @@
 {
-  "name": "Nextcloud Native",
-  "short_name": "NC Native",
+  "name": "nati.ve",
+  "short_name": "nati.ve",
   "description": "Open-source native Nextcloud alpha for Android, Linux, and Windows.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0D0F13",
-  "theme_color": "#0D0F13",
+  "background_color": "#101418",
+  "theme_color": "#101418",
   "icons": [
     {
       "src": "/icon-192.png",

@@ -227,7 +227,7 @@ watch([query, area, status, platform], () => {
       <div class="disclosure-body">
         <div class="section-tool">
           <p>Target milestones from the public repository.</p>
-          <a href="https://github.com/Obiente/nc-native/milestones" target="_blank" rel="noreferrer">
+          <a href="https://github.com/obiente/native/milestones" target="_blank" rel="noreferrer">
             All milestones
             <PhArrowSquareOut :size="14" weight="bold" aria-hidden="true" />
           </a>

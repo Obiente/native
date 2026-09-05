@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="512" viewBox="0 0 1536 512" role="img" aria-labelledby="title desc">
+  <title id="title">nati.ve</title>
+  <desc id="desc">White nati.ve wordmark and arch with a mint dot on charcoal. Fine mint and blue curves flow along the right side.</desc>
+  <rect id="background" width="1536" height="512" fill="#101418"/>
+  <g id="flow-lines" fill="none" stroke-linecap="round">
+    <path id="blue-flow" d="M990 536C968 360 1050 245 1228 206S1470 112 1560-18" stroke="#55A7FF" stroke-width="2"/>
+    <path id="mint-flow" d="M1022 536C1012 390 1090 301 1274 268S1480 213 1560 153" stroke="#52E0B4" stroke-width="2"/>
+    <path id="fine-flow" d="M1122 536C1144 432 1232 386 1370 360S1504 320 1560 282" stroke="#36C69C" stroke-width="1"/>
+  </g>
+  <circle id="flow-dot" cx="1326" cy="371" r="35" fill="#36C69C"/>
+  <g id="brand-symbol" transform="translate(92 143) scale(2.3)">
+    <path id="arch" fill="#F5F7F6" d="M8 96V44a36 36 0 0 1 72 0v52H58V44a14 14 0 0 0-28 0v52Z"/>
+    <circle id="signal-dot" cx="108" cy="84" r="12" fill="#36C69C"/>
+  </g>
+  <text id="wordmark" x="421" y="343" fill="#F5F7F6" font-family="Inter, Arial, sans-serif" font-size="136" font-weight="750" letter-spacing="-7">nati.ve</text>
+</svg>

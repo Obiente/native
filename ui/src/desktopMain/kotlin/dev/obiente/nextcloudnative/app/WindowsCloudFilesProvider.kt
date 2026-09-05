@@ -1933,7 +1933,7 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun placeholder(identity: WindowsCloudFileIdentity): WindowsCloudPlaceholder = WindowsCloudPlaceholder(
-        name = identity.path.substringAfterLast('/').ifBlank { "Nextcloud Native" },
+        name = identity.path.substringAfterLast('/').ifBlank { "nati.ve" },
         identity = WindowsCloudFileIdentityCodec.encode(identity),
         size = identity.size,
         directory = identity.directory,

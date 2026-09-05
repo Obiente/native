@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { Resvg } from "@resvg/resvg-js";
 import { PNG } from "pngjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -50,14 +51,15 @@ test("app exploration and downloads expose keyboard and native dialog semantics"
 
 test("both hero captures follow the resolved site theme", async () => {
   const home = await readFile(path.join(root, "src/components/NativeHome.vue"), "utf8");
-  assert.match(home, /const heroDesktopCapture = computed\(\(\) => captures.get\(props.theme === "light"\s*\? "homepage-overview-desktop-light" : "homepage-overview-desktop-dark"\)/);
+  assert.match(home, /const heroDesktopCapture = computed\(\(\) => captures.get\(props.theme === "light"\s*\? "homepage-files-desktop-light" : "homepage-files-desktop-dark"\)/);
   assert.match(home, /const mobileHomeCapture = computed\(\(\) => captures.get\(props.theme === "light"\s*\? "homepage-overview-mobile-light" : "homepage-overview-mobile-dark"\)/);
 });
 
 test("the website mark has transparency and the font is self-hosted with its license", async () => {
-  const mark = PNG.sync.read(await readFile(path.join(root, "public/native-mark.png")));
+  const svg = await readFile(path.join(root, "public/brand/native-mark.svg"), "utf8");
+  const mark = PNG.sync.read(new Resvg(svg).render().asPng());
   assert.equal(mark.width, 128);
-  assert.equal(mark.height, 128);
+  assert.equal(mark.height, 112);
   assert.equal(mark.data[3], 0);
   assert.ok(mark.data.some((value, index) => index % 4 === 3 && value === 255));
   const font = await readFile(path.join(root, "public/fonts/inter-variable.woff2"));

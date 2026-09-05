@@ -6,7 +6,7 @@ Priority: optional
 Architecture: APPLICATION_ARCH
 Provides: APPLICATION_PACKAGE
 Description: One native client for your complete Nextcloud account
- Nextcloud Native brings files, photos, media, collaboration, and installed
+ nati.ve brings files, photos, media, collaboration, and installed
  Nextcloud apps together in one coherent native desktop client.
 Depends: PACKAGE_DEFAULT_DEPENDENCIES PACKAGE_CUSTOM_DEPENDENCIES
 Installed-Size: APPLICATION_INSTALLED_SIZE

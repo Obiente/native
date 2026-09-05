@@ -109,18 +109,18 @@ internal fun FileSyncOperation.toTrayActivityPhase(): DesktopFileSyncTrayActivit
 }
 
 fun DesktopFileSyncTraySnapshot.tooltip(): String = when (phase) {
-    DesktopFileSyncTrayPhase.Syncing -> "Nextcloud Native - syncing"
-    DesktopFileSyncTrayPhase.Paused -> "Nextcloud Native - sync paused"
+    DesktopFileSyncTrayPhase.Syncing -> "nati.ve - syncing"
+    DesktopFileSyncTrayPhase.Paused -> "nati.ve - sync paused"
     DesktopFileSyncTrayPhase.NeedsAttention -> buildString {
-        append("Nextcloud Native - attention needed")
+        append("nati.ve - attention needed")
         if (conflictCount > 0) {
             append("; ").append(conflictCount).append(if (conflictCount == 1) " conflict" else " conflicts")
         }
         if (failedCount > 0) append("; ").append(failedCount).append(" failed")
     }
     DesktopFileSyncTrayPhase.Idle -> when {
-        pairCount == 0 -> "Nextcloud Native - no sync folders"
-        pendingCount > 0 -> "Nextcloud Native - $pendingCount pending"
-        else -> "Nextcloud Native - up to date"
+        pairCount == 0 -> "nati.ve - no sync folders"
+        pendingCount > 0 -> "nati.ve - $pendingCount pending"
+        else -> "nati.ve - up to date"
     }
 }

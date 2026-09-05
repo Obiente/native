@@ -78,7 +78,7 @@ internal class DesktopStartOnLoginController(
                 platform,
                 enabled = false,
                 configured = true,
-                message = "Nextcloud Native will not start when you sign in.",
+                message = "nati.ve will not start when you sign in.",
             )
         }
         check(File(launcher).isFile) { "The installed Nextcloud Native launcher could not be found." }
@@ -88,7 +88,7 @@ internal class DesktopStartOnLoginController(
             [Desktop Entry]
             Type=Application
             Version=1.0
-            Name=Nextcloud Native
+            Name=nati.ve
             Comment=Keep Nextcloud files and virtual files available
             TryExec=${desktopEntryStringValue(launcher)}
             Exec=${desktopEntryExecArgument(launcher)} --autostart
@@ -109,9 +109,9 @@ internal class DesktopStartOnLoginController(
             enabled = true,
             configured = true,
             message = if (supervised) {
-                "Nextcloud Native will start in your desktop session and recover after a crash."
+                "nati.ve will start in your desktop session and recover after a crash."
             } else {
-                "Nextcloud Native will start when you sign in."
+                "nati.ve will start when you sign in."
             },
         )
     }
@@ -126,7 +126,7 @@ internal class DesktopStartOnLoginController(
             service,
             """
                 [Unit]
-                Description=Nextcloud Native desktop sync
+                Description=nati.ve desktop sync
                 PartOf=graphical-session.target
                 After=graphical-session.target
 
@@ -178,7 +178,7 @@ internal class DesktopStartOnLoginController(
                         listOf("systemctl", "--user", "--no-block", "stop", LINUX_USER_SERVICE_NAME),
                     ) == 0
                 }.getOrDefault(false),
-            ) { "The Nextcloud Native background service could not be stopped." }
+            ) { "The nati.ve background service could not be stopped." }
         }
         Files.deleteIfExists(File(userDirectory, "graphical-session.target.wants/$LINUX_USER_SERVICE_NAME").toPath())
         Files.deleteIfExists(service.toPath())
@@ -235,9 +235,9 @@ internal class DesktopStartOnLoginController(
             enabled = enabled,
             configured = true,
             message = if (enabled) {
-                "Nextcloud Native will start when you sign in."
+                "nati.ve will start when you sign in."
             } else {
-                "Nextcloud Native will not start when you sign in."
+                "nati.ve will not start when you sign in."
             },
         )
     }

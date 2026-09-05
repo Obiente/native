@@ -119,7 +119,7 @@ internal class AndroidSupportBundleExporter(
         featureState: List<SupportDiagnosticFieldDraft>,
     ): SupportDiagnosticsExportResult {
         val host = activity ?: return SupportDiagnosticsExportResult.Unsupported(
-            "Open Nextcloud Native before exporting a diagnostic report.",
+            "Open nati.ve before exporting a diagnostic report.",
         )
         val archive = runCatchingPreservingCancellation {
             withContext(Dispatchers.IO) {

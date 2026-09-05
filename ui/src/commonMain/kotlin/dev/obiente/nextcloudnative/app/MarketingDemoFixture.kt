@@ -89,7 +89,7 @@ internal val marketingHomepageSession = NextcloudSession(
 
 internal val marketingHomepageTalkRoom = TalkRoom(
     token = "homepage-conversation",
-    displayName = "Nextcloud Native",
+    displayName = "nati.ve",
     lastMessage = "The updated brief is ready.",
     unreadMessages = 5,
 )

@@ -1,11 +1,11 @@
 # Platform strategy
 
-This document defines the platform boundary for Nextcloud Native. It separates
+This document defines the platform boundary for nati.ve. It separates
 portable product behavior from operating-system integration so shared code does
 not erase native security, lifecycle, accessibility, or filesystem semantics.
 
 **Last reviewed: 2026-09-01.** Implementation and release availability may
-have changed. The [GitHub Releases page](https://github.com/Obiente/nc-native/releases)
+have changed. The [GitHub Releases page](https://github.com/obiente/native/releases)
 is the source of truth for published artifacts and their limitations.
 
 The target architecture has three portable layers and thin platform products:

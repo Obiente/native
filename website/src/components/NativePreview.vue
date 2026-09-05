@@ -102,10 +102,10 @@ function focusAppSwitcher() {
 </script>
 
 <template>
-  <section id="product-tour" class="native-preview" aria-label="Interactive Nextcloud Native product tour">
+  <section id="product-tour" class="native-preview" aria-label="Interactive nati.ve product tour">
     <header class="preview-titlebar">
       <div>
-        <strong>Nextcloud Native</strong>
+        <strong>nati.ve</strong>
         <span>
           <PhCheckCircle :size="14" weight="duotone" aria-hidden="true" />
           Connected to Nextcloud

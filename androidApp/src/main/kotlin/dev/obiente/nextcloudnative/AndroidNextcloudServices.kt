@@ -1697,7 +1697,7 @@ internal class AndroidNextcloudServices(
             },
             providerState = VirtualFileProviderState.Active,
             providerActive = true,
-            providerLocation = "System Files / Nextcloud Native",
+            providerLocation = "System Files / nati.ve",
             pendingWritebackCount = pendingWritebacks,
         )
     }
@@ -1706,7 +1706,7 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): VirtualFileStorageActionResult = VirtualFileStorageActionResult.Completed(
-        "Nextcloud Native is already available in System Files.",
+        "nati.ve is already available in System Files.",
     )
 
     override suspend fun deactivateVirtualFileProvider(

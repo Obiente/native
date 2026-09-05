@@ -15,19 +15,19 @@ const scriptsDirectory = path.dirname(fileURLToPath(import.meta.url));
 test("IndexNow URLs stay on the canonical origin", () => {
   const sitemap = [
     "<urlset>",
-    "<url><loc>https://nc-native.obiente.dev/</loc></url>",
-    "<url><loc>https://nc-native.obiente.dev/guides/?a=1&amp;b=2</loc></url>",
+    "<url><loc>https://nati.ve/</loc></url>",
+    "<url><loc>https://nati.ve/guides/?a=1&amp;b=2</loc></url>",
     "</urlset>",
   ].join("");
-  assert.deepEqual(extractIndexNowUrls(sitemap, "https://nc-native.obiente.dev"), [
-    "https://nc-native.obiente.dev/",
-    "https://nc-native.obiente.dev/guides/?a=1&b=2",
+  assert.deepEqual(extractIndexNowUrls(sitemap, "https://nati.ve"), [
+    "https://nati.ve/",
+    "https://nati.ve/guides/?a=1&b=2",
   ]);
   assert.throws(
     () =>
       extractIndexNowUrls(
         "<urlset><url><loc>https://example.com/</loc></url></urlset>",
-        "https://nc-native.obiente.dev",
+        "https://nati.ve",
       ),
     /different origin/,
   );
@@ -42,19 +42,19 @@ test("IndexNow deployment artifacts bind the payload to the exact static build",
   await writeFile(path.join(distDirectory, "index.html"), "<!doctype html><title>Native</title>");
   await writeFile(path.join(distDirectory, `${key}.txt`), `${key}\n`);
   const sitemap =
-    "<urlset><url><loc>https://nc-native.obiente.dev/</loc></url></urlset>";
+    "<urlset><url><loc>https://nati.ve/</loc></url></urlset>";
 
   const first = await prepareIndexNowArtifacts({
     distDirectory,
     privateDirectory,
     sitemap,
-    siteUrl: "https://nc-native.obiente.dev",
+    siteUrl: "https://nati.ve",
   });
   const payload = JSON.parse(await readFile(path.join(privateDirectory, "payload.json"), "utf8"));
-  assert.equal(payload.host, "nc-native.obiente.dev");
+  assert.equal(payload.host, "nati.ve");
   assert.equal(payload.key, key);
-  assert.equal(payload.keyLocation, `https://nc-native.obiente.dev/${key}.txt`);
-  assert.deepEqual(payload.urlList, ["https://nc-native.obiente.dev/"]);
+  assert.equal(payload.keyLocation, `https://nati.ve/${key}.txt`);
+  assert.deepEqual(payload.urlList, ["https://nati.ve/"]);
   assert.equal(
     (await readFile(path.join(distDirectory, "indexnow-deployment.txt"), "utf8")).trim(),
     first.fingerprint,
@@ -65,7 +65,7 @@ test("IndexNow deployment artifacts bind the payload to the exact static build",
     distDirectory,
     privateDirectory,
     sitemap,
-    siteUrl: "https://nc-native.obiente.dev",
+    siteUrl: "https://nati.ve",
   });
   assert.notEqual(second.fingerprint, first.fingerprint);
 });

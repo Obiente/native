@@ -34,7 +34,7 @@ internal fun TrustedCertificateSettings(
             title = { Text("Stop trusting this certificate?") },
             text = {
                 Text(
-                    "Nextcloud Native will return to the operating system's normal certificate checks. " +
+                    "nati.ve will return to the operating system's normal certificate checks. " +
                         "The account may stop connecting until the server uses a trusted certificate.",
                 )
             },
@@ -60,7 +60,7 @@ internal fun TrustedCertificateSettings(
         ) {
             Text("Explicitly trusted server certificate", style = MaterialTheme.typography.titleSmall)
             Text(
-                "Nextcloud Native accepts only this SHA-256 fingerprint for the current server address.",
+                "nati.ve accepts only this SHA-256 fingerprint for the current server address.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(certificate.sha256Fingerprint, style = MaterialTheme.typography.bodySmall)

@@ -316,6 +316,9 @@ private fun restoreBackupAfterFailure(
     failure: Throwable,
 ) {
     try {
+        // A rejected initial rename leaves the original catalog in place.
+        // Never remove it unless a backup actually exists to restore.
+        if (!Files.exists(backupDirectory, LinkOption.NOFOLLOW_LINKS)) return
         if (Files.exists(captureDirectory, LinkOption.NOFOLLOW_LINKS)) {
             deleteDirectoryTree(captureDirectory)
         }

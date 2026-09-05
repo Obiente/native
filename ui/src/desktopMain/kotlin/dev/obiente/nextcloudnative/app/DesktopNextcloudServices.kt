@@ -355,7 +355,7 @@ internal fun requireValidDesktopVirtualFileCacheRoot(parent: Path) {
     require(
         Files.isDirectory(cacheRoot, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
             !Files.isSymbolicLink(cacheRoot),
-    ) { "The selected location contains an invalid Nextcloud Native cache folder." }
+    ) { "The selected location contains an invalid nati.ve cache folder." }
 }
 
 internal fun hasInvalidDesktopVirtualFileCacheRoot(parent: Path): Boolean {
@@ -1833,7 +1833,7 @@ class DesktopNextcloudServices(
             providerActive = active,
             providerLocation = when {
                 linux -> desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath
-                windows -> "Nextcloud Native in File Explorer"
+                windows -> "nati.ve in File Explorer"
                 else -> null
             },
             providerLocationConfiguration = if (linux) {
@@ -2226,7 +2226,7 @@ class DesktopNextcloudServices(
         withContext(Dispatchers.IO) {
             val selectedFile = invokeOnSwingEventThread {
                 val chooser = JFileChooser().apply {
-                    dialogTitle = "Choose where Nextcloud Native appears"
+                    dialogTitle = "Choose where nati.ve appears"
                     fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
                     isAcceptAllFileFilterUsed = false
                     initialParentPath?.let(::File)?.takeIf(File::isDirectory)?.let {
@@ -3068,7 +3068,7 @@ class DesktopNextcloudServices(
             failedCount = failed,
             message = when {
                 paused -> "Sync is paused"
-                conflicts + failed > 0 -> "Open Nextcloud Native to review sync problems"
+                conflicts + failed > 0 -> "Open nati.ve to review sync problems"
                 else -> null
             },
             accountLabel = loadSession()?.loginName,

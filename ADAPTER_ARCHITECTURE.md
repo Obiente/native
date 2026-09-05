@@ -6,7 +6,7 @@ for contributors changing transport, discovery, repositories, caching, sync,
 or native feature adapters.
 
 **Last reviewed: 2026-08-20.** Architecture rules may have changed. The
-[default-branch document](https://github.com/Obiente/nc-native/blob/main/ADAPTER_ARCHITECTURE.md)
+[default-branch document](https://github.com/obiente/native/blob/main/ADAPTER_ARCHITECTURE.md)
 is the source of truth for the maintained contract.
 
 Current product status belongs in [COMPATIBILITY.md](COMPATIBILITY.md). Planned

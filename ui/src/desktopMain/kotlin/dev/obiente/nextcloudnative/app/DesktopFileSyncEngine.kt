@@ -53,7 +53,7 @@ internal class DesktopFileSyncEngine(
                     pair.copy(workItems = work.conflicts).toCenterSummary(
                         localDisplayName = root?.displayName ?: "Selected folder",
                         localRootPath = root?.absolutePath,
-                        scheduleDescription = "Automatic sync while Nextcloud Native is running",
+                        scheduleDescription = "Automatic sync while nati.ve is running",
                         completedCount = account.completedCountsByPairId.getValue(pair.id),
                         readyCount = work.readyCount,
                         runningCount = work.runningCount,

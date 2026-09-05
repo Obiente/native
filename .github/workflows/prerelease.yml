@@ -593,7 +593,7 @@ jobs:
                 'The Windows MSI is currently unsigned. Windows may show a Microsoft Defender SmartScreen warning. After confirming that the download came from this release, choose `More info > Run anyway` to continue. Managed devices may block unsigned installers.'
               printf '\n'
               printf '%s\n' \
-                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo Obiente/nc-native` and compare the file with `SHA256SUMS`.'
+                'Verify build provenance with `gh attestation verify <downloaded-msi> --repo obiente/native` and compare the file with `SHA256SUMS`.'
             } >>"${RUNNER_TEMP}/release-notes.md"
           fi
 

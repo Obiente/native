@@ -123,12 +123,12 @@ class AppUpdateChannelsTest {
     @Test
     fun onlyAvailableChannelsResolveCanonicalMetadataPointers() {
         assertEquals(
-            "https://github.com/Obiente/nc-native/releases/download/" +
+            "https://github.com/obiente/native/releases/download/" +
                 "channel-prerelease/update-manifest.json",
             AndroidUpdateChannel.Alpha.manifestUrl(),
         )
         assertEquals(
-            "https://github.com/Obiente/nc-native/releases/download/" +
+            "https://github.com/obiente/native/releases/download/" +
                 "channel-nightly/update-manifest.json",
             AndroidUpdateChannel.Nightly.manifestUrl(),
         )
@@ -138,7 +138,7 @@ class AppUpdateChannelsTest {
             }
             assertFalse(
                 isCanonicalAndroidUpdateManifestUrl(
-                    "https://github.com/Obiente/nc-native/releases/download/" +
+                    "https://github.com/obiente/native/releases/download/" +
                         "${channel.pointerTag}/update-manifest.json",
                     channel,
                 ),
@@ -198,7 +198,7 @@ class AppUpdateChannelsTest {
             validateAndroidDirectRelease(
                 nightly.copy(
                     apkUrl =
-                        "https://github.com/Obiente/nc-native/releases/download/" +
+                        "https://github.com/obiente/native/releases/download/" +
                             "nightly-20260726-0145-run124-abcdef12/" +
                             "nextcloud-native-$nightlyTag-android.apk",
                 ),
@@ -240,11 +240,11 @@ class AppUpdateChannelsTest {
         packageName = "dev.obiente.nextcloudnative",
         minimumAndroidSdk = 26,
         apkUrl =
-            "https://github.com/Obiente/nc-native/releases/download/$tag/" +
+            "https://github.com/obiente/native/releases/download/$tag/" +
                 "nextcloud-native-$versionName-android.apk",
         apkSize = 123_456,
         apkSha256 = "a".repeat(64),
         signingCertificateSha256Digests = listOf("b".repeat(64)),
-        releaseNotesUrl = "https://github.com/Obiente/nc-native/releases/tag/$tag",
+        releaseNotesUrl = "https://github.com/obiente/native/releases/tag/$tag",
     )
 }

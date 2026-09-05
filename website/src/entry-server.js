@@ -58,13 +58,13 @@ export async function render(pathname) {
   const softwareData = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    name: "Nextcloud Native",
+    name: "nati.ve",
     applicationCategory: "UtilitiesApplication",
     operatingSystem: "Android, Linux, Windows",
     description:
       "An open-source native alpha client for Nextcloud on Android, Linux, and Windows, with verified Files, media, Calendar, app, offline, and sync foundations.",
     url: siteUrl,
-    codeRepository: "https://github.com/Obiente/nc-native",
+    codeRepository: "https://github.com/obiente/native",
     license: "https://www.gnu.org/licenses/agpl-3.0.html",
     author: {
       "@type": "Organization",
@@ -84,7 +84,7 @@ export async function render(pathname) {
       priceCurrency: "EUR",
     },
     inLanguage: "en",
-    downloadUrl: "https://github.com/Obiente/nc-native/releases",
+    downloadUrl: "https://github.com/obiente/native/releases",
     softwareHelp: `${siteUrl}/guides/`,
     featureList: [
       "Nextcloud Login Flow on Android, Linux, and Windows with native credential storage",
@@ -103,11 +103,11 @@ export async function render(pathname) {
     {
       "@context": "https://schema.org",
       "@type": "WebSite",
-      name: "Nextcloud Native",
+      name: "nati.ve",
       url: siteUrl,
       publisher: { "@type": "Organization", name: "Obiente", url: organizationUrl },
       image: `${siteUrl}/icon-512.png`,
-      sameAs: ["https://github.com/Obiente/nc-native"],
+      sameAs: ["https://github.com/obiente/native"],
       inLanguage: "en",
     },
   ] : [];
@@ -121,7 +121,7 @@ export async function render(pathname) {
         {
           "@type": "ListItem",
           position: 1,
-          name: "Nextcloud Native",
+          name: "nati.ve",
           item: siteUrl,
         },
         ...(metadata.published
@@ -150,7 +150,7 @@ export async function render(pathname) {
         {
           "@type": "ListItem",
           position: guide ? 4 : metadata.published || guideHub ? 3 : 2,
-          name: metadata.title.replace(" | Nextcloud Native", ""),
+          name: metadata.title.replace(" | nati.ve", ""),
           item: metadata.canonical,
         },
       ],
@@ -173,7 +173,7 @@ export async function render(pathname) {
         audienceType: `${currentGuide.platform} ${currentGuide.device} users`,
       },
       about: [
-        { "@type": "SoftwareApplication", name: "Nextcloud Native", url: siteUrl },
+        { "@type": "SoftwareApplication", name: "nati.ve", url: siteUrl },
         { "@type": "Thing", name: currentGuide.platform },
       ],
       timeRequired: `PT${currentGuide.durationMinutes}M`,
@@ -204,7 +204,7 @@ export async function render(pathname) {
     structuredData.push({
       "@context": "https://schema.org",
       "@type": "Article",
-      headline: metadata.title.replace(" | Nextcloud Native", ""),
+      headline: metadata.title.replace(" | nati.ve", ""),
       description: metadata.description,
       datePublished: metadata.published,
       dateModified: metadata.modified,
@@ -222,7 +222,7 @@ export async function render(pathname) {
       isAccessibleForFree: true,
       inLanguage: "en",
       about: [
-        { "@type": "SoftwareApplication", name: "Nextcloud Native", url: siteUrl },
+        { "@type": "SoftwareApplication", name: "nati.ve", url: siteUrl },
         { "@type": "Thing", name: "Nextcloud" },
       ],
     });
@@ -233,7 +233,7 @@ export async function render(pathname) {
     sharingHeadFor(metadata),
     `<meta name="robots" content="${metadata.robots ?? "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"}">`,
     `<meta name="author" content="Obiente">`,
-    `<link rel="alternate" type="application/rss+xml" title="Nextcloud Native project news" href="${siteUrl}/news.xml">`,
+    `<link rel="alternate" type="application/rss+xml" title="nati.ve project news" href="${siteUrl}/news.xml">`,
     `<script type="application/ld+json">${safeJson(structuredData)}</script>`,
   ].join("\n    ");
 

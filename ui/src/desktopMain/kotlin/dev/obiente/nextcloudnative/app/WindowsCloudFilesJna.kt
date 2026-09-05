@@ -104,7 +104,7 @@ internal class JnaWindowsCloudFilesApi(
 
     init {
         require(isWindowsDesktop()) { "CldApi.dll is only available on Windows." }
-        require(Native.POINTER_SIZE == 8) { "Nextcloud Native Cloud Files requires 64-bit Windows." }
+        require(Native.POINTER_SIZE == 8) { "nati.ve Cloud Files requires 64-bit Windows." }
         cldApi = Native.load("CldApi", CldApi::class.java)
         kernelFiles = Native.load("kernel32", KernelFileApi::class.java)
     }

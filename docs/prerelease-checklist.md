@@ -4,7 +4,7 @@
 and published availability may have changed. Check the
 [prerelease policy](releases.md), the
 [Publish prerelease workflow](../.github/workflows/prerelease.yml), and the
-[latest releases](https://github.com/Obiente/nc-native/releases) before using
+[latest releases](https://github.com/obiente/native/releases) before using
 this checklist.
 
 Use this checklist before approving the protected `prerelease` environment.

@@ -125,16 +125,11 @@ private fun DesktopNavigationHeader(expanded: Boolean, canExpand: Boolean, onTog
         horizontalArrangement = if (expanded) Arrangement.spacedBy(8.dp) else Arrangement.Center,
     ) {
         if (expanded) {
-            Icon(
-                NextcloudIcons.Cloud,
-                contentDescription = null,
-                tint = NextcloudTheme.colors.appIcon,
-                modifier = Modifier.size(26.dp),
-            )
+            NativeBrandMark(modifier = Modifier.size(32.dp))
             Text(
-                "Nextcloud Native",
+                "nati.ve",
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -151,12 +146,7 @@ private fun DesktopNavigationHeader(expanded: Boolean, canExpand: Boolean, onTog
                 }
             }
         } else {
-            Icon(
-                NextcloudIcons.Cloud,
-                contentDescription = "Nextcloud Native",
-                tint = NextcloudTheme.colors.appIcon,
-                modifier = Modifier.padding(8.dp).size(26.dp),
-            )
+            NativeBrandMark(modifier = Modifier.padding(8.dp).size(32.dp), contentDescription = "nati.ve")
         }
     }
 }

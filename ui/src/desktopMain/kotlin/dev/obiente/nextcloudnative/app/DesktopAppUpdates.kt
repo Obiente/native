@@ -580,7 +580,7 @@ internal fun executeDesktopUpdateRequest(
     return try {
         check(
             request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/Obiente/nc-native/releases/download/"),
+                request.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) { "Unexpected redirect while loading update content." }
         val location = requireNotNull(initialResponse.header("Location"))
         val redirectedUrl = requireNotNull(request.url.resolve(location))
@@ -681,9 +681,9 @@ internal fun startWindowsInstallerAfterAppExit(
     check(Files.isRegularFile(powershell.toPath(), LinkOption.NOFOLLOW_LINKS)) {
         "The trusted Windows PowerShell executable could not be found."
     }
-    val launcher = requireNotNull(launcherFile) { "The installed Nextcloud Native launcher is unavailable." }
+    val launcher = requireNotNull(launcherFile) { "The installed nati.ve launcher is unavailable." }
     check(Files.isRegularFile(launcher.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-        "The installed Nextcloud Native launcher could not be found."
+        "The installed nati.ve launcher could not be found."
     }
     val updateGate = updateGateFile.toPath().toAbsolutePath().normalize()
     val updateGateDirectory = requireNotNull(updateGate.parent)

@@ -220,7 +220,7 @@ class JvmSupportIntake(
             val submission = PendingSubmission(
                 archive = null,
                 metadata = SupportIntakeMetadata(
-                    title = "Nextcloud Native diagnostic report",
+                    title = "nati.ve diagnostic report",
                     description = context.sanitizedReproductionSteps.toSupportIntakeDescription(),
                     release = environment.safeForReport().let { safe ->
                         SupportIntakeRelease(

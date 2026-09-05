@@ -28,7 +28,7 @@ Requires: PACKAGE_DEFAULT_DEPENDENCIES PACKAGE_CUSTOM_DEPENDENCIES
 %define default_filesystem / /opt /usr /usr/bin /usr/lib /usr/local /usr/local/bin /usr/local/lib
 
 %description
-Nextcloud Native brings files, photos, media, collaboration, and installed
+nati.ve brings files, photos, media, collaboration, and installed
 Nextcloud apps together in one coherent native desktop client.
 
 %global __os_install_post %{nil}

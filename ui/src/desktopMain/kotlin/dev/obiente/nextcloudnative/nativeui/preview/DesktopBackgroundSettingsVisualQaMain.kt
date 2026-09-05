@@ -30,7 +30,7 @@ fun main() = application {
     }
     Window(
         onCloseRequest = ::exitApplication,
-        title = "Nextcloud Native desktop settings QA",
+        title = "nati.ve desktop settings QA",
         state = rememberWindowState(width = 760.dp, height = 620.dp),
     ) {
         NextcloudNativeTheme(darkTheme = false) {
@@ -38,7 +38,7 @@ fun main() = application {
                 Column(modifier = Modifier.padding(32.dp)) {
                     Text("Desktop app", style = MaterialTheme.typography.headlineMedium)
                     Text(
-                        "Choose how Nextcloud Native behaves outside its main window.",
+                        "Choose how nati.ve behaves outside its main window.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp),
@@ -53,7 +53,7 @@ fun main() = application {
                         item {
                             DesktopStartOnLoginSettingsCard(
                                 enabled = true,
-                                message = "Nextcloud Native will start in your desktop session and recover after a crash.",
+                                message = "nati.ve will start in your desktop session and recover after a crash.",
                                 onEnabledChanged = {},
                             )
                         }

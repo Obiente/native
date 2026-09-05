@@ -97,7 +97,7 @@ private fun Media3VideoPlayer(
             .followSslRedirects(false)
             .build()
         val sourceFactory = OkHttpDataSource.Factory(client)
-            .setUserAgent("Nextcloud Native")
+            .setUserAgent("nati.ve")
             .setDefaultRequestProperties(
                 source.authenticatedRequestProperties("Basic $authorization"),
             )

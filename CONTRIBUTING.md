@@ -1,6 +1,6 @@
-# Contributing to Nextcloud Native
+# Contributing to nati.ve
 
-Nextcloud Native is an independent Obiente project. Contributions are welcome,
+nati.ve is an independent Obiente project. Contributions are welcome,
 especially protocol research, reusable semantic components, accessibility
 improvements, compatibility fixtures, and tests against different Nextcloud
 versions.
@@ -9,7 +9,7 @@ versions.
 contribution requirements may have changed. Check [`gradle.properties`](gradle.properties),
 the [version catalog](gradle/libs.versions.toml), the
 [Build and test workflow](.github/workflows/ci.yml), [`AGENTS.md`](AGENTS.md),
-and the [latest releases](https://github.com/Obiente/nc-native/releases) before
+and the [latest releases](https://github.com/obiente/native/releases) before
 starting work.
 
 ## Before you start

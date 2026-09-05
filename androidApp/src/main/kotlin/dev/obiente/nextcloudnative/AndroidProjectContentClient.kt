@@ -114,7 +114,7 @@ internal class AndroidProjectContentClient(
             canCheckDirectUpdates = directUpdatesEnabled,
             explanation = when (channel) {
                 AppDistributionChannel.DirectApk if directUpdatesEnabled ->
-                    "This APK was installed directly. Updates are checked securely by Nextcloud Native."
+                    "This APK was installed directly. Updates are checked securely by nati.ve."
                 AppDistributionChannel.DirectApk ->
                     "This build does not include direct APK installation. Use its distribution channel for updates."
                 AppDistributionChannel.DirectDesktopPackage ->
@@ -321,7 +321,7 @@ internal class AndroidProjectContentClient(
             )
         if (!appContext.packageManager.canRequestPackageInstalls()) {
             val message =
-                "Allow installs from Nextcloud Native, then return and confirm the update again."
+                "Allow installs from nati.ve, then return and confirm the update again."
             mutableUpdateState.value = AppUpdateInstallState.PermissionRequired(
                 versionName = release.versionName,
                 versionCode = release.versionCode,
@@ -931,7 +931,7 @@ internal fun executeWithTrustedGitHubReleaseRedirect(
     return try {
         check(
             request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/Obiente/nc-native/releases/download/"),
+                request.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) {
             "Unexpected redirect while loading public project content."
         }

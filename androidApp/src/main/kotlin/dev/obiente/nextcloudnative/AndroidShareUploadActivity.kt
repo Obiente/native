@@ -177,7 +177,7 @@ class AndroidShareUploadActivity : ComponentActivity() {
             var activeAccountId: String? = null
             try {
                 val activeSession = services.loadSession()
-                    ?: error("Sign in to Nextcloud Native before sharing files to it.")
+                    ?: error("Sign in to nati.ve before sharing files to it.")
                 activeAccountId = NextcloudDocumentIds.accountKey(activeSession)
                 val staged = withContext(Dispatchers.IO) {
                     val restored = validatedRequestId?.let { requestId ->

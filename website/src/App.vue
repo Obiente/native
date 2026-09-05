@@ -66,7 +66,7 @@ const props = defineProps({
   },
 });
 
-const githubUrl = "https://github.com/Obiente/nc-native";
+const githubUrl = "https://github.com/obiente/native";
 const currentGithubRepository = ref(githubRepository);
 const githubStarLabel = computed(() => `${new Intl.NumberFormat("en", {
   notation: "compact",
@@ -578,7 +578,7 @@ const frequentlyAsked = [
   {
     question: "Is this a web wrapper?",
     answer:
-      "No. Nextcloud Native consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
+      "No. nati.ve consumes server APIs and renders native Compose interfaces. Web content is reserved for formats that genuinely require a document renderer, not app navigation.",
   },
   {
     question: "Can I keep normal folders and an Obsidian vault in sync?",
@@ -603,7 +603,7 @@ const frequentlyAsked = [
   {
     question: "Is this an official Nextcloud project?",
     answer:
-      "No. Nextcloud Native is an independent Obiente project, licensed under AGPL-3.0-or-later. It is not affiliated with, sponsored by or endorsed by Nextcloud GmbH.",
+      "No. nati.ve is an independent Obiente project, licensed under AGPL-3.0-or-later. It is not affiliated with, sponsored by or endorsed by Nextcloud GmbH.",
   },
 ];
 const downloadDialog = ref(null);
@@ -638,9 +638,9 @@ onMounted(() => {
 
     <div class="site-header-frame" :class="{ 'is-raised': headerRaised }">
     <header ref="siteHeader" class="site-header" @keydown.esc="onHeaderEscape">
-      <a class="brand" href="/" aria-label="Nextcloud Native home">
-        <span class="native-brand-mark"><img src="/native-mark.png" alt="" width="38" height="38" /></span>
-        <span class="brand-copy"><strong>Nextcloud Native</strong><small>by Obiente</small></span>
+      <a class="brand" href="/" aria-label="nati.ve home">
+        <span class="native-brand-mark"><img :src="resolvedTheme === 'light' ? '/brand/native-mark.svg' : '/brand/native-mark-dark.svg'" alt="" width="38" height="38" /></span>
+        <span class="brand-copy"><strong>nati.ve</strong></span>
       </a>
 
       <nav class="desktop-nav" aria-label="Primary navigation">
@@ -803,7 +803,7 @@ onMounted(() => {
         </a>
       </div>
       <p class="native-download-note">Alpha software: keep another copy of important data. macOS is a packaging preview without sign-in; iOS is planned.</p>
-      <a class="native-text-link" href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">Release notes and checksums <ArrowRight :size="17" aria-hidden="true" /></a>
+      <a class="native-text-link" href="https://github.com/obiente/native/releases" target="_blank" rel="noreferrer">Release notes and checksums <ArrowRight :size="17" aria-hidden="true" /></a>
     </dialog>
 
     <main id="main">
@@ -833,7 +833,7 @@ onMounted(() => {
             </div>
             <p class="download-caveat">
               Alpha software: keep another copy of important data. Check the
-              <a href="https://github.com/Obiente/nc-native/releases" target="_blank" rel="noreferrer">release notes and checksums</a>
+              <a href="https://github.com/obiente/native/releases" target="_blank" rel="noreferrer">release notes and checksums</a>
               before installing.
             </p>
           </section>
@@ -843,7 +843,7 @@ onMounted(() => {
               <p class="eyebrow">Everyday work</p>
               <h2>Open a file. Review a photo. Read a message.</h2>
               <p>
-                Nextcloud Native uses verified server APIs and the platform
+                nati.ve uses verified server APIs and the platform
                 integrations implemented for Android, Linux, and Windows. Capability
                 checks keep unavailable actions out of otherwise useful workspaces.
               </p>
@@ -864,7 +864,7 @@ onMounted(() => {
               <p class="eyebrow">How it works</p>
               <h2>Native is a behavior, not a coat of paint.</h2>
               <p>
-                Nextcloud Native reads verified capabilities and versioned contracts,
+                nati.ve reads verified capabilities and versioned contracts,
                 understands the work they represent, and chooses a useful native
                 interface. It never invents an endpoint or passes an embedded website
                 off as an app.
@@ -905,7 +905,7 @@ onMounted(() => {
                 <img
                   class="platform-story-desktop"
                   :src="platformDesktopCapture.websitePath"
-                  alt="Nextcloud Native Files on desktop with folders, photos, documents, and offline availability"
+                  alt="nati.ve Files on desktop with folders, photos, documents, and offline availability"
                   :width="platformDesktopCapture.width"
                   :height="platformDesktopCapture.height"
                   loading="lazy"
@@ -913,7 +913,7 @@ onMounted(() => {
                 <img
                   class="platform-story-mobile"
                   :src="mobileHomeCapture.websitePath"
-                  alt="Nextcloud Native home on mobile"
+                  alt="nati.ve home on mobile"
                   :width="mobileHomeCapture.width"
                   :height="mobileHomeCapture.height"
                   loading="lazy"
@@ -1064,7 +1064,7 @@ onMounted(() => {
                 or bring a platform integration you care about.
               </p>
             </div>
-            <nav class="contribute-links" aria-label="Contribute to Nextcloud Native">
+            <nav class="contribute-links" aria-label="Contribute to nati.ve">
               <a href="/contributing/">Contribution guide <ArrowRight :size="17" weight="bold" aria-hidden="true" /></a>
               <a :href="githubUrl" target="_blank" rel="noreferrer">Browse the source <GithubLogo :size="17" weight="fill" aria-hidden="true" /></a>
               <a :href="`${githubUrl}/issues`" target="_blank" rel="noreferrer">Open issues <ArrowRight :size="17" weight="bold" aria-hidden="true" /></a>
@@ -1077,7 +1077,7 @@ onMounted(() => {
         <header class="guides-index-heading">
           <div>
             <p class="eyebrow">
-              {{ currentGuidePlatformHub ? `${currentGuidePlatformHub.device} guides` : "Nextcloud Native guides" }}
+              {{ currentGuidePlatformHub ? `${currentGuidePlatformHub.device} guides` : "nati.ve guides" }}
             </p>
             <h1>{{ currentGuidePlatformHub?.title ?? "Choose your platform, then finish a workflow." }}</h1>
             <p>
@@ -1512,7 +1512,7 @@ onMounted(() => {
 
       <section v-else-if="isNewsIndex" class="news-index section-width">
         <header class="doc-heading" data-reveal>
-          <p class="eyebrow">Nextcloud Native news</p>
+          <p class="eyebrow">nati.ve news</p>
           <h1>What your Nextcloud can do in one native client.</h1>
           <p>Dated product and design notes explain decisions made while building the client. Use current guides, compatibility notes, and release notes for support decisions.</p>
           <div class="page-record">
@@ -1612,7 +1612,7 @@ onMounted(() => {
             </details>
           </template>
           <template v-else>
-            <a class="doc-back" href="/#docs">Nextcloud Native documentation</a>
+            <a class="doc-back" href="/#docs">nati.ve documentation</a>
             <header class="doc-heading" data-reveal>
               <p class="eyebrow">Repository documentation</p>
               <h1>{{ currentDoc.title }}</h1>
@@ -1642,8 +1642,8 @@ onMounted(() => {
     <footer class="site-footer section-width">
       <div class="footer-identity">
         <a class="brand footer-brand" href="/">
-          <span class="native-brand-mark"><img src="/native-mark.png" alt="" width="38" height="38" /></span>
-          <span class="brand-copy"><strong>Nextcloud Native</strong><small>by Obiente</small></span>
+          <span class="native-brand-mark"><img :src="resolvedTheme === 'light' ? '/brand/native-mark.svg' : '/brand/native-mark-dark.svg'" alt="" width="38" height="38" /></span>
+          <span class="brand-copy"><strong>nati.ve</strong></span>
         </a>
         <p>Your Nextcloud, in a native workspace.</p>
       </div>

@@ -6,21 +6,21 @@
   src: url("/fonts/inter-variable.woff2") format("woff2");
 }
 
-/* Website identity. App captures keep the colors of the shipping native UI. */
+/* nati.ve: quiet neutral surfaces, mint actions and blue file accents. */
 :root {
-  --native-accent: #c4a9ff;
-  --native-button: #bda0ff;
-  --native-button-text: #24123f;
+  --native-accent: #52e0b4;
+  --native-button: #52e0b4;
+  --native-button-text: #073d31;
 }
 
 :root[data-theme="light"] {
-  --background: #faf9fb;
-  --text: #221d32;
-  --muted: #676176;
-  --outline: #e2dfe8;
-  --native-accent: #6240c7;
-  --native-button: #603bc6;
-  --native-button-text: #ffffff;
+  --background: #f8fafb;
+  --text: #101820;
+  --muted: #596775;
+  --outline: #e1e7ec;
+  --native-accent: #087d62;
+  --native-button: #30c59b;
+  --native-button-text: #073d31;
 }
 
 .site-header {
@@ -32,8 +32,8 @@
 }
 .native-brand-mark { flex: 0 0 42px; width: 42px; height: 42px; }
 .native-brand-mark img { width: 100%; height: 100%; object-fit: contain; }
-:root:not([data-theme="light"]) .native-brand-mark img { filter: brightness(1.8); }
-.brand-copy strong { font-size: 18px; font-weight: 680; letter-spacing: -.04em; }
+:root:not([data-theme="light"]) .native-brand-mark img { border-radius: 8px; }
+.brand-copy strong { font-size: 22px; font-weight: 680; letter-spacing: -.04em; }
 .brand-copy small { margin-top: 4px; font-size: 11px; font-weight: 400; }
 .desktop-nav { gap: 36px; }
 .desktop-nav > a, .project-menu > summary { font-size: 14px; font-weight: 550; color: var(--text); }
@@ -73,27 +73,27 @@
 .project-menu nav a:hover { background: var(--surface-low); color: var(--native-accent); }
 
 .native-home { padding-top: 0; }
-.native-hero { padding-top: clamp(40px, 5vw, 72px); }
-.native-hero-copy { margin-inline: auto; text-align: center; }
+.native-hero { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.4fr); align-items: center; gap: 48px; padding-block: clamp(56px, 7vw, 100px); }
+.native-hero-copy { margin: 0; text-align: left; }
 .native-eyebrow { margin: 0 0 20px; font-size: 16px; font-weight: 500; line-height: 1.4; color: var(--native-accent); }
 .native-hero h1 {
-  margin: 0; max-width: none; font-size: clamp(40px, 5.65vw, 80px); font-weight: 640;
+  margin: 0; max-width: none; font-size: clamp(44px, 5.3vw, 76px); font-weight: 640;
   line-height: 1.035; letter-spacing: -.057em; text-wrap: initial;
 }
-.native-lede { margin: 24px auto 0; max-width: 650px; color: var(--muted); font-size: clamp(18px, 2vw, 24px); line-height: 1.5; }
-.native-hero-actions { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 46px; margin-top: 32px; font-size: 15px; }
+.native-lede { margin: 24px 0 0; max-width: 650px; color: var(--muted); font-size: clamp(18px, 2vw, 24px); line-height: 1.5; }
+.native-hero-actions { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 24px; margin-top: 32px; font-size: 15px; }
 .native-alpha { color: var(--muted); margin: 24px 0 0; font-size: 14px; line-height: 1.6; }
-.native-hero-visual { position: relative; margin: 34px 14px 0; padding: 0 14% 5.2% 0; }
+.native-hero-visual { position: relative; margin: 0; padding: 0; min-width: 0; }
 .native-hero-visual .native-hero-desktop {
   position: static; display: block; width: 100%; height: auto; max-width: none; aspect-ratio: auto;
-  object-fit: contain; border: 1px solid #302b3b; border-radius: 17px;
+  object-fit: contain; border: 1px solid var(--outline); border-radius: 12px;
   box-shadow: 0 24px 40px #23133520, 0 5px 10px #23133512; transform: none;
 }
 .native-hero-visual .native-hero-mobile {
   position: absolute; inset: auto 0 0 auto; display: block; width: 20%; height: auto;
   max-width: none; aspect-ratio: auto; object-fit: contain; transform: none;
   border: 2px solid #d8d2e2; border-radius: 27px;
-  box-shadow: 0 20px 34px #23133522; background: #faf9fb;
+  box-shadow: 0 20px 34px #23133522; background: #f8fafb;
 }
 .native-platforms { margin-top: 60px; border-block: 1px solid var(--outline); }
 .native-platform-row { display: flex; align-items: center; justify-content: center; gap: clamp(30px, 6vw, 90px); min-height: 106px; }
@@ -172,7 +172,7 @@
   .native-alpha { margin-top: 20px; }
   .native-hero-visual { margin-top: 28px; }
   .native-home-content .guide-home-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .brand-copy strong { font-size: 16px; }
+  .brand-copy strong { font-size: 20px; }
   .desktop-nav { gap: 26px; }
   .native-platform-row { gap: 38px; min-height: 94px; }
   .native-platform-preview { padding-left: 32px; }
@@ -209,9 +209,9 @@
   .site-header { min-height: 80px; gap: 10px; }
   .brand { gap: 7px; }
   .native-brand-mark { flex-basis: 32px; width: 32px; height: 32px; }
-  .brand-copy strong { font-size: 14px; letter-spacing: -.04em; }
+  .brand-copy strong { font-size: 18px; letter-spacing: -.04em; }
   .site-header .brand-copy { max-width: none; }
-  .site-header .brand-copy strong { max-width: none; overflow: visible; text-overflow: clip; font-size: 12px; }
+  .site-header .brand-copy strong { max-width: none; overflow: visible; text-overflow: clip; font-size: 18px; }
   .site-header .brand-copy small { display: block; }
   .brand-copy small { font-size: 10px; margin-top: 3px; }
   .header-actions { gap: 2px; }
@@ -256,4 +256,17 @@
 }
 @media (max-width: 380px) {
   .header-download { display: none; }
+}
+
+.native-hero h1 span { color: var(--native-accent); }
+@media (max-width: 960px) {
+  .native-hero { grid-template-columns: 1fr; gap: 32px; }
+  .native-hero-copy { max-width: 620px; }
+  .native-hero-visual { margin: 0; padding: 0; }
+}
+
+.native-hero-visual .native-hero-mobile { display: none; }
+@media (max-width: 640px) {
+  .native-hero-visual .native-hero-desktop { display: none; }
+  .native-hero-visual .native-hero-mobile { display: block; position: static; width: 100%; max-width: 360px; margin: auto; border: 1px solid var(--outline); border-radius: 12px; }
 }

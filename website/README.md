@@ -1,4 +1,4 @@
-# Nextcloud Native website
+# nati.ve website
 
 The project homepage is a provider-neutral Vue site. Its production build
 prerenders the homepage and every selected repository Markdown document to
@@ -161,7 +161,7 @@ the same image. In production, place the container behind the Obiente reverse
 proxy and terminate TLS there.
 
 The container exposes `/api/github-repository` as a cached, same-origin proxy
-for the public `Obiente/nc-native` repository metadata. The website uses it to
+for the public `obiente/native` repository metadata. The website uses it to
 refresh the displayed star count without a deployment. Nginx refreshes the
 upstream response at most once every ten minutes and can serve its last cached
 response during temporary GitHub failures. The prerendered count remains the
@@ -178,7 +178,7 @@ publish the protocol verification key at the site root. The production Obiente
 Cloud deployment must set `INDEXNOW_PRODUCTION=1`; the submitter is fail-closed
 when that variable is absent or has any other value. On container startup, a
 background deployment hook waits until the exact static-build fingerprint is
-visible at `https://nc-native.obiente.dev` before submitting that build's
+visible at `https://nati.ve` before submitting that build's
 crawlable URLs to the global IndexNow endpoint. HTTP 200 and the initial
 key-verification HTTP 202 response are recorded as successful for that
 container, so an ordinary restart does not notify the same build again.
@@ -188,6 +188,6 @@ containers leave it unset and exit before contacting IndexNow, even when their
 static output happens to match the production website.
 
 The canonical hostname is currently configured as
-`https://nc-native.obiente.dev` in the prerender and crawler metadata. Change
+`https://nati.ve` in the prerender and crawler metadata. Change
 that value in `src/entry-server.js`, `scripts/prerender.mjs`,
 `public/robots.txt`, and `index.html` together if the final hostname differs.

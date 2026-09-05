@@ -16,13 +16,13 @@ prerequisites: A connected Linux or Windows account with more than one installed
 # Move between Nextcloud apps without losing your place
 
 **Last reviewed: 2026-08-30.** The software and published packages may have
-changed since this review. Check the [current releases](https://github.com/Obiente/nc-native/releases)
+changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
 Navigation instructions and screenshots reflect the reviewed source implementation;
 published packages may differ.
 
-Nextcloud Native is designed as one workspace for the apps it can currently discover and render from a connected account. On Linux and Windows, the desktop sidebar stays useful inside apps, and each app remembers supported route and saveable interface state so comparing work across tools does not require starting over. macOS authenticated use is not supported yet.
+nati.ve is designed as one workspace for the apps it can currently discover and render from a connected account. On Linux and Windows, the desktop sidebar stays useful inside apps, and each app remembers supported route and saveable interface state so comparing work across tools does not require starting over. macOS authenticated use is not supported yet.
 
 ## 1. Discover the complete app catalog
 
@@ -35,7 +35,7 @@ Open a tool to add it to recent work. Everyday apps such as Files, Photos, Talk,
 
 ## 2. Switch directly from an active workspace
 
-@capture-alt: Photos folder workspace nested inside Nextcloud Native with Photos selected and Files, Talk, Calendar, and recent Deck shortcuts still visible
+@capture-alt: Photos folder workspace nested inside nati.ve with Photos selected and Files, Talk, Calendar, and recent Deck shortcuts still visible
 @capture-caption: The global sidebar remains available inside Photos, so another app can open directly without discarding the current folder state.
 
 Open a folder, conversation, board, or calendar view, then choose another pinned or recent app in the sidebar. The compact rail retains those shortcuts when the window narrows or you collapse the sidebar. The selected app changes in place while account access and global destinations remain available. On short windows, scroll the navigation to reach Settings and the account entry. The current implementation does not define a complete global keyboard-shortcut set, so use the sidebar or normal focus navigation instead of relying on undocumented key combinations.
@@ -47,6 +47,6 @@ Return to the first app. The app restores the last bounded route it knows how to
 @capture-alt: Native Tables workspace with inventory insights, typed rows, reusable app navigation, and a responsive overview
 @capture-caption: A verified dynamic app opens on a useful collection rather than a web page or raw API response, while retaining normal native navigation.
 
-Open an installed app that uses a verified dynamic contract. Nextcloud Native chooses a useful entry point such as a mailbox, table, board, recipe library, or record collection. Parent and child context stay connected, so actions receive the correct resource identity instead of asking you to type internal IDs.
+Open an installed app that uses a verified dynamic contract. nati.ve chooses a useful entry point such as a mailbox, table, board, recipe library, or record collection. Parent and child context stay connected, so actions receive the correct resource identity instead of asking you to type internal IDs.
 
 Use the app's own navigation for destinations inside that tool and the global sidebar for switching tools. If the server does not verify a required action or permission, the interface remains read-only and explains why. Returning later restores the last valid nested route without inventing unsupported behavior.

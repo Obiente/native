@@ -34,7 +34,7 @@ class WindowsCloudShellRegistrarTest {
             registrar.register(
                 root,
                 accountId,
-                "Nextcloud Native - ada@cloud.example",
+                "nati.ve - ada@cloud.example",
                 byteArrayOf(0, 15, -1),
             ),
         )
@@ -44,7 +44,7 @@ class WindowsCloudShellRegistrarTest {
                 "register",
                 root.toAbsolutePath().normalize().toString(),
                 accountId,
-                "Nextcloud Native - ada@cloud.example",
+                "nati.ve - ada@cloud.example",
                 icon.absolutePath,
                 "000fff",
             ),
@@ -79,7 +79,7 @@ class WindowsCloudShellRegistrarTest {
 
         assertEquals(
             WindowsShellRegistrationResult.Registered,
-            registrar.register(root, currentAccountId, "Nextcloud Native", byteArrayOf(1)),
+            registrar.register(root, currentAccountId, "nati.ve", byteArrayOf(1)),
         )
         assertEquals(
             listOf(
@@ -87,7 +87,7 @@ class WindowsCloudShellRegistrarTest {
                 "register",
                 root.toAbsolutePath().normalize().toString(),
                 currentAccountId,
-                "Nextcloud Native",
+                "nati.ve",
                 installation.resolve(WINDOWS_SHELL_ICON_NAME).absolutePath,
                 "01",
                 "--recoverable-root",
@@ -132,7 +132,7 @@ class WindowsCloudShellRegistrarTest {
 
         assertEquals(
             WindowsShellRegistrationResult.OwnedPathConflict,
-            registrar.register(root, accountId, "Nextcloud Native - ada@cloud.example", byteArrayOf(1)),
+            registrar.register(root, accountId, "nati.ve - ada@cloud.example", byteArrayOf(1)),
         )
         assertEquals(WindowsShellUnregistrationResult.Unregistered, registrar.unregister(root, accountId))
         assertEquals(
@@ -297,11 +297,11 @@ class WindowsCloudShellRegistrarTest {
         val second = windowsCloudShellDisplayName(secondSession)
 
         assertEquals(
-            "Nextcloud Native - ada@cloud.example [${desktopFileCacheAccountId(firstSession).take(12)}]",
+            "nati.ve - ada@cloud.example [${desktopFileCacheAccountId(firstSession).take(12)}]",
             first,
         )
         assertEquals(
-            "Nextcloud Native - grace@cloud.example [${desktopFileCacheAccountId(secondSession).take(12)}]",
+            "nati.ve - grace@cloud.example [${desktopFileCacheAccountId(secondSession).take(12)}]",
             second,
         )
         assertFalse(first.contains("secret"))
@@ -317,8 +317,8 @@ class WindowsCloudShellRegistrarTest {
             NextcloudSession("https://cloud.example:9443/two", "ada", "secret-two"),
         )
 
-        assertTrue(first.startsWith("Nextcloud Native - ada@cloud.example ["))
-        assertTrue(second.startsWith("Nextcloud Native - ada@cloud.example ["))
+        assertTrue(first.startsWith("nati.ve - ada@cloud.example ["))
+        assertTrue(second.startsWith("nati.ve - ada@cloud.example ["))
         assertNotEquals(first, second)
         assertFalse(first.contains("secret"))
         assertFalse(second.contains("secret"))
