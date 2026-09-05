@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.DurableUploadState
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
 import dev.obiente.nextcloudnative.app.SupportDiagnosticEventDraft
 import dev.obiente.nextcloudnative.app.SupportDiagnosticFieldDraft
@@ -122,26 +123,48 @@ internal class DeckAttachmentUploadWorker(
                 )
             }
         }
-        val capabilityReady = runCatching {
-            picker.requirePersisted(initial.request.file)
-            picker.open(initial.request.file).use { }
-        }.isSuccess
-        if (!capabilityReady) {
-            store.transition(
-                jobId,
-                expected = DurableUploadState.Queued,
-                target = DurableUploadState.Failed,
-                message = "The selected file is no longer available. Select it again to retry.",
-            )
-            picker.release(initial.request.file)
-            recordUploadDiagnostic(
-                severity = SupportDiagnosticSeverity.Warning,
-                outcome = "source-unavailable",
-                accountId = initial.accountId,
-                jobId = jobId,
-            )
-            return Result.failure()
-        }
+        return processQueuedDurableUploadSource(
+            requireCapability = { picker.requirePersisted(initial.request.file) },
+            openSource = { picker.open(initial.request.file).use { } },
+            onCapabilityUnavailable = {
+                store.transition(
+                    jobId,
+                    expected = DurableUploadState.Queued,
+                    target = DurableUploadState.Failed,
+                    message = "The selected file is no longer available. Select it again to retry.",
+                )
+                picker.release(initial.request.file)
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "source-unavailable",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                Result.failure()
+            },
+            onProviderUnavailable = { failure ->
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "source-open-deferred",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                    failure = failure,
+                )
+                Result.retry()
+            },
+            onReady = {
+                uploadReadyQueuedJob(store, initial, picker, jobId, session)
+            },
+        )
+    }
+
+    private suspend fun uploadReadyQueuedJob(
+        store: AndroidDurableMultipartUploadStore,
+        initial: AndroidDurableMultipartUploadJob,
+        picker: AndroidLocalUploadPicker,
+        jobId: String,
+        session: NextcloudSession,
+    ): Result {
         val started = claimQueuedDurableUploadForExecution(jobId) {
             store.transition(
                 jobId,
@@ -254,6 +277,26 @@ internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
     releaseSelection()
     recordFailure()
     return failureResult
+}
+
+internal suspend fun <Result> processQueuedDurableUploadSource(
+    requireCapability: () -> Unit,
+    openSource: () -> Unit,
+    onCapabilityUnavailable: suspend () -> Result,
+    onProviderUnavailable: suspend (Exception) -> Result,
+    onReady: suspend () -> Result,
+): Result {
+    try {
+        requireCapability()
+        openSource()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: AndroidLocalUploadCapabilityUnavailableException) {
+        return onCapabilityUnavailable()
+    } catch (failure: Exception) {
+        return onProviderUnavailable(failure)
+    }
+    return onReady()
 }
 
 internal suspend fun <WorkResult> runDurableUploadWorkerWithRecoverySignal(
