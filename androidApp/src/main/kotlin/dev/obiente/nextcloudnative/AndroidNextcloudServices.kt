@@ -2677,32 +2677,32 @@ internal class AndroidNextcloudServices(
         }
     }
 
-    override suspend fun saveTextFile(
-        session: NextcloudSession,
-        userId: String,
+    override suspend fun saveTextFile(session: NextcloudSession, userId: String,
         path: String,
         text: String,
         expectedEtag: String,
     ): SavedTextFile = withContext(Dispatchers.IO) {
-        withNoBlockingAndroidDocumentWritebackSuspending(appContext, session, path) {
-            val specification = textFileDavSaveRequest(text, expectedEtag)
-            val response = request(
-                method = "PUT",
-                url = buildNextcloudFileUrl(session.serverUrl, userId, path),
-                session = session,
-                rawBody = specification.body,
-                contentType = specification.contentType,
-                headers = specification.headers,
-            )
-            val confirmation = confirmTextFileDavSave(response.status)
-            val etag = response.etag ?: try {
-                loadFileEtag(session, userId, path)
-            } catch (failure: Exception) {
-                if (failure is CancellationException) throw failure
-                null
+        withAndroidAuthenticatedFileMutation(accountMutationLeaseHeld, session, accountCredentials::loadSession) { currentSession ->
+            withNoBlockingAndroidDocumentWritebackSuspending(appContext, currentSession, path) {
+                val specification = textFileDavSaveRequest(text, expectedEtag)
+                val response = request(
+                    method = "PUT",
+                    url = buildNextcloudFileUrl(currentSession.serverUrl, userId, path),
+                    session = currentSession,
+                    rawBody = specification.body,
+                    contentType = specification.contentType,
+                    headers = specification.headers,
+                )
+                val confirmation = confirmTextFileDavSave(response.status)
+                val etag = response.etag ?: try {
+                    loadFileEtag(currentSession, userId, path)
+                } catch (failure: Exception) {
+                    if (failure is CancellationException) throw failure
+                    null
+                }
+                runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(currentSession), path) }
+                SavedTextFile(etag, confirmation.created)
             }
-            runCatching { fileReadCache.invalidate(NextcloudDocumentIds.accountKey(session), path) }
-            SavedTextFile(etag, confirmation.created)
         }
     }
 
@@ -2750,39 +2750,38 @@ internal class AndroidNextcloudServices(
         true
     }
 
-    override suspend fun executeFileMutation(
-        session: NextcloudSession,
-        userId: String,
-        mutation: NextcloudFileMutation,
-    ): NextcloudFileMutationResult = withContext(Dispatchers.IO) {
+    override suspend fun executeFileMutation(session: NextcloudSession, userId: String, mutation: NextcloudFileMutation):
+        NextcloudFileMutationResult = withContext(Dispatchers.IO) {
         val spec = mutation.toWebDavMutationSpec()
-        withNoBlockingAndroidDocumentWritebackSuspending(
-            appContext,
-            session,
-            *listOfNotNull(spec.sourcePath, spec.destinationPath).toTypedArray(),
-        ) {
-            val headers = buildMap {
-                put("Accept", "*/*")
-                putAll(spec.conflictConditionHeaders())
-                spec.destinationPath?.let { destinationPath ->
-                    put("Destination", buildNextcloudFileUrl(session.serverUrl, userId, destinationPath))
-                    put("Overwrite", if (spec.overwrite) "T" else "F")
+        withAndroidAuthenticatedFileMutation(accountMutationLeaseHeld, session, accountCredentials::loadSession) { currentSession ->
+            withNoBlockingAndroidDocumentWritebackSuspending(
+                appContext,
+                currentSession,
+                *listOfNotNull(spec.sourcePath, spec.destinationPath).toTypedArray(),
+            ) {
+                val headers = buildMap {
+                    put("Accept", "*/*")
+                    putAll(spec.conflictConditionHeaders())
+                    spec.destinationPath?.let { destinationPath ->
+                        put("Destination", buildNextcloudFileUrl(currentSession.serverUrl, userId, destinationPath))
+                        put("Overwrite", if (spec.overwrite) "T" else "F")
+                    }
                 }
+                val response = request(
+                    method = spec.method,
+                    url = buildNextcloudFileUrl(currentSession.serverUrl, userId, spec.sourcePath),
+                    session = currentSession,
+                    headers = headers,
+                    maxResponseBytes = 64 * 1024,
+                )
+                if (response.status !in 200..299) throw fileOperationException(response.status)
+                val accountId = NextcloudDocumentIds.accountKey(currentSession)
+                runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
+                spec.destinationPath?.let { destination ->
+                    runCatching { fileReadCache.invalidate(accountId, destination) }
+                }
+                NextcloudFileMutationResult(spec.destinationPath, response.etag)
             }
-            val response = request(
-                method = spec.method,
-                url = buildNextcloudFileUrl(session.serverUrl, userId, spec.sourcePath),
-                session = session,
-                headers = headers,
-                maxResponseBytes = 64 * 1024,
-            )
-            if (response.status !in 200..299) throw fileOperationException(response.status)
-            val accountId = NextcloudDocumentIds.accountKey(session)
-            runCatching { fileReadCache.invalidate(accountId, spec.sourcePath) }
-            spec.destinationPath?.let { destination ->
-                runCatching { fileReadCache.invalidate(accountId, destination) }
-            }
-            NextcloudFileMutationResult(spec.destinationPath, response.etag)
         }
     }
 

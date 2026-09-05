@@ -98,7 +98,7 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(secondSession())
 
         assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
-        assertEquals(12, flushCount)
+        assertEquals(14, flushCount)
         assertEquals(firstSession().serverUrl, preferences.get("server", null))
         assertEquals(firstSession().loginName, preferences.get("login", null))
     }
@@ -122,7 +122,7 @@ class DesktopAccountCredentialPersistenceTest {
         var flushCount = 0
         val persistence = persistence(preferences, secrets) {
             flushCount += 1
-            if (flushCount == 2) error("synthetic registry flush failure")
+            if (flushCount == 3) error("synthetic registry flush failure")
             preferences.flush()
         }
         secrets.failClears = true
@@ -203,7 +203,7 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
-    fun startupRecoveryPreservesPendingCredentialWhenRegistryVersionIsUnreadable() =
+    fun startupRecoveryBlocksCredentialAccessWhenRegistryVersionIsUnreadable() =
         withStore { preferences, secrets ->
             val session = firstSession()
             preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, """{"version":2,"accounts":[]}""")
@@ -215,7 +215,9 @@ class DesktopAccountCredentialPersistenceTest {
                 session.appPassword.encodeToByteArray(),
             )
 
-            assertNull(persistence(preferences, secrets).loadActiveSession())
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence(preferences, secrets).loadActiveSession()
+            }
 
             assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
             assertEquals(session.serverUrl, preferences.get("accountCredentialSaveServer", null))
@@ -245,7 +247,7 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
-    fun failedReplacementRollbackIsFinalizedFromTheCredentialJournalOnRestart() =
+    fun failedReplacementRollbackRestoresThePreviousCredentialFromTheSecureJournalOnRestart() =
         withStore { preferences, secrets ->
             val original = firstSession()
             val replacement = original.copy(appPassword = "replacement-password")
@@ -257,8 +259,8 @@ class DesktopAccountCredentialPersistenceTest {
                 preferences.flush()
             }
             persistence.saveSession(original)
-            secrets.failSaveOnAttempt = secrets.saveCount + 2
-            failFlushOnAttempt = flushCount + 2
+            secrets.failSaveOnAttempt = secrets.saveCount + 3
+            failFlushOnAttempt = flushCount + 3
 
             assertFailsWith<IllegalStateException> { persistence.saveSession(replacement) }
 
@@ -269,7 +271,8 @@ class DesktopAccountCredentialPersistenceTest {
             assertEquals(original.serverUrl, preferences.get("accountCredentialSaveServer", null))
 
             failFlushOnAttempt = null
-            assertEquals(replacement, persistence(preferences, secrets).loadActiveSession())
+            assertEquals(original, persistence(preferences, secrets).loadActiveSession())
+            assertNull(secrets.load(desktopAccountCredentialRollbackReference(original.accountId)))
             assertNull(preferences.get("accountCredentialSaveServer", null))
             assertNull(preferences.get("accountCredentialSaveLogin", null))
         }
@@ -289,7 +292,7 @@ class DesktopAccountCredentialPersistenceTest {
             persistence.saveSession(inactive)
             persistence.saveSession(active)
             failFlushOnAttempt = flushCount + 3
-            secrets.crashSaveOnAttempt = secrets.saveCount + 2
+            secrets.crashSaveOnAttempt = secrets.saveCount + 3
 
             assertFailsWith<SimulatedProcessExit> {
                 persistence.saveSession(inactive.copy(appPassword = "replacement-password"))
@@ -300,6 +303,8 @@ class DesktopAccountCredentialPersistenceTest {
             val restarted = persistence(preferences, secrets)
             assertEquals(active, restarted.loadActiveSession())
             assertEquals(active.accountId, restarted.activeAccountId())
+            assertEquals(inactive, restarted.loadSession(inactive.accountId))
+            assertNull(secrets.load(desktopAccountCredentialRollbackReference(inactive.accountId)))
             assertNull(preferences.get("accountCredentialSavePhase", null))
         }
 
@@ -751,7 +756,7 @@ class DesktopAccountCredentialPersistenceTest {
             var flushAttempts = 0
             val persistence = persistence(preferences, secrets) {
                 flushAttempts += 1
-                if (flushAttempts == 12) error("synthetic removal flush failure")
+                if (flushAttempts == 14) error("synthetic removal flush failure")
                 preferences.flush()
             }
             persistence.saveSession(first)
@@ -803,12 +808,109 @@ class DesktopAccountCredentialPersistenceTest {
         assertDiagnosticsExcludePrivateValues(diagnostics)
     }
 
+    @Test
+    fun missingRollbackCredentialBlocksEveryFollowingCredentialOperation() =
+        withStore { preferences, secrets ->
+            val original = firstSession()
+            val replacement = original.copy(appPassword = "replacement-password")
+            val persistence = persistence(preferences, secrets)
+            persistence.saveSession(original)
+            preparePendingRollback(preferences, secrets, original, replacement, includeRollback = false)
+
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence.loadActiveSession()
+            }
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence.saveSession(replacement)
+            }
+            assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
+        }
+
+    @Test
+    fun rollbackCredentialLoadFailureBlocksSelectionUntilRecoveryCanRetry() =
+        withStore { preferences, secrets ->
+            val original = firstSession()
+            val persistence = persistence(preferences, secrets)
+            persistence.saveSession(original)
+            preparePendingRollback(preferences, secrets, original, original.copy(appPassword = "replacement-password"))
+            secrets.failLoadTarget = desktopAccountCredentialRollbackReference(original.accountId).targetName
+
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence.loadActiveSession()
+            }
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence.selectAccount(original.accountId)
+            }
+            assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
+        }
+
+    @Test
+    fun rollbackCredentialSaveFailureBlocksRemovalUntilRecoveryCanRetry() =
+        withStore { preferences, secrets ->
+            val original = firstSession()
+            val persistence = persistence(preferences, secrets)
+            persistence.saveSession(original)
+            preparePendingRollback(preferences, secrets, original, original.copy(appPassword = "replacement-password"))
+            secrets.failSaveTarget = desktopAccountSecretReference(original.accountId).targetName
+
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence.loadActiveSession()
+            }
+            assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+                persistence.removeAccount(original.accountId)
+            }
+            assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
+        }
+
+    @Test
+    fun rollbackCredentialClearFailureBlocksASubsequentSave() = withStore { preferences, secrets ->
+        val original = firstSession()
+        val persistence = persistence(preferences, secrets)
+        persistence.saveSession(original)
+        preparePendingRollback(preferences, secrets, original, original.copy(appPassword = "replacement-password"))
+        secrets.failClearTarget = desktopAccountCredentialRollbackReference(original.accountId).targetName
+
+        assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+            persistence.loadActiveSession()
+        }
+        assertFailsWith<DesktopCredentialRollbackRecoveryUnavailableException> {
+            persistence.saveSession(original)
+        }
+        assertEquals(original.appPassword, secrets.load(desktopAccountSecretReference(original.accountId))?.decodeToString())
+        assertEquals("rollback", preferences.get("accountCredentialSavePhase", null))
+    }
+
     private fun persistence(
         preferences: Preferences,
         secrets: MemorySecretStore,
         diagnostics: MutableList<SupportDiagnosticEventDraft> = mutableListOf(),
         flushPreferences: () -> Unit = preferences::flush,
     ) = DesktopAccountCredentialPersistence(preferences, secrets, diagnostics::add, flushPreferences)
+
+    private fun preparePendingRollback(
+        preferences: Preferences,
+        secrets: MemorySecretStore,
+        original: NextcloudSession,
+        replacement: NextcloudSession,
+        includeRollback: Boolean = true,
+    ) {
+        preferences.put("accountCredentialSaveServer", original.serverUrl)
+        preferences.put("accountCredentialSaveLogin", original.loginName)
+        preferences.put("accountCredentialSavePhase", "rollback")
+        secrets.save(
+            desktopAccountSecretReference(original.accountId),
+            original.loginName,
+            replacement.appPassword.encodeToByteArray(),
+        )
+        if (includeRollback) {
+            secrets.save(
+                desktopAccountCredentialRollbackReference(original.accountId),
+                original.loginName,
+                original.appPassword.encodeToByteArray(),
+            )
+        }
+        preferences.flush()
+    }
 
     private fun putLegacySession(
         preferences: Preferences,
@@ -868,6 +970,9 @@ class DesktopAccountCredentialPersistenceTest {
         var crashSaveOnAttempt: Int? = null
         var failClears = false
         var loadFailure: RuntimeException? = null
+        var failLoadTarget: String? = null
+        var failSaveTarget: String? = null
+        var failClearTarget: String? = null
         var loadCount = 0
             private set
         var saveCount = 0
@@ -878,13 +983,14 @@ class DesktopAccountCredentialPersistenceTest {
         override fun load(reference: DesktopSecretReference): ByteArray? {
             loadCount += 1
             loadFailure?.let { throw it }
+            if (reference.targetName == failLoadTarget) error("synthetic targeted secret load failure")
             return values[reference.targetName]?.copyOf()
         }
 
         override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
             saveCount += 1
             if (saveCount == crashSaveOnAttempt) throw SimulatedProcessExit()
-            if (failSaves || saveCount == failSaveOnAttempt) {
+            if (failSaves || saveCount == failSaveOnAttempt || reference.targetName == failSaveTarget) {
                 error("private-app-password at cloud.example.test for alice")
             }
             values[reference.targetName] = secret.copyOf()
@@ -892,7 +998,7 @@ class DesktopAccountCredentialPersistenceTest {
 
         override fun clear(reference: DesktopSecretReference) {
             clearCount += 1
-            if (failClears) error("synthetic secret deletion failure")
+            if (failClears || reference.targetName == failClearTarget) error("synthetic secret deletion failure")
             values.remove(reference.targetName)
         }
 
