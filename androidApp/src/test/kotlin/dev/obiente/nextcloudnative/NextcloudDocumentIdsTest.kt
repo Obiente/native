@@ -124,6 +124,26 @@ class NextcloudDocumentIdsTest {
     }
 
     @Test
+    fun providerRootIdsRoundTripTheirAccountAndIncarnation() {
+        val versioned = NextcloudDocumentIncarnation.Versioned("1".repeat(32))
+
+        assertEquals(
+            NextcloudDocumentRootReference(NextcloudDocumentIds.accountKey(session), legacy),
+            NextcloudDocumentIds.parseProviderRootId(NextcloudDocumentIds.providerRootId(session, legacy)),
+        )
+        assertEquals(
+            NextcloudDocumentRootReference(NextcloudDocumentIds.accountKey(session), versioned),
+            NextcloudDocumentIds.parseProviderRootId(NextcloudDocumentIds.providerRootId(session, versioned)),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.parseProviderRootId("${NextcloudDocumentIds.accountKey(session)}:broken")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.parseProviderRootId("${NextcloudDocumentIds.accountKey(session)}:${"1".repeat(32)}:extra")
+        }
+    }
+
+    @Test
     fun resolvesParentPathsCanonically() {
         assertEquals("Documents/Reports", NextcloudDocumentIds.parentPath("Documents/Reports/2026.pdf"))
         assertEquals("", NextcloudDocumentIds.parentPath("top-level.txt"))

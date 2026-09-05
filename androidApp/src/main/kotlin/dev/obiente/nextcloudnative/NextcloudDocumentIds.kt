@@ -12,6 +12,11 @@ internal data class NextcloudDocumentReference(
     val isRoot: Boolean get() = path.isEmpty()
 }
 
+internal data class NextcloudDocumentRootReference(
+    val accountKey: String,
+    val incarnation: NextcloudDocumentIncarnation,
+)
+
 internal sealed interface NextcloudDocumentIncarnation {
     data object Legacy : NextcloudDocumentIncarnation
 
@@ -53,6 +58,18 @@ internal object NextcloudDocumentIds {
             NextcloudDocumentIncarnation.Legacy -> accountKey(session)
             is NextcloudDocumentIncarnation.Versioned -> "${accountKey(session)}:${incarnation.value}"
         }
+
+    fun parseProviderRootId(rootId: String): NextcloudDocumentRootReference {
+        val parts = rootId.split(':')
+        val accountKey = parts.firstOrNull().orEmpty()
+        require(accountKeyPattern.matches(accountKey)) { "Invalid document account." }
+        val incarnation = when (parts.size) {
+            1 -> NextcloudDocumentIncarnation.Legacy
+            2 -> NextcloudDocumentIncarnation.Versioned(parts[1])
+            else -> throw IllegalArgumentException("Unsupported document root ID.")
+        }
+        return NextcloudDocumentRootReference(accountKey, incarnation)
+    }
 
     fun rootId(session: NextcloudSession, incarnation: NextcloudDocumentIncarnation): String =
         rootId(accountKey(session), incarnation)
