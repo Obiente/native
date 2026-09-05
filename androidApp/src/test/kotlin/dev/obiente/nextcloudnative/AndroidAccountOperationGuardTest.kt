@@ -395,6 +395,59 @@ class AndroidAccountOperationGuardTest {
     }
 
     @Test
+    fun removalPreparationCanUseTheRetainedReadLeaseBeforeRemovalBecomesExclusive() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        val events = mutableListOf<String>()
+
+        withTimeout(1_000L) {
+            withPreparedAndroidAccountRemovalLease(
+                accountIdentity = accountIdentity,
+                guard = guard,
+                prepare = {
+                    guard.withAccount(accountIdentity) { events += "provider-read" }
+                },
+            ) {
+                events += "remove"
+            }
+        }
+
+        assertEquals(listOf("provider-read", "remove"), events)
+    }
+
+    @Test
+    fun accountWorkStartedAfterPreparationMakesRemovalFailClosed() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val accountIdentity = "account-a"
+        var removalEntered = false
+        var competingLease: AndroidAccountOperationLease? = null
+
+        val failure = try {
+            assertFailsWith<IllegalStateException> {
+                withTimeout(1_000L) {
+                    withPreparedAndroidAccountRemovalLease(
+                        accountIdentity = accountIdentity,
+                        guard = guard,
+                        prepare = {
+                            competingLease = guard.acquireBlocking(accountIdentity)
+                        },
+                    ) {
+                        removalEntered = true
+                    }
+                }
+            }
+        } finally {
+            competingLease?.close()
+        }
+
+        assertEquals(
+            "Finish or discard pending document changes before removing this account.",
+            failure.message,
+        )
+        assertFalse(removalEntered)
+    }
+
+    @Test
     fun directDocumentMutationLeaseRejectsReauthenticatedSessionAndReleasesTheGuard() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "original-password")

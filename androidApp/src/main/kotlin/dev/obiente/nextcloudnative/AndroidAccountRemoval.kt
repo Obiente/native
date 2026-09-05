@@ -30,6 +30,16 @@ internal suspend fun <Result> withAndroidAccountRemovalLease(
     action = action,
 )
 
+internal suspend fun <Result> withPreparedAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    prepare: suspend () -> Unit,
+    action: suspend () -> Result,
+): Result {
+    prepare()
+    return withAndroidAccountRemovalLease(accountIdentity, guard, action)
+}
+
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
@@ -67,8 +77,8 @@ internal suspend fun revokeAndroidSessionWithAccountLease(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
     removeLocalAccount: suspend () -> Unit,
-) = withAndroidAccountRemovalLease(accountIdentity, guard) {
-    revokeAndroidSessionAfterRemovalPreflight(preflight, revoke, removeLocalAccount)
+) = withPreparedAndroidAccountRemovalLease(accountIdentity, guard, preflight) {
+    revokeAndroidSessionAfterRemovalPreflight({}, revoke, removeLocalAccount)
 }
 
 internal enum class AndroidAccountDocumentGrantScope(val pathSegment: String) {
