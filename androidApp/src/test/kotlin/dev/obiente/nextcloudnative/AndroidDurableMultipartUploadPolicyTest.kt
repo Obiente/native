@@ -5,6 +5,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadState
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
@@ -314,7 +315,7 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `retained background account is deferred instead of becoming unavailable`() {
+    fun `retained background account is deferred without reading its credential`() {
         val retainedSession = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",
             loginName = "alice",
@@ -324,17 +325,17 @@ class AndroidDurableMultipartUploadPolicyTest {
 
         assertEquals(
             DurableUploadAccountMismatchOutcome.DeferRetainedAccount,
-            durableUploadAccountMismatchOutcome(accountId, retainedSession),
+            durableUploadAccountMismatchOutcome(accountId, listOf(retainedSession.accountRecord())),
         )
         assertEquals(
             DurableUploadAccountMismatchOutcome.AccountUnavailable,
-            durableUploadAccountMismatchOutcome(accountId, null),
+            durableUploadAccountMismatchOutcome(accountId, emptyList()),
         )
         assertEquals(
             DurableUploadAccountMismatchOutcome.AccountUnavailable,
             durableUploadAccountMismatchOutcome(
                 accountId,
-                retainedSession.copy(loginName = "another-account"),
+                listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
             ),
         )
     }
