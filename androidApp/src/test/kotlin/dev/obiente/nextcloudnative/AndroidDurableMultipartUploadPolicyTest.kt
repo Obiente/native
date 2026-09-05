@@ -426,9 +426,13 @@ class AndroidDurableMultipartUploadPolicyTest {
 
         val result = failQueuedDurableUploadForUnavailableAccount(
             transitionToFailed = { events += "fail" },
-            releaseSelection = { events += "release" },
+            releaseSelection = {
+                events += "release"
+                true
+            },
             recordFailure = { events += "diagnose" },
             failureResult = "worker-failure",
+            retryResult = "worker-retry",
         )
 
         assertEquals("worker-failure", result)

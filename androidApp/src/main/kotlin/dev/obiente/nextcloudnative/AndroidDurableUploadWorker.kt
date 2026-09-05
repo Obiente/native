@@ -44,16 +44,25 @@ internal class DeckAttachmentUploadWorker(
                 target = DurableUploadState.OutcomeUnknown,
                 message = "The app restarted while this upload was in progress. Check the card before uploading again.",
             )
-            picker.release(initial.request.file)
             recordUploadDiagnostic(
                 severity = SupportDiagnosticSeverity.Warning,
                 outcome = "process-recovery",
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return Result.success()
+            return resultAfterDurableUploadCapabilityRelease(
+                releaseCapability = { picker.release(initial.request.file) },
+                releasedResult = Result.success(),
+                retainedResult = Result.retry(),
+            )
         }
-        if (initial.state != DurableUploadState.Queued) return Result.success()
+        if (initial.state != DurableUploadState.Queued) {
+            return resultAfterDurableUploadCapabilityRelease(
+                releaseCapability = { picker.release(initial.request.file) },
+                releasedResult = Result.success(),
+                retainedResult = Result.retry(),
+            )
+        }
 
         return uploadQueuedJob(store, initial, picker, jobId)
     }
@@ -130,6 +139,7 @@ internal class DeckAttachmentUploadWorker(
                         )
                     },
                     failureResult = Result.failure(),
+                    retryResult = Result.retry(),
                 )
             }
         }
@@ -143,14 +153,17 @@ internal class DeckAttachmentUploadWorker(
                     target = DurableUploadState.Failed,
                     message = "The selected file is no longer available. Select it again to retry.",
                 )
-                picker.release(initial.request.file)
                 recordUploadDiagnostic(
                     severity = SupportDiagnosticSeverity.Warning,
                     outcome = "source-unavailable",
                     accountId = initial.accountId,
                     jobId = jobId,
                 )
-                Result.failure()
+                resultAfterDurableUploadCapabilityRelease(
+                    releaseCapability = { picker.release(initial.request.file) },
+                    releasedResult = Result.failure(),
+                    retainedResult = Result.retry(),
+                )
             },
             onProviderUnavailable = { failure ->
                 recordUploadDiagnostic(
@@ -226,7 +239,6 @@ internal class DeckAttachmentUploadWorker(
                     code = "HTTP:${response.status}",
                 )
             }
-            picker.release(started.request.file)
         }.onFailure { failure ->
             // Once the request body starts, a transport exception cannot prove whether the server
             // created the attachment. Never replay it automatically and risk a duplicate.
@@ -243,9 +255,12 @@ internal class DeckAttachmentUploadWorker(
                 jobId = jobId,
                 failure = failure,
             )
-            picker.release(started.request.file)
         }
-        return Result.success()
+        return resultAfterDurableUploadCapabilityRelease(
+            releaseCapability = { picker.release(started.request.file) },
+            releasedResult = Result.success(),
+            retainedResult = Result.retry(),
+        )
     }
 
     private fun recordUploadDiagnostic(
@@ -279,15 +294,22 @@ internal class DeckAttachmentUploadWorker(
 
 internal fun <Result> failQueuedDurableUploadForUnavailableAccount(
     transitionToFailed: () -> Unit,
-    releaseSelection: () -> Unit,
+    releaseSelection: () -> Boolean,
     recordFailure: () -> Unit,
     failureResult: Result,
+    retryResult: Result,
 ): Result {
     transitionToFailed()
-    releaseSelection()
+    val released = releaseSelection()
     recordFailure()
-    return failureResult
+    return if (released) failureResult else retryResult
 }
+
+internal fun <Result> resultAfterDurableUploadCapabilityRelease(
+    releaseCapability: () -> Boolean,
+    releasedResult: Result,
+    retainedResult: Result,
+): Result = if (releaseCapability()) releasedResult else retainedResult
 
 internal suspend fun <Result> processQueuedDurableUploadSource(
     requireCapability: () -> Unit,
