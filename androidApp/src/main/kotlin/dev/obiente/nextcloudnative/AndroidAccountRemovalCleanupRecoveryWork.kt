@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
@@ -99,7 +100,7 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
             },
             removeAccountOwnedWork = { pending ->
                 ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(pending.workIdentity) {
-                    cleanup.retryWithoutCredentials(pending.workIdentity)
+                    cleanup.retryWithoutCredentials(pending.workIdentity, pending.previewCacheIdentity)
                 }
             },
             clearCleanup = journal::clear,
@@ -149,8 +150,14 @@ internal fun androidAccountRemovalCleanupOwnedByRegistry(
             storageOwner.serverUrl,
             storageOwner.loginName,
         )
+        val storageOwnerPreviewIdentity = NextcloudDocumentIds.cacheAccountId(
+            NextcloudSession(storageOwner.serverUrl, storageOwner.loginName, appPassword = ""),
+        )
         check(storageOwnerWorkIdentity == cleanup.workIdentity) {
             "The account-removal cleanup identities do not match."
+        }
+        check(cleanup.previewCacheIdentity == null || storageOwnerPreviewIdentity == cleanup.previewCacheIdentity) {
+            "The account-removal preview identity does not match."
         }
         return true
     }

@@ -826,22 +826,6 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
-    fun previewCleanupFailureDoesNotRollBackACommittedAccountRemoval() {
-        val events = mutableListOf<String>()
-
-        clearAndroidPreviewAfterCommittedRemoval(
-            accountCacheId = "account-cache-id",
-            clearPreviewAccount = {
-                events += "clear-preview:$it"
-                error("synthetic preview cleanup failure")
-            },
-            recordFailure = { events += "diagnose-cleanup" },
-        )
-
-        assertEquals(listOf("clear-preview:account-cache-id", "diagnose-cleanup"), events)
-    }
-
-    @Test
     fun failedAccountTransitionDoesNotClearExternalHandoffs() {
         val events = mutableListOf<String>()
 
