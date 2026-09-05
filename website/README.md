@@ -160,6 +160,13 @@ For a local check, `docker compose -f website/compose.yml up --build` provides
 the same image. In production, place the container behind the Obiente reverse
 proxy and terminate TLS there.
 
+The container returns a permanent HTTP 301 redirect for requests whose Host is
+`nc-native.obiente.dev`, preserving the original path and query string at
+`https://nati.ve`. Obiente Cloud must route both domains to this container and
+preserve the incoming Host header. Configure DNS and valid HTTPS certificates
+for both domains before deploying the redirect. Requests to `nati.ve`, preview
+domains, and localhost continue to serve the site directly.
+
 The container exposes `/api/github-repository` as a cached, same-origin proxy
 for the public `obiente/native` repository metadata. The website uses it to
 refresh the displayed star count without a deployment. Nginx refreshes the
