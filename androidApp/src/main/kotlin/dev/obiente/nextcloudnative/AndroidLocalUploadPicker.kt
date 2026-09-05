@@ -398,7 +398,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            throw AndroidLocalUploadCapabilityUnavailableException(
+            throw AndroidLocalUploadCapabilityReadException(
                 "The local file selection metadata could not be read.",
                 failure,
             )
@@ -512,6 +512,11 @@ internal fun durableUploadCapabilityHasCapacity(
 }
 
 internal class AndroidLocalUploadCapabilityUnavailableException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+internal class AndroidLocalUploadCapabilityReadException(
     message: String,
     cause: Throwable? = null,
 ) : IllegalStateException(message, cause)
