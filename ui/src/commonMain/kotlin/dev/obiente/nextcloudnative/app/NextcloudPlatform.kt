@@ -622,7 +622,6 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): String? = null
-
     suspend fun saveDurableMutationRecovery(
         session: NextcloudSession,
         accountScope: String,
@@ -1347,8 +1346,8 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
     /**
      * Streams one picker-authorized file to a reviewed same-origin multipart endpoint.
      *
-     * Implementations attach the active account credentials, reject redirects, enforce both
-     * request and response limits, and never accept an arbitrary local path from shared code.
+     * Implementations use the supplied session's credentials, including for retained background
+     * work, reject redirects and arbitrary local paths, and enforce request and response limits.
      */
     suspend fun executeNextcloudMultipartUpload(
         session: NextcloudSession,

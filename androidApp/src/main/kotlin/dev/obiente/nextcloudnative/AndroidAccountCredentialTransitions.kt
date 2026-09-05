@@ -1,5 +1,7 @@
 package dev.obiente.nextcloudnative
 
+import android.content.SharedPreferences
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -8,6 +10,27 @@ import kotlinx.coroutines.withContext
 internal fun removeActiveAndroidAccountCredentialState(
     state: AndroidAccountCredentialState,
 ): AndroidAccountCredentialState = state.registry.activeAccountId?.let(state::remove) ?: state
+
+internal fun NextcloudAccountRegistry?.asDurableRegistry(): DurableUploadAccountRegistry =
+    this?.let { registry -> DurableUploadAccountRegistry.Available(registry.accounts) }
+        ?: DurableUploadAccountRegistry.Unavailable
+
+internal fun NextcloudAccountRegistry?.asAccountRetentionSnapshot(): AndroidAccountRetentionSnapshot =
+    this?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
+        ?: AndroidAccountRetentionSnapshot.Unavailable
+
+internal fun SharedPreferences.durableUploadAccountResolutionAvailable(): Boolean =
+    durableUploadAccountResolutionAvailable {
+        getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
+    }
+
+internal fun durableUploadAccountResolutionAvailable(
+    readRegistry: () -> String?,
+): Boolean = try {
+    androidCredentialFreeRegistryAllowsAccountResolution(readRegistry())
+} catch (_: ClassCastException) {
+    false
+}
 
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
     active: Boolean = false,

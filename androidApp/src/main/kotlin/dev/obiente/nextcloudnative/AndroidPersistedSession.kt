@@ -225,6 +225,11 @@ internal fun restoreAndroidCredentialFreeRegistry(
     }
 }
 
+internal fun androidCredentialFreeRegistryAllowsAccountResolution(encoded: String?): Boolean {
+    val restored = encoded?.let(::restoreAndroidCredentialFreeRegistry) ?: return true
+    return restored.registry != null || restored.credentialRecoveryRequired
+}
+
 internal fun recoverAndroidCredentialFreeRegistryForCredentialLoad(
     restored: RestoredAndroidCredentialFreeRegistry?,
     recover: () -> NextcloudAccountRegistry?,
