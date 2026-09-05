@@ -1,0 +1,126 @@
+package dev.obiente.nextcloudnative
+
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class AndroidDurableUploadSourcePreflightTest {
+    @Test
+    fun `missing or mismatched private metadata terminally fails and releases`() = runBlocking {
+        listOf("missing", "mismatched").forEach { reason ->
+            var providerOpened = false
+            var queued = true
+            var retained = true
+
+            val result = processQueuedDurableUploadSource(
+                requireCapability = {
+                    throw AndroidLocalUploadCapabilityUnavailableException(reason)
+                },
+                openSource = { providerOpened = true },
+                onCapabilityUnavailable = {
+                    queued = false
+                    retained = false
+                    "failed"
+                },
+                onProviderUnavailable = { "retried" },
+                onReady = { "started" },
+            )
+
+            assertEquals("failed", result)
+            assertFalse(providerOpened)
+            assertFalse(queued)
+            assertFalse(retained)
+        }
+    }
+
+    @Test
+    fun `transient provider failure leaves queued capability retained`() = runBlocking {
+        var queued = true
+        var retained = true
+        var starts = 0
+
+        val result = processQueuedDurableUploadSource(
+            requireCapability = { },
+            openSource = { throw IOException("provider unavailable") },
+            onCapabilityUnavailable = {
+                queued = false
+                retained = false
+                "failed"
+            },
+            onProviderUnavailable = { "retried" },
+            onReady = {
+                starts += 1
+                "started"
+            },
+        )
+
+        assertEquals("retried", result)
+        assertTrue(queued)
+        assertTrue(retained)
+        assertEquals(0, starts)
+    }
+
+    @Test
+    fun `later provider success starts exactly once`() = runBlocking {
+        var providerAttempts = 0
+        var starts = 0
+
+        suspend fun attempt(): String = processQueuedDurableUploadSource(
+            requireCapability = { },
+            openSource = {
+                providerAttempts += 1
+                if (providerAttempts == 1) throw IOException("provider restarting")
+            },
+            onCapabilityUnavailable = { "failed" },
+            onProviderUnavailable = { "retried" },
+            onReady = {
+                starts += 1
+                "started"
+            },
+        )
+
+        assertEquals("retried", attempt())
+        assertEquals(0, starts)
+        assertEquals("started", attempt())
+        assertEquals(1, starts)
+    }
+
+    @Test
+    fun `cancellation is preserved without running a disposition`() = runBlocking {
+        listOf(true, false).forEach { cancelDuringCapabilityRead ->
+            var dispositions = 0
+            val expected = CancellationException("worker stopped")
+
+            val actual = assertFailsWith<CancellationException> {
+                processQueuedDurableUploadSource(
+                    requireCapability = {
+                        if (cancelDuringCapabilityRead) throw expected
+                    },
+                    openSource = {
+                        if (!cancelDuringCapabilityRead) throw expected
+                    },
+                    onCapabilityUnavailable = {
+                        dispositions += 1
+                        Unit
+                    },
+                    onProviderUnavailable = {
+                        dispositions += 1
+                        Unit
+                    },
+                    onReady = {
+                        dispositions += 1
+                        Unit
+                    },
+                )
+            }
+
+            assertTrue(actual === expected)
+            assertEquals(0, dispositions)
+        }
+    }
+}
