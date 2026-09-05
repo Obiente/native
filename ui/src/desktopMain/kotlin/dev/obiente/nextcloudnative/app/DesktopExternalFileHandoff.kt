@@ -223,7 +223,7 @@ internal class DesktopExternalFileHandoff(
 
     fun removeAccount(accountId: String) {
         requireDesktopExternalFileHandoffAccountId(accountId)
-        pruneLegacyDesktopExternalFileCache(root)
+        pruneLegacyDesktopExternalFileCache(root, removeAll = true)
         val rootPath = root.toPath().toAbsolutePath().normalize()
         if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) return
         check(Files.isDirectory(rootPath, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(rootPath)) {
@@ -300,6 +300,7 @@ internal fun desktopExternalFileHandoffDirectory(): File {
 internal fun pruneLegacyDesktopExternalFileCache(
     root: File,
     nowMillis: Long = System.currentTimeMillis(),
+    removeAll: Boolean = false,
 ) {
     val rootPath = root.toPath().toAbsolutePath().normalize()
     if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) return
@@ -310,7 +311,7 @@ internal fun pruneLegacyDesktopExternalFileCache(
             if (!name.matches(LEGACY_EXTERNAL_FILE_OPERATION_DIRECTORY)) return@forEach
             if (!Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(entry)) return@forEach
             val modified = Files.getLastModifiedTime(entry, LinkOption.NOFOLLOW_LINKS).toMillis()
-            if (nowMillis >= modified && nowMillis - modified > DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS) {
+            if (removeAll || nowMillis >= modified && nowMillis - modified > DESKTOP_EXTERNAL_FILE_MAX_AGE_MILLIS) {
                 entry.toFile().deleteRecursively()
             }
         }
