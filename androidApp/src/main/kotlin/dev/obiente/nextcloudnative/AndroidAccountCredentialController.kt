@@ -32,6 +32,7 @@ internal class AndroidAccountCredentialController(
     private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String) -> Unit,
 ) {
     private val appContext = context.applicationContext
+    private val handoffCleanup = AndroidExternalFileHandoffCleanup(appContext, preferences, ::commitPreferences)
     private val accountRemovalCleanupJournal = AndroidAccountRemovalCleanupJournal(
         preferences = preferences,
         commit = ::commitPreferences,
@@ -404,13 +405,13 @@ internal class AndroidAccountCredentialController(
                                     encodeNextcloudAccountRegistry(replacement.registry),
                                 ).let { editor -> prepareCredentialSlotEdit(editor, replacement) }
                             }
-                            commitPreferences(accountRemovalCleanupJournal.prepareEdit(editor, pendingCleanup))
+                            commitPreferences(handoffCleanup.prepare(accountRemovalCleanupJournal.prepareEdit(editor, pendingCleanup)))
                         },
                         cancelAll = scheduler::cancelAll,
                         clearPublishedAccount = { publishAccountIdentity(null) },
                     )
                 },
-                clearHandoffs = AndroidExternalFileHandoffRegistry::clear,
+                clearHandoffs = handoffCleanup::complete,
                 recordFailure = ::recordAccountHandoffCleanupFailure,
             )
         }
@@ -460,7 +461,7 @@ internal class AndroidAccountCredentialController(
                                     encodeNextcloudAccountRegistry(replacement.registry),
                                 )
                             }
-                            commitPreferences(prepareCredentialSlotEdit(editor, replacement))
+                            commitPreferences(handoffCleanup.prepare(prepareCredentialSlotEdit(editor, replacement)))
                         },
                         cancelAll = scheduler::cancelAll,
                         publishAccount = publishAccountIdentity,
@@ -474,7 +475,7 @@ internal class AndroidAccountCredentialController(
                         },
                     )
                 },
-                clearHandoffs = AndroidExternalFileHandoffRegistry::clear,
+                clearHandoffs = handoffCleanup::complete,
                 recordFailure = ::recordAccountHandoffCleanupFailure,
             )
         }
