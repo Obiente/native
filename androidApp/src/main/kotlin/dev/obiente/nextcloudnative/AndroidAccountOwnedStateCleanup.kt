@@ -10,6 +10,9 @@ internal class AndroidAccountOwnedStateCleanup(
         File(context.applicationContext.cacheDir, "files-read-v1"),
     ),
     private val virtualFileCache: AndroidVirtualFileCache = AndroidVirtualFileCache(context.applicationContext),
+    private val clearPreviewAccount: (String) -> Unit = AndroidNativeMediaPreviewCache(
+        File(context.applicationContext.cacheDir, "native-media-previews-v1"),
+    )::clearAccount,
 ) {
     private val appContext = context.applicationContext
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
@@ -18,7 +21,9 @@ internal class AndroidAccountOwnedStateCleanup(
 
     suspend fun remove(session: NextcloudSession) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
-        runAndroidAccountRemovalCleanups(
+        runAndroidAccountOwnedStateCleanups(
+            NextcloudDocumentIds.cacheAccountId(session),
+            clearPreviewAccount,
             listOf(
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
@@ -32,7 +37,9 @@ internal class AndroidAccountOwnedStateCleanup(
     }
 
     suspend fun retry(session: NextcloudSession, accountIdentity: String) {
-        runAndroidAccountRemovalCleanups(
+        runAndroidAccountOwnedStateCleanups(
+            NextcloudDocumentIds.cacheAccountId(session),
+            clearPreviewAccount,
             listOf(
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
@@ -45,8 +52,10 @@ internal class AndroidAccountOwnedStateCleanup(
         )
     }
 
-    suspend fun retryWithoutCredentials(accountIdentity: String) {
-        runAndroidAccountRemovalCleanups(
+    suspend fun retryWithoutCredentials(accountIdentity: String, previewCacheIdentity: String? = null) {
+        runAndroidAccountOwnedStateCleanups(
+            previewCacheIdentity,
+            clearPreviewAccount,
             listOf(
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },
                 { fileOffline.removeForAccount(accountIdentity) },
@@ -58,4 +67,15 @@ internal class AndroidAccountOwnedStateCleanup(
             ),
         )
     }
+}
+
+internal suspend fun runAndroidAccountOwnedStateCleanups(
+    previewCacheIdentity: String?,
+    clearPreviewAccount: (String) -> Unit,
+    cleanups: List<suspend () -> Unit>,
+) {
+    val previewCleanup: suspend () -> Unit = {
+        previewCacheIdentity?.let(clearPreviewAccount)
+    }
+    runAndroidAccountRemovalCleanups(cleanups + previewCleanup)
 }
