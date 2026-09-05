@@ -4,7 +4,11 @@ import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -42,6 +46,14 @@ internal data class AndroidDurableUploadSchedulingRecoveryBatch(
     val workIdsToAwait: List<UUID>,
 )
 
+internal sealed interface AndroidDurableUploadSchedulingRecoveryStep {
+    data object Completed : AndroidDurableUploadSchedulingRecoveryStep
+
+    data class Interrupted(
+        val batch: AndroidDurableUploadSchedulingRecoveryBatch,
+    ) : AndroidDurableUploadSchedulingRecoveryStep
+}
+
 internal class AndroidDurableUploadSchedulingRecoverySignal {
     private val monitor = Any()
     private val wakeups = Channel<Unit>(Channel.CONFLATED)
@@ -64,14 +76,32 @@ internal class AndroidDurableUploadSchedulingRecoverySignal {
 
     suspend fun await(): AndroidDurableUploadSchedulingRecoveryBatch {
         wakeups.receive()
-        return synchronized(monitor) {
-            AndroidDurableUploadSchedulingRecoveryBatch(
-                immediate = immediatePending,
-                workIdsToAwait = workIdsToAwait.toList(),
-            ).also {
-                immediatePending = false
-                workIdsToAwait.clear()
+        return takeBatch()
+    }
+
+    suspend fun runUntilRequested(
+        action: suspend () -> Unit,
+    ): AndroidDurableUploadSchedulingRecoveryStep = coroutineScope {
+        val running = async(start = CoroutineStart.UNDISPATCHED) { action() }
+        try {
+            select {
+                running.onAwait { AndroidDurableUploadSchedulingRecoveryStep.Completed }
+                wakeups.onReceive {
+                    AndroidDurableUploadSchedulingRecoveryStep.Interrupted(takeBatch())
+                }
             }
+        } finally {
+            running.cancel()
+        }
+    }
+
+    private fun takeBatch(): AndroidDurableUploadSchedulingRecoveryBatch = synchronized(monitor) {
+        AndroidDurableUploadSchedulingRecoveryBatch(
+            immediate = immediatePending,
+            workIdsToAwait = workIdsToAwait.toList(),
+        ).also {
+            immediatePending = false
+            workIdsToAwait.clear()
         }
     }
 }
@@ -98,13 +128,41 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
 ) {
     require(workerFailureFollowUpDelayMillis > 0L)
     recover()
+    var immediatePending = false
+    val workIdsToAwait = linkedSetOf<UUID>()
+
+    fun addRequests(batch: AndroidDurableUploadSchedulingRecoveryBatch) {
+        immediatePending = immediatePending || batch.immediate
+        workIdsToAwait += batch.workIdsToAwait
+    }
+
     while (true) {
-        val requests = recoverySignal.await()
-        if (requests.workIdsToAwait.isNotEmpty()) {
-            requests.workIdsToAwait.forEach { workId -> awaitWorkStopsRunning(workId) }
-            wait(workerFailureFollowUpDelayMillis)
+        if (!immediatePending && workIdsToAwait.isEmpty()) addRequests(recoverySignal.await())
+        if (immediatePending) {
+            immediatePending = false
+            recover()
+            continue
         }
-        if (requests.immediate || requests.workIdsToAwait.isNotEmpty()) recover()
+
+        val workId = workIdsToAwait.first()
+        when (val step = recoverySignal.runUntilRequested { awaitWorkStopsRunning(workId) }) {
+            AndroidDurableUploadSchedulingRecoveryStep.Completed -> Unit
+            is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> {
+                addRequests(step.batch)
+                continue
+            }
+        }
+        when (
+            val step = recoverySignal.runUntilRequested {
+                wait(workerFailureFollowUpDelayMillis)
+            }
+        ) {
+            AndroidDurableUploadSchedulingRecoveryStep.Completed -> {
+                workIdsToAwait.remove(workId)
+                recover()
+            }
+            is AndroidDurableUploadSchedulingRecoveryStep.Interrupted -> addRequests(step.batch)
+        }
     }
 }
 

@@ -104,8 +104,9 @@ class AndroidDurableUploadEnqueueCancellationTest {
     }
 
     @Test
-    fun `unreadable ownership state retains the selection`() {
+    fun `unreadable ownership state persists cleanup intent without releasing`() {
         var releases = 0
+        var ownershipChecksPending = 0
 
         val released = releaseUnownedDurableUploadSelection(
             selectionId = "selection-123456",
@@ -114,10 +115,15 @@ class AndroidDurableUploadEnqueueCancellationTest {
                 releases += 1
                 true
             },
+            markOwnershipCheckPending = {
+                ownershipChecksPending += 1
+                true
+            },
         )
 
         assertFalse(released)
         assertEquals(0, releases)
+        assertEquals(1, ownershipChecksPending)
     }
 
     @Test
