@@ -3,6 +3,10 @@ package dev.obiente.nextcloudnative.app
 import java.util.prefs.Preferences
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 internal const val DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE =
     "This account has cleanup state written by a newer app version."
@@ -233,6 +237,31 @@ internal suspend fun commitDesktopAccountRemovalBeforeVirtualFileTeardown(
 ) {
     commitRemoval()
     teardownVirtualFiles()
+}
+
+internal suspend fun <Session> completeDesktopSignOutAfterRemoteRevocation(
+    session: Session?,
+    revokeRemoteSession: suspend (Session) -> Unit,
+    completeLocalRemoval: suspend () -> Unit,
+) {
+    if (session == null) {
+        completeLocalRemoval()
+        return
+    }
+    var revocationCancellation: CancellationException? = null
+    try {
+        revokeRemoteSession(session)
+    } catch (cancelled: CancellationException) {
+        revocationCancellation = cancelled
+    }
+    try {
+        withContext(NonCancellable) { completeLocalRemoval() }
+    } catch (failure: Throwable) {
+        revocationCancellation?.let(failure::addSuppressed)
+        throw failure
+    }
+    revocationCancellation?.let { throw it }
+    currentCoroutineContext().ensureActive()
 }
 
 internal fun finishCommittedDesktopAccountRemoval(
