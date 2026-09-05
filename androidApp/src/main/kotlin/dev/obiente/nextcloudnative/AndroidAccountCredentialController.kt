@@ -135,11 +135,14 @@ internal class AndroidAccountCredentialController(
 
     suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
-            val current = requireValidState()
+            val (current, suspectEncrypted) = recoverAndroidAccountCredentialStateForSelection(
+                readStore(), ::readIndependentCredentialSlotState,
+            )
+            requireSupportedCredentialSlots(current.registry)
             val selected = current.select(accountId) ?: return@withLock null
             val session = requireNotNull(selected.activeSession)
             registerSessionPrivateValues(session)
-            replaceActiveState(selected, current.activeSession)
+            replaceActiveState(selected, current.activeSession, suspectEncrypted)
             session
         }
 
@@ -493,15 +496,9 @@ internal class AndroidAccountCredentialController(
         )
     }
 
-    private fun requireValidState(): AndroidAccountCredentialState = when (val read = readStore()) {
-        is AndroidAccountCredentialStoreRead.Available -> read.state.also { state ->
-            requireSupportedCredentialSlots(state.registry)
-        }
-        is AndroidAccountCredentialStoreRead.Invalid -> error("The account credential store is invalid.")
-        AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable ->
-            error("The independent account credential slots could not be recovered.")
-        is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
-    }
+    private fun requireValidState(): AndroidAccountCredentialState = requireValidAndroidAccountCredentialState(
+        readStore(), ::requireSupportedCredentialSlots,
+    )
 
     private fun requireValidStateForAccountRemoval(accountId: NextcloudAccountId): AndroidAccountCredentialState =
         when (val read = readStore()) {

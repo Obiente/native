@@ -23,6 +23,38 @@ internal sealed interface AndroidAccountCredentialSlotRead {
     data class Unsupported(val version: Int) : AndroidAccountCredentialSlotRead
 }
 
+internal data class AndroidAccountCredentialSelectionRecovery(
+    val state: AndroidAccountCredentialState,
+    val suspectEncrypted: String?,
+)
+
+internal fun recoverAndroidAccountCredentialStateForSelection(
+    read: AndroidAccountCredentialStoreRead,
+    recoverIndependent: () -> AndroidAccountCredentialState?,
+): AndroidAccountCredentialSelectionRecovery = when (read) {
+    is AndroidAccountCredentialStoreRead.Available -> AndroidAccountCredentialSelectionRecovery(read.state, null)
+    is AndroidAccountCredentialStoreRead.Invalid -> AndroidAccountCredentialSelectionRecovery(
+        recoverIndependent() ?: error("The independent account credential slots could not be recovered."),
+        read.encrypted,
+    )
+    AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable -> AndroidAccountCredentialSelectionRecovery(
+        recoverIndependent() ?: error("The independent account credential slots could not be recovered."),
+        null,
+    )
+    is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
+}
+
+internal fun requireValidAndroidAccountCredentialState(
+    read: AndroidAccountCredentialStoreRead,
+    requireSupportedSlots: (NextcloudAccountRegistry) -> Unit,
+): AndroidAccountCredentialState = when (read) {
+    is AndroidAccountCredentialStoreRead.Available -> read.state.also { requireSupportedSlots(it.registry) }
+    is AndroidAccountCredentialStoreRead.Invalid -> error("The account credential store is invalid.")
+    AndroidAccountCredentialStoreRead.IndependentRecoveryUnavailable ->
+        error("The independent account credential slots could not be recovered.")
+    is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
+}
+
 internal data class AndroidPendingAccountRemovalCleanup(
     val accountStorageKey: String,
     val workIdentity: String,
