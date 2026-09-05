@@ -10,6 +10,10 @@ internal class DesktopAccountCredentialPersistence(
     private val flushPreferences: () -> Unit = preferences::flush,
 ) {
     private val registryStore = DesktopAccountRegistryPreferenceStore(preferences, flushPreferences)
+    private val legacyCleanupJournal = DesktopLegacyCredentialCleanupJournal(
+        preferences,
+        flushPreferences,
+    ) { recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED", "account-credentials.migrate") }
 
     fun loadActiveSession(): NextcloudSession? {
         retryPendingCredentialSave()
@@ -74,6 +78,7 @@ internal class DesktopAccountCredentialPersistence(
         persistPendingCredentialSave(persistedSession)
         try {
             saveSecret(persistedSession)
+            markPendingCredentialSaveSecretWritten()
             persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
         } catch (failure: Exception) {
             var credentialRollbackCompleted = false
@@ -190,6 +195,7 @@ internal class DesktopAccountCredentialPersistence(
     private fun retryPendingCredentialSave() {
         val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
         val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
+        val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         if (server == null && login == null) return
         if (server.isNullOrBlank() || login.isNullOrBlank()) {
             recordCredentialDiagnostic(
@@ -231,7 +237,7 @@ internal class DesktopAccountCredentialPersistence(
                 )
                 return
             }
-        } else {
+        } else if (phase == CREDENTIAL_SAVE_SECRET_WRITTEN) {
             val selected = requireNotNull(registry.select(accountId))
             try {
                 persistAccountState(prepareRegistry(selected), selected.activeAccount)
@@ -320,15 +326,18 @@ internal class DesktopAccountCredentialPersistence(
     private fun persistPendingCredentialSave(session: NextcloudSession) {
         val previousServer = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
         val previousLogin = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
+        val previousPhase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         try {
             preferences.put(KEY_PENDING_CREDENTIAL_SAVE_SERVER, session.serverUrl)
             preferences.put(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, session.loginName)
+            preferences.put(KEY_PENDING_CREDENTIAL_SAVE_PHASE, CREDENTIAL_SAVE_PREPARED)
             flushPreferences()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_SERVER, previousServer)
             preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, previousLogin)
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_PHASE, previousPhase)
             runCatching(flushPreferences)
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED",
@@ -339,19 +348,27 @@ internal class DesktopAccountCredentialPersistence(
         }
     }
 
+    private fun markPendingCredentialSaveSecretWritten() {
+        preferences.put(KEY_PENDING_CREDENTIAL_SAVE_PHASE, CREDENTIAL_SAVE_SECRET_WRITTEN)
+        flushPreferences()
+    }
+
     private fun clearPendingCredentialSave() {
         val server = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_SERVER, null)
         val login = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, null)
+        val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         if (server == null && login == null) return
         try {
             preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_SERVER)
             preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN)
+            preferences.remove(KEY_PENDING_CREDENTIAL_SAVE_PHASE)
             flushPreferences()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_SERVER, server)
             preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_LOGIN, login)
+            preferences.putOrRemove(KEY_PENDING_CREDENTIAL_SAVE_PHASE, phase)
             runCatching(flushPreferences)
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
@@ -362,19 +379,16 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun retryPendingLegacyCredentialCleanup(expected: NextcloudSession? = null) {
-        val server = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null)
-        val login = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null)
-        if (server == null && login == null) return
-        if (server.isNullOrBlank() || login.isNullOrBlank()) {
-            recordCredentialDiagnostic(
-                "ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED",
-                "account-credentials.migrate",
-            )
-            return
-        }
-        if (expected != null && (expected.serverUrl != server || expected.loginName != login)) return
+        legacyCleanupJournal.pending()
+            .filter { cleanup -> expected == null ||
+                expected.serverUrl == cleanup.serverUrl && expected.loginName == cleanup.loginName
+            }
+            .forEach(::retryPendingLegacyCredentialCleanup)
+    }
+
+    private fun retryPendingLegacyCredentialCleanup(cleanup: DesktopPendingLegacyCredentialCleanup) {
         val cleanupAllowed = try {
-            val accountId = deriveNextcloudAccountId(server, login)
+            val accountId = deriveNextcloudAccountId(cleanup.serverUrl, cleanup.loginName)
             val registry = readRegistry().registry
             registry?.accounts?.none { account -> account.id == accountId } == true ||
                 loadSecret(desktopAccountSecretReference(accountId)) != null
@@ -389,7 +403,7 @@ internal class DesktopAccountCredentialPersistence(
         }
         if (!cleanupAllowed) return
         try {
-            secretStore.clear(desktopSessionSecretReference(server, login))
+            secretStore.clear(desktopSessionSecretReference(cleanup.serverUrl, cleanup.loginName))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -400,21 +414,10 @@ internal class DesktopAccountCredentialPersistence(
             return
         }
         try {
-            preferences.remove(KEY_PENDING_LEGACY_CLEANUP_SERVER)
-            preferences.remove(KEY_PENDING_LEGACY_CLEANUP_LOGIN)
-            flushPreferences()
+            legacyCleanupJournal.clear(cleanup)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, server)
-            preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, login)
-            try {
-                flushPreferences()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                // The in-memory marker remains available for another retry in this process.
-            }
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED",
                 "account-credentials.migrate",
@@ -423,17 +426,14 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun persistPendingLegacyCredentialCleanup(session: NextcloudSession) {
-        val previousServer = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null)
-        val previousLogin = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null)
+        val previous = legacyCleanupJournal.snapshot()
         try {
-            preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, session.serverUrl)
-            preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, session.loginName)
+            legacyCleanupJournal.prepareAdd(DesktopPendingLegacyCredentialCleanup(session.serverUrl, session.loginName))
             flushPreferences()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_SERVER, previousServer)
-            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_LOGIN, previousLogin)
+            legacyCleanupJournal.restore(previous)
             try {
                 flushPreferences()
             } catch (cancelled: CancellationException) {
@@ -518,14 +518,14 @@ internal class DesktopAccountCredentialPersistence(
             registry = registryStore.read(),
             server = preferences.get(KEY_SERVER, null),
             login = preferences.get(KEY_LOGIN, null),
-            pendingLegacyCleanupServer = preferences.get(KEY_PENDING_LEGACY_CLEANUP_SERVER, null),
-            pendingLegacyCleanupLogin = preferences.get(KEY_PENDING_LEGACY_CLEANUP_LOGIN, null),
+            pendingLegacyCleanups = legacyCleanupJournal.snapshot(),
             pendingCredentialRemovals = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null),
         )
         try {
             pendingLegacyCleanupAccount?.let { account ->
-                preferences.put(KEY_PENDING_LEGACY_CLEANUP_SERVER, account.serverUrl)
-                preferences.put(KEY_PENDING_LEGACY_CLEANUP_LOGIN, account.loginName)
+                legacyCleanupJournal.prepareAdd(
+                    DesktopPendingLegacyCredentialCleanup(account.serverUrl, account.loginName),
+                )
             }
             pendingCredentialRemoval?.let { accountId ->
                 val removals = pendingCredentialRemovalIds() + accountId
@@ -540,7 +540,7 @@ internal class DesktopAccountCredentialPersistence(
             preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
             flushPreferences()
         } catch (failure: Exception) {
-            runCatching { previous.restore(preferences, registryStore) }
+            runCatching { previous.restore(preferences, registryStore, legacyCleanupJournal) }
             runCatching(flushPreferences)
             recordCredentialDiagnostic(
                 "ACCOUNT_CREDENTIAL_STORE_WRITE_FAILED",
@@ -587,16 +587,18 @@ internal class DesktopAccountCredentialPersistence(
         val registry: String?,
         val server: String?,
         val login: String?,
-        val pendingLegacyCleanupServer: String?,
-        val pendingLegacyCleanupLogin: String?,
+        val pendingLegacyCleanups: DesktopLegacyCredentialCleanupSnapshot,
         val pendingCredentialRemovals: String?,
     ) {
-        fun restore(preferences: Preferences, registryStore: DesktopAccountRegistryPreferenceStore) {
+        fun restore(
+            preferences: Preferences,
+            registryStore: DesktopAccountRegistryPreferenceStore,
+            legacyCleanupJournal: DesktopLegacyCredentialCleanupJournal,
+        ) {
             registryStore.write(registry)
             preferences.putOrRemove(KEY_SERVER, server)
             preferences.putOrRemove(KEY_LOGIN, login)
-            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_SERVER, pendingLegacyCleanupServer)
-            preferences.putOrRemove(KEY_PENDING_LEGACY_CLEANUP_LOGIN, pendingLegacyCleanupLogin)
+            legacyCleanupJournal.restore(pendingLegacyCleanups)
             preferences.putOrRemove(KEY_PENDING_CREDENTIAL_REMOVALS, pendingCredentialRemovals)
         }
     }
@@ -604,11 +606,12 @@ internal class DesktopAccountCredentialPersistence(
     private companion object {
         const val KEY_SERVER = "server"
         const val KEY_LOGIN = "login"
-        const val KEY_PENDING_LEGACY_CLEANUP_SERVER = "accountLegacyCleanupServer"
-        const val KEY_PENDING_LEGACY_CLEANUP_LOGIN = "accountLegacyCleanupLogin"
         const val KEY_PENDING_CREDENTIAL_SAVE_SERVER = "accountCredentialSaveServer"
         const val KEY_PENDING_CREDENTIAL_SAVE_LOGIN = "accountCredentialSaveLogin"
+        const val KEY_PENDING_CREDENTIAL_SAVE_PHASE = "accountCredentialSavePhase"
         const val KEY_PENDING_CREDENTIAL_REMOVALS = "accountCredentialRemovals"
+        const val CREDENTIAL_SAVE_PREPARED = "prepared"
+        const val CREDENTIAL_SAVE_SECRET_WRITTEN = "secret-written"
     }
 }
 
