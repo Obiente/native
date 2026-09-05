@@ -121,7 +121,7 @@ fun NativeGroupwareContactsScreen(
         mutationOperationInProgress = true
         onMutationInProgressChanged(true)
         val saved = try {
-            services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Contacts, encoded)
+            services.saveDurableMutationRecovery(session, accountScope, DurableMutationRecoveryKind.Contacts, encoded)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {

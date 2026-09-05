@@ -14,8 +14,24 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 
 class AndroidDynamicApiCachePolicyTest {
+    @Test
+    fun `Android services sharing a canonical cache root share removal fences`() {
+        val parent = Files.createTempDirectory("android-dynamic-process-state-").toFile()
+        try {
+            val first = androidDynamicApiProcessState(parent.resolve("cache"))
+            val second = androidDynamicApiProcessState(parent.resolve("nested/../cache"))
+
+            assertSame(first, second)
+            assertSame(first.cache, second.cache)
+            assertSame(first.coalescer, second.coalescer)
+        } finally {
+            parent.deleteRecursively()
+        }
+    }
+
     @Test
     fun `force network bypasses both Android dynamic cache reads`() = runBlocking {
         val coalescer = DynamicApiRequestCoalescer<NextcloudApiResponse>()
@@ -102,6 +118,44 @@ class AndroidDynamicApiCachePolicyTest {
 
                 assertFails { read.await() }
                 assertNull(cache.load(accountId, requestIdentity, 1_024))
+            } finally {
+                root.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun `second Android service cannot commit a GET that crossed account removal`() = runBlocking {
+        supervisorScope {
+            val root = Files.createTempDirectory("android-dynamic-cross-service-").toFile()
+            try {
+                val accountId = "b".repeat(64)
+                val requestIdentity = "GET /dashboard/widgets"
+                val firstService = androidDynamicApiProcessState(root)
+                val secondService = androidDynamicApiProcessState(root.resolve("."))
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val response = CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null)
+                val read = async {
+                    secondService.coalescer.execute(accountId, requestIdentity, load = {
+                        started.complete(Unit)
+                        release.await()
+                        NextcloudApiResponse(200, response.body, response.contentType, response.etag)
+                    }, commit = { loaded ->
+                        secondService.cache.store(
+                            accountId,
+                            requestIdentity,
+                            CachedDynamicApiResponse(loaded.status, loaded.body, loaded.contentType, loaded.etag),
+                        )
+                    })
+                }
+                started.await()
+
+                clearAndroidDynamicApiState(accountId, firstService.coalescer, firstService.cache)
+                release.complete(Unit)
+
+                assertFails { read.await() }
+                assertNull(firstService.cache.load(accountId, requestIdentity, 1_024))
             } finally {
                 root.deleteRecursively()
             }

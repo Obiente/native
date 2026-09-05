@@ -3332,10 +3332,20 @@ class DesktopNextcloudServices(
     ): String? = withContext(Dispatchers.IO) { durableMutationRecovery.load(accountScope, kind) }
 
     override suspend fun saveDurableMutationRecovery(
+        session: NextcloudSession,
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
-    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.save(accountScope, kind, encoded) }
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (durableMutationAccountScope(session) != accountScope) return@withContext false
+        accountOperationGuard.withAccountPrivateStatePublication(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { false },
+        ) {
+            durableMutationRecovery.save(accountScope, kind, encoded)
+        }
+    }
 
     override suspend fun clearDurableMutationRecovery(
         accountScope: String,
@@ -3428,17 +3438,23 @@ class DesktopNextcloudServices(
         targetRecordId: String,
         values: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
-        val encoded = requireNotNull(
-            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
-        ) { "The pending dynamic mutation is invalid." }
-        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
-            "The pending dynamic mutation identity is invalid."
+        accountOperationGuard.withAccountPrivateStatePublication(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be recorded.") },
+        ) {
+            val encoded = requireNotNull(
+                encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+            ) { "The pending dynamic mutation is invalid." }
+            val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+                "The pending dynamic mutation identity is invalid."
+            }
+            writePrivatePendingMutationFile(
+                directory = pendingDynamicMutationDirectory,
+                target = target,
+                bytes = encoded.encodeToByteArray(),
+            )
         }
-        writePrivatePendingMutationFile(
-            directory = pendingDynamicMutationDirectory,
-            target = target,
-            bytes = encoded.encodeToByteArray(),
-        )
         Unit
     }
 
@@ -3448,8 +3464,14 @@ class DesktopNextcloudServices(
         actionId: String,
         targetRecordId: String,
     ) = withContext(Dispatchers.IO) {
-        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
-            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        accountOperationGuard.withAccountPrivateStatePublication(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be cleared.") },
+        ) {
+            pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+                check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+            }
         }
         Unit
     }

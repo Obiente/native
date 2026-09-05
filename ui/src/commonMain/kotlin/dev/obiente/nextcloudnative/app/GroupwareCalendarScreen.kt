@@ -195,7 +195,7 @@ fun NativeGroupwareCalendarScreen(
         mutationOperationInProgress = true
         onMutationInProgressChanged(true)
         val saved = try {
-            services.saveDurableMutationRecovery(accountScope, DurableMutationRecoveryKind.Calendar, encoded)
+            services.saveDurableMutationRecovery(session, accountScope, DurableMutationRecoveryKind.Calendar, encoded)
         } catch (failure: CancellationException) {
             throw failure
         } catch (_: Exception) {
