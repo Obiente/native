@@ -340,8 +340,7 @@ internal class AndroidIncomingShareUploadWorker(
 internal fun shouldDeferIncomingShareForMissingSession(
     accountIdentity: String,
     retainedAccounts: List<NextcloudAccountRecord>,
-): Boolean = durableUploadAccountMismatchOutcome(accountIdentity, retainedAccounts) ==
-    DurableUploadAccountMismatchOutcome.DeferRetainedAccount
+): Boolean = androidAccountIdentityIsRetained(accountIdentity, retainedAccounts)
 
 internal fun Throwable.incomingShareRetryNotBeforeEpochMillis(nowEpochMillis: Long): Long? {
     require(nowEpochMillis >= 0L)

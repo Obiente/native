@@ -346,11 +346,7 @@ internal fun durableUploadAccountMismatchOutcome(
     expectedAccountId: String,
     retainedAccounts: List<NextcloudAccountRecord>,
 ): DurableUploadAccountMismatchOutcome =
-    if (
-        retainedAccounts.any { account ->
-            NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == expectedAccountId
-        }
-    ) {
+    if (androidAccountIdentityIsRetained(expectedAccountId, retainedAccounts)) {
         DurableUploadAccountMismatchOutcome.DeferRetainedAccount
     } else {
         DurableUploadAccountMismatchOutcome.AccountUnavailable
