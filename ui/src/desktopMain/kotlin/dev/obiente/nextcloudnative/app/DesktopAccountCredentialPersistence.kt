@@ -279,7 +279,6 @@ internal class DesktopAccountCredentialPersistence(
 
     private fun retryPendingCredentialRemoval() {
         val pending = readPendingCredentialRemovals()
-        if (pending.malformed) return
         pending.accountIds.forEach { accountId ->
             val registry = readRegistry().registry
             if (registry == null) {
@@ -293,6 +292,7 @@ internal class DesktopAccountCredentialPersistence(
                 clearPendingCredentialRemoval(accountId)
                 return@forEach
             }
+            if (!reconcileLegacyAccountMetadata(registry.activeAccount)) return@forEach
             try {
                 secretStore.clear(desktopAccountSecretReference(accountId))
             } catch (cancelled: CancellationException) {
@@ -313,15 +313,15 @@ internal class DesktopAccountCredentialPersistence(
         val encoded = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null)
             ?: return DesktopPendingCredentialRemovals.Empty
         val accountIds = linkedSetOf<NextcloudAccountId>()
-        var malformed = encoded.isBlank()
+        val malformedEntries = mutableListOf<String>()
         encoded.split(',').forEach { storageKey ->
             try {
                 accountIds += NextcloudAccountId(storageKey)
             } catch (_: IllegalArgumentException) {
-                malformed = true
+                malformedEntries += storageKey
             }
         }
-        if (malformed && malformedCredentialRemovalJournalReported.compareAndSet(false, true)) {
+        if (malformedEntries.isNotEmpty() && malformedCredentialRemovalJournalReported.compareAndSet(false, true)) {
             runCatching {
                 recordCredentialDiagnostic(
                     "ACCOUNT_CREDENTIAL_REMOVAL_JOURNAL_INVALID",
@@ -329,18 +329,40 @@ internal class DesktopAccountCredentialPersistence(
                 )
             }
         }
-        return DesktopPendingCredentialRemovals(accountIds, malformed)
+        return DesktopPendingCredentialRemovals(accountIds, malformedEntries)
+    }
+
+    private fun reconcileLegacyAccountMetadata(activeAccount: NextcloudAccountRecord?): Boolean {
+        val previousServer = preferences.get(KEY_SERVER, null)
+        val previousLogin = preferences.get(KEY_LOGIN, null)
+        return try {
+            preferences.putOrRemove(KEY_SERVER, activeAccount?.serverUrl)
+            preferences.putOrRemove(KEY_LOGIN, activeAccount?.loginName)
+            flushPreferences()
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferences.putOrRemove(KEY_SERVER, previousServer)
+            preferences.putOrRemove(KEY_LOGIN, previousLogin)
+            runCatching(flushPreferences)
+            recordCredentialDiagnostic(
+                "ACCOUNT_CREDENTIAL_STORE_CLEAR_FAILED",
+                "account-credentials.recover",
+                failure,
+            )
+            false
+        }
     }
 
     private fun clearPendingCredentialRemoval(accountId: NextcloudAccountId) {
         val previous = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null)
         val pending = readPendingCredentialRemovals()
-        if (pending.malformed) return
         val remaining = pending.accountIds - accountId
         try {
             preferences.putOrRemove(
                 KEY_PENDING_CREDENTIAL_REMOVALS,
-                if (remaining.isEmpty()) null else remaining.joinToString(",") { pending -> pending.storageKey },
+                pending.encode(remaining),
             )
             flushPreferences()
         } catch (cancelled: CancellationException) {
@@ -563,10 +585,7 @@ internal class DesktopAccountCredentialPersistence(
     ) {
         val credentialRemovals = pendingCredentialRemoval?.let { accountId ->
             val pending = readPendingCredentialRemovals()
-            check(!pending.malformed) {
-                "The credential removal journal is invalid and must be recovered before removing another account."
-            }
-            pending.accountIds + accountId
+            requireNotNull(pending.encode(pending.accountIds + accountId))
         }
         val previous = DesktopAccountPreferenceSnapshot(
             registry = registryStore.read(),
@@ -582,10 +601,7 @@ internal class DesktopAccountCredentialPersistence(
                 )
             }
             credentialRemovals?.let { removals ->
-                preferences.put(
-                    KEY_PENDING_CREDENTIAL_REMOVALS,
-                    removals.joinToString(",") { pending -> pending.storageKey },
-                )
+                preferences.put(KEY_PENDING_CREDENTIAL_REMOVALS, removals)
             }
             if (pendingLegacyCleanupAccount != null || pendingCredentialRemoval != null) flushPreferences()
             registryStore.write(encodedRegistry)
@@ -638,10 +654,16 @@ internal class DesktopAccountCredentialPersistence(
 
     private data class DesktopPendingCredentialRemovals(
         val accountIds: Set<NextcloudAccountId>,
-        val malformed: Boolean,
+        val malformedEntries: List<String>,
     ) {
+        fun encode(accountIds: Set<NextcloudAccountId>): String? {
+            if (accountIds.isEmpty() && malformedEntries.isEmpty()) return null
+            return (accountIds.map(NextcloudAccountId::storageKey) + malformedEntries)
+                .joinToString(",")
+        }
+
         companion object {
-            val Empty = DesktopPendingCredentialRemovals(emptySet(), malformed = false)
+            val Empty = DesktopPendingCredentialRemovals(emptySet(), emptyList())
         }
     }
 
