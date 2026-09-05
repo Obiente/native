@@ -125,8 +125,6 @@ private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 100_000
 private const val MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS = 3
 private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_000L
 private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
-private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
-private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
 private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
@@ -135,7 +133,6 @@ private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
 private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
 private const val VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION = "v2"
 private const val VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION = "v2"
-private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
@@ -518,98 +515,6 @@ internal fun pagedPersistedWindowsCloudFilesRecoveryRoots(
         preferences.put(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR, page.keys.last())
     }
     return page
-}
-
-private fun desktopLegacyWindowsCloudFilesRoot(accountId: String, userHome: File): File =
-    File(File(userHome, "Nextcloud Native"), accountId)
-
-internal fun unregisterSupersededWindowsCloudFilesRoot(
-    preferences: Preferences,
-    accountId: String,
-    userHome: File,
-    api: WindowsCloudFilesApi,
-) {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    val legacyRoot = validatedWindowsCloudFilesRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome), userHome)
-    api.unregisterSyncRoot(legacyRoot)
-    clearWindowsCloudFilesRootPreferences(preferences, accountId, legacyRoot)
-}
-
-private fun clearWindowsCloudFilesRootPreferences(
-    preferences: Preferences,
-    accountId: String,
-    removedRoot: Path,
-) {
-    listOf(KEY_WINDOWS_CLOUD_FILES_ROOT, windowsCloudFilesRootPreferenceKey(accountId)).forEach { key ->
-        val savedRoot = preferences.get(key, null)
-            ?.let(::File)
-            ?.toPath()
-            ?.toAbsolutePath()
-            ?.normalize()
-        if (savedRoot == removedRoot) preferences.remove(key)
-    }
-}
-
-internal fun unregisterWindowsCloudFilesRootForUninstall(
-    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
-    userHome: File = File(System.getProperty("user.home")),
-    apiFactory: () -> WindowsCloudFilesApi = ::JnaWindowsCloudFilesApi,
-) {
-    val rootsByPreference = linkedMapOf<Path, MutableSet<String>>()
-    fun addRoot(root: File?, preferenceKey: String? = null) {
-        if (root == null) return
-        val validated = validatedWindowsCloudFilesRoot(root, userHome)
-        rootsByPreference.getOrPut(validated) { linkedSetOf() }
-            .apply { preferenceKey?.let(::add) }
-    }
-    addRoot(
-        preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File),
-        KEY_WINDOWS_CLOUD_FILES_ROOT,
-    )
-    preferences.keys().filter { it.startsWith(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX) }.forEach { key ->
-        addRoot(preferences.get(key, null)?.let(::File), key)
-    }
-    val sessionAccountId = preferences.get("server", null)?.let { server ->
-        preferences.get("login", null)?.let { login ->
-            desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
-        }
-    }
-    sessionAccountId?.let { accountId ->
-        addRoot(
-            desktopWindowsCloudFilesRoot(accountId, userHome),
-            windowsCloudFilesRootPreferenceKey(accountId),
-        )
-        addRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome))
-    }
-    if (rootsByPreference.isEmpty()) return
-    val api = apiFactory()
-    var firstFailure: Throwable? = null
-    try {
-        rootsByPreference.entries
-            .sortedByDescending { (root) -> root.fileName.toString().endsWith(WINDOWS_CLOUD_FILES_ROOT_SUFFIX) }
-            .forEach { (root, preferenceKeys) ->
-                runCatching { api.unregisterSyncRoot(root) }
-                    .onSuccess { preferenceKeys.forEach(preferences::remove) }
-                    .onFailure { failure -> if (firstFailure == null) firstFailure = failure }
-            }
-    } finally {
-        api.close()
-    }
-    firstFailure?.let { throw it }
-}
-
-private fun validatedWindowsCloudFilesRoot(root: File, userHome: File): Path {
-    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
-    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
-    val name = normalizedRoot.fileName.toString()
-    val accountId = name.removeSuffix(WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
-    check(
-        normalizedRoot.parent == expectedParent &&
-            accountId.length == 64 &&
-            accountId.all { it in '0'..'9' || it in 'a'..'f' } &&
-            (name == accountId || name == accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX),
-    ) { "The stored Windows Cloud Files root is invalid." }
-    return normalizedRoot
 }
 
 internal fun virtualFileProviderPreferenceKey(accountId: String): String {
@@ -3763,7 +3668,7 @@ class DesktopNextcloudServices(
                 requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
                 accountOperationGuard.withSyncRunLock {
                     fileSyncEngine.requireAccountRemovalReady(providerAccountId)
-                    removeDesktopAccountBeforeSyncPairCleanup(
+                    val removed = removeDesktopAccountBeforeSyncPairCleanup(
                         accountId = providerAccountId,
                         prepareCleanup = accountSyncPairCleanupJournal::prepare,
                         commitCleanup = accountSyncPairCleanupJournal::commit,
@@ -3776,10 +3681,11 @@ class DesktopNextcloudServices(
                                 accountCredentials.removeAccount(accountId)
                             }
                         } },
-                        removeSyncPairs = { fileSyncEngine.removeAccountPairs(providerAccountId) },
+                        removeSyncPairs = { removeDesktopAccountOwnedState(providerAccountId) },
                     ) {
                         recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
                     }
+                    removed
                 }
             }
         }
@@ -3830,96 +3736,110 @@ class DesktopNextcloudServices(
                         virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
                     }
                 }
-                synchronized(virtualFileProviderLock) {
-                    linuxVirtualFileSystem?.unmount()
-                    linuxVirtualFileSystem = null
-                    linuxVirtualMetadataBackend = null
-                    linuxVirtualFileMountIdentity = null
-                    linuxVirtualFileFailure = null
-                    val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
-                    val provider = windowsCloudFilesProvider
-                    try {
-                        if (provider != null) {
-                            provider.removeSyncRoot()
-                        } else if (isWindowsDesktop()) {
-                            unregisterWindowsCloudFilesRootForUninstall(preferences)
-                        }
-                        windowsCloudFilesFailure = null
-                    } catch (failure: Throwable) {
-                        windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
-                        supportDiagnostics.record(
-                            SupportDiagnosticEventDraft(
-                                severity = SupportDiagnosticSeverity.Error,
-                                component = SupportDiagnosticComponent.VirtualFiles,
-                                operation = "cloud-files.signout-cleanup",
-                                outcome = "failed",
-                                fields = desktopAccountDiagnosticFields(accountId),
-                                exception = failure.toSupportDiagnosticExceptionDraft(),
-                            ),
-                        )
-                    } finally {
-                        runCatching { provider?.close() }
-                        windowsCloudFilesProvider = null
-                        windowsCloudFilesIdentity = null
-                        preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
-                        accountId?.let {
-                            clearWindowsCloudFilesRootPreferences(
-                                preferences,
-                                it,
-                                desktopWindowsCloudFilesRoot(it, userHome).toPath(),
+                val teardownVirtualFiles = {
+                    synchronized(virtualFileProviderLock) {
+                        linuxVirtualFileSystem?.unmount()
+                        linuxVirtualFileSystem = null
+                        linuxVirtualMetadataBackend = null
+                        linuxVirtualFileMountIdentity = null
+                        linuxVirtualFileFailure = null
+                        val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
+                        val provider = windowsCloudFilesProvider
+                        try {
+                            if (provider != null) {
+                                provider.removeSyncRoot()
+                            }
+                            windowsCloudFilesFailure = null
+                        } catch (failure: Throwable) {
+                            windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
+                            supportDiagnostics.record(
+                                SupportDiagnosticEventDraft(
+                                    severity = SupportDiagnosticSeverity.Error,
+                                    component = SupportDiagnosticComponent.VirtualFiles,
+                                    operation = "cloud-files.signout-cleanup",
+                                    outcome = "failed",
+                                    fields = desktopAccountDiagnosticFields(accountId),
+                                    exception = failure.toSupportDiagnosticExceptionDraft(),
+                                ),
                             )
-                            clearWindowsCloudFilesRootPreferences(
-                                preferences,
-                                it,
-                                desktopLegacyWindowsCloudFilesRoot(it, userHome).toPath(),
-                            )
-                        }
-                        if (isWindowsDesktop()) {
-                            val uninstallFailure = runCatching {
-                                unregisterWindowsCloudFilesRootForUninstall(preferences, userHome = userHome)
-                            }.exceptionOrNull()
-                            if (uninstallFailure != null) {
-                                windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
-                                    uninstallFailure.message ?: windowsCloudFilesFailureMessage
-                                )
-                                supportDiagnostics.record(
-                                    SupportDiagnosticEventDraft(
-                                        severity = SupportDiagnosticSeverity.Error,
-                                        component = SupportDiagnosticComponent.VirtualFiles,
-                                        operation = "cloud-files.signout-cleanup-retry",
-                                        outcome = "failed",
-                                        fields = desktopAccountDiagnosticFields(accountId),
-                                        exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
-                                    ),
-                                )
+                        } finally {
+                            runCatching { provider?.close() }
+                            windowsCloudFilesProvider = null
+                            windowsCloudFilesIdentity = null
+                            if (isWindowsDesktop() && accountId != null) {
+                                val uninstallFailure = runCatching {
+                                    unregisterWindowsCloudFilesRootsForAccountRemoval(
+                                        preferences = preferences,
+                                        accountId = accountId,
+                                        userHome = userHome,
+                                    )
+                                }.exceptionOrNull()
+                                if (uninstallFailure != null) {
+                                    windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
+                                        uninstallFailure.message ?: windowsCloudFilesFailureMessage
+                                    )
+                                    supportDiagnostics.record(
+                                        SupportDiagnosticEventDraft(
+                                            severity = SupportDiagnosticSeverity.Error,
+                                            component = SupportDiagnosticComponent.VirtualFiles,
+                                            operation = "cloud-files.signout-cleanup-retry",
+                                            outcome = "failed",
+                                            fields = desktopAccountDiagnosticFields(accountId),
+                                            exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(phase = DesktopFileSyncTrayPhase.Idle)
+                val finishCommittedRemoval = {
+                    finishCommittedDesktopAccountRemoval(
+                        markRemovalCommitted = { cleared = true },
+                        teardownVirtualFiles = teardownVirtualFiles,
+                        clearDiagnosticIdentity = { supportDiagnostics.setActiveAccountIdentity(null) },
+                        clearIntakeIdentity = { supportIntake.setActiveAccountIdentity(null) },
+                    )
+                }
                 clearDesktopActiveAccountBeforeSyncPairCleanup(
                     accountId,
                     accountSyncPairCleanupJournal,
                     ::desktopAccountExists,
                     {
-                        sessionPublicationGuard.serialize {
-                            check(
-                                activeAccountId == null || removeDesktopAccountCredential(
-                                    preferences,
-                                    accountId,
-                                    credentialStillExists = {
-                                        accountCredentials.listAccounts().any { account -> account.id == activeAccountId }
-                                    },
-                                ) { accountCredentials.removeAccount(activeAccountId) },
-                            )
-                            supportDiagnostics.setActiveAccountIdentity(null)
-                            supportIntake.setActiveAccountIdentity(null)
-                        }
+                        commitDesktopAccountRemovalBeforeVirtualFileTeardown(
+                            commitRemoval = {
+                                var committedFailure = false
+                                try {
+                                    sessionPublicationGuard.serialize {
+                                        check(
+                                            activeAccountId == null || removeDesktopAccountCredential(
+                                                preferences,
+                                                accountId,
+                                                credentialStillExists = {
+                                                    accountCredentials.listAccounts().any { account ->
+                                                        account.id == activeAccountId
+                                                    }
+                                                },
+                                                finishCommittedRemoval = { committedFailure = true },
+                                            ) { accountCredentials.removeAccount(activeAccountId) },
+                                        )
+                                    }
+                                } catch (failure: Throwable) {
+                                    if (committedFailure) {
+                                        runCatching(finishCommittedRemoval)
+                                            .exceptionOrNull()
+                                            ?.let(failure::addSuppressed)
+                                    }
+                                    throw failure
+                                }
+                            },
+                            teardownVirtualFiles = finishCommittedRemoval,
+                        )
                     },
-                    fileSyncEngine::removeAccountPairs,
+                    ::removeDesktopAccountOwnedState,
                     ::recordSupportDiagnostic,
                 )
-                cleared = true
             }
         } finally {
             if (!cleared) {
@@ -3936,7 +3856,7 @@ class DesktopNextcloudServices(
         retryDesktopAccountSyncPairCleanup(
             cleanup = cleanup,
             accountStillExists = ::desktopAccountExists,
-            removeSyncPairs = fileSyncEngine::removeAccountPairs,
+            removeSyncPairs = ::removeDesktopAccountOwnedState,
             clearCleanup = accountSyncPairCleanupJournal::clear,
         )
     }
@@ -3945,11 +3865,30 @@ class DesktopNextcloudServices(
         retryPendingDesktopAccountSyncPairCleanups(
             cleanupJournal = accountSyncPairCleanupJournal,
             accountStillExists = ::desktopAccountExists,
-            removeSyncPairs = fileSyncEngine::removeAccountPairs,
+            removeSyncPairs = ::removeDesktopAccountOwnedState,
             recordCleanupFailure = { accountId, failure ->
                 recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
             },
         )
+    }
+
+    private suspend fun removeDesktopAccountOwnedState(accountId: String) {
+        fileSyncEngine.removeAccountPairs(accountId)
+        if (!isWindowsDesktop()) return
+        try {
+            unregisterWindowsCloudFilesRootsForAccountRemoval(
+                preferences = preferences,
+                accountId = accountId,
+            )
+        } catch (failure: Throwable) {
+            recordVirtualFileFailure(
+                operation = "cloud-files.account-removal-cleanup",
+                accountId = accountId,
+                root = desktopWindowsCloudFilesRoot(accountId).toPath(),
+                failure = failure,
+            )
+            throw failure
+        }
     }
 
     private fun desktopAccountExists(accountId: String): Boolean = sessionPublicationGuard.serialize {
