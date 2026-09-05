@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -10,6 +11,26 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 
 class DesktopAccountRevocationCancellationTest {
+    @Test
+    fun ambiguousRemoteRevocationFailureStillCompletesLocalRemovalAndReturnsOriginalFailure() = runBlocking {
+        val events = mutableListOf<String>()
+        val revocationFailure = IOException("remote response was lost")
+
+        val thrown = assertFailsWith<IOException> {
+            completeDesktopSignOutAfterRemoteRevocation(
+                session = "account",
+                revokeRemoteSession = {
+                    events += "remote-revocation-attempted"
+                    throw revocationFailure
+                },
+                completeLocalRemoval = { events += "local-removed" },
+            )
+        }
+
+        assertTrue(thrown === revocationFailure)
+        assertEquals(listOf("remote-revocation-attempted", "local-removed"), events)
+    }
+
     @Test
     fun cancellationReturningFromRemoteRevocationStillCompletesLocalRemoval() = runBlocking {
         val events = mutableListOf<String>()

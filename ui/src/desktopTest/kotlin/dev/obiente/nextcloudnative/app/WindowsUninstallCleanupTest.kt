@@ -335,7 +335,7 @@ class WindowsUninstallCleanupTest {
                 prepareCleanup = journal::prepare,
                 commitCleanup = journal::commit,
                 clearCleanup = journal::clear,
-                accountStillExists = { false },
+                accountOwnership = { DesktopAccountOwnership.Absent },
                 removeCredential = { true },
                 removeSyncPairs = {
                     unregisterWindowsCloudFilesRootsForAccountRemoval(
@@ -358,7 +358,7 @@ class WindowsUninstallCleanupTest {
             val retryApi = RecordingWindowsCloudFilesApi()
             retryDesktopAccountSyncPairCleanup(
                 cleanup = journal.pending().single(),
-                accountStillExists = { false },
+                accountOwnership = { DesktopAccountOwnership.Absent },
                 removeSyncPairs = {
                     unregisterWindowsCloudFilesRootsForAccountRemoval(
                         preferences = preferences,

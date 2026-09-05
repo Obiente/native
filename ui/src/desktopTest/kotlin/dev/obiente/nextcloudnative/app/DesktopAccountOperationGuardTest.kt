@@ -547,7 +547,7 @@ class DesktopAccountOperationGuardTest {
             prepareCleanup = { events += "prepare-cleanup" },
             commitCleanup = { events += "commit-cleanup" },
             clearCleanup = { events += "clear-cleanup" },
-            accountStillExists = { false },
+            accountOwnership = { DesktopAccountOwnership.Absent },
             removeCredential = {
                 events += "remove-credential"
                 true
@@ -582,7 +582,7 @@ class DesktopAccountOperationGuardTest {
                 prepareCleanup = { events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
-                accountStillExists = { false },
+                accountOwnership = { DesktopAccountOwnership.Absent },
                 removeCredential = {
                     events += "remove-credential"
                     true
@@ -611,7 +611,7 @@ class DesktopAccountOperationGuardTest {
                 prepareCleanup = { events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
-                accountStillExists = { false },
+                accountOwnership = { DesktopAccountOwnership.Absent },
                 removeCredential = {
                     events += "remove-credential"
                     error("synthetic post-commit credential cleanup failure")
@@ -653,7 +653,7 @@ class DesktopAccountOperationGuardTest {
                 clearDesktopActiveAccountBeforeSyncPairCleanup(
                     accountId = CLEANUP_ACCOUNT_ID,
                     cleanupJournal = DesktopAccountSyncPairCleanupJournal(preferences),
-                    accountStillExists = { true },
+                    accountOwnership = { DesktopAccountOwnership.Present },
                     commitRemoval = {
                         events += "remove-credential"
                         error("synthetic credential commit failure")
@@ -726,7 +726,7 @@ class DesktopAccountOperationGuardTest {
                     prepareCleanup = firstJournal::prepare,
                     commitCleanup = firstJournal::commit,
                     clearCleanup = firstJournal::clear,
-                    accountStillExists = { false },
+                    accountOwnership = { DesktopAccountOwnership.Absent },
                     removeCredential = { true },
                     removeSyncPairs = { error("synthetic pair cleanup failure") },
                     recordCleanupFailure = { removalEvents += "diagnose" },
@@ -748,7 +748,7 @@ class DesktopAccountOperationGuardTest {
             val retryEvents = mutableListOf<String>()
             retryDesktopAccountSyncPairCleanup(
                 cleanup = restored.pending().single(),
-                accountStillExists = { true },
+                accountOwnership = { DesktopAccountOwnership.Present },
                 removeSyncPairs = { retryEvents += "remove-pairs-$it" },
                 clearCleanup = {
                     retryEvents += "clear-cleanup-$it"
@@ -775,12 +775,29 @@ class DesktopAccountOperationGuardTest {
                 CLEANUP_ACCOUNT_ID,
                 DesktopAccountSyncPairCleanupPhase.Prepared,
             ),
-            accountStillExists = { true },
+            accountOwnership = { DesktopAccountOwnership.Present },
             removeSyncPairs = { events += "remove-pairs" },
             clearCleanup = { events += "clear-cleanup" },
         )
 
         assertEquals(listOf("clear-cleanup"), events)
+    }
+
+    @Test
+    fun preparedCleanupPreservesPairsAndJournalWhenCredentialOwnershipIsUnknown() = runBlocking {
+        val events = mutableListOf<String>()
+
+        retryDesktopAccountSyncPairCleanup(
+            cleanup = DesktopAccountSyncPairCleanup(
+                CLEANUP_ACCOUNT_ID,
+                DesktopAccountSyncPairCleanupPhase.Prepared,
+            ),
+            accountOwnership = { DesktopAccountOwnership.Unknown },
+            removeSyncPairs = { events += "remove-pairs" },
+            clearCleanup = { events += "clear-cleanup" },
+        )
+
+        assertTrue(events.isEmpty())
     }
 
     private companion object {
