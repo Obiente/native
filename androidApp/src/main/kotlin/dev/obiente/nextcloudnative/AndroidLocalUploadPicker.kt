@@ -130,15 +130,14 @@ internal class AndroidLocalUploadPicker(context: Context) {
     }
 
     fun release(file: LocalUploadFile): Boolean {
-        val source = selections[file.selectionId] ?: load(file.selectionId)
-        return releaseDurableUploadCapability(
-            releasePermission = {
-                source?.let {
-                    resolver.releasePersistableUriPermission(
-                        it.uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
-                }
+        return releaseStoredDurableUploadCapability(
+            cachedCapability = selections[file.selectionId],
+            loadCapability = { load(file.selectionId) },
+            releasePermission = { source ->
+                resolver.releasePersistableUriPermission(
+                    source.uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
             },
             removeMetadata = {
                 preferences.edit()
@@ -193,17 +192,15 @@ internal class AndroidLocalUploadPicker(context: Context) {
 
     private fun load(selectionId: String): SelectedSource? {
         val encrypted = preferences.getString(preferenceKey(selectionId), null) ?: return null
-        return runCatching {
-            val payload = JSONObject(cipher.decrypt(encrypted))
-            val file = localUploadFile(
-                selectionId = payload.getString("selectionId"),
-                displayName = payload.getString("displayName"),
-                mimeType = if (payload.isNull("mimeType")) null else payload.getString("mimeType"),
-                sizeBytes = if (payload.isNull("sizeBytes")) null else payload.getLong("sizeBytes"),
-            )
-            require(file.selectionId == selectionId) { "The persisted upload capability changed." }
-            SelectedSource(Uri.parse(payload.getString("uri")), file)
-        }.getOrNull()
+        val payload = JSONObject(cipher.decrypt(encrypted))
+        val file = localUploadFile(
+            selectionId = payload.getString("selectionId"),
+            displayName = payload.getString("displayName"),
+            mimeType = if (payload.isNull("mimeType")) null else payload.getString("mimeType"),
+            sizeBytes = if (payload.isNull("sizeBytes")) null else payload.getLong("sizeBytes"),
+        )
+        require(file.selectionId == selectionId) { "The persisted upload capability changed." }
+        return SelectedSource(Uri.parse(payload.getString("uri")), file)
     }
 
     private fun preferenceKey(selectionId: String): String = "$PREFERENCE_PREFIX$selectionId"
@@ -258,6 +255,25 @@ internal fun releaseDurableUploadCapability(
 ): Boolean {
     runCatching(releasePermission)
     return runCatching(removeMetadata).getOrDefault(false)
+}
+
+internal fun <Capability> releaseStoredDurableUploadCapability(
+    cachedCapability: Capability?,
+    loadCapability: () -> Capability?,
+    releasePermission: (Capability) -> Unit,
+    removeMetadata: () -> Boolean,
+): Boolean {
+    val capability = cachedCapability ?: try {
+        loadCapability()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        return false
+    }
+    return releaseDurableUploadCapability(
+        releasePermission = { capability?.let(releasePermission) },
+        removeMetadata = removeMetadata,
+    )
 }
 
 private data class AndroidUploadMetadata(
