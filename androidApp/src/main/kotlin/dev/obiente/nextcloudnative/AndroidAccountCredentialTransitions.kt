@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -26,6 +27,14 @@ internal suspend fun replaceAndroidActiveStateWithAccountLeases(
         replace(replacement, previousSession, suspectEncrypted, replacedSession)
     }
 }
+
+internal fun NextcloudAccountRegistry?.asDurableRegistry(): DurableUploadAccountRegistry =
+    this?.let { registry -> DurableUploadAccountRegistry.Available(registry.accounts) }
+        ?: DurableUploadAccountRegistry.Unavailable
+
+internal fun NextcloudAccountRegistry?.asAccountRetentionSnapshot(): AndroidAccountRetentionSnapshot =
+    this?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
+        ?: AndroidAccountRetentionSnapshot.Unavailable
 
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
     active: Boolean = false,
