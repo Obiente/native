@@ -20,6 +20,37 @@ import kotlin.concurrent.thread
 
 class DesktopAccountOperationGuardTest {
     @Test
+    fun accountRemovalCannotOvertakePostSaveDynamicReadActivation() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val persistenceEntered = CompletableDeferred<Unit>()
+        val finishPersistence = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "saved-password")
+        val save = async {
+            guard.persistSessionAndActivateDynamicReads(
+                persist = {
+                    persistenceEntered.complete(Unit)
+                    finishPersistence.await()
+                    session
+                },
+                activate = { events += "activate" },
+            )
+        }
+        persistenceEntered.await()
+        val removal = async {
+            guard.serialize { events += "fence" }
+        }
+        yield()
+
+        assertFalse(removal.isCompleted)
+        finishPersistence.complete(Unit)
+        assertEquals(session, save.await())
+        removal.await()
+
+        assertEquals(listOf("activate", "fence"), events)
+    }
+
+    @Test
     fun lateDurableWriterCannotPublishAfterRemovalAndCredentialReplacement() = runBlocking {
         val guard = DesktopAccountOperationGuard()
         val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")

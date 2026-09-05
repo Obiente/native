@@ -3509,21 +3509,22 @@ class DesktopNextcloudServices(
         session
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        val persistedSession = accountOperationGuard.serializeWhenSyncIdle {
-            retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(session))
-            sessionPublicationGuard.serialize {
-                val activeAccountId = accountCredentials.activeAccountId()
-                val activeSession = activeAccountId?.let(accountCredentials::loadSession)
-                val invalidatesLiveResources = desktopSessionSaveSwitchesAccount(activeAccountId, session.accountId) ||
-                    desktopSessionSaveReplacesActiveCredential(activeSession, session)
-                requireDesktopSessionSaveAllowed(
-                    !invalidatesLiveResources || !hasLiveAccountResources(),
-                    ::recordSupportDiagnostic,
-                )
-                accountCredentials.saveSession(session).also(accountSessionPublication::publish)
-            }
-        }
-        dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(persistedSession))
+        val persistedSession = accountOperationGuard.persistSessionAndActivateDynamicReads(
+            persist = {
+                retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(session))
+                sessionPublicationGuard.serialize {
+                    val activeAccountId = accountCredentials.activeAccountId()
+                    val activeSession = activeAccountId?.let(accountCredentials::loadSession)
+                    val invalidatesLiveResources = desktopSessionSaveSwitchesAccount(activeAccountId, session.accountId) ||
+                        desktopSessionSaveReplacesActiveCredential(activeSession, session)
+                    requireDesktopSessionSaveAllowed(
+                        !invalidatesLiveResources || !hasLiveAccountResources(), ::recordSupportDiagnostic,
+                    )
+                    accountCredentials.saveSession(session).also(accountSessionPublication::publish)
+                }
+            },
+            activate = { dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it)) },
+        )
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
         persistedSession

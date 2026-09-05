@@ -946,7 +946,10 @@ internal class AndroidNextcloudServices(
 
     override suspend fun saveSession(session: NextcloudSession): NextcloudSession {
         val persisted = accountCredentials.saveSession(session)
-        dynamicApiRequestCoalescer.activateAccount(NextcloudDocumentIds.cacheAccountId(persisted))
+        activateAndroidDynamicReadsAfterCredentialSave(
+            persisted, ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX, ANDROID_ACCOUNT_OPERATION_GUARD,
+            { accountCredentials.loadSession(persisted.accountId) }, dynamicApiRequestCoalescer::activateAccount,
+        )
         return persisted
     }
 

@@ -8,6 +8,9 @@ import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import kotlin.test.Test
@@ -121,6 +124,35 @@ class AndroidDynamicApiCachePolicyTest {
             } finally {
                 root.deleteRecursively()
             }
+        }
+    }
+
+    @Test
+    fun `committed removal fences dynamic reads even when cleanup is cancelled`() = runBlocking {
+        val root = Files.createTempDirectory("android-dynamic-cancelled-cleanup-").toFile()
+        try {
+            val accountId = "c".repeat(64)
+            val requestIdentity = "GET /dashboard/widgets"
+            val cache = DynamicApiResponseCache(root)
+            val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+            cache.store(
+                accountId,
+                requestIdentity,
+                CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null),
+            )
+
+            val removal = launch {
+                currentCoroutineContext().cancel()
+                fenceAndroidDynamicApiStateForRemoval(accountId, coalescer, cache)
+            }
+            removal.join()
+
+            assertFails {
+                coalescer.execute(accountId, requestIdentity, load = { error("must remain fenced") })
+            }
+            assertNull(cache.load(accountId, requestIdentity, 1_024))
+        } finally {
+            root.deleteRecursively()
         }
     }
 
