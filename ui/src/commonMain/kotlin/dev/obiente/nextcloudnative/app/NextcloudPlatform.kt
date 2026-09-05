@@ -622,7 +622,6 @@ interface NextcloudPlatformServices : NextcloudAccountCredentialServices, DeckCa
         accountScope: String,
         kind: DurableMutationRecoveryKind,
     ): String? = null
-
     suspend fun saveDurableMutationRecovery(
         session: NextcloudSession,
         accountScope: String,
