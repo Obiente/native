@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -37,6 +38,14 @@ internal fun androidAccountRemovalCleanupRetryFailure(failure: Exception) = Ille
     "Previous account cleanup must finish before this account can be added again.",
     failure,
 )
+
+internal suspend fun retryAndroidAccountOwnedStateCleanup(
+    session: NextcloudSession,
+    pending: AndroidPendingAccountRemovalCleanup,
+    retry: suspend (NextcloudSession, String, String?) -> Unit,
+) {
+    retry(session, pending.workIdentity, pending.previewCacheIdentity)
+}
 
 internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
     resume: suspend () -> Unit,

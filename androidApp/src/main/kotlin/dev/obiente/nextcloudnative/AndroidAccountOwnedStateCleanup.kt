@@ -36,9 +36,13 @@ internal class AndroidAccountOwnedStateCleanup(
         )
     }
 
-    suspend fun retry(session: NextcloudSession, accountIdentity: String) {
+    suspend fun retry(
+        session: NextcloudSession,
+        accountIdentity: String,
+        previewCacheIdentity: String?,
+    ) {
         runAndroidAccountOwnedStateCleanups(
-            NextcloudDocumentIds.cacheAccountId(session),
+            previewCacheIdentity,
             clearPreviewAccount,
             listOf(
                 { revokeAndroidAccountDocumentGrants(appContext, accountIdentity) },

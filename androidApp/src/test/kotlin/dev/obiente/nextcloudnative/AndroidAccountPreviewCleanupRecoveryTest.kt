@@ -4,12 +4,50 @@ import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class AndroidAccountPreviewCleanupRecoveryTest {
+    @Test
+    fun readdedCanonicalAccountRetriesTheRemovedPreviewIdentity() = runBlocking {
+        val removed = session().copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443/")
+        val readded = session().copy(serverUrl = "https://cloud.example.test")
+        val pending = pendingAndroidAccountRemovalCleanup(removed)
+        val retried = mutableListOf<Pair<String, String?>>()
+
+        retryAndroidAccountOwnedStateCleanup(readded, pending) { _, workIdentity, previewIdentity ->
+            retried += workIdentity to previewIdentity
+        }
+
+        assertEquals(removed.accountId, readded.accountId)
+        assertFalse(NextcloudDocumentIds.cacheAccountId(removed) == NextcloudDocumentIds.cacheAccountId(readded))
+        assertEquals(
+            NextcloudDocumentIds.accountKey(removed) to NextcloudDocumentIds.cacheAccountId(removed),
+            retried.single(),
+        )
+    }
+
+    @Test
+    fun legacyCleanupWithoutPreviewIdentityDoesNotTargetAReaddedAccount() = runBlocking {
+        val readded = session().copy(serverUrl = "https://cloud.example.test")
+        val legacy = requireNotNull(
+            decodeAndroidPendingAccountRemovalCleanup(
+                "${readded.accountId.storageKey}:${NextcloudDocumentIds.accountKey(readded)}",
+            ),
+        )
+        val retriedPreviewIdentities = mutableListOf<String?>()
+
+        retryAndroidAccountOwnedStateCleanup(readded, legacy) { _, _, previewIdentity ->
+            retriedPreviewIdentities += previewIdentity
+        }
+
+        assertEquals(listOf<String?>(null), retriedPreviewIdentities)
+        assertFalse(NextcloudDocumentIds.cacheAccountId(readded) in retriedPreviewIdentities)
+    }
+
     @Test
     fun cleanupTombstoneCarriesThePathConfinedPreviewIdentityAndReadsLegacyEntries() {
         val pending = pendingAndroidAccountRemovalCleanup(session())
