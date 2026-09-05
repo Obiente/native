@@ -54,7 +54,9 @@ internal sealed interface AndroidDurableUploadSchedulingRecoveryStep {
     ) : AndroidDurableUploadSchedulingRecoveryStep
 }
 
-internal class AndroidDurableUploadSchedulingRecoverySignal {
+internal class AndroidDurableUploadSchedulingRecoverySignal(
+    private val beforeBatchClaim: suspend () -> Unit = {},
+) {
     private val monitor = Any()
     private val wakeups = Channel<Unit>(Channel.CONFLATED)
     private var immediatePending = false
@@ -63,19 +65,20 @@ internal class AndroidDurableUploadSchedulingRecoverySignal {
     fun request() {
         synchronized(monitor) {
             immediatePending = true
+            wakeups.trySend(Unit)
         }
-        wakeups.trySend(Unit)
     }
 
     fun requestAfterWorkStopsRunning(workId: UUID) {
         synchronized(monitor) {
             workIdsToAwait += workId
+            wakeups.trySend(Unit)
         }
-        wakeups.trySend(Unit)
     }
 
     suspend fun await(): AndroidDurableUploadSchedulingRecoveryBatch {
         wakeups.receive()
+        beforeBatchClaim()
         return takeBatch()
     }
 
@@ -87,6 +90,7 @@ internal class AndroidDurableUploadSchedulingRecoverySignal {
             select {
                 running.onAwait { AndroidDurableUploadSchedulingRecoveryStep.Completed }
                 wakeups.onReceive {
+                    beforeBatchClaim()
                     AndroidDurableUploadSchedulingRecoveryStep.Interrupted(takeBatch())
                 }
             }
@@ -96,6 +100,9 @@ internal class AndroidDurableUploadSchedulingRecoverySignal {
     }
 
     private fun takeBatch(): AndroidDurableUploadSchedulingRecoveryBatch = synchronized(monitor) {
+        while (wakeups.tryReceive().isSuccess) {
+            // Every request represented by a drained token is included in the pending state below.
+        }
         AndroidDurableUploadSchedulingRecoveryBatch(
             immediate = immediatePending,
             workIdsToAwait = workIdsToAwait.toList(),
@@ -138,6 +145,7 @@ internal suspend fun monitorQueuedDurableUploadScheduling(
 
     while (true) {
         if (!immediatePending && workIdsToAwait.isEmpty()) addRequests(recoverySignal.await())
+        if (!immediatePending && workIdsToAwait.isEmpty()) continue
         if (immediatePending) {
             immediatePending = false
             recover()
