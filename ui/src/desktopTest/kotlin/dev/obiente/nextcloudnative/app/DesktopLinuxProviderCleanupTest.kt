@@ -26,6 +26,8 @@ class DesktopLinuxProviderCleanupTest {
                     }
                 }
             },
+            mountOwnerUid = TEST_MOUNT_OWNER_UID,
+            mountOwnerGid = TEST_MOUNT_OWNER_GID,
         )
         assertTrue(fileSystem.quiesceWrites())
         val provider = DetachedDesktopLinuxProvider(fileSystem, null, "account")
@@ -45,6 +47,8 @@ class DesktopLinuxProviderCleanupTest {
             backend = CleanupBackend,
             unmountOperation = { error("synthetic unmount failure") },
             fuseAbortHandleProvider = { null },
+            mountOwnerUid = TEST_MOUNT_OWNER_UID,
+            mountOwnerGid = TEST_MOUNT_OWNER_GID,
         )
         assertTrue(fileSystem.quiesceWrites())
         val provider = DetachedDesktopLinuxProvider(fileSystem, null, "account")
@@ -56,6 +60,9 @@ class DesktopLinuxProviderCleanupTest {
         assertEquals(-ErrorCodes.EBUSY(), fileSystem.mkdir("/blocked", 0L))
     }
 }
+
+private const val TEST_MOUNT_OWNER_UID = 2_001L
+private const val TEST_MOUNT_OWNER_GID = 2_002L
 
 private object CleanupBackend : LinuxVirtualFileBackend {
     override fun resolve(path: String): LinuxVirtualFileNode? = null
