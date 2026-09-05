@@ -3523,6 +3523,7 @@ class DesktopNextcloudServices(
                 accountCredentials.saveSession(session).also(accountSessionPublication::publish)
             }
         }
+        dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(persistedSession))
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
         persistedSession
@@ -3863,6 +3864,7 @@ class DesktopNextcloudServices(
         clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
         cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
+        externalFileHandoff.removeAccount(accountId)
         removeDesktopAccountPrivateStorage(accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId))
         if (!isWindowsDesktop()) return
         try {
@@ -3937,19 +3939,23 @@ class DesktopNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launchStreamed(file, action, capability) { output, maximumBytes ->
-            val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
-            downloadDesktopDetachedFile(
-                noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
-                output, maximumBytes, USER_AGENT,
-                failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
-                limitMessage = "The file exceeds the platform byte representation.",
-                requestHeaders = mapOf("If-Match" to expectedEtag),
-                handoffEtag = expectedEtag,
-                onNetworkFailure = { started, attempt, failure ->
-                    recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
-                },
-            )
+        return accountOperationGuard.withExternalFileHandoffSession(session, { loadSession(session.accountId) }) {
+            externalFileHandoff.launchStreamed(
+                desktopFileCacheAccountId(session), file, action, capability,
+            ) { output, maximumBytes ->
+                val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+                downloadDesktopDetachedFile(
+                    noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
+                    output, maximumBytes, USER_AGENT,
+                    failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
+                    limitMessage = "The file exceeds the platform byte representation.",
+                    requestHeaders = mapOf("If-Match" to expectedEtag),
+                    handoffEtag = expectedEtag,
+                    onNetworkFailure = { started, attempt, failure ->
+                        recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
+                    },
+                )
+            }
         }
     }
 
@@ -3968,18 +3974,22 @@ class DesktopNextcloudServices(
             ocsApiRequest = true,
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            downloadDesktopDetachedFile(
-                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
-                output, maximumBytes, USER_AGENT,
-                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
-                limitMessage = "The Deck attachment exceeds the platform byte representation.",
-                accept = "*/*",
-                requestHeaders = mapOf("OCS-APIRequest" to "true"),
-                onNetworkFailure = { started, attempt, failure ->
-                    recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
-                },
-            )
+        return accountOperationGuard.withExternalFileHandoffSession(session, { loadSession(session.accountId) }) {
+            externalFileHandoff.launchDetached(
+                desktopFileCacheAccountId(session), attachment, action, capability,
+            ) { output, maximumBytes ->
+                downloadDesktopDetachedFile(
+                    noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                    output, maximumBytes, USER_AGENT,
+                    failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                    limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                    accept = "*/*",
+                    requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                    onNetworkFailure = { started, attempt, failure ->
+                        recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                    },
+                )
+            }
         }
     }
 
@@ -4703,24 +4713,28 @@ class DesktopNextcloudServices(
         )
         val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
         val specification = fileVersionContentRequest(userId, fileId, version.id)
-        return externalFileHandoff.launchStreamed(historicalCopy, action, capability) { output, maximumBytes ->
-            downloadDesktopDetachedFile(
-                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
-                output, maximumBytes, USER_AGENT,
-                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
-                limitMessage = "The historical version exceeds the platform byte representation.",
-                handoffEtag = expectedHandoffEtag,
-                validateResponseEtag = { returnedEtag ->
-                    if (version.etag != null && returnedEtag != null) {
-                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
-                            "The historical version changed while it was being exported."
+        return accountOperationGuard.withExternalFileHandoffSession(session, { loadSession(session.accountId) }) {
+            externalFileHandoff.launchStreamed(
+                desktopFileCacheAccountId(session), historicalCopy, action, capability,
+            ) { output, maximumBytes ->
+                downloadDesktopDetachedFile(
+                    noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                    output, maximumBytes, USER_AGENT,
+                    failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                    limitMessage = "The historical version exceeds the platform byte representation.",
+                    handoffEtag = expectedHandoffEtag,
+                    validateResponseEtag = { returnedEtag ->
+                        if (version.etag != null && returnedEtag != null) {
+                            check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
+                                "The historical version changed while it was being exported."
+                            }
                         }
-                    }
-                },
-                onNetworkFailure = { started, attempt, failure ->
-                    recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
-                },
-            )
+                    },
+                    onNetworkFailure = { started, attempt, failure ->
+                        recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
+                    },
+                )
+            }
         }
     }
 

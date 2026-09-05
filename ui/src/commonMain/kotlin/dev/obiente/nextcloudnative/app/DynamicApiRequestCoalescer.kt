@@ -26,7 +26,9 @@ class DynamicApiRequestCoalescer<T> {
 
     private val mutex = Mutex()
     private val accountGenerations = mutableMapOf<String, Long>()
+    private val closedAccounts = mutableSetOf<String>()
     private val fencedAccountGenerations = mutableMapOf<String, Long>()
+    private val fencedInFlight = mutableMapOf<String, MutableSet<InFlight<T>>>()
     private val requestGenerations = mutableMapOf<Key, Long>()
     private val inFlight = mutableMapOf<Key, InFlight<T>>()
 
@@ -40,8 +42,10 @@ class DynamicApiRequestCoalescer<T> {
             val key = Key(accountId, requestIdentity)
             var owner = false
             val entry = mutex.withLock {
-                inFlight[key] ?: InFlight<T>(
-                    accountGeneration = accountGenerations[accountId] ?: 0L,
+                if (accountId in closedAccounts) throw DynamicReadAccountFencedException()
+                val accountGeneration = accountGenerations[accountId] ?: 0L
+                inFlight[key]?.takeIf { current -> current.accountGeneration == accountGeneration } ?: InFlight<T>(
+                    accountGeneration = accountGeneration,
                     requestGeneration = requestGenerations[key] ?: 0L,
                     result = CompletableDeferred<T>(),
                 ).also {
@@ -66,7 +70,7 @@ class DynamicApiRequestCoalescer<T> {
                             inFlight.remove(key, entry)
                             entry.result.completeExceptionally(failure)
                             retireRequestGenerationIfIdle(key, entry.requestGeneration)
-                            retireAccountFenceIfIdle(accountId)
+                            retireAccountFenceEntry(accountId, entry)
                         }
                     }
                     throw failure
@@ -80,7 +84,7 @@ class DynamicApiRequestCoalescer<T> {
                         entry.result.completeExceptionally(failure)
                         retireRequestGenerationIfIdle(key, entry.requestGeneration)
                     }
-                    retireAccountFenceIfIdle(accountId)
+                    retireAccountFenceEntry(accountId, entry)
                     cause
                 }
                 if (invalidation == InvalidationCause.Invalidated) continue
@@ -92,7 +96,7 @@ class DynamicApiRequestCoalescer<T> {
                 if (cause != InvalidationCause.None) {
                     inFlight.remove(key, entry)
                     entry.result.completeExceptionally(cause.exception())
-                    retireAccountFenceIfIdle(accountId)
+                    retireAccountFenceEntry(accountId, entry)
                     cause
                 } else {
                     try {
@@ -124,18 +128,28 @@ class DynamicApiRequestCoalescer<T> {
 
     /**
      * Invalidates an account and terminates reads that entered before the fence.
-     * Reads invoked after the fence use the new generation normally.
+     * The account remains closed until credential activation explicitly reopens it.
      */
     suspend fun fenceAccount(accountId: String, invalidate: () -> Unit) {
         mutex.withLock {
             val generation = (accountGenerations[accountId] ?: 0L) + 1L
             accountGenerations[accountId] = generation
-            if (inFlight.any { (key, entry) -> key.accountId == accountId && entry.accountGeneration < generation }) {
+            closedAccounts += accountId
+            val fenced = inFlight.filter { (key, entry) ->
+                key.accountId == accountId && entry.accountGeneration < generation
+            }.values
+            if (fenced.isNotEmpty()) {
                 fencedAccountGenerations[accountId] = generation
+                fencedInFlight.getOrPut(accountId, ::mutableSetOf).addAll(fenced)
             }
             requestGenerations.keys.removeAll { it.accountId == accountId }
             invalidate()
         }
+    }
+
+    /** Reopens reads only after the caller has persisted the exact account credentials. */
+    suspend fun activateAccount(accountId: String) {
+        mutex.withLock { closedAccounts.remove(accountId) }
     }
 
     suspend fun invalidateRequest(
@@ -179,9 +193,11 @@ class DynamicApiRequestCoalescer<T> {
         }
     }
 
-    private fun retireAccountFenceIfIdle(accountId: String) {
-        val fence = fencedAccountGenerations[accountId] ?: return
-        if (inFlight.none { (key, entry) -> key.accountId == accountId && entry.accountGeneration < fence }) {
+    private fun retireAccountFenceEntry(accountId: String, entry: InFlight<T>) {
+        val entries = fencedInFlight[accountId] ?: return
+        entries.remove(entry)
+        if (entries.isEmpty()) {
+            fencedInFlight.remove(accountId)
             fencedAccountGenerations.remove(accountId)
         }
     }

@@ -24,6 +24,7 @@ internal class AndroidAccountOwnedStateCleanup(
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
     private val incomingShares = AndroidIncomingShareAccountCleanup(appContext)
     private val durableUploads = AndroidDurableUploadAccountCleanup(appContext)
+    private val mediaBackupLedger = AndroidMediaBackupAccountCleanup(appContext)
     private val mutationRecovery = AndroidAccountMutationRecoveryCleanup(appContext)
 
     suspend fun remove(session: NextcloudSession) {
@@ -38,6 +39,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { incomingShares.removeForAccount(session) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { mutationRecovery.clearDurableRecoveries(durableMutationAccountScope(session)) },
@@ -62,6 +64,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { incomingShares.removeForAccount(accountIdentity, session) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
@@ -85,6 +88,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { incomingShares.removeForAccount(accountIdentity) },
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
+                { mediaBackupLedger.removeForAccount(accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
