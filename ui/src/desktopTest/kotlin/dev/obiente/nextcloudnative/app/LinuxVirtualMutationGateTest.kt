@@ -52,7 +52,11 @@ class LinuxVirtualMutationGateTest {
 
     @Test
     fun `failed quiescence reopens automatically so an unreleased writer can close`() {
-        val fileSystem = LinuxNextcloudVirtualFileSystem(QuiescenceBackend())
+        val fileSystem = LinuxNextcloudVirtualFileSystem(
+            backend = QuiescenceBackend(),
+            mountOwnerUid = TEST_MOUNT_OWNER_UID,
+            mountOwnerGid = TEST_MOUNT_OWNER_GID,
+        )
         val fileInfo = FuseFileInfo.of(Runtime.getSystemRuntime().memoryManager.allocateDirect(256)).apply {
             flags.set(1L)
         }
@@ -70,10 +74,12 @@ class LinuxVirtualMutationGateTest {
         val closeStarted = CountDownLatch(1)
         val allowClose = CountDownLatch(1)
         val fileSystem = LinuxNextcloudVirtualFileSystem(
-            QuiescenceBackend {
+            backend = QuiescenceBackend {
                 closeStarted.countDown()
                 check(allowClose.await(5, TimeUnit.SECONDS))
             },
+            mountOwnerUid = TEST_MOUNT_OWNER_UID,
+            mountOwnerGid = TEST_MOUNT_OWNER_GID,
         )
         val runtime = Runtime.getSystemRuntime()
         val writer = FuseFileInfo.of(runtime.memoryManager.allocateDirect(256))
@@ -100,6 +106,9 @@ class LinuxVirtualMutationGateTest {
         }
     }
 }
+
+private const val TEST_MOUNT_OWNER_UID = 2_001L
+private const val TEST_MOUNT_OWNER_GID = 2_002L
 
 private class QuiescenceBackend(
     private val onWriteClose: () -> Unit = {},
