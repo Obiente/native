@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import androidx.work.NetworkType
 import dev.obiente.nextcloudnative.app.DurableUploadScope
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
@@ -17,18 +18,31 @@ import org.json.JSONObject
 
 class AndroidDurableUploadCleanupPruningTest {
     @Test
-    fun `reconciliation schedules pending terminal cleanup but skips completed history`() = runBlocking {
+    fun `reconciliation runs terminal cleanup without consulting upload work ownership`() = runBlocking {
         val pending = fixtureJob(index = 1, cleanupPending = true)
         val history = fixtureJob(index = 2)
-        val scheduled = mutableListOf<AndroidDurableMultipartUploadJob>()
+        val cleaned = mutableListOf<AndroidDurableMultipartUploadJob>()
 
         val allScheduled = reconcileQueuedDurableUploads(
             jobs = listOf(pending, history),
-            schedule = { job -> scheduled += job },
+            schedulerOwns = { error("Local cleanup must not wait for upload work ownership.") },
+            cleanupCapability = { job -> cleaned += job },
+            schedule = { error("Terminal cleanup must not use network-constrained upload work.") },
         )
 
         assertTrue(allScheduled)
-        assertEquals(listOf(pending), scheduled)
+        assertEquals(listOf(pending), cleaned)
+    }
+
+    @Test
+    fun `only queued uploads are eligible for connected upload work`() {
+        val queued = fixtureJob(index = 1, state = DurableUploadState.Queued)
+        val pending = fixtureJob(index = 2, cleanupPending = true)
+
+        assertEquals(NetworkType.CONNECTED, networkTypeForDurableUploadWork(queued))
+        assertFailsWith<IllegalArgumentException> {
+            networkTypeForDurableUploadWork(pending)
+        }
     }
 
     @Test
@@ -37,19 +51,24 @@ class AndroidDurableUploadCleanupPruningTest {
         val queued = fixtureJob(index = 2, state = DurableUploadState.Queued)
         val attempts = mutableListOf<String>()
 
-        val allScheduled = reconcileQueuedDurableUploads(listOf(pending, queued)) { job ->
-            attempts += job.id
-            if (job == pending) error("synthetic cleanup scheduling failure")
-        }
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(pending, queued),
+            cleanupCapability = { job ->
+                attempts += job.id
+                error("synthetic cleanup failure")
+            },
+            schedule = { job -> attempts += job.id },
+        )
 
         assertFalse(allScheduled)
         assertEquals(listOf(pending.id, queued.id), attempts)
     }
 
     @Test
-    fun `unsupported account registry schedules terminal cleanup but not queued uploads`() = runBlocking {
+    fun `unsupported account registry runs terminal cleanup but not queued uploads`() = runBlocking {
         val pending = fixtureJob(index = 1, cleanupPending = true)
         val queued = fixtureJob(index = 2, state = DurableUploadState.Queued)
+        val cleaned = mutableListOf<AndroidDurableMultipartUploadJob>()
         val scheduled = mutableListOf<AndroidDurableMultipartUploadJob>()
         val accountResolutionAvailable = androidCredentialFreeRegistryAllowsAccountResolution(
             """{"version":99,"accounts":[]}""",
@@ -58,12 +77,14 @@ class AndroidDurableUploadCleanupPruningTest {
         val allScheduled = reconcileQueuedDurableUploads(
             jobs = listOf(pending, queued),
             allowQueuedScheduling = accountResolutionAvailable,
+            cleanupCapability = cleaned::add,
             schedule = scheduled::add,
         )
 
         assertFalse(accountResolutionAvailable)
         assertTrue(allScheduled)
-        assertEquals(listOf(pending), scheduled)
+        assertEquals(listOf(pending), cleaned)
+        assertTrue(scheduled.isEmpty())
     }
 
     @Test
@@ -71,9 +92,11 @@ class AndroidDurableUploadCleanupPruningTest {
         val pending = fixtureJob(index = 1, cleanupPending = true)
 
         assertFailsWith<CancellationException> {
-            reconcileQueuedDurableUploads(listOf(pending)) {
-                throw CancellationException("recovery stopped")
-            }
+            reconcileQueuedDurableUploads(
+                jobs = listOf(pending),
+                cleanupCapability = { throw CancellationException("recovery stopped") },
+                schedule = { error("Terminal cleanup must not schedule upload work.") },
+            )
         }
         Unit
     }
@@ -182,15 +205,18 @@ class AndroidDurableUploadCleanupPruningTest {
 
     @Test
     fun `cleanup commit failure retries and preserves cancellation`() {
+        var recoveryRequests = 0
         assertEquals(
             "retry",
             resultAfterDurableUploadCapabilityRelease(
                 releaseCapability = { true },
                 completeCapabilityCleanup = { error("queue unavailable") },
+                onCleanupRetained = { recoveryRequests += 1 },
                 releasedResult = "finished",
                 retainedResult = "retry",
             ),
         )
+        assertEquals(1, recoveryRequests)
         assertFailsWith<CancellationException> {
             resultAfterDurableUploadCapabilityRelease(
                 releaseCapability = { true },
