@@ -21,6 +21,7 @@ import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.util.UUID
+import java.util.concurrent.Executor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -76,8 +77,17 @@ internal class AndroidDurableMultipartUploads(context: Context) {
             .asSequence()
             .onEach { job ->
                 if (job.state == DurableUploadState.Queued) {
-                    runCatching { schedule(job) }
-                        .onFailure { requestQueuedDurableUploadSchedulingRecovery() }
+                    runCatching {
+                        val operation = schedule(job)
+                        observeDurableUploadSchedulingResult(
+                            result = operation.result,
+                            addListener = { listener ->
+                                operation.result.addListener(listener, DIRECT_COMPLETION_EXECUTOR)
+                            },
+                        )
+                    }.onFailure {
+                        requestQueuedDurableUploadSchedulingRecovery()
+                    }
                 }
             }
             .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
@@ -96,6 +106,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                     },
                 )
             } catch (cancelled: CancellationException) {
+                runCatching { requestQueuedDurableUploadSchedulingRecovery() }
                 throw cancelled
             } catch (_: Exception) {
                 requestQueuedDurableUploadSchedulingRecovery()
@@ -147,6 +158,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
 
     private companion object {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
+        val DIRECT_COMPLETION_EXECUTOR = Executor(Runnable::run)
     }
 }
 
