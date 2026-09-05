@@ -545,17 +545,82 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
-    fun accountRetirementKeepsPairIdsUntilEveryScheduleCancellationCompletes() = runBlocking {
+    fun accountRetirementReconcilesBeforePersistingAndReleasesOnlyUnsharedSafGrants() = runBlocking {
+        val sharedRoot = "content://documents/shared"
+        val retiredRoot = "content://documents/retired"
+        val retiredPairs = listOf(
+            fileSyncPair("retired-a", "removed-account", sharedRoot),
+            fileSyncPair("retired-b", "removed-account", retiredRoot),
+            fileSyncPair("retired-c", "removed-account", retiredRoot),
+        )
+        val retainedPairs = listOf(fileSyncPair("retained", "retained-account", sharedRoot))
+        val events = mutableListOf<String>()
+
+        retireConfiguredFileSyncAccountPairs(
+            retiredPairs = retiredPairs,
+            retainedPairs = retainedPairs,
+            reconcileLocalDownloads = { pair -> events += "reconcile-${pair.id}"; true },
+            cancelSchedule = { pair -> events += "cancel-${pair.id}" },
+            persistRetirement = { events += "persist-retirement" },
+            releaseLocalGrant = { localRootId -> events += "release-$localRootId" },
+        )
+
+        assertEquals(
+            listOf(
+                "reconcile-retired-a",
+                "reconcile-retired-b",
+                "reconcile-retired-c",
+                "cancel-retired-a",
+                "cancel-retired-b",
+                "cancel-retired-c",
+                "persist-retirement",
+                "release-$retiredRoot",
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun accountRetirementKeepsPairsAndGrantsWhenLocalRecoveryIsUnavailable() = runBlocking {
+        val retiredPairs = listOf(
+            fileSyncPair("retired-a", "removed-account", "content://documents/first"),
+            fileSyncPair("retired-b", "removed-account", "content://documents/second"),
+        )
         val events = mutableListOf<String>()
 
         assertFailsWith<IllegalStateException> {
-            cancelAndroidFileSyncPairSchedulesBeforeRetirement(
-                pairIds = listOf("pair-a", "pair-b"),
-                cancelSchedule = { pairId ->
-                    events += "cancel-$pairId"
-                    if (pairId == "pair-b") error("synthetic WorkManager cancellation failure")
+            retireConfiguredFileSyncAccountPairs(
+                retiredPairs = retiredPairs,
+                retainedPairs = emptyList(),
+                reconcileLocalDownloads = { pair -> events += "reconcile-${pair.id}"; pair.id == "retired-a" },
+                cancelSchedule = { pair -> events += "cancel-${pair.id}" },
+                persistRetirement = { events += "persist-retirement" },
+                releaseLocalGrant = { localRootId -> events += "release-$localRootId" },
+            )
+        }
+
+        assertEquals(listOf("reconcile-retired-a", "reconcile-retired-b"), events)
+    }
+
+    @Test
+    fun accountRetirementKeepsPairIdsUntilEveryScheduleCancellationCompletes() = runBlocking {
+        val retiredPairs = listOf(
+            fileSyncPair("pair-a", "removed-account", "first-root"),
+            fileSyncPair("pair-b", "removed-account", "second-root"),
+        )
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            retireConfiguredFileSyncAccountPairs(
+                retiredPairs = retiredPairs,
+                retainedPairs = emptyList(),
+                reconcileLocalDownloads = { true },
+                cancelSchedule = { pair ->
+                    events += "cancel-${pair.id}"
+                    if (pair.id == "pair-b") error("synthetic WorkManager cancellation failure")
                 },
                 persistRetirement = { events += "persist-retirement" },
+                releaseLocalGrant = { localRootId -> events += "release-$localRootId" },
             )
         }
 
@@ -1050,6 +1115,18 @@ class AndroidFileSyncEngineInvariantTest {
         assertEquals(null, guard.capture("account-old"))
         assertTrue(guard.capture("account-new") != null)
     }
+
+    private fun fileSyncPair(
+        id: String,
+        accountId: String,
+        localRootId: String,
+    ) = FileSyncPair(
+        id = id,
+        accountId = accountId,
+        localRootId = localRootId,
+        remoteRootPath = "Documents",
+        configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+    )
 
     private fun assertThreadBlocked(thread: Thread) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
