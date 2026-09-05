@@ -11,6 +11,8 @@ import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.io.IOException
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -592,6 +594,163 @@ class AndroidDurableMultipartUploadPolicyTest {
         }
 
         assertEquals(2, recoveryRuns)
+    }
+
+    @Test
+    fun `worker failure wake waits for WorkManager to relinquish ownership`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val workId = UUID.randomUUID()
+        val initialRecoveryFinished = CompletableDeferred<Unit>()
+        val readinessEntered = CompletableDeferred<Unit>()
+        val workStoppedRunning = CompletableDeferred<Unit>()
+        var workManagerOwnsJob = true
+        var recoveryRuns = 0
+
+        val monitor = async {
+            monitorQueuedDurableUploadScheduling(
+                recover = {
+                    recoveryRuns += 1
+                    if (recoveryRuns == 1) {
+                        initialRecoveryFinished.complete(Unit)
+                    } else {
+                        assertFalse(workManagerOwnsJob)
+                        throw CancellationException("Test completed")
+                    }
+                },
+                awaitWorkStopsRunning = { requestedWorkId ->
+                    assertEquals(workId, requestedWorkId)
+                    readinessEntered.complete(Unit)
+                    workStoppedRunning.await()
+                },
+                recoverySignal = recoverySignal,
+            )
+        }
+
+        initialRecoveryFinished.await()
+        recoverySignal.requestAfterWorkStopsRunning(workId)
+        readinessEntered.await()
+        yield()
+        assertEquals(1, recoveryRuns)
+
+        workManagerOwnsJob = false
+        workStoppedRunning.complete(Unit)
+        assertFailsWith<CancellationException> { monitor.await() }
+        assertEquals(2, recoveryRuns)
+    }
+
+    @Test
+    fun `recovery signal conflates immediate requests and deduplicates worker ids`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val firstWorkId = UUID.randomUUID()
+        val secondWorkId = UUID.randomUUID()
+
+        recoverySignal.request()
+        recoverySignal.request()
+        recoverySignal.requestAfterWorkStopsRunning(firstWorkId)
+        recoverySignal.requestAfterWorkStopsRunning(firstWorkId)
+        recoverySignal.requestAfterWorkStopsRunning(secondWorkId)
+
+        assertEquals(
+            AndroidDurableUploadSchedulingRecoveryBatch(
+                immediate = true,
+                workIdsToAwait = listOf(firstWorkId, secondWorkId),
+            ),
+            recoverySignal.await(),
+        )
+    }
+
+    @Test
+    fun `worker readiness retries a transient state query for the same work id`() = runBlocking {
+        val workId = UUID.randomUUID()
+        val requestedWorkIds = mutableListOf<UUID>()
+        val waits = mutableListOf<Long>()
+
+        awaitDurableUploadWorkToStopRunning(
+            workId = workId,
+            retryDelayMillis = 25L,
+            awaitWorkStopsRunning = { requestedWorkId ->
+                requestedWorkIds += requestedWorkId
+                if (requestedWorkIds.size == 1) {
+                    throw IOException("Synthetic WorkManager database failure")
+                }
+            },
+            wait = waits::add,
+        )
+
+        assertEquals(listOf(workId, workId), requestedWorkIds)
+        assertEquals(listOf(25L), waits)
+    }
+
+    @Test
+    fun `worker readiness cancellation propagates without retrying`() = runBlocking {
+        val workId = UUID.randomUUID()
+        val expected = CancellationException("Recovery owner stopped")
+        val waits = mutableListOf<Long>()
+
+        val actual = assertFailsWith<CancellationException> {
+            awaitDurableUploadWorkToStopRunning(
+                workId = workId,
+                awaitWorkStopsRunning = { requestedWorkId ->
+                    assertEquals(workId, requestedWorkId)
+                    throw expected
+                },
+                wait = waits::add,
+            )
+        }
+
+        assertTrue(actual === expected)
+        assertTrue(waits.isEmpty())
+    }
+
+    @Test
+    fun `asynchronous scheduling failure requests recovery`() {
+        val schedulingResult = CompletableFuture<Unit>()
+        var recoveryRequests = 0
+
+        observeDurableUploadSchedulingResult(
+            result = schedulingResult,
+            addListener = { listener ->
+                schedulingResult.whenComplete { _, _ -> listener.run() }
+            },
+            requestRecovery = { recoveryRequests += 1 },
+        )
+        assertEquals(0, recoveryRequests)
+
+        schedulingResult.completeExceptionally(IOException("WorkManager rejected the request"))
+
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `cancelled scheduling result requests recovery without blocking`() {
+        val schedulingResult = CompletableFuture<Unit>()
+        var recoveryRequests = 0
+
+        observeDurableUploadSchedulingResult(
+            result = schedulingResult,
+            addListener = { listener ->
+                schedulingResult.whenComplete { _, _ -> listener.run() }
+            },
+            requestRecovery = { recoveryRequests += 1 },
+        )
+
+        assertTrue(schedulingResult.cancel(false))
+        assertEquals(1, recoveryRequests)
+    }
+
+    @Test
+    fun `premature scheduling listener requests recovery instead of blocking`() {
+        val schedulingResult = CompletableFuture<Unit>()
+        var recoveryRequests = 0
+
+        observeDurableUploadSchedulingResult(
+            result = schedulingResult,
+            addListener = Runnable::run,
+            requestRecovery = { recoveryRequests += 1 },
+        )
+
+        assertFalse(schedulingResult.isDone)
+        assertEquals(1, recoveryRequests)
     }
 
     @Test

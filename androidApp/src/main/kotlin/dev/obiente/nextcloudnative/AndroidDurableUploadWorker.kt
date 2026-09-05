@@ -19,8 +19,12 @@ internal class DeckAttachmentUploadWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        runDurableUploadWorkerWithRecoverySignal {
+    override suspend fun doWork(): Result = runDurableUploadWorkerWithRecoverySignal(
+        requestRecovery = {
+            requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(id)
+        },
+    ) {
+        withContext(Dispatchers.IO) {
             executeDurableUploadWork()
         }
     }
