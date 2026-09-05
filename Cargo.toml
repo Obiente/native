@@ -17,6 +17,7 @@ pretty_assertions = "1.4"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Security_Cryptography",
+    "Security_Cryptography_Core",
     "Storage",
     "Storage_Provider",
     "Storage_Search",

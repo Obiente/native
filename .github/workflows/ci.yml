@@ -337,6 +337,8 @@ jobs:
           steps.changes.outputs.windows == 'true'
         shell: pwsh
         run: |
+          cargo test --locked --bin nextcloud-native-shell-registrar
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\gradlew.bat --no-daemon `
             -PncDirectDesktopPackageUpdates=true `
             :ui:desktopTest :ui:packageMsi

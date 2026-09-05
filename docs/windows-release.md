@@ -97,6 +97,9 @@ previous published package:
 - upgrade preserves account, sync, cache, and recovery state and starts only
   the new version;
 - account removal disconnects and unregisters its sync root;
+- recovery accepts an empty saved provider GUID only with the exact Windows
+  user, account root context, checksum, and permitted path; foreign identities
+  and damaged or unsupported context remain rejected;
 - uninstall leaves no active provider process or unusable registered sync
   root;
 - silent installation and uninstall work for package-manager validation.
@@ -104,6 +107,14 @@ previous published package:
 Explorer and writeback qualification uses disposable synthetic accounts. Do
 not use personal file trees or include server, account, path, or credential
 details in logs and public artifacts.
+
+Run `cargo test --locked --bin nextcloud-native-shell-registrar` for deterministic
+registration ownership coverage. On a Windows test checkout on NTFS, also run
+`cargo test --locked --bin nextcloud-native-shell-registrar persisted_root_can_be_owned_and_unregistered -- --ignored`.
+That explicit integration test creates and removes only its disposable empty
+Explorer root under the checkout's ignored `target` directory. It checks saved
+registration ownership, rejection of a different requested path, and
+unregistration. It does not validate personal-account recovery or writeback.
 
 ## WinGet delivery
 
