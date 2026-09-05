@@ -97,6 +97,27 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun workerAccountResolutionRecoversALegacyAggregateBeforeEnumeration() {
+        val session = firstSession()
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(session.accountRecord())
+        var aggregateRecoveryCount = 0
+
+        val resolved = resolveStoredAndroidAccountSession(
+            accountIdentity = NextcloudDocumentIds.accountKey(session),
+            listAccounts = {
+                recoverAndroidCredentialFreeRegistryForCredentialLoad(restored = null) {
+                    aggregateRecoveryCount += 1
+                    registry
+                }?.accounts.orEmpty()
+            },
+            loadSession = { accountId -> session.takeIf { it.accountId == accountId } },
+        )
+
+        assertEquals(session, resolved)
+        assertEquals(1, aggregateRecoveryCount)
+    }
+
+    @Test
     fun clearingRecoveredIndependentStateRemovesOnlyItsActiveAccount() {
         val first = firstSession()
         val second = secondSession()
