@@ -199,6 +199,7 @@ internal data class AndroidDurableMultipartUploadJob(
     val request: NextcloudMultipartUploadRequest,
     val state: DurableUploadState,
     val message: String?,
+    val capabilityCleanupPending: Boolean = false,
     val updatedAtEpochMillis: Long = System.currentTimeMillis(),
 ) {
     init {
@@ -213,6 +214,9 @@ internal data class AndroidDurableMultipartUploadJob(
         }
         require(message == null || message.length <= MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS) {
             "The durable upload message is too long."
+        }
+        require(!capabilityCleanupPending || state.isTerminal()) {
+            "Only a terminal durable upload can have pending capability cleanup."
         }
     }
 
@@ -280,7 +284,7 @@ internal class AndroidDurableMultipartUploadStore(
     fun hasActiveSelection(selectionId: String): Boolean = synchronized(LOCK) {
         readAll().any {
             it.request.file.selectionId == selectionId &&
-                !it.state.isTerminal()
+                it.mustRetain()
         }
     }
 
@@ -293,6 +297,14 @@ internal class AndroidDurableMultipartUploadStore(
         val removed = current.filter { job -> job.accountId == accountId }
         if (removed.isNotEmpty()) writeAll(current.filterNot { job -> job.accountId == accountId })
         removed
+    }
+
+    fun completeCapabilityCleanup(id: String) = synchronized(LOCK) {
+        val current = readAll().toMutableList()
+        val index = current.indexOfFirst { job -> job.id == id }
+        if (index < 0 || !current[index].capabilityCleanupPending) return@synchronized
+        current[index] = current[index].copy(capabilityCleanupPending = false)
+        writeAll(pruneDurableUploadJobs(current))
     }
 
     fun transition(
@@ -310,6 +322,7 @@ internal class AndroidDurableMultipartUploadStore(
         val updated = current[index].copy(
             state = target,
             message = message?.take(MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS),
+            capabilityCleanupPending = target.isTerminal(),
             updatedAtEpochMillis = System.currentTimeMillis(),
         )
         current[index] = updated
@@ -415,6 +428,12 @@ internal fun requireCanAddDurableUpload(
     require(current.none { it.id == job.id }) {
         "The attachment upload id is already in use."
     }
+    require(
+        current.count(AndroidDurableMultipartUploadJob::mustRetain) <
+            AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS,
+    ) {
+        "Background upload cleanup must finish before another upload can be queued."
+    }
     require(active.size < AndroidDurableMultipartUploadStore.MAX_ACTIVE_UPLOADS) {
         "Too many attachment uploads are already pending."
     }
@@ -442,12 +461,15 @@ internal fun requireCanAddDurableUpload(
 internal fun pruneDurableUploadJobs(
     jobs: List<AndroidDurableMultipartUploadJob>,
 ): List<AndroidDurableMultipartUploadJob> {
-    val active = jobs.filterNot { it.state.isTerminal() }
-    val terminal = jobs.filter { it.state.isTerminal() }
+    val retained = jobs.filter(AndroidDurableMultipartUploadJob::mustRetain)
+    val terminal = jobs.filterNot(AndroidDurableMultipartUploadJob::mustRetain)
         .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
-        .take((AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS - active.size).coerceAtLeast(0))
-    return (active + terminal).sortedBy(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
+        .take((AndroidDurableMultipartUploadStore.MAX_STORED_UPLOADS - retained.size).coerceAtLeast(0))
+    return (retained + terminal).sortedBy(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
 }
+
+private fun AndroidDurableMultipartUploadJob.mustRetain(): Boolean =
+    !state.isTerminal() || capabilityCleanupPending
 
 private fun DurableUploadState.isTerminal(): Boolean =
     this == DurableUploadState.Completed ||
@@ -491,6 +513,7 @@ private fun AndroidDurableMultipartUploadJob.toJson(): JSONObject = JSONObject()
     .put("itemId", resource.itemId)
     .put("state", state.name)
     .put("message", message)
+    .put("capabilityCleanupPending", capabilityCleanupPending)
     .put("updatedAt", updatedAtEpochMillis)
     .put("method", request.method.name)
     .put("relativePath", request.relativePath)
@@ -565,6 +588,7 @@ private fun JSONObject.toJob(): AndroidDurableMultipartUploadJob {
         request = request,
         state = DurableUploadState.valueOf(getString("state")),
         message = if (isNull("message")) null else getString("message"),
+        capabilityCleanupPending = optBoolean("capabilityCleanupPending", false),
         updatedAtEpochMillis = getLong("updatedAt"),
     )
 }
