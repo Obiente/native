@@ -979,7 +979,7 @@ private val calendarMutationRecoveryJson = Json {
     ignoreUnknownKeys = true
 }
 
-internal fun durableMutationAccountScope(session: NextcloudSession): String =
+fun durableMutationAccountScope(session: NextcloudSession): String =
     publicContentSha256(
         listOf(session.serverUrl.trimEnd('/'), session.loginName)
             .joinToString("|") { value -> "${value.length}:$value" }

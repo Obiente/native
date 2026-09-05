@@ -18,7 +18,7 @@ class AndroidAccountPreviewCleanupRecoveryTest {
         val pending = pendingAndroidAccountRemovalCleanup(removed)
         val retried = mutableListOf<Pair<String, String?>>()
 
-        retryAndroidAccountOwnedStateCleanup(readded, pending) { _, workIdentity, previewIdentity ->
+        retryAndroidAccountOwnedStateCleanup(readded, pending) { _, workIdentity, previewIdentity, _ ->
             retried += workIdentity to previewIdentity
         }
 
@@ -40,7 +40,7 @@ class AndroidAccountPreviewCleanupRecoveryTest {
         )
         val retriedPreviewIdentities = mutableListOf<String?>()
 
-        retryAndroidAccountOwnedStateCleanup(readded, legacy) { _, _, previewIdentity ->
+        retryAndroidAccountOwnedStateCleanup(readded, legacy) { _, _, previewIdentity, _ ->
             retriedPreviewIdentities += previewIdentity
         }
 
@@ -53,12 +53,18 @@ class AndroidAccountPreviewCleanupRecoveryTest {
         val pending = pendingAndroidAccountRemovalCleanup(session())
 
         assertEquals(64, requireNotNull(pending.previewCacheIdentity).length)
+        assertEquals(64, requireNotNull(pending.durableMutationIdentity).length)
         assertTrue(pending.previewCacheIdentity.startsWith(pending.workIdentity))
         assertEquals(pending, decodeAndroidPendingAccountRemovalCleanup(encodeAndroidPendingAccountRemovalCleanup(pending)))
         assertNull(
             decodeAndroidPendingAccountRemovalCleanup(
                 "${pending.accountStorageKey}:${pending.workIdentity}",
             )?.previewCacheIdentity,
+        )
+        assertNull(
+            decodeAndroidPendingAccountRemovalCleanup(
+                "${pending.accountStorageKey}:${pending.workIdentity}",
+            )?.durableMutationIdentity,
         )
         val mismatchedIdentity = if (pending.workIdentity.first() == 'f') "e".repeat(64) else "f".repeat(64)
         assertFailsWith<IllegalArgumentException> { pending.copy(previewCacheIdentity = mismatchedIdentity) }

@@ -778,7 +778,7 @@ internal class AndroidNextcloudServices(
         kind: DurableMutationRecoveryKind,
     ): String? = withContext(Dispatchers.IO) {
         if (!accountScope.isCanonicalAndroidMutationAccountScope()) return@withContext null
-        preferences.getString(durableMutationRecoveryKey(accountScope, kind), null)
+        preferences.getString(androidDurableMutationRecoveryKey(accountScope, kind), null)
             ?.takeIf { encoded ->
                 encoded.isNotEmpty() && encoded.encodeToByteArray().size <= MAX_ANDROID_MUTATION_RECOVERY_BYTES
             }
@@ -794,7 +794,7 @@ internal class AndroidNextcloudServices(
             return@withContext false
         }
         synchronized(androidDurableMutationRecoveryLock) {
-            val key = durableMutationRecoveryKey(accountScope, kind)
+            val key = androidDurableMutationRecoveryKey(accountScope, kind)
             if (preferences.contains(key)) return@synchronized false
             preferences.edit().putString(key, encoded).commit() && preferences.getString(key, null) == encoded
         }
@@ -809,18 +809,13 @@ internal class AndroidNextcloudServices(
         if (expectedEncoded.isEmpty() ||
             expectedEncoded.encodeToByteArray().size > MAX_ANDROID_MUTATION_RECOVERY_BYTES
         ) return@withContext false
-        val key = durableMutationRecoveryKey(accountScope, kind)
+        val key = androidDurableMutationRecoveryKey(accountScope, kind)
         synchronized(androidDurableMutationRecoveryLock) {
             val actual = preferences.getString(key, null) ?: return@synchronized true
             if (actual != expectedEncoded) return@synchronized false
             preferences.edit().remove(key).commit() && !preferences.contains(key)
         }
     }
-
-    private fun durableMutationRecoveryKey(
-        accountScope: String,
-        kind: DurableMutationRecoveryKind,
-    ): String = "durable-mutation-${kind.storageKey}-$accountScope"
 
     override suspend fun loadCachedDynamicAppDiscovery(
         session: NextcloudSession,
@@ -3967,9 +3962,6 @@ private fun NextcloudFile.isNativeTiffPreviewFormat(): Boolean {
 
 private const val MAX_ANDROID_MUTATION_RECOVERY_BYTES = 1024 * 1024
 
-private fun String.isCanonicalAndroidMutationAccountScope(): Boolean =
-    length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
-
 internal sealed interface NativeTiffRangeReadPlan {
     val fileId: Long
     val sourceSize: Long
@@ -4253,7 +4245,6 @@ private fun org.w3c.dom.Node.systemTagFirstText(namespace: String, localName: St
 private const val SYSTEM_TAG_DAV_NAMESPACE = "DAV:"
 private const val SYSTEM_TAG_OC_NAMESPACE = "http://owncloud.org/ns"
 private const val SYSTEM_TAG_NC_NAMESPACE = "http://nextcloud.org/ns"
-private val androidDurableMutationRecoveryLock = Any()
 private const val MINIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 64
 private const val MAXIMUM_NATIVE_MEDIA_PREVIEW_DIMENSION = 4_096
         private const val NATIVE_TIFF_DECODER_VERSION = "tiff-stream-v4"
