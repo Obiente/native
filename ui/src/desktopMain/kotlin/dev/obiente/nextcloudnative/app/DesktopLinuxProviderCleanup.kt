@@ -7,6 +7,7 @@ internal data class DetachedDesktopLinuxProvider(
 )
 
 internal interface DesktopLinuxProviderFileSystem {
+    fun disableReads()
     fun unmount()
 }
 
@@ -26,6 +27,7 @@ internal class DesktopLinuxProviderCleanupSlot {
         try {
             provider.fileSystem.unmount()
         } catch (failure: Throwable) {
+            runCatching(provider.fileSystem::disableReads).exceptionOrNull()?.let(failure::addSuppressed)
             synchronized(lock) {
                 check(pending == null)
                 pending = provider
