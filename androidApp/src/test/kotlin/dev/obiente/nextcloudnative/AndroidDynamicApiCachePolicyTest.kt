@@ -3,9 +3,17 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
 import dev.obiente.nextcloudnative.app.NextcloudApiCachePolicy
 import dev.obiente.nextcloudnative.app.NextcloudApiResponse
+import dev.obiente.nextcloudnative.contracts.CachedDynamicApiResponse
+import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
+import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
+import kotlin.test.assertNull
 
 class AndroidDynamicApiCachePolicyTest {
     @Test
@@ -65,5 +73,38 @@ class AndroidDynamicApiCachePolicyTest {
         assertEquals(0, cacheLoads)
         assertEquals(0, invalidations)
         assertEquals(1, networkLoads)
+    }
+
+    @Test
+    fun `account cleanup fences a late Android GET before deleting its cache`() = runBlocking {
+        supervisorScope {
+            val root = Files.createTempDirectory("android-dynamic-cache-cleanup-").toFile()
+            try {
+                val accountId = "a".repeat(64)
+                val requestIdentity = "GET /dashboard/widgets"
+                val cache = DynamicApiResponseCache(root)
+                val coalescer = DynamicApiRequestCoalescer<CachedDynamicApiResponse>()
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val response = CachedDynamicApiResponse(200, "private".encodeToByteArray(), null, null)
+                cache.store(accountId, requestIdentity, response)
+                val read = async {
+                    coalescer.execute(accountId, requestIdentity, load = {
+                        started.complete(Unit)
+                        release.await()
+                        response
+                    }, commit = { cache.store(accountId, requestIdentity, it) })
+                }
+                started.await()
+
+                clearAndroidDynamicApiState(accountId, coalescer, cache)
+                release.complete(Unit)
+
+                assertFails { read.await() }
+                assertNull(cache.load(accountId, requestIdentity, 1_024))
+            } finally {
+                root.deleteRecursively()
+            }
+        }
     }
 }

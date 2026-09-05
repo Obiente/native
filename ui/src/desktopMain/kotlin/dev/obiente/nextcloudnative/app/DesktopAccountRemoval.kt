@@ -37,6 +37,7 @@ internal enum class DesktopAccountOwnership {
 internal data class DesktopAccountSyncPairCleanup(
     val accountId: String,
     val phase: DesktopAccountSyncPairCleanupPhase,
+    val durableMutationAccountScope: String? = null,
 )
 
 internal class DesktopAccountSyncPairCleanupJournal(
@@ -45,9 +46,16 @@ internal class DesktopAccountSyncPairCleanupJournal(
 ) {
     private val malformedReported = AtomicBoolean()
 
-    fun prepare(accountId: String) = persist(accountId, DesktopAccountSyncPairCleanupPhase.Prepared)
+    fun prepare(accountId: String, durableMutationAccountScope: String? = null) =
+        persist(accountId, DesktopAccountSyncPairCleanupPhase.Prepared, durableMutationAccountScope)
 
-    fun commit(accountId: String) = persist(accountId, DesktopAccountSyncPairCleanupPhase.Committed)
+    fun commit(accountId: String) {
+        val current = decode(accountId, preferences.get(cleanupKey(accountId), null))
+        check(current.phase != DesktopAccountSyncPairCleanupPhase.Unknown) {
+            "The desktop account sync cleanup journal phase is unsupported."
+        }
+        persist(accountId, DesktopAccountSyncPairCleanupPhase.Committed, current.durableMutationAccountScope)
+    }
 
     fun clear(accountId: String) {
         validateDesktopSyncPairCleanupAccountId(accountId)
@@ -57,8 +65,8 @@ internal class DesktopAccountSyncPairCleanupJournal(
 
     fun blocksAccountActivation(accountId: String): Boolean {
         validateDesktopSyncPairCleanupAccountId(accountId)
-        val phase = preferences.get(cleanupKey(accountId), null)
-        val blocked = phase != null && phase != PREPARED && phase != COMMITTED
+        val encoded = preferences.get(cleanupKey(accountId), null)
+        val blocked = encoded != null && decode(accountId, encoded).phase == DesktopAccountSyncPairCleanupPhase.Unknown
         if (blocked) recordMalformedOnce()
         return blocked
     }
@@ -72,12 +80,9 @@ internal class DesktopAccountSyncPairCleanupJournal(
                 val accountId = key.removePrefix(KEY_PREFIX)
                 val cleanup = runCatching {
                     validateDesktopSyncPairCleanupAccountId(accountId)
-                    val phase = when (preferences.get(key, null)) {
-                        PREPARED -> DesktopAccountSyncPairCleanupPhase.Prepared
-                        COMMITTED -> DesktopAccountSyncPairCleanupPhase.Committed
-                        else -> DesktopAccountSyncPairCleanupPhase.Unknown.also { malformedEntryFound = true }
+                    decode(accountId, preferences.get(key, null)).also { cleanup ->
+                        if (cleanup.phase == DesktopAccountSyncPairCleanupPhase.Unknown) malformedEntryFound = true
                     }
-                    DesktopAccountSyncPairCleanup(accountId, phase)
                 }.getOrNull()
                 if (cleanup == null) malformedEntryFound = true
                 cleanup
@@ -90,10 +95,18 @@ internal class DesktopAccountSyncPairCleanupJournal(
         return cleanups
     }
 
-    private fun persist(accountId: String, phase: DesktopAccountSyncPairCleanupPhase) {
+    private fun persist(
+        accountId: String,
+        phase: DesktopAccountSyncPairCleanupPhase,
+        durableMutationAccountScope: String?,
+    ) {
         validateDesktopSyncPairCleanupAccountId(accountId)
+        require(
+            durableMutationAccountScope == null || durableMutationAccountScope.isCanonicalGroupwareMutationAccountScope(),
+        ) { "The desktop durable mutation cleanup identity is invalid." }
         val key = cleanupKey(accountId)
-        check(preferences.get(key, null) in setOf(null, PREPARED, COMMITTED)) {
+        val current = preferences.get(key, null)?.let { decode(accountId, it) }
+        check(current == null || current.phase != DesktopAccountSyncPairCleanupPhase.Unknown) {
             "The desktop account sync cleanup journal phase is unsupported."
         }
         val pending = pending()
@@ -102,9 +115,35 @@ internal class DesktopAccountSyncPairCleanupJournal(
         }
         preferences.put(
             key,
-            if (phase == DesktopAccountSyncPairCleanupPhase.Prepared) PREPARED else COMMITTED,
+            encode(phase, durableMutationAccountScope),
         )
         preferences.flush()
+    }
+
+    private fun decode(accountId: String, encoded: String?): DesktopAccountSyncPairCleanup {
+        val legacyPhase = when (encoded) {
+            PREPARED -> DesktopAccountSyncPairCleanupPhase.Prepared
+            COMMITTED -> DesktopAccountSyncPairCleanupPhase.Committed
+            else -> null
+        }
+        if (legacyPhase != null) return DesktopAccountSyncPairCleanup(accountId, legacyPhase)
+        val fields = encoded?.split(VALUE_SEPARATOR).orEmpty()
+        val phase = when (fields.getOrNull(1)) {
+            PREPARED -> DesktopAccountSyncPairCleanupPhase.Prepared
+            COMMITTED -> DesktopAccountSyncPairCleanupPhase.Committed
+            else -> DesktopAccountSyncPairCleanupPhase.Unknown
+        }
+        val scope = fields.getOrNull(2)?.takeIf(String::isCanonicalGroupwareMutationAccountScope)
+        return if (fields.size == 3 && fields[0] == VALUE_VERSION && scope != null) {
+            DesktopAccountSyncPairCleanup(accountId, phase, scope)
+        } else {
+            DesktopAccountSyncPairCleanup(accountId, DesktopAccountSyncPairCleanupPhase.Unknown)
+        }
+    }
+
+    private fun encode(phase: DesktopAccountSyncPairCleanupPhase, scope: String?): String {
+        val encodedPhase = if (phase == DesktopAccountSyncPairCleanupPhase.Prepared) PREPARED else COMMITTED
+        return scope?.let { "$VALUE_VERSION$VALUE_SEPARATOR$encodedPhase$VALUE_SEPARATOR$it" } ?: encodedPhase
     }
 
     private fun recordMalformedOnce() {
@@ -119,6 +158,8 @@ internal class DesktopAccountSyncPairCleanupJournal(
         const val KEY_PREFIX = "fsac."
         const val PREPARED = "prepared"
         const val COMMITTED = "committed"
+        const val VALUE_VERSION = "v2"
+        const val VALUE_SEPARATOR = '|'
     }
 }
 
@@ -190,15 +231,16 @@ internal fun setDesktopVirtualFileProviderPreference(
 
 internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     accountId: String,
-    prepareCleanup: suspend (String) -> Unit,
+    durableMutationAccountScope: String? = null,
+    prepareCleanup: suspend (String, String?) -> Unit,
     commitCleanup: suspend (String) -> Unit,
     clearCleanup: suspend (String) -> Unit,
     accountOwnership: (String) -> DesktopAccountOwnership,
     removeCredential: suspend () -> Boolean,
-    removeSyncPairs: suspend () -> Unit,
+    removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     recordCleanupFailure: suspend (Exception) -> Unit,
 ): Boolean {
-    prepareCleanup(accountId)
+    prepareCleanup(accountId, durableMutationAccountScope)
     val removed = try {
         removeCredential()
     } catch (failure: Throwable) {
@@ -217,7 +259,13 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
     }
     try {
         commitCleanup(accountId)
-        removeSyncPairs()
+        removeSyncPairs(
+            DesktopAccountSyncPairCleanup(
+                accountId,
+                DesktopAccountSyncPairCleanupPhase.Committed,
+                durableMutationAccountScope,
+            ),
+        )
         clearCleanup(accountId)
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -229,10 +277,11 @@ internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(
 
 internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
     accountId: String?,
+    durableMutationAccountScope: String? = null,
     cleanupJournal: DesktopAccountSyncPairCleanupJournal,
     accountOwnership: (String) -> DesktopAccountOwnership,
     commitRemoval: suspend () -> Unit,
-    removeSyncPairs: suspend (String) -> Unit,
+    removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     recordDiagnostic: (SupportDiagnosticEventDraft) -> Unit,
 ) {
     if (accountId == null) {
@@ -241,6 +290,7 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
     }
     removeDesktopAccountBeforeSyncPairCleanup(
         accountId = accountId,
+        durableMutationAccountScope = durableMutationAccountScope,
         prepareCleanup = cleanupJournal::prepare,
         commitCleanup = cleanupJournal::commit,
         clearCleanup = cleanupJournal::clear,
@@ -249,7 +299,7 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
             commitRemoval()
             true
         },
-        removeSyncPairs = { removeSyncPairs(accountId) },
+        removeSyncPairs = removeSyncPairs,
         recordCleanupFailure = { failure ->
             recordDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
         },
@@ -308,7 +358,7 @@ internal fun finishCommittedDesktopAccountRemoval(
 internal suspend fun retryDesktopAccountSyncPairCleanup(
     cleanup: DesktopAccountSyncPairCleanup,
     accountOwnership: (String) -> DesktopAccountOwnership,
-    removeSyncPairs: suspend (String) -> Unit,
+    removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     clearCleanup: suspend (String) -> Unit,
 ) {
     if (cleanup.phase != DesktopAccountSyncPairCleanupPhase.Committed) {
@@ -321,14 +371,14 @@ internal suspend fun retryDesktopAccountSyncPairCleanup(
             DesktopAccountOwnership.Absent -> Unit
         }
     }
-    removeSyncPairs(cleanup.accountId)
+    removeSyncPairs(cleanup)
     clearCleanup(cleanup.accountId)
 }
 
 internal suspend fun retryPendingDesktopAccountSyncPairCleanups(
     cleanupJournal: DesktopAccountSyncPairCleanupJournal,
     accountOwnership: (String) -> DesktopAccountOwnership,
-    removeSyncPairs: suspend (String) -> Unit,
+    removeSyncPairs: suspend (DesktopAccountSyncPairCleanup) -> Unit,
     recordCleanupFailure: (String, Exception) -> Unit,
 ) {
     cleanupJournal.pending().forEach { cleanup ->

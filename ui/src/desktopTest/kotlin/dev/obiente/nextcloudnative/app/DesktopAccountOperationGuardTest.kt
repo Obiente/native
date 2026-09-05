@@ -544,7 +544,7 @@ class DesktopAccountOperationGuardTest {
 
         val removed = removeDesktopAccountBeforeSyncPairCleanup(
             accountId = CLEANUP_ACCOUNT_ID,
-            prepareCleanup = { events += "prepare-cleanup" },
+            prepareCleanup = { _, _ -> events += "prepare-cleanup" },
             commitCleanup = { events += "commit-cleanup" },
             clearCleanup = { events += "clear-cleanup" },
             accountOwnership = { DesktopAccountOwnership.Absent },
@@ -579,7 +579,7 @@ class DesktopAccountOperationGuardTest {
         assertFailsWith<CancellationException> {
             removeDesktopAccountBeforeSyncPairCleanup(
                 accountId = CLEANUP_ACCOUNT_ID,
-                prepareCleanup = { events += "prepare-cleanup" },
+                prepareCleanup = { _, _ -> events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
                 accountOwnership = { DesktopAccountOwnership.Absent },
@@ -608,7 +608,7 @@ class DesktopAccountOperationGuardTest {
         assertFailsWith<IllegalStateException> {
             removeDesktopAccountBeforeSyncPairCleanup(
                 accountId = CLEANUP_ACCOUNT_ID,
-                prepareCleanup = { events += "prepare-cleanup" },
+                prepareCleanup = { _, _ -> events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
                 accountOwnership = { DesktopAccountOwnership.Absent },
@@ -658,7 +658,7 @@ class DesktopAccountOperationGuardTest {
                         events += "remove-credential"
                         error("synthetic credential commit failure")
                     },
-                    removeSyncPairs = { events += "remove-pairs-$it" },
+                    removeSyncPairs = { events += "remove-pairs-${it.accountId}" },
                     recordDiagnostic = { events += "diagnose-cleanup" },
                 )
             }
@@ -727,6 +727,7 @@ class DesktopAccountOperationGuardTest {
             assertTrue(
                 removeDesktopAccountBeforeSyncPairCleanup(
                     accountId = CLEANUP_ACCOUNT_ID,
+                    durableMutationAccountScope = MUTATION_SCOPE,
                     prepareCleanup = firstJournal::prepare,
                     commitCleanup = firstJournal::commit,
                     clearCleanup = firstJournal::clear,
@@ -744,16 +745,18 @@ class DesktopAccountOperationGuardTest {
                     DesktopAccountSyncPairCleanup(
                         CLEANUP_ACCOUNT_ID,
                         DesktopAccountSyncPairCleanupPhase.Committed,
+                        MUTATION_SCOPE,
                     ),
                 ),
                 restored.pending(),
             )
+            assertEquals("v2|committed|$MUTATION_SCOPE", preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null))
 
             val retryEvents = mutableListOf<String>()
             retryDesktopAccountSyncPairCleanup(
                 cleanup = restored.pending().single(),
                 accountOwnership = { DesktopAccountOwnership.Present },
-                removeSyncPairs = { retryEvents += "remove-pairs-$it" },
+                removeSyncPairs = { retryEvents += "remove-pairs-${it.accountId}" },
                 clearCleanup = {
                     retryEvents += "clear-cleanup-$it"
                     restored.clear(it)
@@ -833,5 +836,6 @@ class DesktopAccountOperationGuardTest {
 
     private companion object {
         const val CLEANUP_ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        const val MUTATION_SCOPE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
 }

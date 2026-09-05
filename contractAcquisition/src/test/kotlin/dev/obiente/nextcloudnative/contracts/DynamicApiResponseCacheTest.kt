@@ -4,6 +4,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class DynamicApiResponseCacheTest {
@@ -48,6 +49,21 @@ class DynamicApiResponseCacheTest {
             cache.store(account, "GET /apps/example/items", response)
             cache.invalidateAccount(account)
             assertNull(cache.load(account, "GET /apps/example/items", 10))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun accountInvalidationFailsClosedForAnUnsafeAccountPath() {
+        val root = Files.createTempDirectory("ncn-dynamic-api-cache-").toFile()
+        try {
+            root.resolve(account).writeText("not a cache directory")
+
+            assertFailsWith<IllegalStateException> {
+                DynamicApiResponseCache(root).invalidateAccount(account)
+            }
+            assertEquals("not a cache directory", root.resolve(account).readText())
         } finally {
             root.deleteRecursively()
         }
