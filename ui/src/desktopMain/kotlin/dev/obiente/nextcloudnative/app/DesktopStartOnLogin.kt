@@ -81,7 +81,7 @@ internal class DesktopStartOnLoginController(
                 message = "nati.ve will not start when you sign in.",
             )
         }
-        check(File(launcher).isFile) { "The installed Nextcloud Native launcher could not be found." }
+        check(File(launcher).isFile) { "The installed nati.ve launcher could not be found." }
         val parent = requireNotNull(entry.parentFile)
         check(parent.isDirectory || parent.mkdirs()) { "The desktop autostart folder could not be created." }
         val content = """
@@ -209,7 +209,7 @@ internal class DesktopStartOnLoginController(
     }
 
     private fun configureWindows(enabled: Boolean, launcher: String): DesktopStartOnLoginResult {
-        check(File(launcher).isFile) { "The installed Nextcloud Native launcher could not be found." }
+        check(File(launcher).isFile) { "The installed nati.ve launcher could not be found." }
         val command = if (enabled) {
             listOf(
                 "reg.exe",

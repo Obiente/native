@@ -691,7 +691,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           else
             test "${#assets[@]}" -gt 0
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
@@ -701,7 +701,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
           fi
 
           if [[ "${SUCCESSFUL_PLATFORMS}" -ge 3 ]]; then
@@ -725,7 +725,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${version}"
+              --title "nati.ve ${version}"
             mapfile -d '' canonical_apks < <(
               find "${canonical}" -maxdepth 1 -type f \
                 -name 'nextcloud-native-*-android.apk' -print0

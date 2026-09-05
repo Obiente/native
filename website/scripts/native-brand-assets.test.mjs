@@ -16,3 +16,8 @@ test("social preview pixels match declared metadata and render without system fo
     assert.deepEqual(await readFile(new URL(asset, root)), rendered.asPng());
   }
 });
+
+test("crawler discovery uses the canonical sitemap origin", async () => {
+  const robots = await readFile(new URL("../public/robots.txt", import.meta.url), "utf8");
+  assert.match(robots, /^Sitemap: https:\/\/nati\.ve\/sitemap\.xml$/m);
+});

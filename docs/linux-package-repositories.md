@@ -42,6 +42,12 @@ The builder requires the full 40-character fingerprint in
 the active GnuPG home. Public clients receive only the exported certificate.
 Never commit the secret key or its backup.
 
+The examples use `https://packages.example.org` as a placeholder. Replace it
+with the deployed package origin; the website domain does not establish a
+package repository endpoint. APT `Origin` and `Label` retain `Nextcloud Native`
+as repository identities so existing clients do not require release-info-change
+acceptance solely for the product rename.
+
 ## Build a repository snapshot
 
 Install AppStream, `apt-ftparchive`, `cpio`, `createrepo_c`, `dpkg-deb`,
@@ -53,7 +59,7 @@ tools/build-linux-package-repositories.sh \
   dist \
   linux-repository \
   prerelease \
-  https://packages.nc-native.obiente.dev
+  https://packages.example.org
 ```
 
 `linux-repository` must not already exist. `dist` must contain at least one
@@ -81,7 +87,7 @@ chmod 700 "$verification_home"
 trap 'rm -r -- "$verification_home"' EXIT
 curl --fail --proto '=https' --tlsv1.2 \
   --output nextcloud-native.asc \
-  https://packages.nc-native.obiente.dev/keys/nextcloud-native.asc
+  https://packages.example.org/keys/nextcloud-native.asc
 GNUPGHOME="$verification_home" gpg --batch --import nextcloud-native.asc
 mapfile -t actual_fingerprints < <(
   GNUPGHOME="$verification_home" gpg --batch --with-colons --list-keys |

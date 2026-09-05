@@ -540,7 +540,7 @@ jobs:
               --prerelease \
               --latest=false \
               --notes-file "${RUNNER_TEMP}/release-notes.md" \
-              --title "Nextcloud Native ${NIGHTLY_VERSION}"
+              --title "nati.ve ${NIGHTLY_VERSION}"
           fi
 
           canonical="${RUNNER_TEMP}/canonical-release-assets"
@@ -577,7 +577,7 @@ jobs:
             --prerelease \
             --latest=false \
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
-            --title "Nextcloud Native ${NIGHTLY_VERSION}"
+            --title "nati.ve ${NIGHTLY_VERSION}"
 
           if [[ "${canonical_successful}" -ge 3 ]]; then
             if tools/has-direct-desktop-update-assets.sh "${canonical}"; then

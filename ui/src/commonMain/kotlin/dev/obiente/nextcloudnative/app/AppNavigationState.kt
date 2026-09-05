@@ -7,7 +7,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nc-native.obiente.dev/guides/"
+internal const val NEXTCLOUD_NATIVE_GUIDES_URL = "https://nati.ve/guides/"
 
 @Serializable
 internal sealed interface Screen {

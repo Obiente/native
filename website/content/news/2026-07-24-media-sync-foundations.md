@@ -14,7 +14,7 @@ imageCaption: Production media-folder and sync-pair components show detected fol
 
 **Historical article, reviewed 2026-08-20.** This post mixes implemented Android
 backup-state foundations with planned cleanup and sharing work. Check the
-[current releases](https://github.com/Obiente/nc-native/releases),
+[current releases](https://github.com/obiente/native/releases),
 [compatibility notes](/compatibility/), and current [Android photo-backup guide](/guides/android/photo-backup/)
 before relying on it.
 

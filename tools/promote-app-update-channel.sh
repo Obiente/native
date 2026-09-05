@@ -279,5 +279,5 @@ gh release create "$pointer_tag" "${publish_assets[@]}" \
     --verify-tag \
     --prerelease \
     --latest=false \
-    --title "Nextcloud Native ${expected_channel} update channel" \
+    --title "nati.ve ${expected_channel} update channel" \
     --notes-file "$temporary/notes.md"

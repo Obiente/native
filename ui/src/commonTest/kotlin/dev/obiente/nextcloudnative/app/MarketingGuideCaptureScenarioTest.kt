@@ -47,6 +47,6 @@ class MarketingGuideCaptureScenarioTest {
 
     @Test
     fun `guide library entry point is secure and canonical`() {
-        assertEquals("https://nc-native.obiente.dev/guides/", NEXTCLOUD_NATIVE_GUIDES_URL)
+        assertEquals("https://nati.ve/guides/", NEXTCLOUD_NATIVE_GUIDES_URL)
     }
 }

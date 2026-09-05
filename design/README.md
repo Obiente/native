@@ -96,3 +96,8 @@ before following the existing restricted release-asset redirect.
 Already-installed builds that reject GitHub's repository-rename 301 need a
 manual upgrade from the canonical release page; new metadata cannot change
 the downloader code in those builds.
+
+New release titles and generated notes use nati.ve. APT Origin/Label values,
+calendar PRODID values, and installed filesystem identities retain their legacy
+strings for compatibility. Package-host examples are placeholders until a
+separate package origin is deployed.
