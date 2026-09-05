@@ -1,9 +1,11 @@
 package dev.obiente.nextcloudnative
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -274,6 +276,63 @@ class AndroidDocumentProviderIncarnationStoreTest {
         assertEquals(retired, records[accountIdentity])
         assertTrue("retirement:$accountIdentity" in records)
         assertFailsWith<IllegalStateException> { store.activeIncarnation(accountIdentity) }
+    }
+
+    @Test
+    fun credentialReadSkipsRetirementRecoveryWhileACredentialMutationIsActive() {
+        val active = AndroidDocumentProviderIncarnationRecord.Active(
+            NextcloudDocumentIncarnation.Versioned("1".repeat(32)),
+        )
+        val records = mutableMapOf(accountIdentity to encodeAndroidDocumentProviderIncarnationRecord(active))
+        val store = fixture(records = records).store
+        store.retireForRemoval(accountIdentity)
+        val credentialMutations = Mutex(locked = true)
+        var recoveryRan = false
+
+        assertFalse(
+            reconcileAndroidDocumentProviderAccountRemovalsWhenCredentialMutationIdle(credentialMutations) {
+                recoveryRan = true
+                store.reconcilePending(ownership(AndroidDocumentProviderAccountOwnership.Present))
+            },
+        )
+
+        assertFalse(recoveryRan)
+        assertTrue("retirement:$accountIdentity" in records)
+        assertFailsWith<IllegalStateException> { store.activeIncarnation(accountIdentity) }
+        credentialMutations.unlock()
+        assertTrue(
+            reconcileAndroidDocumentProviderAccountRemovalsWhenCredentialMutationIdle(credentialMutations) {
+                store.reconcilePending(ownership(AndroidDocumentProviderAccountOwnership.Present))
+            },
+        )
+        assertEquals(active.incarnation, store.activeIncarnation(accountIdentity))
+    }
+
+    @Test
+    fun malformedAndUnsupportedJournalsStayUnavailableWhileOtherAccountsRecover() {
+        listOf("broken", "2:unsupported").forEach { malformed ->
+            val otherAccount = "b".repeat(32)
+            val otherActive = AndroidDocumentProviderIncarnationRecord.Active(
+                NextcloudDocumentIncarnation.Versioned("2".repeat(32)),
+            )
+            val records = mutableMapOf(
+                otherAccount to encodeAndroidDocumentProviderIncarnationRecord(otherActive),
+            )
+            val store = fixture(records = records).store
+            store.retireForRemoval(otherAccount)
+            records["retirement:$accountIdentity"] = malformed
+            val failures = mutableListOf<Exception>()
+
+            store.reconcilePending(
+                ownership = ownership(AndroidDocumentProviderAccountOwnership.Present),
+                onMalformedJournal = failures::add,
+            )
+
+            assertEquals(1, failures.size)
+            assertTrue("retirement:$accountIdentity" in records)
+            assertFailsWith<IllegalStateException> { store.activeIncarnation(accountIdentity) }
+            assertEquals(otherActive.incarnation, store.activeIncarnation(otherAccount))
+        }
     }
 
     @Test

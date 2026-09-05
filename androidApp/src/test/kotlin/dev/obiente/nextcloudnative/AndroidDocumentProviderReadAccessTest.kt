@@ -11,6 +11,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 
 class AndroidDocumentProviderReadAccessTest {
@@ -21,10 +22,15 @@ class AndroidDocumentProviderReadAccessTest {
     @Test
     fun openedFileLeaseBlocksRemovalUntilTheDescriptorReleasesIt() = runBlocking {
         val guard = AndroidAccountOperationGuard()
-        val lease = readLease(guard)
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val lease = readLease(guard, lifetimeGuard)
         var removalEntered = false
         val removal = async(Dispatchers.Default) {
-            guard.withAccount(NextcloudDocumentIds.accountKey(original)) { removalEntered = true }
+            withAndroidAccountRemovalLease(
+                NextcloudDocumentIds.accountKey(original),
+                guard,
+                lifetimeGuard,
+            ) { removalEntered = true }
         }
         yield()
 
@@ -37,11 +43,16 @@ class AndroidDocumentProviderReadAccessTest {
     @Test
     fun fileOpenWaitingForRemovalRejectsTheReplacementIncarnation() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val removalEntered = CompletableDeferred<Unit>()
         val finishRemoval = CompletableDeferred<Unit>()
         var currentIncarnation = originalIncarnation
         val removal = async {
-            guard.withAccount(NextcloudDocumentIds.accountKey(original)) {
+            withAndroidAccountRemovalLease(
+                NextcloudDocumentIds.accountKey(original),
+                guard,
+                lifetimeGuard,
+            ) {
                 currentIncarnation = replacementIncarnation
                 removalEntered.complete(Unit)
                 finishRemoval.await()
@@ -56,6 +67,7 @@ class AndroidDocumentProviderReadAccessTest {
                     { original },
                     { currentIncarnation },
                     guard,
+                    lifetimeGuard,
                 )
             }
         }
@@ -73,6 +85,7 @@ class AndroidDocumentProviderReadAccessTest {
     @Test
     fun searchKeepsRemovalBlockedThroughTheAuthenticatedRead() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
         val searchEntered = CompletableDeferred<Unit>()
         val finishSearch = CompletableDeferred<Unit>()
         var removalEntered = false
@@ -83,6 +96,7 @@ class AndroidDocumentProviderReadAccessTest {
                 { original },
                 { originalIncarnation },
                 guard,
+                lifetimeGuard,
             ) {
                 searchEntered.complete(Unit)
                 runBlocking { finishSearch.await() }
@@ -90,7 +104,11 @@ class AndroidDocumentProviderReadAccessTest {
         }
         searchEntered.await()
         val removal = async {
-            guard.withAccount(NextcloudDocumentIds.accountKey(original)) { removalEntered = true }
+            withAndroidAccountRemovalLease(
+                NextcloudDocumentIds.accountKey(original),
+                guard,
+                lifetimeGuard,
+            ) { removalEntered = true }
         }
         yield()
 
@@ -104,6 +122,7 @@ class AndroidDocumentProviderReadAccessTest {
     @Test
     fun failedReadReleasesTheAccountLease() = runBlocking {
         val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
 
         assertFailsWith<IllegalStateException> {
             withAndroidDocumentProviderReadAccess(
@@ -112,18 +131,46 @@ class AndroidDocumentProviderReadAccessTest {
                 { original },
                 { originalIncarnation },
                 guard,
+                lifetimeGuard,
             ) { error("synthetic read failure") }
         }
 
-        guard.withAccount(NextcloudDocumentIds.accountKey(original)) {}
+        withTimeout(1_000L) {
+            withAndroidAccountRemovalLease(
+                NextcloudDocumentIds.accountKey(original),
+                guard,
+                lifetimeGuard,
+            ) {}
+        }
     }
 
-    private fun readLease(guard: AndroidAccountOperationGuard) = acquireAndroidDocumentProviderReadLease(
+    @Test
+    fun openedFileLeaseDoesNotBlockAccountSelection() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val lease = readLease(guard, lifetimeGuard)
+        var selectionEntered = false
+
+        withTimeout(1_000L) {
+            guard.withAccounts(listOf(NextcloudDocumentIds.accountKey(original), "another-account")) {
+                selectionEntered = true
+            }
+        }
+
+        assertTrue(selectionEntered)
+        lease.close()
+    }
+
+    private fun readLease(
+        guard: AndroidAccountOperationGuard,
+        lifetimeGuard: AndroidAccountRemovalLifetimeGuard,
+    ) = acquireAndroidDocumentProviderReadLease(
         original,
         originalIncarnation,
         { original },
         { originalIncarnation },
         guard,
+        lifetimeGuard,
     )
 
     private fun incarnation(digit: String) = NextcloudDocumentIncarnation.Versioned(digit.repeat(32))
