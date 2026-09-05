@@ -259,6 +259,25 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         finishCleanup(record)
     }
 
+    fun persistPairRemoval(
+        load: () -> AndroidFileSyncPersistedState,
+        persist: () -> Unit,
+    ) = try {
+        persist()
+    } catch (failure: Exception) {
+        recoverAmbiguousPairRemoval(load)
+        throw failure
+    }
+
+    private fun recoverAmbiguousPairRemoval(load: () -> AndroidFileSyncPersistedState) = synchronized(LIFECYCLE_LOCK) {
+        val authoritative = try {
+            load()
+        } catch (_: Exception) {
+            return@synchronized
+        }
+        runCatching { reconcile(authoritative) }
+    }
+
     fun reconcile(state: AndroidFileSyncPersistedState) = synchronized(LIFECYCLE_LOCK) {
         var records = store.list()
         val safPairs = state.coordinator.pairs.filter { it.localRootId.startsWith("content://") }

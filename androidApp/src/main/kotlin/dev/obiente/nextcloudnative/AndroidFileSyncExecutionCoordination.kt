@@ -244,10 +244,9 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
     AndroidFileSyncEngine.ENGINE_LOCK.withLock {
         val store = AndroidFileSyncStore(context)
         val current = store.load()
-        val retiredPairs = current.coordinator.pairs.filter { pair -> pair.accountId == accountId }
-        if (retiredPairs.isEmpty()) return@withLock
         val capabilities = AndroidFileSyncCapabilityLifecycle(context)
-        capabilities.reconcile(current)
+        val retiredPairs = reconcileAndroidFileSyncAccountRetirement(current, accountId, capabilities)
+        if (retiredPairs.isEmpty()) return@withLock
         val scheduler = AndroidFileSyncScheduler(context)
         val notifications = AndroidNotificationCoordinator(context)
         retireConfiguredFileSyncAccountPairs(
@@ -264,6 +263,15 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
             finishLocalGrantCleanup = capabilities::finishPairCleanup,
         )
     }
+}
+
+internal fun reconcileAndroidFileSyncAccountRetirement(
+    state: AndroidFileSyncPersistedState,
+    accountId: String,
+    capabilities: AndroidFileSyncCapabilityLifecycle,
+): List<FileSyncPair> {
+    capabilities.reconcile(state)
+    return state.coordinator.pairs.filter { pair -> pair.accountId == accountId }
 }
 
 internal suspend fun retireConfiguredFileSyncAccountPairs(

@@ -114,6 +114,25 @@ class AndroidFileSyncAccountRetirementCapabilityTest {
         assertFalse(fixture.grants.writeGranted)
     }
 
+    @Test
+    fun `empty account retirement retry still reconciles committed capability cleanup`() {
+        val fixture = fixture()
+        val retired = listOf(pair(FIRST_PAIR_ID, REMOVED_ACCOUNT))
+        fixture.lifecycle.reconcile(state(retired))
+        fixture.lifecycle.preparePairCleanup(FIRST_PAIR_ID)
+
+        val remaining = reconcileAndroidFileSyncAccountRetirement(
+            state(emptyList()),
+            REMOVED_ACCOUNT,
+            fixture.lifecycle,
+        )
+
+        assertTrue(remaining.isEmpty())
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
     private suspend fun retire(
         lifecycle: AndroidFileSyncCapabilityLifecycle,
         retiredPairs: List<FileSyncPair>,
