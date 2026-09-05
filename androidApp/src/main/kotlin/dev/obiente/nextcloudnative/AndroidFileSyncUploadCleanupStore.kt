@@ -16,7 +16,10 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
-internal class AndroidFileSyncUploadCleanupStore(private val directory: File) {
+internal class AndroidFileSyncUploadCleanupStore(
+    private val directory: File,
+    private val deleteFile: (File) -> Boolean = File::delete,
+) {
     fun read(): Map<String, List<FileSyncPendingUploadCleanup>> {
         if (!directory.exists()) return emptyMap()
         check(directory.isDirectory) { "Folder sync cleanup storage is invalid." }
@@ -54,7 +57,7 @@ internal class AndroidFileSyncUploadCleanupStore(private val directory: File) {
         }
         checkNotNull(directory.listFiles()) { "Could not list folder sync cleanup storage." }
             .filter { it.isFile && it.name.endsWith(ROW_SUFFIX) && it.name !in retainedNames }
-            .forEach { stale -> check(stale.delete()) { "Could not remove obsolete sync cleanup ownership." } }
+            .forEach { stale -> check(deleteFile(stale)) { "Could not remove obsolete sync cleanup ownership." } }
     }
 
     private fun readRow(file: File): AndroidFileSyncUploadCleanupRow =

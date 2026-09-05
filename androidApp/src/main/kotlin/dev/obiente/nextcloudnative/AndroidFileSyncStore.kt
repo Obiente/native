@@ -58,14 +58,13 @@ internal fun requireAndroidFileSyncAccountRemovalReady(
 internal class AndroidFileSyncStore internal constructor(
     private val stateFile: File,
     private val maximumSnapshotBytes: Int = MAX_SNAPSHOT_BYTES,
+    private val uploadCleanupStore: AndroidFileSyncUploadCleanupStore = AndroidFileSyncUploadCleanupStore(
+        File(checkNotNull(stateFile.parentFile), "${stateFile.name}.upload-cleanups"),
+    ),
 ) {
     init {
         require(maximumSnapshotBytes in 1..MAX_SNAPSHOT_BYTES)
     }
-
-    private val uploadCleanupStore = AndroidFileSyncUploadCleanupStore(
-        File(checkNotNull(stateFile.parentFile), "${stateFile.name}.upload-cleanups"),
-    )
 
     constructor(context: Context) : this(File(context.filesDir, STATE_FILE_NAME))
 
@@ -120,6 +119,13 @@ internal class AndroidFileSyncStore internal constructor(
                     )
                 },
             ),
+        )
+    }
+
+    @Synchronized
+    fun loadAndReconcileUploadCleanups(): AndroidFileSyncPersistedState = load().also { state ->
+        uploadCleanupStore.replace(
+            state.coordinator.pairs.associate { pair -> pair.id to pair.pendingUploadCleanups },
         )
     }
 

@@ -92,7 +92,8 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val scheduledPairScheduling = DeferredFileSyncPairSchedulingRegistry()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
     private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
-    init { reconciliationScope.launch { reconcileFileSyncCapabilities(ENGINE_LOCK, store::load, capabilities) } }
+    private val loadCapabilityState = store::loadAndReconcileUploadCleanups
+    init { reconciliationScope.launch { reconcileFileSyncCapabilities(ENGINE_LOCK, loadCapabilityState, capabilities) } }
     suspend fun loadCenter(
         session: NextcloudSession,
         userId: String,
@@ -353,7 +354,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                 persistRemoval = {
                     capabilities.preparePairCleanup(pairId)
                     val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
-                    capabilities.persistPairRemoval(store::load) {
+                    capabilities.persistPairRemoval(store::loadAndReconcileUploadCleanups) {
                         store.save(current.copy(
                             coordinator = remaining,
                             localDisplayNames = current.localDisplayNames - pairId,

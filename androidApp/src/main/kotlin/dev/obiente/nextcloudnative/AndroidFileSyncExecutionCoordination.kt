@@ -243,7 +243,7 @@ internal fun reconcileSafDownloadsBeforePairRemoval(
 internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, accountId: String) {
     AndroidFileSyncEngine.ENGINE_LOCK.withLock {
         val store = AndroidFileSyncStore(context)
-        val current = store.load()
+        val current = store.loadAndReconcileUploadCleanups()
         val capabilities = AndroidFileSyncCapabilityLifecycle(context)
         val retiredPairs = reconcileAndroidFileSyncAccountRetirement(current, accountId, capabilities)
         if (retiredPairs.isEmpty()) return@withLock
