@@ -16,6 +16,21 @@ internal const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
 internal const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 internal const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
+internal fun desktopWindowsCloudFilesRoot(
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): File {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return File(File(userHome, "Nextcloud Native"), accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
+}
+
+internal fun windowsCloudFilesRootPreferenceKey(accountId: String): String {
+    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
+    return "$KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX$accountId".also { key ->
+        check(key.length <= Preferences.MAX_KEY_LENGTH)
+    }
+}
+
 internal fun desktopLegacyWindowsCloudFilesRoot(accountId: String, userHome: File): File =
     File(File(userHome, "Nextcloud Native"), accountId)
 
