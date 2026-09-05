@@ -58,14 +58,20 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
             commit = { editor -> ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
                 requireCommittedAndroidAccountCredentialEdit(editor)
             } },
-            recordMalformed = { Log.w(LOG_TAG, "Malformed account-removal cleanup journal repaired") },
+            recordMalformed = { Log.w(LOG_TAG, "Malformed account-removal cleanup journal retained") },
         )
         val registry = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
             ?.let(::restoreAndroidCredentialFreeRegistry)
             ?.registry
         val cleanup = AndroidAccountOwnedStateCleanup(applicationContext)
+        val pending = readPendingAndroidAccountRemovalCleanups(
+            readPending = journal::pending,
+            recordFailure = {
+                logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message) }
+            },
+        ) ?: return@withLock Result.retry()
         val completed = recoverPendingAndroidAccountRemovalCleanups(
-            pending = journal.pending(),
+            pending = pending,
             accountOwnedByRegistry = { accountStorageKey ->
                 registry?.accounts?.any { account -> account.id.storageKey == accountStorageKey }
             },
@@ -75,7 +81,9 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
                 }
             },
             clearCleanup = journal::clear,
-            recordFailure = { Log.w(LOG_TAG, "Account-removal cleanup recovery deferred", it) },
+            recordFailure = {
+                logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message) }
+            },
         )
         if (completed) Result.success() else Result.retry()
     }
@@ -86,7 +94,7 @@ internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
     accountOwnedByRegistry: (String) -> Boolean?,
     removeAccountOwnedWork: suspend (AndroidPendingAccountRemovalCleanup) -> Unit,
     clearCleanup: suspend (String) -> Unit,
-    recordFailure: (Exception) -> Unit,
+    recordFailure: () -> Unit,
 ): Boolean {
     var completed = true
     pending.forEach { cleanup ->
@@ -98,12 +106,30 @@ internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (failure: Exception) {
+        } catch (_: Exception) {
             completed = false
-            recordFailure(failure)
+            recordFailure()
         }
     }
     return completed
+}
+
+internal fun readPendingAndroidAccountRemovalCleanups(
+    readPending: () -> Collection<AndroidPendingAccountRemovalCleanup>,
+    recordFailure: () -> Unit,
+): Collection<AndroidPendingAccountRemovalCleanup>? = try {
+    readPending()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    recordFailure()
+    null
+}
+
+internal fun logAndroidAccountRemovalCleanupRecoveryDeferred(
+    logWarning: (String) -> Unit,
+) {
+    logWarning("Account-removal cleanup recovery deferred")
 }
 
 private const val ANDROID_ACCOUNT_PREFERENCES = "nextcloud_native"
