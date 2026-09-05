@@ -25,9 +25,12 @@ internal class AndroidAccountMutationRecoveryCleanup(
             val keys = DurableMutationRecoveryKind.entries.map { kind ->
                 androidDurableMutationRecoveryKey(accountScope, kind)
             }
-            if (keys.none(preferences::contains)) return@synchronized
             val editor = preferences.edit()
             keys.forEach(editor::remove)
+            editor.putBoolean(
+                ANDROID_DURABLE_MUTATION_CLEANUP_TOGGLE_KEY,
+                !preferences.getBoolean(ANDROID_DURABLE_MUTATION_CLEANUP_TOGGLE_KEY, false),
+            )
             check(editor.commit() && keys.none(preferences::contains)) {
                 "Could not clear this account's durable mutation recovery."
             }
@@ -82,3 +85,5 @@ internal fun String.isCanonicalAndroidMutationAccountScope(): Boolean =
     length == 64 && all { character -> character in '0'..'9' || character in 'a'..'f' }
 
 internal val androidDurableMutationRecoveryLock = Any()
+
+private const val ANDROID_DURABLE_MUTATION_CLEANUP_TOGGLE_KEY = "durable-mutation-cleanup-toggle-v1"
