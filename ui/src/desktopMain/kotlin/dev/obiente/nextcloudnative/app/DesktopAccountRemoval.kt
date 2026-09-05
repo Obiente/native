@@ -25,6 +25,7 @@ internal fun DesktopAccountSyncPairCleanupJournal.requireAccountActivationAllowe
 internal enum class DesktopAccountSyncPairCleanupPhase {
     Prepared,
     Committed,
+    Unknown,
 }
 
 internal enum class DesktopAccountOwnership {
@@ -74,7 +75,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
                     val phase = when (preferences.get(key, null)) {
                         PREPARED -> DesktopAccountSyncPairCleanupPhase.Prepared
                         COMMITTED -> DesktopAccountSyncPairCleanupPhase.Committed
-                        else -> error("The desktop account sync cleanup journal is invalid.")
+                        else -> DesktopAccountSyncPairCleanupPhase.Unknown.also { malformedEntryFound = true }
                     }
                     DesktopAccountSyncPairCleanup(accountId, phase)
                 }.getOrNull()
@@ -310,7 +311,7 @@ internal suspend fun retryDesktopAccountSyncPairCleanup(
     removeSyncPairs: suspend (String) -> Unit,
     clearCleanup: suspend (String) -> Unit,
 ) {
-    if (cleanup.phase == DesktopAccountSyncPairCleanupPhase.Prepared) {
+    if (cleanup.phase != DesktopAccountSyncPairCleanupPhase.Committed) {
         when (accountOwnership(cleanup.accountId)) {
             DesktopAccountOwnership.Present -> {
                 clearCleanup(cleanup.accountId)
