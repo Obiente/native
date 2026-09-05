@@ -166,11 +166,12 @@ internal suspend fun constructAndReconcileQueuedDurableUploads(
 
 internal suspend fun reconcileQueuedDurableUploads(
     jobs: List<AndroidDurableMultipartUploadJob>,
+    allowQueuedScheduling: Boolean = true,
     schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { false },
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
 ): Boolean {
     var allScheduled = true
-    jobs.filter(AndroidDurableMultipartUploadJob::requiresSchedulingRecovery).forEach { job ->
+    jobs.filter { job -> job.requiresSchedulingRecovery(allowQueuedScheduling) }.forEach { job ->
         try {
             if (!schedulerOwns(job)) schedule(job)
         } catch (cancelled: CancellationException) {
@@ -182,8 +183,9 @@ internal suspend fun reconcileQueuedDurableUploads(
     return allScheduled
 }
 
-private fun AndroidDurableMultipartUploadJob.requiresSchedulingRecovery(): Boolean =
-    state == DurableUploadState.Queued || capabilityCleanupPending
+private fun AndroidDurableMultipartUploadJob.requiresSchedulingRecovery(
+    allowQueuedScheduling: Boolean,
+): Boolean = capabilityCleanupPending || (allowQueuedScheduling && state == DurableUploadState.Queued)
 
 internal suspend fun retryQueuedDurableUploadScheduling(
     retryDelaysMillis: List<Long> = listOf(1_000L, 5_000L),

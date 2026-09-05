@@ -52,13 +52,15 @@ class NextcloudNativeApplication : Application() {
                                             ANDROID_ACCOUNT_PREFERENCES_NAME,
                                             Context.MODE_PRIVATE,
                                         )
-                                        if (accountPreferences.durableUploadAccountResolutionAvailable()) {
-                                            val available = uploads ?: AndroidDurableMultipartUploads(
-                                                this@NextcloudNativeApplication,
-                                            ).also { uploads = it }
-                                            available::reconcileQueuedUploads
-                                        } else {
-                                            suspend { true }
+                                        val accountResolutionAvailable =
+                                            accountPreferences.durableUploadAccountResolutionAvailable()
+                                        val available = uploads ?: AndroidDurableMultipartUploads(
+                                            this@NextcloudNativeApplication,
+                                        ).also { uploads = it }
+                                        suspend {
+                                            available.reconcileQueuedUploads(
+                                                allowQueuedScheduling = accountResolutionAvailable,
+                                            )
                                         }
                                     }
                                 },
