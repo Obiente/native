@@ -1,6 +1,9 @@
 package dev.obiente.nextcloudnative
 
 import android.content.SharedPreferences
+import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
+import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.accountRecord
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -10,6 +13,38 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AndroidAccountRemovalRecoveryTest {
+    @Test
+    fun unavailableActiveCredentialRemovalUsesActiveTeardown() = runBlocking {
+        val events = mutableListOf<String>()
+
+        removeUnavailableAndroidAccountCredentialData(
+            accountIdentity = "account-identity",
+            active = true,
+            prepareAccountRemoval = { events += "prepare" },
+            removeAccountOwnedWorkWithoutCredentials = { events += "remove:$it" },
+            persistRemoval = { events += "persist-inactive" },
+            clearActiveAccount = { events += "clear-active" },
+            rollbackRemoval = { events += "rollback" },
+            completeCommittedCleanup = { events += "clear-cleanup" },
+        )
+
+        assertEquals(
+            listOf("prepare", "clear-active", "remove:account-identity", "clear-cleanup"),
+            events,
+        )
+    }
+
+    @Test
+    fun unavailableRemovalTargetPreservesCredentialFreeActiveOwnership() {
+        val session = NextcloudSession("https://cloud.example.test", "alice", "unused-secret")
+        val registry = NextcloudAccountRegistry.Empty.upsertAndSelect(session.accountRecord())
+
+        val target = requireNotNull(resolveAndroidUnavailableAccountRemovalTarget(registry, session.accountId))
+
+        assertEquals(session.accountRecord(), target.record)
+        assertTrue(target.wasActive)
+    }
+
     @Test
     fun unavailableCredentialRemovalCleansCommittedStateByIdentity() = runBlocking {
         val events = mutableListOf<String>()
