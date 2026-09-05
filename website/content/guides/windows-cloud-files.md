@@ -8,14 +8,14 @@ device: Desktop
 platforms: Windows
 durationMinutes: 9
 difficulty: Advanced
-lastUpdated: 2026-08-30
+lastUpdated: 2026-09-05
 captureScenarios: guide-windows-cloud-files-settings, guide-windows-cloud-files-storage, guide-windows-cloud-files-recovery
 prerequisites: A connected Windows x86-64 alpha installation, A disposable test folder in Nextcloud, Enough local storage to hydrate the files you open
 ---
 
 # Use Nextcloud files in Windows File Explorer
 
-**Last reviewed: 2026-08-30.** The software and published packages may have
+**Last reviewed: 2026-09-05.** The software and published packages may have
 changed since this review. Check the [current releases](https://github.com/obiente/native/releases)
 and [compatibility notes](/compatibility/) before using this guide with important data.
 
@@ -29,6 +29,8 @@ On Windows, nati.ve integrates with the Cloud Files API so remote content can ap
 Open **Settings**, choose **Sync & storage**, then open **Virtual files**. Activate the system provider if it is not already active. When registration succeeds, the location is reported as **nati.ve in File Explorer**. The root is account-scoped, and signing out disconnects the provider for that account.
 
 If activation fails, keep the failure message and retry only after checking that the app is the current installed version. The app keeps a failed automatic activation visible instead of retrying it on every settings refresh. Use the explicit activation action when you are ready to retry. Do not manually delete a registered sync root or copy provider metadata between accounts. Recovery handles stale registrations, legacy roots, and damaged Cloud Files metadata while preserving the existing local root and its data.
+
+An older build can report **Windows refused to safely unregister the branded Cloud Files root** during recovery. The source includes a fix for saved registrations whose provider identifier is empty: recovery verifies the saved account identity and path before proceeding. Check the release notes for a build containing this fix, then restart the installed app and retry activation. Do not delete the folder or edit the Windows registration to bypass the check. This recovery fix does not establish that all Windows sync or writeback scenarios are qualified.
 
 The storage view distinguishes **Not connected**, **Connected**, and
 **Edits need review**. An available integration is not proof that the provider
