@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.prefs.Preferences
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
@@ -47,5 +49,53 @@ class DesktopVirtualFileProviderPreferencesTest {
 
         assertTrue(detached)
         assertEquals(null, returnedFailure)
+    }
+
+    @Test
+    fun `aborted account removal leaves virtual file providers attached`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            commitDesktopAccountRemovalBeforeVirtualFileTeardown(
+                commitRemoval = {
+                    events += "remove"
+                    error("credential removal failed")
+                },
+                teardownVirtualFiles = { events += "teardown" },
+            )
+        }
+
+        assertEquals(listOf("remove"), events)
+    }
+
+    @Test
+    fun `committed account removal tears down virtual file providers afterward`() = runBlocking {
+        val events = mutableListOf<String>()
+
+        commitDesktopAccountRemovalBeforeVirtualFileTeardown(
+            commitRemoval = { events += "remove" },
+            teardownVirtualFiles = { events += "teardown" },
+        )
+
+        assertEquals(listOf("remove", "teardown"), events)
+    }
+
+    @Test
+    fun `committed removal clears support identities even when provider teardown fails`() {
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            finishCommittedDesktopAccountRemoval(
+                markRemovalCommitted = { events += "committed" },
+                teardownVirtualFiles = {
+                    events += "teardown"
+                    error("synthetic unmount failure")
+                },
+                clearDiagnosticIdentity = { events += "diagnostics" },
+                clearIntakeIdentity = { events += "intake" },
+            )
+        }
+
+        assertEquals(listOf("committed", "teardown", "diagnostics", "intake"), events)
     }
 }
