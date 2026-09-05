@@ -26,7 +26,7 @@ internal class AndroidAccountCredentialController(
     private val clearPreviewAccount: (String) -> Unit,
     private val notifyDocumentRootsChanged: () -> Unit,
     private val resumeQueuedUploads: suspend (String) -> Unit,
-    private val prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
+    private val prepareAccountRemoval: suspend (NextcloudSession) -> AndroidDocumentProviderIncarnationRetirement,
     private val removeQueuedUploads: suspend (NextcloudSession) -> Unit,
     private val retryQueuedUploadsCleanup: suspend (NextcloudSession, String, String?, String?) -> Unit,
     private val retryQueuedUploadsCleanupWithoutCredentials: suspend (String, String?, String?) -> Unit,
@@ -56,19 +56,16 @@ internal class AndroidAccountCredentialController(
             publishAccountIdentity(accountIdentity)
         },
     )
-
     fun accountRetentionSnapshot(): AndroidAccountRetentionSnapshot = readRegistryForCredentialLoad()
         ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
         ?: AndroidAccountRetentionSnapshot.Unavailable
 
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
-
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
             val registry = readRegistryForCredentialLoad() ?: return@serialize null
             loadSession(accountId, registry)
         }
-
     private fun loadSession(
         accountId: NextcloudAccountId,
         registry: NextcloudAccountRegistry,
@@ -99,7 +96,6 @@ internal class AndroidAccountCredentialController(
         }
         session.also(registerSessionPrivateValues)
     }
-
     suspend fun saveSession(session: NextcloudSession): NextcloudSession =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
             retryPendingAccountRemovalCleanup(session)
@@ -137,7 +133,6 @@ internal class AndroidAccountCredentialController(
             }
             requireNotNull(loadSession(session.accountId))
         }
-
     suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
             val (current, suspectEncrypted) = recoverAndroidAccountCredentialStateForSelection(
@@ -150,7 +145,6 @@ internal class AndroidAccountCredentialController(
             replaceActiveState(selected, current.activeSession, suspectEncrypted)
             session
         }
-
     suspend fun removeAccount(accountId: NextcloudAccountId): Boolean =
         ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
             val current = requireValidStateForAccountRemoval(accountId)
@@ -159,9 +153,10 @@ internal class AndroidAccountCredentialController(
             val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
             withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session)) {
                 val active = current.registry.activeAccountId == accountId
+                var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
                 removeAndroidAccountCredentialData(
                     active = active,
-                    prepareAccountRemoval = { prepareAccountRemoval(session) },
+                    prepareAccountRemoval = { documentRetirement = prepareAccountRemoval(session) },
                     removeQueuedUploads = { removeQueuedUploads(session) },
                     clearActiveAccount = { clearSession(current, pendingCleanup) },
                     rollbackActiveRemoval = {
@@ -170,11 +165,13 @@ internal class AndroidAccountCredentialController(
                             previousSession = null,
                             suspectEncrypted = null,
                         )
+                        rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
                     persistInactiveRemoval = { persistState(current.remove(accountId), pendingCleanup) },
                     rollbackInactiveRemoval = {
                         persistState(current)
+                        rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
                     completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
@@ -183,7 +180,6 @@ internal class AndroidAccountCredentialController(
             }
             true
         }
-
     private suspend fun removeUnavailableAccount(
         accountId: NextcloudAccountId,
         recovered: AndroidAccountCredentialState,
@@ -193,10 +189,11 @@ internal class AndroidAccountCredentialController(
         val accountIdentity = NextcloudDocumentIds.accountKey(unavailableSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(unavailableSession)
         withAndroidAccountRemovalLease(accountIdentity) {
+            var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
             removeUnavailableAndroidAccountCredentialData(
                 accountIdentity = accountIdentity,
                 active = target.wasActive,
-                prepareAccountRemoval = { prepareAccountRemoval(unavailableSession) },
+                prepareAccountRemoval = { documentRetirement = prepareAccountRemoval(unavailableSession) },
                 removeAccountOwnedWorkWithoutCredentials = { identity ->
                     retryQueuedUploadsCleanupWithoutCredentials(
                         identity,
@@ -209,7 +206,10 @@ internal class AndroidAccountCredentialController(
                 rollbackRemoval = {
                     rollbackUnavailableAndroidAccountRemoval(
                         active = target.wasActive, recovered = recovered, persistRecovered = { state -> persistState(state) },
-                        clearCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
+                        clearCleanup = {
+                            rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
+                            accountRemovalCleanupJournal.clear(accountId.storageKey)
+                        },
                     )
                 },
                 completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
@@ -219,7 +219,6 @@ internal class AndroidAccountCredentialController(
         notifyDocumentRootsChanged()
         return true
     }
-
     suspend fun revokeSession(
         expectedSession: NextcloudSession,
         revokeRemoteSession: suspend () -> Unit,
@@ -230,9 +229,10 @@ internal class AndroidAccountCredentialController(
         }
         val accountIdentity = NextcloudDocumentIds.accountKey(expectedSession)
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(expectedSession)
+        var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
         revokeAndroidSessionWithAccountLease(
             accountIdentity = accountIdentity,
-            preflight = { prepareAccountRemoval(expectedSession) },
+            preflight = { documentRetirement = prepareAccountRemoval(expectedSession) },
             revoke = revokeRemoteSession,
             removeLocalAccount = {
                 removeAndroidAccountCredentialData(
@@ -241,6 +241,7 @@ internal class AndroidAccountCredentialController(
                     clearActiveAccount = { clearSession(current, pendingCleanup) },
                     rollbackActiveRemoval = {
                         replaceActiveStateWhileOperationsIdle(current, previousSession = null, suspectEncrypted = null)
+                        rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(expectedSession.accountId.storageKey)
                     },
                     persistInactiveRemoval = {},
@@ -253,7 +254,6 @@ internal class AndroidAccountCredentialController(
             },
         )
     }
-
     suspend fun clearSession() = ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX.withLock {
         when (val read = readStore()) {
             is AndroidAccountCredentialStoreRead.Available -> {
@@ -265,9 +265,10 @@ internal class AndroidAccountCredentialController(
                     val accountIdentity = NextcloudDocumentIds.accountKey(session)
                     val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
                     withAndroidAccountRemovalLease(accountIdentity) {
+                        var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
                         removeAndroidAccountCredentialData(
                             active = true,
-                            prepareAccountRemoval = { prepareAccountRemoval(session) },
+                            prepareAccountRemoval = { documentRetirement = prepareAccountRemoval(session) },
                             removeQueuedUploads = { removeQueuedUploads(session) },
                             clearActiveAccount = { clearSession(read.state, pendingCleanup) },
                             rollbackActiveRemoval = {
@@ -276,6 +277,7 @@ internal class AndroidAccountCredentialController(
                                     previousSession = null,
                                     suspectEncrypted = null,
                                 )
+                                rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                                 accountRemovalCleanupJournal.clear(session.accountId.storageKey)
                             },
                             persistInactiveRemoval = {},
@@ -302,7 +304,6 @@ internal class AndroidAccountCredentialController(
             is AndroidAccountCredentialStoreRead.Unsupported -> unsupportedCredentialStoreMutation(read.version)
         }
     }
-
     private suspend fun clearSession(
         current: AndroidAccountCredentialState, pendingCleanup: AndroidPendingAccountRemovalCleanup? = null,
         activeFallback: NextcloudSession? = null,
@@ -334,8 +335,9 @@ internal class AndroidAccountCredentialController(
             val accountIdentity = NextcloudDocumentIds.accountKey(activeSession)
             val pendingCleanup = pendingAndroidAccountRemovalCleanup(activeSession)
             withAndroidAccountRemovalLease(accountIdentity) {
+                var documentRetirement: AndroidDocumentProviderIncarnationRetirement? = null
                 removeRecoveredAndroidAccountCredentialData(
-                    prepareAccountRemoval = { prepareAccountRemoval(activeSession) },
+                    prepareAccountRemoval = { documentRetirement = prepareAccountRemoval(activeSession) },
                     removeQueuedUploads = { removeQueuedUploads(activeSession) },
                     clearRecoveredAccount = {
                         persistRecoveredInvalidStoreAfterClear(current, suspectEncrypted, pendingCleanup)
@@ -346,6 +348,7 @@ internal class AndroidAccountCredentialController(
                             previousSession = null,
                             suspectEncrypted = suspectEncrypted,
                         )
+                        rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(activeSession.accountId.storageKey)
                     },
                     completeCommittedCleanup = {

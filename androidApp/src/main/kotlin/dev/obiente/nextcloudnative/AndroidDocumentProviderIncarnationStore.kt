@@ -17,9 +17,16 @@ internal sealed interface AndroidDocumentProviderIncarnationRecord {
     ) : AndroidDocumentProviderIncarnationRecord
 }
 
+internal data class AndroidDocumentProviderIncarnationRetirement(
+    val accountIdentity: String,
+    val previousEncoded: String?,
+    val retiredEncoded: String,
+    val incarnation: NextcloudDocumentIncarnation,
+)
+
 internal class AndroidDocumentProviderIncarnationStore(
     private val read: (String) -> String?,
-    private val commit: (String, String) -> Boolean,
+    private val commit: (String, String?) -> Boolean,
     private val createIncarnation: () -> NextcloudDocumentIncarnation.Versioned = {
         NextcloudDocumentIncarnation.Versioned(UUID.randomUUID().toString().replace("-", ""))
     },
@@ -28,10 +35,9 @@ internal class AndroidDocumentProviderIncarnationStore(
         read = context.applicationContext
             .getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)::getStringOrNull,
         commit = { accountIdentity, encoded ->
-            context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putString(accountIdentity, encoded)
-                .commit()
+            context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE).edit().apply {
+                if (encoded == null) remove(accountIdentity) else putString(accountIdentity, encoded)
+            }.commit()
         },
     )
 
@@ -63,14 +69,35 @@ internal class AndroidDocumentProviderIncarnationStore(
         }
     }
 
-    fun retire(accountIdentity: String): NextcloudDocumentIncarnation = synchronized(LOCK) {
-        val incarnation = when (val record = readRecordOrNullOnMalformed(accountIdentity)) {
+    fun retire(accountIdentity: String): NextcloudDocumentIncarnation =
+        retireForRemoval(accountIdentity).incarnation
+
+    fun retireForRemoval(accountIdentity: String): AndroidDocumentProviderIncarnationRetirement = synchronized(LOCK) {
+        requireAccountIdentity(accountIdentity)
+        val previousEncoded = read(accountIdentity)
+        val incarnation = when (val record = decodeRecordOrNullOnMalformed(previousEncoded)) {
             null -> NextcloudDocumentIncarnation.Legacy
             is AndroidDocumentProviderIncarnationRecord.Active -> record.incarnation
             is AndroidDocumentProviderIncarnationRecord.Retired -> record.incarnation
         }
-        persist(accountIdentity, AndroidDocumentProviderIncarnationRecord.Retired(incarnation))
-        incarnation
+        val retiredEncoded = encodeAndroidDocumentProviderIncarnationRecord(
+            AndroidDocumentProviderIncarnationRecord.Retired(incarnation),
+        )
+        persistEncoded(accountIdentity, retiredEncoded)
+        AndroidDocumentProviderIncarnationRetirement(
+            accountIdentity,
+            previousEncoded,
+            retiredEncoded,
+            incarnation,
+        )
+    }
+
+    fun rollback(retirement: AndroidDocumentProviderIncarnationRetirement) = synchronized(LOCK) {
+        requireAccountIdentity(retirement.accountIdentity)
+        check(read(retirement.accountIdentity) == retirement.retiredEncoded) {
+            "The document provider account incarnation changed during removal rollback."
+        }
+        persistEncoded(retirement.accountIdentity, retirement.previousEncoded)
     }
 
     fun retiredIncarnation(accountIdentity: String): NextcloudDocumentIncarnation? = synchronized(LOCK) {
@@ -82,9 +109,9 @@ internal class AndroidDocumentProviderIncarnationStore(
         return read(accountIdentity)?.let(::decodeAndroidDocumentProviderIncarnationRecord)
     }
 
-    private fun readRecordOrNullOnMalformed(accountIdentity: String): AndroidDocumentProviderIncarnationRecord? =
+    private fun decodeRecordOrNullOnMalformed(encoded: String?): AndroidDocumentProviderIncarnationRecord? =
         try {
-            readRecord(accountIdentity)
+            encoded?.let(::decodeAndroidDocumentProviderIncarnationRecord)
         } catch (_: IllegalArgumentException) {
             null
         } catch (_: ClassCastException) {
@@ -92,7 +119,11 @@ internal class AndroidDocumentProviderIncarnationStore(
         }
 
     private fun persist(accountIdentity: String, record: AndroidDocumentProviderIncarnationRecord) {
-        check(commit(accountIdentity, encodeAndroidDocumentProviderIncarnationRecord(record))) {
+        persistEncoded(accountIdentity, encodeAndroidDocumentProviderIncarnationRecord(record))
+    }
+
+    private fun persistEncoded(accountIdentity: String, encoded: String?) {
+        check(commit(accountIdentity, encoded)) {
             "Could not persist the document provider account incarnation."
         }
     }
