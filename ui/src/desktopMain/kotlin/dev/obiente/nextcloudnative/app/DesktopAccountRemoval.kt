@@ -88,6 +88,7 @@ internal fun removeDesktopAccountCredential(
     preferences: Preferences,
     providerAccountId: String?,
     credentialStillExists: () -> Boolean,
+    finishCommittedRemoval: () -> Unit = {},
     removeCredential: () -> Boolean,
 ): Boolean {
     val providerKey = providerAccountId?.let(::virtualFileProviderPreferenceKey)
@@ -105,6 +106,7 @@ internal fun removeDesktopAccountCredential(
             preferences.flush()
         },
         removalCommitted = { !credentialStillExists() },
+        finishCommittedRemoval = finishCommittedRemoval,
         removeCredential = removeCredential,
     )
 }
@@ -171,6 +173,30 @@ internal suspend fun clearDesktopActiveAccountBeforeSyncPairCleanup(
             recordDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
         },
     )
+}
+
+internal suspend fun commitDesktopAccountRemovalBeforeVirtualFileTeardown(
+    commitRemoval: suspend () -> Unit,
+    teardownVirtualFiles: () -> Unit,
+) {
+    commitRemoval()
+    teardownVirtualFiles()
+}
+
+internal fun finishCommittedDesktopAccountRemoval(
+    markRemovalCommitted: () -> Unit,
+    teardownVirtualFiles: () -> Unit,
+    clearDiagnosticIdentity: () -> Unit,
+    clearIntakeIdentity: () -> Unit,
+) {
+    markRemovalCommitted()
+    var firstFailure: Throwable? = null
+    listOf(teardownVirtualFiles, clearDiagnosticIdentity, clearIntakeIdentity).forEach { action ->
+        runCatching(action).onFailure { failure ->
+            if (firstFailure == null) firstFailure = failure else firstFailure?.addSuppressed(failure)
+        }
+    }
+    firstFailure?.let { throw it }
 }
 
 internal suspend fun retryDesktopAccountSyncPairCleanup(

@@ -48,80 +48,75 @@ internal class NextcloudFileSyncWorker(
             // WorkManager may still execute short work when the OS temporarily refuses an FGS.
         }
         val engine = AndroidFileSyncEngine(applicationContext)
-        val result = try {
+        return@withContext try {
             ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(accountId) {
                 val current = services.loadSession()
                 if (current == null || !androidAccountOperationSessionIsCurrent(accountId, current)) {
-                    null
-                } else {
-                    engine.runPair(current, userId, pairId)
+                    return@withAccount Result.failure()
                 }
-            } ?: return@withContext Result.failure()
-        } catch (failure: Throwable) {
-                rethrowAndroidFileSyncCancellation(failure)
-                val disposition = backgroundSyncFailureDisposition(runAttemptCount)
-                services.recordSupportDiagnosticForAccountIdentity(
-                    accountId,
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Sync,
-                        operation = "sync.background-run",
-                        outcome = "failed",
-                        fields = listOf(
-                            SupportDiagnosticFieldDraft(
-                                "pair",
-                                pairId,
-                                SupportDiagnosticValuePrivacy.Identifier,
-                            ),
-                            SupportDiagnosticFieldDraft("failure_scope", "run"),
-                            SupportDiagnosticFieldDraft("work_attempt", runAttemptCount.toString()),
-                            SupportDiagnosticFieldDraft(
-                                "retry_scheduled",
-                                (disposition == BackgroundSyncWorkerDisposition.Retry).toString(),
+                val result = engine.runPair(current, userId, pairId)
+                val pair = engine.loadCenter(current, userId).pairs.firstOrNull { it.id == pairId }
+                    ?: return@withAccount Result.success()
+                pair.conflicts.firstOrNull()?.let { conflict ->
+                    AndroidNotificationCoordinator(applicationContext).post(
+                        NextcloudNotificationEvent.SyncConflict(
+                            id = stableNotificationId(pairId),
+                            accountKey = accountId,
+                            path = conflict.relativePath,
+                            detail = syncConflictNotificationDetail(pair.conflictCount),
+                        ),
+                    )
+                }
+                val completionDisposition = backgroundSyncCompletionDisposition(
+                    failedCount = pair.failedCount,
+                    resultRejected = result is FileSyncCenterActionResult.Rejected,
+                )
+                if (completionDisposition == BackgroundSyncWorkerDisposition.WaitForNextPeriod) {
+                    services.recordSupportDiagnosticForAccountIdentity(
+                        accountId,
+                        SupportDiagnosticEventDraft(
+                            severity = SupportDiagnosticSeverity.Warning,
+                            component = SupportDiagnosticComponent.Sync,
+                            operation = "sync.background-run",
+                            outcome = "needs-attention",
+                            fields = backgroundSyncCompletionDiagnosticFields(
+                                pairId = pairId,
+                                failedCount = pair.failedCount,
+                                conflictCount = pair.conflictCount,
+                                result = result,
                             ),
                         ),
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-                return@withContext disposition.toWorkerResult()
-        }
-        val pair = engine.loadCenter(session, userId).pairs.firstOrNull { it.id == pairId }
-            ?: return@withContext Result.success()
-        pair.conflicts.firstOrNull()?.let { conflict ->
-            AndroidNotificationCoordinator(applicationContext).post(
-                NextcloudNotificationEvent.SyncConflict(
-                    id = stableNotificationId(pairId),
-                    accountKey = accountId,
-                    path = conflict.relativePath,
-                    detail = syncConflictNotificationDetail(pair.conflictCount),
-                ),
-            )
-        }
-        val completionDisposition = backgroundSyncCompletionDisposition(
-            failedCount = pair.failedCount,
-            resultRejected = result is FileSyncCenterActionResult.Rejected,
-        )
-        if (completionDisposition == BackgroundSyncWorkerDisposition.WaitForNextPeriod) {
+                    )
+                }
+                completionDisposition.toWorkerResult()
+            }
+        } catch (failure: Throwable) {
+            rethrowAndroidFileSyncCancellation(failure)
+            val disposition = backgroundSyncFailureDisposition(runAttemptCount)
             services.recordSupportDiagnosticForAccountIdentity(
                 accountId,
                 SupportDiagnosticEventDraft(
-                    severity = SupportDiagnosticSeverity.Warning,
+                    severity = SupportDiagnosticSeverity.Error,
                     component = SupportDiagnosticComponent.Sync,
                     operation = "sync.background-run",
-                    outcome = "needs-attention",
-                    fields = backgroundSyncCompletionDiagnosticFields(
-                        pairId = pairId,
-                        failedCount = pair.failedCount,
-                        conflictCount = pair.conflictCount,
-                        result = result,
+                    outcome = "failed",
+                    fields = listOf(
+                        SupportDiagnosticFieldDraft(
+                            "pair",
+                            pairId,
+                            SupportDiagnosticValuePrivacy.Identifier,
+                        ),
+                        SupportDiagnosticFieldDraft("failure_scope", "run"),
+                        SupportDiagnosticFieldDraft("work_attempt", runAttemptCount.toString()),
+                        SupportDiagnosticFieldDraft(
+                            "retry_scheduled",
+                            (disposition == BackgroundSyncWorkerDisposition.Retry).toString(),
+                        ),
                     ),
+                    exception = failure.toSupportDiagnosticExceptionDraft(),
                 ),
             )
-            // Per-item failures and attempt counts are durable coordinator state. An immediate
-            // WorkManager retry bypasses the periodic cadence and re-executes known failed work.
-            completionDisposition.toWorkerResult()
-        } else {
-            completionDisposition.toWorkerResult()
+            disposition.toWorkerResult()
         }
     }
 
