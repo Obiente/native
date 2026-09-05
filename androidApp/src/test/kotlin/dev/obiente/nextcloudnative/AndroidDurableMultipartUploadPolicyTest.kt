@@ -572,12 +572,12 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `repeated worker failure wakes wait for ownership and follow up delay`() = runBlocking {
+    fun `coalesced immediate recovery preempts worker ownership and follow up waits`() = runBlocking {
         val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
         val workId = UUID.randomUUID()
         val expectedCancellation = CancellationException("recovery owner stopped")
-        var workManagerOwnsJob = true
         var recoveryRuns = 0
+        var ownershipWaits = 0
         var delayRuns = 0
         recoverySignal.request()
         recoverySignal.requestAfterWorkStopsRunning(workId)
@@ -586,24 +586,15 @@ class AndroidDurableMultipartUploadPolicyTest {
             monitorQueuedDurableUploadScheduling(
                 recover = {
                     recoveryRuns += 1
-                    when (recoveryRuns) {
-                        1 -> Unit
-                        2 -> {
-                            workManagerOwnsJob = true
-                            recoverySignal.requestAfterWorkStopsRunning(workId)
-                        }
-                        else -> error("worker recovery bypassed its follow-up delay")
-                    }
+                    if (recoveryRuns == 2) throw expectedCancellation
                 },
                 awaitWorkStopsRunning = { requestedWorkId ->
                     assertEquals(workId, requestedWorkId)
-                    assertTrue(workManagerOwnsJob)
-                    workManagerOwnsJob = false
+                    ownershipWaits += 1
                 },
                 wait = { delayMillis ->
                     assertEquals(ANDROID_DURABLE_UPLOAD_SCHEDULING_FOLLOW_UP_DELAY_MILLIS, delayMillis)
-                    assertFalse(workManagerOwnsJob)
-                    if (++delayRuns == 2) throw expectedCancellation
+                    delayRuns += 1
                 },
                 recoverySignal = recoverySignal,
             )
@@ -611,7 +602,8 @@ class AndroidDurableMultipartUploadPolicyTest {
 
         assertTrue(actual === expectedCancellation)
         assertEquals(2, recoveryRuns)
-        assertEquals(2, delayRuns)
+        assertEquals(0, ownershipWaits)
+        assertEquals(0, delayRuns)
     }
 
     @Test
