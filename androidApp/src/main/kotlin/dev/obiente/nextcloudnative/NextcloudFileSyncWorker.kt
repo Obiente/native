@@ -178,9 +178,14 @@ internal class AndroidFileSyncScheduleRestorationWorker(
         val expectedAccountId = inputData.getString(KEY_ACCOUNT_ID)?.takeIf(String::isNotBlank)
             ?: return@withContext Result.failure()
         val services = AndroidNextcloudServices(applicationContext)
+        val accountSnapshot = services.accountRetentionSnapshot()
         val session = services.loadSession()
             ?.takeIf { restored -> isAndroidFileSyncScheduleRestorationCurrent(expectedAccountId, restored) }
-            ?: return@withContext Result.success()
+            ?: return@withContext if (shouldRetryAndroidFileSyncScheduleRestoration(expectedAccountId, accountSnapshot)) {
+                Result.retry()
+            } else {
+                Result.success()
+            }
         runCatching {
             val userId = services.loadServerInfo(session).userId
             services.loadFileSyncCenter(session, userId)
@@ -202,6 +207,18 @@ internal fun isAndroidFileSyncScheduleRestorationCurrent(
     expectedAccountId: String,
     session: NextcloudSession,
 ): Boolean = NextcloudDocumentIds.accountKey(session) == expectedAccountId
+
+internal fun shouldRetryAndroidFileSyncScheduleRestoration(
+    expectedAccountId: String,
+    snapshot: AndroidAccountRetentionSnapshot,
+): Boolean = when (snapshot.expectedAccountState(expectedAccountId)) {
+    AndroidExpectedAccountState.Active,
+    AndroidExpectedAccountState.Unknown,
+    -> true
+    AndroidExpectedAccountState.Inactive,
+    AndroidExpectedAccountState.Absent,
+    -> false
+}
 
 internal fun scheduleRestorationFailureDisposition(runAttemptCount: Int): BackgroundSyncWorkerDisposition {
     require(runAttemptCount >= 0)

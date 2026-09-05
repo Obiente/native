@@ -41,6 +41,11 @@ internal data class DesktopAccountSyncPairCleanup(
     val accountStorageKey: String? = null,
 )
 
+internal fun DesktopAccountSyncPairCleanup.matchesAccountActivation(
+    accountId: String,
+    accountStorageKey: String,
+): Boolean = this.accountId == accountId || this.accountStorageKey == accountStorageKey
+
 internal class DesktopAccountSyncPairCleanupJournal(
     private val preferences: Preferences,
     private val recordMalformed: () -> Unit = {},
@@ -102,6 +107,14 @@ internal class DesktopAccountSyncPairCleanupJournal(
             "The desktop account sync cleanup journal is too large."
         }
         return cleanups
+    }
+
+    fun pendingForAccountActivation(accountId: String, accountStorageKey: String): List<DesktopAccountSyncPairCleanup> {
+        validateDesktopSyncPairCleanupAccountId(accountId)
+        require(accountStorageKey.matches(ACCOUNT_STORAGE_KEY_PATTERN)) {
+            "The desktop account storage cleanup identity is invalid."
+        }
+        return pending().filter { cleanup -> cleanup.matchesAccountActivation(accountId, accountStorageKey) }
     }
 
     private fun persist(

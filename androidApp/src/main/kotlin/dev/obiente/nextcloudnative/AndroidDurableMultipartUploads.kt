@@ -190,16 +190,26 @@ internal class DeckAttachmentUploadWorker(
         val accountServices = AndroidNextcloudServices(applicationContext)
         val session = accountServices.loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
-            if (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.accountRetentionSnapshot()) ==
-                DurableUploadAccountMismatchOutcome.DeferAccountRecovery
-            ) {
-                recordUploadDiagnostic(
-                    severity = SupportDiagnosticSeverity.Warning,
-                    outcome = "account-deferred",
-                    accountId = initial.accountId,
-                    jobId = jobId,
-                )
-                return Result.success()
+            when (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.accountRetentionSnapshot())) {
+                DurableUploadAccountMismatchOutcome.RetryAccountRecovery -> {
+                    recordUploadDiagnostic(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        outcome = "account-retry",
+                        accountId = initial.accountId,
+                        jobId = jobId,
+                    )
+                    return Result.retry()
+                }
+                DurableUploadAccountMismatchOutcome.DeferAccountActivation -> {
+                    recordUploadDiagnostic(
+                        severity = SupportDiagnosticSeverity.Warning,
+                        outcome = "account-deferred",
+                        accountId = initial.accountId,
+                        jobId = jobId,
+                    )
+                    return Result.success()
+                }
+                DurableUploadAccountMismatchOutcome.AccountUnavailable -> Unit
             }
             store.transition(
                 jobId,
@@ -334,25 +344,6 @@ internal class DeckAttachmentUploadWorker(
     internal companion object {
         const val KEY_JOB_ID = "job_id"
     }
-}
-
-internal enum class DurableUploadAccountMismatchOutcome {
-    DeferAccountRecovery,
-    AccountUnavailable,
-}
-
-internal fun durableUploadAccountMismatchOutcome(
-    expectedAccountId: String,
-    accountSnapshot: AndroidAccountRetentionSnapshot,
-): DurableUploadAccountMismatchOutcome = when (accountSnapshot) {
-    is AndroidAccountRetentionSnapshot.Available -> {
-        if (androidAccountIdentityIsRetained(expectedAccountId, accountSnapshot.accounts)) {
-            DurableUploadAccountMismatchOutcome.DeferAccountRecovery
-        } else {
-            DurableUploadAccountMismatchOutcome.AccountUnavailable
-        }
-    }
-    AndroidAccountRetentionSnapshot.Unavailable -> DurableUploadAccountMismatchOutcome.DeferAccountRecovery
 }
 
 internal fun queuedDurableUploadsForAccount(

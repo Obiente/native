@@ -324,7 +324,7 @@ class AndroidDurableMultipartUploadPolicyTest {
         val accountId = NextcloudDocumentIds.accountKey(retainedSession)
 
         assertEquals(
-            DurableUploadAccountMismatchOutcome.DeferAccountRecovery,
+            DurableUploadAccountMismatchOutcome.DeferAccountActivation,
             durableUploadAccountMismatchOutcome(
                 accountId,
                 AndroidAccountRetentionSnapshot.Available(listOf(retainedSession.accountRecord())),
@@ -335,8 +335,29 @@ class AndroidDurableMultipartUploadPolicyTest {
     @Test
     fun `unreadable account registry defers queued upload recovery`() {
         assertEquals(
-            DurableUploadAccountMismatchOutcome.DeferAccountRecovery,
+            DurableUploadAccountMismatchOutcome.RetryAccountRecovery,
             durableUploadAccountMismatchOutcome(ACCOUNT_A, AndroidAccountRetentionSnapshot.Unavailable),
+        )
+    }
+
+    @Test
+    fun `active account with unreadable credential keeps its upload scheduled`() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertEquals(
+            DurableUploadAccountMismatchOutcome.RetryAccountRecovery,
+            durableUploadAccountMismatchOutcome(
+                accountId,
+                AndroidAccountRetentionSnapshot.Available(
+                    accounts = listOf(retainedSession.accountRecord()),
+                    activeAccountId = retainedSession.accountId,
+                ),
+            ),
         )
     }
 

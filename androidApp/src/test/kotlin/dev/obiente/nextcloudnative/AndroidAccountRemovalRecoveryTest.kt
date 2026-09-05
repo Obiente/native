@@ -158,7 +158,7 @@ class AndroidAccountRemovalRecoveryTest {
     }
 
     @Test
-    fun malformedCleanupTombstonesRemainBlockingRecoveryState() {
+    fun malformedCleanupTombstonesDoNotHideValidRecoveryState() {
         val valid = AndroidPendingAccountRemovalCleanup(
             accountStorageKey = "a".repeat(64),
             workIdentity = "1".repeat(32),
@@ -166,18 +166,37 @@ class AndroidAccountRemovalRecoveryTest {
         val encoded = linkedSetOf(encodeAndroidPendingAccountRemovalCleanup(valid), "truncated-row")
         var malformedRecorded = false
 
-        assertFailsWith<AndroidAccountRemovalCleanupJournalException> {
+        assertEquals(
+            setOf(valid),
             requireValidAndroidAccountRemovalCleanupJournal(encoded) {
                 malformedRecorded = true
-            }
-        }
+            },
+        )
 
         assertTrue(malformedRecorded)
         assertTrue("truncated-row" in encoded)
+        val snapshot = restoreAndroidPendingAccountRemovalCleanups(encoded)
+        assertEquals(setOf(valid), snapshot.cleanups)
+        assertEquals(1, snapshot.malformedEntryCount)
+        assertFailsWith<IllegalStateException> {
+            requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
+        }
+        assertFalse(androidAccountRemovalCleanupRecoveryCompleted(true, snapshot, true))
     }
 
     @Test
-    fun malformedCleanupJournalDoesNotRewriteStoredTombstones() {
+    fun malformedOnlyCleanupJournalBlocksAccountReactivation() {
+        val snapshot = restoreAndroidPendingAccountRemovalCleanups(setOf("truncated-row"))
+
+        assertTrue(snapshot.cleanups.isEmpty())
+        assertEquals(1, snapshot.malformedEntryCount)
+        assertFailsWith<IllegalStateException> {
+            requireAndroidAccountRemovalCleanupJournalAllowsActivation(snapshot)
+        }
+    }
+
+    @Test
+    fun malformedCleanupJournalReadDoesNotRewriteStoredTombstones() {
         val valid = AndroidPendingAccountRemovalCleanup(
             accountStorageKey = "a".repeat(64),
             workIdentity = "1".repeat(32),
@@ -204,10 +223,41 @@ class AndroidAccountRemovalRecoveryTest {
             recordMalformed = {},
         )
 
-        assertFailsWith<AndroidAccountRemovalCleanupJournalException> { journal.pending() }
+        assertEquals(setOf(valid), journal.pending())
 
         assertEquals(0, editCalls)
         assertEquals(0, commitCalls)
         assertEquals(linkedSetOf(encodeAndroidPendingAccountRemovalCleanup(valid), "truncated-row"), encoded)
+    }
+
+    @Test
+    fun cleanupJournalEditsPreserveMalformedPeersWhileReplacingValidTombstones() {
+        val original = AndroidPendingAccountRemovalCleanup(
+            accountStorageKey = "a".repeat(64),
+            workIdentity = "1".repeat(32),
+        )
+        val replacement = original.copy(workIdentity = "2".repeat(32))
+        val peer = AndroidPendingAccountRemovalCleanup(
+            accountStorageKey = "b".repeat(64),
+            workIdentity = "3".repeat(32),
+        )
+        val malformed = "truncated-row"
+        var malformedCount = 0
+        val encoded = linkedSetOf(
+            encodeAndroidPendingAccountRemovalCleanup(original),
+            encodeAndroidPendingAccountRemovalCleanup(peer),
+            malformed,
+        )
+
+        val replaced = replaceAndroidAccountRemovalCleanup(encoded, replacement) { malformedCount += 1 }
+        val cleared = removeAndroidAccountRemovalCleanup(replaced, replacement.accountStorageKey) {
+            malformedCount += 1
+        }
+
+        assertEquals(
+            linkedSetOf(encodeAndroidPendingAccountRemovalCleanup(peer), malformed),
+            cleared,
+        )
+        assertEquals(2, malformedCount)
     }
 }

@@ -88,14 +88,14 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
             ?.let(::restoreAndroidCredentialFreeRegistry)
             ?.registry
         val cleanup = AndroidAccountOwnedStateCleanup(applicationContext)
-        val pending = readPendingAndroidAccountRemovalCleanups(
-            readPending = journal::pending,
-            recordFailure = {
-                logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message) }
-            },
-        ) ?: return@withLock Result.retry()
+        val snapshot = try {
+            journal.snapshot()
+        } catch (failure: Exception) {
+            logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message, failure) }
+            return@withLock Result.retry()
+        }
         val completed = recoverPendingAndroidAccountRemovalCleanups(
-            pending = pending,
+            pending = snapshot.cleanups,
             accountOwnedByRegistry = { pendingCleanup ->
                 androidAccountRemovalCleanupOwnedByRegistry(pendingCleanup, registry?.accounts)
             },
@@ -114,9 +114,19 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
                 logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message) }
             },
         )
-        if (completed && handoffCompleted) Result.success() else Result.retry()
+        if (androidAccountRemovalCleanupRecoveryCompleted(completed, snapshot, handoffCompleted)) {
+            Result.success()
+        } else {
+            Result.retry()
+        }
     }
 }
+
+internal fun androidAccountRemovalCleanupRecoveryCompleted(
+    validCleanupCompleted: Boolean,
+    snapshot: RestoredAndroidPendingAccountRemovalCleanups,
+    handoffCompleted: Boolean,
+): Boolean = validCleanupCompleted && snapshot.malformedEntryCount == 0 && handoffCompleted
 
 internal suspend fun recoverPendingAndroidAccountRemovalCleanups(
     pending: Collection<AndroidPendingAccountRemovalCleanup>,

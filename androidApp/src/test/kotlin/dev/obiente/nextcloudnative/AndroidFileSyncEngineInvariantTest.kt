@@ -577,8 +577,8 @@ class AndroidFileSyncEngineInvariantTest {
                 "cancel-notification-retired-b",
                 "cancel-retired-c",
                 "cancel-notification-retired-c",
-                "persist-retirement",
                 "release-$retiredRoot",
+                "persist-retirement",
             ),
             events,
         )

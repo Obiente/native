@@ -4,6 +4,13 @@ import java.util.prefs.Preferences
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 
+internal class DesktopCredentialRollbackRecoveryUnavailableException(
+    cause: Throwable? = null,
+) : NextcloudSessionStorageUnavailableException(
+    "The pending desktop credential rollback could not be completed safely.",
+    cause,
+)
+
 internal class DesktopAccountCredentialPersistence(
     private val preferences: Preferences,
     private val secretStore: DesktopSecretStore,
@@ -95,9 +102,17 @@ internal class DesktopAccountCredentialPersistence(
         val updatedRegistry = registry.upsertAndSelect(persistedSession.accountRecord())
         val encodedRegistry = prepareRegistry(updatedRegistry)
         val secretReference = desktopAccountSecretReference(persistedSession.accountId)
+        val rollbackReference = desktopAccountCredentialRollbackReference(persistedSession.accountId)
         val previousSecret = loadSecretForRollback(secretReference)
+        check(previousRecord == null || previousSecret != null) {
+            "The existing account credential could not be read for safe replacement."
+        }
         persistPendingCredentialSave(persistedSession)
         try {
+            if (previousSecret != null) {
+                secretStore.save(rollbackReference, previousRecord?.loginName, previousSecret)
+            }
+            markPendingCredentialSaveSecretWriting()
             saveSecret(persistedSession)
             markPendingCredentialSaveSecretWritten()
             persistAccountState(encodedRegistry, updatedRegistry.activeAccount)
@@ -114,6 +129,7 @@ internal class DesktopAccountCredentialPersistence(
                         previousSecret,
                     )
                 }
+                secretStore.clear(rollbackReference)
                 credentialRollbackCompleted = true
             } catch (rollbackFailure: Exception) {
                 failure.addSuppressed(rollbackFailure)
@@ -126,6 +142,7 @@ internal class DesktopAccountCredentialPersistence(
             if (credentialRollbackCompleted) clearPendingCredentialSave()
             throw failure
         }
+        if (previousSecret != null) secretStore.clear(rollbackReference)
         clearPendingCredentialSave()
         return persistedSession
     }
@@ -220,58 +237,77 @@ internal class DesktopAccountCredentialPersistence(
         val phase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         if (server == null && login == null) return
         if (server.isNullOrBlank() || login.isNullOrBlank()) {
-            recordCredentialDiagnostic(
-                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
-                "account-credentials.recover",
-            )
-            return
+            credentialRollbackRecoveryUnavailable()
         }
         val accountId = try {
             deriveNextcloudAccountId(server, login)
         } catch (failure: Exception) {
-            recordCredentialDiagnostic(
-                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
-                "account-credentials.recover",
-                failure,
-            )
-            return
+            credentialRollbackRecoveryUnavailable(failure)
         }
         val registryRead = readRegistry()
         if (registryRead.encoded != null && registryRead.registry == null) {
-            recordCredentialDiagnostic(
-                "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
-                "account-credentials.recover",
-            )
-            return
+            credentialRollbackRecoveryUnavailable()
+        }
+        val knownPhases = setOf(
+            null,
+            CREDENTIAL_SAVE_PREPARED,
+            CREDENTIAL_SAVE_SECRET_WRITING,
+            CREDENTIAL_SAVE_SECRET_WRITTEN,
+            CREDENTIAL_SAVE_ROLLBACK,
+        )
+        if (phase !in knownPhases) {
+            credentialRollbackRecoveryUnavailable()
         }
         val registry = registryRead.registry
         val credentialCommitted = registry?.accounts?.any { account -> account.id == accountId } == true
+        val secretReference = desktopAccountSecretReference(accountId)
+        val rollbackReference = desktopAccountCredentialRollbackReference(accountId)
         if (!credentialCommitted) {
             try {
-                secretStore.clear(desktopAccountSecretReference(accountId))
+                secretStore.clear(secretReference)
+                secretStore.clear(rollbackReference)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                recordCredentialDiagnostic(
-                    "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
-                    "account-credentials.recover",
-                    failure,
-                )
-                return
+                credentialRollbackRecoveryUnavailable(failure)
+            }
+        } else if (phase == CREDENTIAL_SAVE_SECRET_WRITING || phase == CREDENTIAL_SAVE_ROLLBACK) {
+            val rollbackSecret = try {
+                secretStore.load(rollbackReference)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                credentialRollbackRecoveryUnavailable(failure)
+            }
+            if (rollbackSecret == null) {
+                credentialRollbackRecoveryUnavailable()
+            }
+            try {
+                secretStore.save(secretReference, registry.accounts.first { it.id == accountId }.loginName, rollbackSecret)
+                secretStore.clear(rollbackReference)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                credentialRollbackRecoveryUnavailable(failure)
             }
         } else if (phase == CREDENTIAL_SAVE_SECRET_WRITTEN) {
             val selected = requireNotNull(registry.select(accountId))
             try {
                 persistAccountState(prepareRegistry(selected), selected.activeAccount)
+                secretStore.clear(rollbackReference)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                recordCredentialDiagnostic(
-                    "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
-                    "account-credentials.recover",
-                    failure,
-                )
-                return
+                credentialRollbackRecoveryUnavailable(failure)
+            }
+        }
+        if (phase == CREDENTIAL_SAVE_PREPARED) {
+            try {
+                secretStore.clear(rollbackReference)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                credentialRollbackRecoveryUnavailable(failure)
             }
         }
         clearPendingCredentialSave()
@@ -408,6 +444,20 @@ internal class DesktopAccountCredentialPersistence(
         flushPreferences()
     }
 
+    private fun markPendingCredentialSaveSecretWriting() {
+        preferences.put(KEY_PENDING_CREDENTIAL_SAVE_PHASE, CREDENTIAL_SAVE_SECRET_WRITING)
+        flushPreferences()
+    }
+
+    private fun credentialRollbackRecoveryUnavailable(failure: Exception? = null): Nothing {
+        recordCredentialDiagnostic(
+            "ACCOUNT_CREDENTIAL_STORE_ROLLBACK_FAILED",
+            "account-credentials.recover",
+            failure,
+        )
+        throw DesktopCredentialRollbackRecoveryUnavailableException(failure)
+    }
+
     private fun markPendingCredentialSaveRollback() {
         val previousPhase = preferences.get(KEY_PENDING_CREDENTIAL_SAVE_PHASE, null)
         try {
@@ -444,6 +494,7 @@ internal class DesktopAccountCredentialPersistence(
                 "account-credentials.recover",
                 failure,
             )
+            throw DesktopCredentialRollbackRecoveryUnavailableException(failure)
         }
     }
 
@@ -695,6 +746,7 @@ internal class DesktopAccountCredentialPersistence(
         const val KEY_PENDING_CREDENTIAL_SAVE_PHASE = "accountCredentialSavePhase"
         const val KEY_PENDING_CREDENTIAL_REMOVALS = "accountCredentialRemovals"
         const val CREDENTIAL_SAVE_PREPARED = "prepared"
+        const val CREDENTIAL_SAVE_SECRET_WRITING = "secret-writing"
         const val CREDENTIAL_SAVE_SECRET_WRITTEN = "secret-written"
         const val CREDENTIAL_SAVE_ROLLBACK = "rollback"
     }
