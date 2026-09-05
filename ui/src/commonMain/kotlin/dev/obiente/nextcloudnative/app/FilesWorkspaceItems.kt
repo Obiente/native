@@ -97,7 +97,7 @@ internal fun NativeFileWorkspaceList(
                 Surface(
                     color = if (selected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent,
                     shape = RoundedCornerShape(NextcloudRadii.Small),
-                    modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }.combinedClickable(
+                    modifier = Modifier.fillMaxWidth().semantics { if (desktop) this.selected = selected }.combinedClickable(
                         onClickLabel = if (desktop) "Select ${file.name}" else primaryFileActionLabel(file),
                         onLongClickLabel = "Show actions for ${file.name}",
                         onClick = {
@@ -274,7 +274,7 @@ private fun NativeFileWorkspaceTile(
         }
     }
     Card(
-        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }.combinedClickable(
+        modifier = Modifier.fillMaxWidth().semantics { if (onDoubleClick != null) this.selected = selected }.combinedClickable(
             onClickLabel = if (onDoubleClick != null) "Select ${file.name}" else primaryFileActionLabel(file),
             onLongClickLabel = "Show actions for ${file.name}",
             onClick = onClick,

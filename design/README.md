@@ -83,8 +83,16 @@ The frozen news-feed-v1 contract retains its legacy URLs; new clients accept
 both canonical article/image origins. Update manifest fields and asset names
 remain unchanged. DNS, deployment, GitHub social-preview settings and release
 publication are separate operational steps.
+New clients load the feed and images directly from nati.ve. The legacy feed
+and screenshot endpoints remain available without a redirect for installed
+clients; other old website URLs redirect permanently.
 
 Release scripts use the renamed repository for GitHub API operations, while
 `tools/release-repository.sh` retains `Obiente/nc-native` in v1 manifest URLs
 for installed clients. New Android and desktop clients accept both narrowly
 scoped repository URL prefixes without changing the original download URLs.
+Network requests map those legacy release URLs to the renamed GitHub repository
+before following the existing restricted release-asset redirect.
+Already-installed builds that reject GitHub's repository-rename 301 need a
+manual upgrade from the canonical release page; new metadata cannot change
+the downloader code in those builds.

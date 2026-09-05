@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-indexnow_origin="https://nc-native.obiente.dev"
+indexnow_origin="https://nati.ve"
 indexnow_endpoint="https://api.indexnow.org/indexnow"
 indexnow_state_directory="/var/cache/nginx/indexnow"
 indexnow_private_directory="/opt/indexnow"

@@ -78,3 +78,38 @@ test("IndexNow notifier fails closed outside the production deployment", async (
   assert.match(stdout, /INDEXNOW_PRODUCTION is not enabled/);
   assert.equal(stderr, "");
 });
+
+test("production notifier polls the canonical host before submitting", {
+  skip: process.platform === "win32" ? "POSIX container notifier is exercised on Linux" : false,
+}, async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "native-indexnow-notifier-"));
+  try {
+    const privateDirectory = path.join(temporary, "private");
+    const stateDirectory = path.join(temporary, "state");
+    const bin = path.join(temporary, "bin");
+    await mkdir(privateDirectory);
+    await mkdir(bin);
+    await writeFile(path.join(privateDirectory, "fingerprint"), "synthetic-fingerprint");
+    await writeFile(path.join(privateDirectory, "payload.json"), "{}");
+    const source = await readFile(path.join(scriptsDirectory, "../docker/indexnow-notify.sh"), "utf8");
+    const notifier = path.join(temporary, "notify.sh");
+    await writeFile(notifier, source.replace("/opt/indexnow", privateDirectory)
+      .replace("/var/cache/nginx/indexnow", stateDirectory));
+    await writeFile(path.join(bin, "curl"), `#!/bin/sh
+for argument do destination="$argument"; done
+case "$destination" in
+  'https://nati.ve/indexnow-deployment.txt?build=synthetic-fingerprint') printf synthetic-fingerprint ;;
+  'https://api.indexnow.org/indexnow') printf 202 ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+    await writeFile(path.join(bin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const { stdout } = await executeFile("sh", [notifier], {
+      env: { ...process.env, INDEXNOW_PRODUCTION: "1", PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+    });
+    assert.match(stdout, /IndexNow accepted deployment synthetic-fingerprint with HTTP 202/);
+    assert.equal(await readFile(path.join(stateDirectory, "synthetic-fingerprint.submitted"), "utf8"), "");
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});

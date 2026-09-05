@@ -573,22 +573,23 @@ internal fun executeDesktopUpdateRequest(
     request: Request,
     onCallChanged: (Call?) -> Unit = {},
 ): Response {
-    val initialCall = client.newCall(request)
+    val canonicalRequest = if (request.url.host == "github.com") request.newBuilder().url(canonicalReleaseDownloadRequestUrl(request.url.toString())).build() else request
+    val initialCall = client.newCall(canonicalRequest)
     onCallChanged(initialCall)
     val initialResponse = initialCall.execute()
     if (initialResponse.code !in setOf(302, 307, 308)) return initialResponse
     return try {
         check(
-            request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/obiente/native/releases/download/"),
+            canonicalRequest.url.host == "github.com" &&
+                canonicalRequest.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) { "Unexpected redirect while loading update content." }
         val location = requireNotNull(initialResponse.header("Location"))
-        val redirectedUrl = requireNotNull(request.url.resolve(location))
+        val redirectedUrl = requireNotNull(canonicalRequest.url.resolve(location))
         check(isTrustedDesktopReleaseAssetRedirect(redirectedUrl.toString())) {
             "GitHub release download redirected to an untrusted destination."
         }
         initialResponse.close()
-        val redirectedCall = client.newCall(request.newBuilder().url(redirectedUrl).build())
+        val redirectedCall = client.newCall(canonicalRequest.newBuilder().url(redirectedUrl).build())
         onCallChanged(redirectedCall)
         redirectedCall.execute()
     } catch (failure: Exception) {

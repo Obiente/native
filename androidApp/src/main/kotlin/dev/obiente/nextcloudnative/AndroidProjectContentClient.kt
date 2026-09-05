@@ -1,5 +1,4 @@
 package dev.obiente.nextcloudnative
-
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -23,6 +22,8 @@ import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_APK_BYTES
 import dev.obiente.nextcloudnative.app.MAX_ANDROID_UPDATE_METADATA_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_FEED_BYTES
 import dev.obiente.nextcloudnative.app.MAX_PROJECT_NEWS_IMAGE_BYTES
+import dev.obiente.nextcloudnative.app.canonicalReleaseDownloadRequestUrl
+import dev.obiente.nextcloudnative.app.canonicalProjectNewsImageRequestUrl
 import dev.obiente.nextcloudnative.app.PROJECT_NEWS_FEED_URL
 import dev.obiente.nextcloudnative.app.ProjectNewsResult
 import dev.obiente.nextcloudnative.app.ProjectNewsImage
@@ -54,12 +55,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-
 internal const val PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
 internal const val PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
 internal const val PROJECT_CONTENT_CALL_TIMEOUT_SECONDS = 10L * 60L
-
 internal fun buildProjectContentHttpClient(): OkHttpClient =
     OkHttpClient.Builder()
         .connectTimeout(PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -192,7 +191,7 @@ internal class AndroidProjectContentClient(
                 publicContent.sha256() == image.sha256
             }?.let { return it }
         }
-        val bytes = getBounded(image.url, MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
+        val bytes = getBounded(canonicalProjectNewsImageRequestUrl(image.url), MAX_PROJECT_NEWS_IMAGE_BYTES.toLong())
         check(bytes.sha256() == image.sha256) { "Project news image verification failed." }
         newsImageDirectory.mkdirs()
         val temporary = File(newsImageDirectory, "${image.sha256}.part")
@@ -924,28 +923,29 @@ internal fun executeWithTrustedGitHubReleaseRedirect(
     request: Request,
     onCallChanged: (Call?) -> Unit = {},
 ): Response {
-    val initialCall = client.newCall(request)
+    val canonicalRequest = if (request.url.host == "github.com") request.newBuilder().url(canonicalReleaseDownloadRequestUrl(request.url.toString())).build() else request
+    val initialCall = client.newCall(canonicalRequest)
     onCallChanged(initialCall)
     val initialResponse = initialCall.execute()
     if (initialResponse.code !in setOf(302, 307, 308)) return initialResponse
     return try {
         check(
-            request.url.host == "github.com" &&
-                request.url.encodedPath.startsWith("/obiente/native/releases/download/"),
+            canonicalRequest.url.host == "github.com" &&
+                canonicalRequest.url.encodedPath.startsWith("/obiente/native/releases/download/"),
         ) {
             "Unexpected redirect while loading public project content."
         }
         val location = requireNotNull(initialResponse.header("Location")) {
             "GitHub release download redirect did not include a destination."
         }
-        val redirectedUrl = requireNotNull(request.url.resolve(location)) {
+        val redirectedUrl = requireNotNull(canonicalRequest.url.resolve(location)) {
             "GitHub release download redirect was invalid."
         }
         check(isTrustedGitHubReleaseAssetRedirect(redirectedUrl.toString())) {
             "GitHub release download redirected to an untrusted destination."
         }
         initialResponse.close()
-        val redirectedCall = client.newCall(request.newBuilder().url(redirectedUrl).build())
+        val redirectedCall = client.newCall(canonicalRequest.newBuilder().url(redirectedUrl).build())
         onCallChanged(redirectedCall)
         redirectedCall.execute()
     } catch (failure: Exception) {

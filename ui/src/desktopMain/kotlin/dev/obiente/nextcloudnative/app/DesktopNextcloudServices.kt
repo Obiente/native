@@ -3284,7 +3284,7 @@ class DesktopNextcloudServices(
                 cached.readBytes().takeIf { publicContentSha256(it) == image.sha256 }
                     ?.let { return@withContext it }
             }
-            projectContentHttpClient.newCall(Request.Builder().url(image.url).get().build())
+            projectContentHttpClient.newCall(Request.Builder().url(canonicalProjectNewsImageRequestUrl(image.url)).get().build())
                 .execute().use { response ->
                     check(response.isSuccessful) {
                         "Project news image request failed (HTTP ${response.code})."

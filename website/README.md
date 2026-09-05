@@ -166,6 +166,9 @@ The container returns a permanent HTTP 301 redirect for requests whose Host is
 preserve the incoming Host header. Configure DNS and valid HTTPS certificates
 for both domains before deploying the redirect. Requests to `nati.ve`, preview
 domains, and localhost continue to serve the site directly.
+The old `/news-feed-v1.json` and `/screenshots/` endpoints also serve directly:
+installed clients reject redirects for this content. Keep their frozen feed
+URLs intact; new clients request the canonical host directly.
 
 The container exposes `/api/github-repository` as a cached, same-origin proxy
 for the public `obiente/native` repository metadata. The website uses it to

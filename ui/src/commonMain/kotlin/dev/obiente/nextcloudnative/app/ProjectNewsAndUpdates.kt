@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
-const val PROJECT_NEWS_FEED_URL = "https://nc-native.obiente.dev/news-feed-v1.json"
+const val PROJECT_NEWS_FEED_URL = "https://nati.ve/news-feed-v1.json"
 const val MAX_PROJECT_NEWS_FEED_BYTES = 512 * 1024
 const val MAX_PROJECT_NEWS_IMAGE_BYTES = 8 * 1024 * 1024
 const val MAX_ANDROID_UPDATE_METADATA_BYTES = 64 * 1024
@@ -541,6 +541,19 @@ private fun String.canonicalReleaseRepositoryUrl(): String {
     )
     val prefix = legacyPrefixes.firstOrNull(::startsWith) ?: return this
     return "https://github.com/obiente/native/releases/" + removePrefix(prefix)
+}
+
+fun canonicalReleaseDownloadRequestUrl(url: String): String {
+    val canonical = url.canonicalReleaseRepositoryUrl()
+    require(canonical.hasCanonicalPathUnder(
+        "https://github.com/obiente/native/releases/download/", trailingSlash = false,
+    ))
+    return canonical
+}
+
+fun canonicalProjectNewsImageRequestUrl(url: String): String {
+    require(isCanonicalProjectNewsImageUrl(url))
+    return url.replace("https://nc-native.obiente.dev/", "https://nati.ve/")
 }
 
 fun isCanonicalDesktopUpdateManifestUrl(
