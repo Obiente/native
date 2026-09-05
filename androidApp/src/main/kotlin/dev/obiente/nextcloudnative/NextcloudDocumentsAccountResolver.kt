@@ -65,7 +65,7 @@ internal class NextcloudDocumentsAccountResolver(
         val session = loadSession(record.id)?.takeIf { candidate ->
             candidate.accountRecord() == record && NextcloudDocumentIds.accountKey(candidate) == record.documentAccountKey()
         } ?: return null
-        return ResolvedNextcloudDocumentsAccount(session, loadIncarnation(record.documentAccountKey()))
+        return ResolvedNextcloudDocumentsAccount(session, loadIncarnation(record.id.storageKey))
     }
 }
 

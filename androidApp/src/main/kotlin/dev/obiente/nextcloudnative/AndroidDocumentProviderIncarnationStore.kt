@@ -234,7 +234,7 @@ internal class AndroidDocumentProviderIncarnationStore(
     private companion object {
         const val PREFERENCES_NAME = "documents-provider-incarnations-v1"
         const val RETIREMENT_JOURNAL_KEY_PREFIX = "retirement:"
-        val ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{32}")
+        val ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{64}")
         val LOCK = Any()
 
         fun retirementJournalKey(accountIdentity: String): String =
@@ -350,7 +350,7 @@ internal fun prepareAndroidDocumentProviderAccountSave(
     val store = AndroidDocumentProviderIncarnationStore(context)
     store.reconcilePendingForCredentialAccess(current.registry)
     store.prepareForAccountSave(
-        NextcloudDocumentIds.accountKey(session),
+        session.documentProviderIncarnationAccountIdentity(),
         session.accountId in current.sessions,
     )
 }
@@ -404,9 +404,7 @@ internal fun AndroidAccountRemovalCleanupJournal.completeDocumentRetirement(
 private fun NextcloudAccountRegistry.documentProviderAccountOwnership(
     accountIdentity: String,
 ): AndroidDocumentProviderAccountOwnership = if (
-    accounts.any { account ->
-        NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == accountIdentity
-    }
+    accounts.any { account -> account.id.storageKey == accountIdentity }
 ) {
     AndroidDocumentProviderAccountOwnership.Present
 } else {
@@ -417,7 +415,7 @@ internal fun notifyAndroidDocumentChanged(context: Context, session: NextcloudSe
     val appContext = context.applicationContext
     val incarnation = runCatching {
         AndroidDocumentProviderIncarnationStore(appContext)
-            .activeIncarnation(NextcloudDocumentIds.accountKey(session))
+            .activeIncarnation(session.documentProviderIncarnationAccountIdentity())
     }.getOrNull() ?: return
     val authority = nextcloudDocumentsAuthority(appContext.packageName)
     appContext.contentResolver.notifyChange(
@@ -435,3 +433,5 @@ internal fun notifyAndroidDocumentChanged(context: Context, session: NextcloudSe
         null,
     )
 }
+
+internal fun NextcloudSession.documentProviderIncarnationAccountIdentity(): String = accountId.storageKey
