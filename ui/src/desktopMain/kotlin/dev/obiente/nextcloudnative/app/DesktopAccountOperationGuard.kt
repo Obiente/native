@@ -103,12 +103,14 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
     clearProviderPreference: () -> Unit,
     restoreProviderPreference: (Boolean) -> Unit,
     removalCommitted: () -> Boolean = { false },
+    commitStatusObserved: (Boolean?) -> Unit = {},
     finishCommittedRemoval: () -> Unit = {},
     removeCredential: () -> Boolean,
 ): Boolean {
     return try {
         clearProviderPreference()
         removeCredential().also { removed ->
+            commitStatusObserved(removed)
             if (!removed) restoreProviderPreference(providerWasEnabled)
         }
     } catch (failure: Throwable) {
@@ -118,6 +120,7 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
             failure.addSuppressed(statusFailure)
             null
         }
+        commitStatusObserved(committed)
         when (committed) {
             false -> runCatching { restoreProviderPreference(providerWasEnabled) }
                 .exceptionOrNull()
@@ -129,6 +132,27 @@ internal fun removeDesktopCredentialWithoutProviderReactivation(
         }
         throw failure
     }
+}
+
+internal fun shouldResumeDesktopWritesAfterRemovalFailure(
+    removalCommitted: Boolean,
+    remoteRevocationAttempted: Boolean,
+    credentialRemovalStatus: Boolean?,
+): Boolean = !removalCommitted && !remoteRevocationAttempted && credentialRemovalStatus == false
+
+internal fun recoverDesktopAccountAfterPrecommitFailure(
+    restoreProviderPreference: () -> Unit,
+    resumeVirtualFileSystem: () -> Unit,
+    reopenSession: () -> Unit,
+    restartLifecycle: () -> Unit,
+): Throwable? {
+    var recoveryFailure: Throwable? = null
+    listOf(restoreProviderPreference, resumeVirtualFileSystem, reopenSession, restartLifecycle).forEach { action ->
+        runCatching(action).exceptionOrNull()?.let { failure ->
+            recoveryFailure?.addSuppressed(failure) ?: run { recoveryFailure = failure }
+        }
+    }
+    return recoveryFailure
 }
 
 internal fun requireDesktopSessionSaveAllowed(

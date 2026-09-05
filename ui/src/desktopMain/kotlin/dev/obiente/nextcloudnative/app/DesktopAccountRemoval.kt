@@ -4,6 +4,19 @@ import java.util.prefs.Preferences
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 
+internal const val DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE =
+    "This account has cleanup state written by a newer app version."
+
+internal fun unknownCleanupStateRejection() =
+    VirtualFileStorageActionResult.Rejected(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE)
+
+internal fun requireDesktopAccountActivationAllowed(blockedByUnknownCleanup: Boolean) {
+    check(!blockedByUnknownCleanup) { DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE }
+}
+
+internal fun DesktopAccountSyncPairCleanupJournal.requireAccountActivationAllowed(record: NextcloudAccountRecord) =
+    requireDesktopAccountActivationAllowed(blocksAccountActivation(desktopFileCacheAccountId(record)))
+
 internal enum class DesktopAccountSyncPairCleanupPhase {
     Prepared,
     Committed,
@@ -30,6 +43,14 @@ internal class DesktopAccountSyncPairCleanupJournal(
         preferences.flush()
     }
 
+    fun blocksAccountActivation(accountId: String): Boolean {
+        validateDesktopSyncPairCleanupAccountId(accountId)
+        val phase = preferences.get(cleanupKey(accountId), null)
+        val blocked = phase != null && phase != PREPARED && phase != COMMITTED
+        if (blocked) recordMalformedOnce()
+        return blocked
+    }
+
     fun pending(): List<DesktopAccountSyncPairCleanup> {
         var malformedEntryFound = false
         val cleanups = preferences.keys()
@@ -50,7 +71,7 @@ internal class DesktopAccountSyncPairCleanupJournal(
                 cleanup
             }
             .toList()
-        if (malformedEntryFound && malformedReported.compareAndSet(false, true)) runCatching(recordMalformed)
+        if (malformedEntryFound) recordMalformedOnce()
         check(cleanups.size <= MAX_LOCAL_ACCOUNTS) {
             "The desktop account sync cleanup journal is too large."
         }
@@ -72,6 +93,10 @@ internal class DesktopAccountSyncPairCleanupJournal(
             if (phase == DesktopAccountSyncPairCleanupPhase.Prepared) PREPARED else COMMITTED,
         )
         preferences.flush()
+    }
+
+    private fun recordMalformedOnce() {
+        if (malformedReported.compareAndSet(false, true)) runCatching(recordMalformed)
     }
 
     private fun cleanupKey(accountId: String): String = "$KEY_PREFIX$accountId".also { key ->
@@ -103,6 +128,7 @@ internal fun removeDesktopAccountCredential(
     preferences: Preferences,
     providerAccountId: String?,
     credentialStillExists: () -> Boolean,
+    commitStatusObserved: (Boolean?) -> Unit = {},
     finishCommittedRemoval: () -> Unit = {},
     removeCredential: () -> Boolean,
 ): Boolean {
@@ -121,9 +147,20 @@ internal fun removeDesktopAccountCredential(
             preferences.flush()
         },
         removalCommitted = { !credentialStillExists() },
+        commitStatusObserved = commitStatusObserved,
         finishCommittedRemoval = finishCommittedRemoval,
         removeCredential = removeCredential,
     )
+}
+
+internal fun setDesktopVirtualFileProviderPreference(
+    preferences: Preferences,
+    accountId: String,
+    enabled: Boolean,
+) {
+    val key = virtualFileProviderPreferenceKey(accountId)
+    if (enabled) preferences.putBoolean(key, true) else preferences.remove(key)
+    preferences.flush()
 }
 
 internal suspend fun removeDesktopAccountBeforeSyncPairCleanup(

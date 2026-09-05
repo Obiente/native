@@ -52,6 +52,37 @@ class DesktopVirtualFileProviderPreferencesTest {
     }
 
     @Test
+    fun `remote revocation attempt never restores a pre-disabled provider`() {
+        var providerEnabled = false
+        val removed = removeDesktopCredentialWithoutProviderReactivation(
+            providerWasEnabled = false,
+            clearProviderPreference = { providerEnabled = false },
+            restoreProviderPreference = { enabled -> providerEnabled = enabled },
+            removeCredential = { false },
+        )
+
+        assertFalse(removed)
+        assertFalse(providerEnabled)
+        assertFalse(shouldResumeDesktopWritesAfterRemovalFailure(false, true, false))
+    }
+
+    @Test
+    fun `provider restore failure does not prevent in-memory account recovery`() {
+        val events = mutableListOf<String>()
+        val restoreFailure = IllegalStateException("synthetic preference flush failure")
+
+        val recoveryFailure = recoverDesktopAccountAfterPrecommitFailure(
+            restoreProviderPreference = { events += "restore"; throw restoreFailure },
+            resumeVirtualFileSystem = { events += "resume" },
+            reopenSession = { events += "reopen" },
+            restartLifecycle = { events += "restart" },
+        )
+
+        assertSame(restoreFailure, recoveryFailure)
+        assertEquals(listOf("restore", "resume", "reopen", "restart"), events)
+    }
+
+    @Test
     fun `aborted account removal leaves virtual file providers attached`() = runBlocking {
         val events = mutableListOf<String>()
 
