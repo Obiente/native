@@ -278,6 +278,66 @@ class DesktopExternalFileHandoffTest {
     }
 
     @Test
+    fun `concurrent account handoffs reserve one shared cache budget`() = runBlocking {
+        val root = Files.createTempDirectory("nextcloud-desktop-concurrent-handoff-").toFile()
+        val firstStarted = CompletableDeferred<Unit>()
+        val finishFirst = CompletableDeferred<Unit>()
+        var secondDownloadStarted = false
+        try {
+            val cacheReservations = DesktopExternalFileCacheReservations()
+            val firstHandoff = DesktopExternalFileHandoff(
+                root = root,
+                launchFile = { true },
+                cacheReservations = cacheReservations,
+                maximumCacheBytes = 10L,
+            )
+            val secondHandoff = DesktopExternalFileHandoff(
+                root = root,
+                launchFile = { true },
+                cacheReservations = cacheReservations,
+                maximumCacheBytes = 10L,
+            )
+            val sixByteFile = file().copy(size = 6L)
+            val first = async {
+                firstHandoff.launchStreamed(
+                    accountId = "a".repeat(64),
+                    file = sixByteFile,
+                    action = ExternalFileHandoffAction.OpenWith,
+                    capability = capability(),
+                ) { output, maximumBytes ->
+                    assertEquals(6L, maximumBytes)
+                    firstStarted.complete(Unit)
+                    finishFirst.await()
+                    output.write(ByteArray(6))
+                    DesktopDetachedDownload(6L, "\"v1\"")
+                }
+            }
+            firstStarted.await()
+
+            assertFailsWith<IllegalStateException> {
+                secondHandoff.launchStreamed(
+                    accountId = "b".repeat(64),
+                    file = sixByteFile,
+                    action = ExternalFileHandoffAction.OpenWith,
+                    capability = capability(),
+                ) { _, _ ->
+                    secondDownloadStarted = true
+                    error("the second copy must not start")
+                }
+            }
+            assertFalse(secondDownloadStarted)
+            finishFirst.complete(Unit)
+            assertIs<ExternalFileHandoffResult.Launched>(first.await())
+            assertEquals(
+                4L,
+                pruneDesktopExternalFileCache(root, requiredBytes = 0L, maximumBytes = 10L),
+            )
+        } finally {
+            deleteDesktopExternalFileTree(root.toPath())
+        }
+    }
+
+    @Test
     fun `same-filesystem export moves the staged copy without requiring duplicate capacity`() {
         val root = Files.createTempDirectory("nextcloud-desktop-export-").toFile()
         try {
