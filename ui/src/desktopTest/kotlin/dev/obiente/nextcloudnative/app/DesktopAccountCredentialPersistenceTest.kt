@@ -98,7 +98,7 @@ class DesktopAccountCredentialPersistenceTest {
         persistence.saveSession(secondSession())
 
         assertEquals(firstSession(), persistence.selectAccount(firstSession().accountId))
-        assertEquals(10, flushCount)
+        assertEquals(12, flushCount)
         assertEquals(firstSession().serverUrl, preferences.get("server", null))
         assertEquals(firstSession().loginName, preferences.get("login", null))
     }
@@ -179,6 +179,27 @@ class DesktopAccountCredentialPersistenceTest {
             assertNotNull(secrets.load(desktopAccountSecretReference(session.accountId)))
             assertNull(preferences.get("accountCredentialSaveServer", null))
             assertNull(preferences.get("accountCredentialSaveLogin", null))
+        }
+
+    @Test
+    fun preparedReauthenticationCrashKeepsTheCurrentSelectionAndOldSecret() =
+        withStore { preferences, secrets ->
+            val inactive = firstSession()
+            val active = secondSession()
+            val persistence = persistence(preferences, secrets)
+            persistence.saveSession(inactive)
+            persistence.saveSession(active)
+            secrets.crashSaveOnAttempt = secrets.saveCount + 1
+
+            assertFailsWith<SimulatedProcessExit> {
+                persistence.saveSession(inactive.copy(appPassword = "replacement-password"))
+            }
+            assertEquals("prepared", preferences.get("accountCredentialSavePhase", null))
+
+            val restarted = persistence(preferences, secrets)
+            assertEquals(active, restarted.loadActiveSession())
+            assertEquals(inactive, restarted.loadSession(inactive.accountId))
+            assertNull(preferences.get("accountCredentialSavePhase", null))
         }
 
     @Test
@@ -386,6 +407,39 @@ class DesktopAccountCredentialPersistenceTest {
         }
 
     @Test
+    fun failedLegacyCleanupForOneAccountDoesNotGetOverwrittenByAnotherRemoval() =
+        withStore { preferences, secrets ->
+            val first = firstSession()
+            val second = secondSession()
+            val firstLegacy = desktopSessionSecretReference(first.serverUrl, first.loginName)
+            val secondLegacy = desktopSessionSecretReference(second.serverUrl, second.loginName)
+            val persistence = persistence(preferences, secrets)
+            persistence.saveSession(first)
+            persistence.saveSession(second)
+            secrets.save(firstLegacy, first.loginName, first.appPassword.encodeToByteArray())
+            secrets.save(secondLegacy, second.loginName, second.appPassword.encodeToByteArray())
+            preferences.put("accountLegacyCleanupServer", first.serverUrl)
+            preferences.put("accountLegacyCleanupLogin", first.loginName)
+            preferences.flush()
+            secrets.failClears = true
+
+            assertTrue(persistence.removeAccount(second.accountId))
+
+            assertEquals(first.serverUrl, preferences.get("accountLegacyCleanupServer", null))
+            assertEquals(second.serverUrl, preferences.get("accountLegacyCleanupV2.0.server", null))
+            assertNotNull(secrets.load(firstLegacy))
+            assertNotNull(secrets.load(secondLegacy))
+
+            secrets.failClears = false
+            persistence(preferences, secrets).loadActiveSession()
+
+            assertNull(secrets.load(firstLegacy))
+            assertNull(secrets.load(secondLegacy))
+            assertNull(preferences.get("accountLegacyCleanupServer", null))
+            assertNull(preferences.get("accountLegacyCleanupV2.0.server", null))
+        }
+
+    @Test
     fun secureStoreReadFailureIsNotReportedAsMissingCredentials() = withStore { preferences, secrets ->
         val persistence = persistence(preferences, secrets)
         persistence.saveSession(firstSession())
@@ -521,7 +575,7 @@ class DesktopAccountCredentialPersistenceTest {
 
         assertFalse(decodeRegistry(preferences).accounts.any { it.id == removed.accountId })
         assertEquals(removed.accountId.storageKey, preferences.get("accountCredentialRemovals", null))
-        assertEquals(removed.serverUrl, preferences.get("accountLegacyCleanupServer", null))
+        assertEquals(removed.serverUrl, preferences.get("accountLegacyCleanupV2.0.server", null))
         assertNotNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
         assertNotNull(secrets.load(desktopSessionSecretReference(removed.serverUrl, removed.loginName)))
 
@@ -530,7 +584,7 @@ class DesktopAccountCredentialPersistenceTest {
         assertNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
         assertNull(secrets.load(desktopSessionSecretReference(removed.serverUrl, removed.loginName)))
         assertNull(preferences.get("accountCredentialRemovals", null))
-        assertNull(preferences.get("accountLegacyCleanupServer", null))
+        assertNull(preferences.get("accountLegacyCleanupV2.0.server", null))
     }
 
     @Test
@@ -554,7 +608,7 @@ class DesktopAccountCredentialPersistenceTest {
             var flushAttempts = 0
             val persistence = persistence(preferences, secrets) {
                 flushAttempts += 1
-                if (flushAttempts == 10) error("synthetic removal flush failure")
+                if (flushAttempts == 12) error("synthetic removal flush failure")
                 preferences.flush()
             }
             persistence.saveSession(first)
@@ -668,6 +722,7 @@ class DesktopAccountCredentialPersistenceTest {
         private val values = mutableMapOf<String, ByteArray>()
         var failSaves = false
         var failSaveOnAttempt: Int? = null
+        var crashSaveOnAttempt: Int? = null
         var failClears = false
         var loadFailure: RuntimeException? = null
         var loadCount = 0
@@ -685,6 +740,7 @@ class DesktopAccountCredentialPersistenceTest {
 
         override fun save(reference: DesktopSecretReference, username: String?, secret: ByteArray) {
             saveCount += 1
+            if (saveCount == crashSaveOnAttempt) throw SimulatedProcessExit()
             if (failSaves || saveCount == failSaveOnAttempt) {
                 error("private-app-password at cloud.example.test for alice")
             }
