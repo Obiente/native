@@ -1,6 +1,7 @@
 package dev.obiente.nextcloudnative.app
 
 import java.util.prefs.Preferences
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 
 internal class DesktopAccountCredentialPersistence(
@@ -14,6 +15,7 @@ internal class DesktopAccountCredentialPersistence(
         preferences,
         flushPreferences,
     ) { recordCredentialDiagnostic("ACCOUNT_CREDENTIAL_LEGACY_CLEANUP_FAILED", "account-credentials.migrate") }
+    private val malformedCredentialRemovalJournalReported = AtomicBoolean(false)
 
     fun loadActiveSession(): NextcloudSession? {
         retryPendingCredentialSave()
@@ -256,7 +258,9 @@ internal class DesktopAccountCredentialPersistence(
     }
 
     private fun retryPendingCredentialRemoval() {
-        pendingCredentialRemovalIds().forEach { accountId ->
+        val pending = readPendingCredentialRemovals()
+        if (pending.malformed) return
+        pending.accountIds.forEach { accountId ->
             val registry = readRegistry().registry
             if (registry == null) {
                 recordCredentialDiagnostic(
@@ -285,25 +289,34 @@ internal class DesktopAccountCredentialPersistence(
         }
     }
 
-    private fun pendingCredentialRemovalIds(): Set<NextcloudAccountId> {
-        val encoded = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null) ?: return emptySet()
-        if (encoded.isBlank()) return emptySet()
-        return encoded.split(',').mapNotNullTo(linkedSetOf()) { storageKey ->
+    private fun readPendingCredentialRemovals(): DesktopPendingCredentialRemovals {
+        val encoded = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null)
+            ?: return DesktopPendingCredentialRemovals.Empty
+        val accountIds = linkedSetOf<NextcloudAccountId>()
+        var malformed = encoded.isBlank()
+        encoded.split(',').forEach { storageKey ->
             try {
-                NextcloudAccountId(storageKey)
+                accountIds += NextcloudAccountId(storageKey)
             } catch (_: IllegalArgumentException) {
+                malformed = true
+            }
+        }
+        if (malformed && malformedCredentialRemovalJournalReported.compareAndSet(false, true)) {
+            runCatching {
                 recordCredentialDiagnostic(
                     "ACCOUNT_CREDENTIAL_REMOVAL_JOURNAL_INVALID",
                     "account-credentials.recover",
                 )
-                null
             }
         }
+        return DesktopPendingCredentialRemovals(accountIds, malformed)
     }
 
     private fun clearPendingCredentialRemoval(accountId: NextcloudAccountId) {
         val previous = preferences.get(KEY_PENDING_CREDENTIAL_REMOVALS, null)
-        val remaining = pendingCredentialRemovalIds() - accountId
+        val pending = readPendingCredentialRemovals()
+        if (pending.malformed) return
+        val remaining = pending.accountIds - accountId
         try {
             preferences.putOrRemove(
                 KEY_PENDING_CREDENTIAL_REMOVALS,
@@ -514,6 +527,13 @@ internal class DesktopAccountCredentialPersistence(
         pendingLegacyCleanupAccount: NextcloudAccountRecord? = null,
         pendingCredentialRemoval: NextcloudAccountId? = null,
     ) {
+        val credentialRemovals = pendingCredentialRemoval?.let { accountId ->
+            val pending = readPendingCredentialRemovals()
+            check(!pending.malformed) {
+                "The credential removal journal is invalid and must be recovered before removing another account."
+            }
+            pending.accountIds + accountId
+        }
         val previous = DesktopAccountPreferenceSnapshot(
             registry = registryStore.read(),
             server = preferences.get(KEY_SERVER, null),
@@ -527,8 +547,7 @@ internal class DesktopAccountCredentialPersistence(
                     DesktopPendingLegacyCredentialCleanup(account.serverUrl, account.loginName),
                 )
             }
-            pendingCredentialRemoval?.let { accountId ->
-                val removals = pendingCredentialRemovalIds() + accountId
+            credentialRemovals?.let { removals ->
                 preferences.put(
                     KEY_PENDING_CREDENTIAL_REMOVALS,
                     removals.joinToString(",") { pending -> pending.storageKey },
@@ -582,6 +601,15 @@ internal class DesktopAccountCredentialPersistence(
         val registry: NextcloudAccountRegistry?,
         val unsupportedVersion: Boolean,
     )
+
+    private data class DesktopPendingCredentialRemovals(
+        val accountIds: Set<NextcloudAccountId>,
+        val malformed: Boolean,
+    ) {
+        companion object {
+            val Empty = DesktopPendingCredentialRemovals(emptySet(), malformed = false)
+        }
+    }
 
     private data class DesktopAccountPreferenceSnapshot(
         val registry: String?,
