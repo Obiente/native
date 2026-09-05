@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import kotlinx.coroutines.CancellationException
@@ -35,6 +36,9 @@ internal fun NextcloudAccountRegistry?.asDurableRegistry(): DurableUploadAccount
 internal fun NextcloudAccountRegistry?.asAccountRetentionSnapshot(): AndroidAccountRetentionSnapshot =
     this?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
         ?: AndroidAccountRetentionSnapshot.Unavailable
+
+internal fun SharedPreferences.durableUploadAccountResolutionAvailable(): Boolean =
+    androidCredentialFreeRegistryAllowsAccountResolution(getString(ANDROID_ACCOUNT_REGISTRY_KEY, null))
 
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
     active: Boolean = false,
