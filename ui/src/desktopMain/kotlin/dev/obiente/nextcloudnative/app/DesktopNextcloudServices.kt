@@ -1499,7 +1499,9 @@ class DesktopNextcloudServices(
             )
         },
     )
-    private val accountSyncPairCleanupJournal = DesktopAccountSyncPairCleanupJournal(preferences)
+    private val accountSyncPairCleanupJournal = DesktopAccountSyncPairCleanupJournal(
+        preferences,
+    ) { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalMalformedDiagnostic()) }
     private val startOnLoginController = DesktopStartOnLoginController()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var backgroundFileSyncJob: Job? = null

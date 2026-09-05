@@ -193,10 +193,14 @@ internal class AndroidAccountCredentialController(
                 active = false,
                 prepareAccountRemoval = { prepareAccountRemoval(unavailableSession) },
                 removeQueuedUploads = { retryQueuedUploadsCleanup(unavailableSession, accountIdentity) },
-                clearActiveAccount = {},
-                rollbackActiveRemoval = {},
+                clearActiveAccount = {}, rollbackActiveRemoval = {},
                 persistInactiveRemoval = { persistState(recovered.remove(accountId), pendingCleanup) },
-                rollbackInactiveRemoval = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
+                rollbackInactiveRemoval = {
+                    rollbackUnavailableAndroidAccountRemoval(
+                        recovered = recovered, persistRecovered = { state -> persistState(state) },
+                        clearCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
+                    )
+                },
                 completeCommittedCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
                 recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
             )
