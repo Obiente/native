@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
@@ -100,7 +101,11 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
             },
             removeAccountOwnedWork = { pending ->
                 ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(pending.workIdentity) {
-                    cleanup.retryWithoutCredentials(pending.workIdentity, pending.previewCacheIdentity)
+                    cleanup.retryWithoutCredentials(
+                        pending.workIdentity,
+                        pending.previewCacheIdentity,
+                        pending.durableMutationIdentity,
+                    )
                 }
             },
             clearCleanup = journal::clear,
@@ -159,12 +164,27 @@ internal fun androidAccountRemovalCleanupOwnedByRegistry(
         check(cleanup.previewCacheIdentity == null || storageOwnerPreviewIdentity == cleanup.previewCacheIdentity) {
             "The account-removal preview identity does not match."
         }
+        check(
+            cleanup.durableMutationIdentity == null ||
+                durableMutationAccountScope(
+                    NextcloudSession(storageOwner.serverUrl, storageOwner.loginName, appPassword = ""),
+                ) == cleanup.durableMutationIdentity,
+        ) {
+            "The account-removal mutation identity does not match."
+        }
         return true
     }
     check(retainedAccounts.none { account ->
         NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == cleanup.workIdentity
     }) {
         "The account-removal cleanup identity belongs to a retained account."
+    }
+    check(cleanup.durableMutationIdentity == null || retainedAccounts.none { account ->
+        durableMutationAccountScope(
+            NextcloudSession(account.serverUrl, account.loginName, appPassword = ""),
+        ) == cleanup.durableMutationIdentity
+    }) {
+        "The account-removal mutation identity belongs to a retained account."
     }
     return false
 }

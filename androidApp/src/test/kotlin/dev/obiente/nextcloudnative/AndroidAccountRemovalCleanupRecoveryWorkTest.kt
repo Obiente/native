@@ -209,6 +209,37 @@ class AndroidAccountRemovalCleanupRecoveryWorkTest {
         )
     }
 
+    @Test
+    fun crossedDurableMutationIdentityCannotDeleteARetainedAccountsRecovery() = runBlocking {
+        val retained = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "retained-user",
+            appPassword = "fixture-password",
+        )
+        val removed = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "removed-user",
+            appPassword = "fixture-password",
+        )
+        val crossed = pendingAndroidAccountRemovalCleanup(removed).copy(
+            durableMutationIdentity = pendingAndroidAccountRemovalCleanup(retained).durableMutationIdentity,
+        )
+        val events = mutableListOf<String>()
+
+        val completed = recoverPendingAndroidAccountRemovalCleanups(
+            pending = listOf(crossed),
+            accountOwnedByRegistry = { cleanup ->
+                androidAccountRemovalCleanupOwnedByRegistry(cleanup, listOf(retained.accountRecord()))
+            },
+            removeAccountOwnedWork = { events += "remove" },
+            clearCleanup = { events += "clear" },
+            recordFailure = { events += "failure" },
+        )
+
+        assertFalse(completed)
+        assertEquals(listOf("failure"), events)
+    }
+
     private fun cleanup(accountCharacter: String, workCharacter: String) =
         AndroidPendingAccountRemovalCleanup(
             accountStorageKey = accountCharacter.repeat(64),
