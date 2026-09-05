@@ -102,6 +102,7 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
             removeAccountOwnedWork = { pending ->
                 ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(pending.workIdentity) {
                     cleanup.retryWithoutCredentials(
+                        pending.accountStorageKey,
                         pending.workIdentity,
                         pending.previewCacheIdentity,
                         pending.durableMutationIdentity,

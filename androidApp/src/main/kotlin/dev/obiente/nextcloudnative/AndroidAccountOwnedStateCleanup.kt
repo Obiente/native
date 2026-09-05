@@ -28,6 +28,7 @@ internal class AndroidAccountOwnedStateCleanup(
     private val durableUploads = AndroidDurableUploadAccountCleanup(appContext)
     private val mediaBackupLedger = AndroidMediaBackupAccountCleanup(appContext)
     private val mutationRecovery = AndroidAccountMutationRecoveryCleanup(appContext)
+    private val deckCardDrafts = AndroidDeckCardDraftStore(appContext)
 
     suspend fun remove(session: NextcloudSession) {
         val accountIdentity = NextcloudDocumentIds.accountKey(session)
@@ -43,6 +44,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
+                { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { mutationRecovery.clearDurableRecoveries(durableMutationAccountScope(session)) },
@@ -72,6 +74,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
+                { deckCardDrafts.removeAccount(session.accountId.storageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },
@@ -81,6 +84,7 @@ internal class AndroidAccountOwnedStateCleanup(
     }
 
     suspend fun retryWithoutCredentials(
+        accountStorageKey: String,
         accountIdentity: String,
         previewCacheIdentity: String? = null,
         durableMutationIdentity: String? = null,
@@ -100,6 +104,7 @@ internal class AndroidAccountOwnedStateCleanup(
                 { durableUploads.removeForAccount(accountIdentity) },
                 { retireAndroidFileSyncAccountPairs(appContext, accountIdentity) },
                 { mediaBackupLedger.removeForAccount(accountIdentity) },
+                { deckCardDrafts.removeAccount(accountStorageKey, accountIdentity) },
                 { fileReadCache.clearAccount(accountIdentity) },
                 { virtualFileCache.clearAccount(accountIdentity) },
                 { durableMutationIdentity?.let(mutationRecovery::clearDurableRecoveries) },

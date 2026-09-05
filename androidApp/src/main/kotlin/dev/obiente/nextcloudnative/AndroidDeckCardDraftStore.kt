@@ -28,6 +28,7 @@ internal class AndroidDeckCardDraftStore(
 
     fun load(session: NextcloudSession, key: DeckCardDraftKey): PersistedDeckCardDraft? =
         synchronized(STORAGE_LOCK) {
+            migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), key)
             val storedKey = storageKey(session, key)
             if (isQuarantined(storedKey)) {
                 storage.remove(setOf(storedKey, quarantineKey(storedKey)))
@@ -36,24 +37,27 @@ internal class AndroidDeckCardDraftStore(
             val encrypted = storage.getString(storedKey) ?: return@synchronized null
             val stored = decode(encrypted)
             requireStorageSlot(stored, storedKey)
+            requireStorageOwner(stored, session.accountId.storageKey)
             requireResource(stored, key)
             stored.draft
         }
 
     fun save(session: NextcloudSession, persisted: PersistedDeckCardDraft): Unit =
         synchronized(STORAGE_LOCK) {
+            migrateLegacyEntries(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session))
             val storedKey = storageKey(session, persisted.key)
             clearQuarantineBeforeSave(storedKey)
             val existing = storage.getString(storedKey)
             existing?.let {
                 val stored = decode(existing)
                 requireStorageSlot(stored, storedKey)
+                requireStorageOwner(stored, session.accountId.storageKey)
                 requireResource(stored, persisted.key)
             }
             if (existing == null) ensureCapacityForNewDraft(session)
             val updatedAtEpochMillis = nowEpochMillis()
             require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
-            val encrypted = encode(storedKey, persisted, updatedAtEpochMillis)
+            val encrypted = encode(session.accountId.storageKey, storedKey, persisted, updatedAtEpochMillis)
             check(storage.putString(storedKey, encrypted)) { "The Deck card draft could not be saved." }
             prune(session)
         }
@@ -65,41 +69,87 @@ internal class AndroidDeckCardDraftStore(
      * preference write must leave the original recovery record available for a later attempt.
      */
     fun migrateLegacyEntries(session: NextcloudSession): Unit = synchronized(STORAGE_LOCK) {
+        migrateLegacyEntries(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session))
+    }
+
+    private fun migrateLegacyEntries(accountStorageKey: String, legacyAccountIdentity: String) {
         val entries = try {
             storage.entries()
         } catch (_: Exception) {
-            return@synchronized
+            return
         }
         entries.forEach { (storedKey, rawValue) ->
-            if (!storedKey.startsWith(KEY_PREFIX)) return@forEach
+            if (!storedKey.matches(LEGACY_DRAFT_KEY_PATTERN)) return@forEach
             val stored = try {
                 (rawValue as? String)?.let(::decode)
             } catch (_: AndroidDeckDraftRecoveryException) {
                 null
             } ?: return@forEach
-            if (stored.storageKey != null || storageKey(session, stored.draft.key) != storedKey) {
-                return@forEach
-            }
-            val migrated = try {
-                encode(storedKey, stored.draft, stored.updatedAtEpochMillis)
-            } catch (_: Exception) {
+            if (
+                stored.accountStorageKey != null ||
+                stored.storageKey != null && stored.storageKey != storedKey ||
+                legacyStorageKey(legacyAccountIdentity, stored.draft.key) != storedKey
+            ) {
                 return@forEach
             }
             try {
-                check(storage.putString(storedKey, migrated))
+                migrateLegacyEntry(accountStorageKey, legacyAccountIdentity, stored.draft.key, stored)
             } catch (_: Exception) {
-                // Keep the legacy ciphertext available so a later session load can retry.
+                // Preserve the legacy record so the migration can be retried.
             }
         }
     }
 
+    private fun migrateLegacyEntry(
+        accountStorageKey: String,
+        legacyAccountIdentity: String,
+        key: DeckCardDraftKey,
+        decodedLegacy: StoredDeckCardDraft? = null,
+    ) {
+        val legacyKey = legacyStorageKey(legacyAccountIdentity, key)
+        val legacyMarker = quarantineKey(legacyKey, LEGACY_KEY_PREFIX, LEGACY_QUARANTINE_PREFIX)
+        val targetKey = storageKey(accountStorageKey, key)
+        val targetMarker = quarantineKey(targetKey)
+        val legacyEncrypted = storage.getString(legacyKey)
+        if (legacyEncrypted == null) {
+            val markerValue = storage.entries()[legacyMarker] as? String ?: return
+            if (storage.putString(targetMarker, markerValue)) storage.remove(setOf(legacyMarker))
+            return
+        }
+        val legacy = decodedLegacy ?: decode(legacyEncrypted)
+        if (
+            legacy.accountStorageKey != null ||
+            legacy.storageKey != null && legacy.storageKey != legacyKey ||
+            legacy.draft.key != key
+        ) {
+            throw AndroidDeckDraftRecoveryException(
+                IllegalArgumentException("The legacy Deck draft identity does not match."),
+            )
+        }
+        val migrated = encode(accountStorageKey, targetKey, legacy.draft, legacy.updatedAtEpochMillis)
+        val markerValue = storage.entries()[legacyMarker] as? String
+        if (markerValue != null && !storage.putString(targetMarker, markerValue)) return
+        val existingTarget = storage.getString(targetKey)
+        if (existingTarget == null) {
+            if (!storage.putString(targetKey, migrated)) return
+        } else {
+            val existing = decode(existingTarget)
+            requireStorageSlot(existing, targetKey)
+            requireStorageOwner(existing, accountStorageKey)
+            requireResource(existing, key)
+        }
+        storage.remove(setOf(legacyKey, legacyMarker))
+    }
+
     private fun encode(
+        accountStorageKey: String,
         storedKey: String,
         persisted: PersistedDeckCardDraft,
         updatedAtEpochMillis: Long,
     ): String {
         val value = JSONObject()
             .put("version", FORMAT_VERSION)
+            .put("accountStorageKey", accountStorageKey)
             .put("storageKey", storedKey)
             .put("updatedAtEpochMillis", updatedAtEpochMillis)
             .put("boardId", persisted.key.boardId)
@@ -115,6 +165,7 @@ internal class AndroidDeckCardDraftStore(
         val encrypted = cipher.encrypt(value)
         val verified = decode(encrypted)
         requireStorageSlot(verified, storedKey)
+        requireStorageOwner(verified, accountStorageKey)
         requireResource(verified, persisted.key)
         check(verified.draft == persisted && verified.updatedAtEpochMillis == updatedAtEpochMillis) {
             "The Deck card draft could not be verified."
@@ -127,11 +178,13 @@ internal class AndroidDeckCardDraftStore(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean = false,
     ): Unit = synchronized(STORAGE_LOCK) {
+        migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), key)
         val storedKey = storageKey(session, key)
         if (!discardUnreadable) {
             storage.getString(storedKey)?.let { existing ->
                 val stored = decode(existing)
                 requireStorageSlot(stored, storedKey)
+                requireStorageOwner(stored, session.accountId.storageKey)
                 requireResource(stored, key)
             }
         }
@@ -142,6 +195,7 @@ internal class AndroidDeckCardDraftStore(
 
     fun quarantineAfterSubmit(session: NextcloudSession, key: DeckCardDraftKey): Unit =
         synchronized(STORAGE_LOCK) {
+            migrateLegacyEntry(session.accountId.storageKey, NextcloudDocumentIds.accountKey(session), key)
             val storedKey = storageKey(session, key)
             check(storage.putString(quarantineKey(storedKey), QUARANTINE_MARKER)) {
                 "The submitted Deck card draft could not be quarantined."
@@ -151,19 +205,57 @@ internal class AndroidDeckCardDraftStore(
 
     fun discardAll(): Unit = synchronized(STORAGE_LOCK) {
         val keys = storage.entries().keys.filterTo(linkedSetOf()) { key ->
-            key.startsWith(KEY_PREFIX) || key.startsWith(QUARANTINE_PREFIX)
+            key.startsWith(KEY_PREFIX) || key.startsWith(QUARANTINE_PREFIX) ||
+                key.matches(LEGACY_DRAFT_KEY_PATTERN) || key.matches(LEGACY_QUARANTINE_KEY_PATTERN)
         }
         if (keys.isEmpty()) return@synchronized
         check(storage.remove(keys)) { "Saved Deck card drafts could not be discarded." }
     }
 
+    fun removeAccount(accountStorageKey: String, legacyAccountIdentity: String) = synchronized(STORAGE_LOCK) {
+        require(ACCOUNT_STORAGE_KEY_PATTERN.matches(accountStorageKey))
+        require(LEGACY_ACCOUNT_IDENTITY_PATTERN.matches(legacyAccountIdentity))
+        val entries = storage.entries()
+        val keys = entries.keys.filterTo(linkedSetOf()) { key ->
+            key.startsWith(accountDraftPrefix(accountStorageKey)) ||
+                key.startsWith(accountQuarantinePrefix(accountStorageKey))
+        }
+        entries.forEach { (storedKey, rawValue) ->
+            if (!storedKey.matches(LEGACY_DRAFT_KEY_PATTERN)) return@forEach
+            val stored = try {
+                (rawValue as? String)?.let(::decode)
+            } catch (_: AndroidDeckDraftRecoveryException) {
+                null
+            } ?: return@forEach
+            if (
+                stored.accountStorageKey == null &&
+                (stored.storageKey == null || stored.storageKey == storedKey) &&
+                legacyStorageKey(legacyAccountIdentity, stored.draft.key) == storedKey
+            ) {
+                keys += storedKey
+                keys += quarantineKey(storedKey, LEGACY_KEY_PREFIX, LEGACY_QUARANTINE_PREFIX)
+            }
+        }
+        if (keys.isNotEmpty()) {
+            check(storage.remove(keys)) { "Saved Deck card drafts for the account could not be removed." }
+        }
+    }
+
     private fun decode(encrypted: String): StoredDeckCardDraft = try {
         val value = JSONObject(cipher.decrypt(encrypted))
-        require(value.getInt("version") == FORMAT_VERSION) {
+        val version = value.getInt("version")
+        require(version == LEGACY_FORMAT_VERSION || version == FORMAT_VERSION) {
             "The Deck draft format is unsupported."
         }
         val updatedAtEpochMillis = value.getLong("updatedAtEpochMillis")
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
+        val storageKey = value.optString("storageKey").takeIf(String::isNotBlank)
+        val accountStorageKey = value.optString("accountStorageKey").takeIf(String::isNotBlank)
+        require(
+            version == LEGACY_FORMAT_VERSION && accountStorageKey == null ||
+                version == FORMAT_VERSION && storageKey != null &&
+                accountStorageKey?.matches(ACCOUNT_STORAGE_KEY_PATTERN) == true,
+        ) { "The Deck draft account storage metadata is invalid." }
         StoredDeckCardDraft(
             draft = PersistedDeckCardDraft(
                 key = DeckCardDraftKey(
@@ -185,7 +277,8 @@ internal class AndroidDeckCardDraftStore(
                 ),
             ),
             updatedAtEpochMillis = updatedAtEpochMillis,
-            storageKey = value.optString("storageKey").takeIf(String::isNotBlank),
+            storageKey = storageKey,
+            accountStorageKey = accountStorageKey,
         )
     } catch (failure: Exception) {
         throw AndroidDeckDraftRecoveryException(failure)
@@ -208,16 +301,25 @@ internal class AndroidDeckCardDraftStore(
         }
     }
 
+    private fun requireStorageOwner(stored: StoredDeckCardDraft, expected: String) {
+        if (stored.accountStorageKey != expected) {
+            throw AndroidDeckDraftRecoveryException(
+                IllegalArgumentException("The Deck draft account identity does not match."),
+            )
+        }
+    }
+
     private fun prune(session: NextcloudSession) {
         var unreadableEntries = 0
+        val accountStorageKey = session.accountId.storageKey
         val metadata = storage.entries().mapNotNull { (key, rawValue) ->
-            if (!key.startsWith(KEY_PREFIX)) return@mapNotNull null
+            if (!key.startsWith(accountDraftPrefix(accountStorageKey))) return@mapNotNull null
             val stored = try {
                 (rawValue as? String)?.let(::decode)
             } catch (_: AndroidDeckDraftRecoveryException) {
                 null
             }
-            if (stored != null && isReadableRetentionEntry(session, key, stored)) {
+            if (stored != null && isReadableRetentionEntry(accountStorageKey, key, stored)) {
                 DeckCardDraftRetention.Entry(key, stored.updatedAtEpochMillis)
             } else {
                 // A Keystore or provider failure can make valid ciphertext temporarily unreadable.
@@ -237,14 +339,15 @@ internal class AndroidDeckCardDraftStore(
     }
 
     private fun ensureCapacityForNewDraft(session: NextcloudSession) {
-        val draftEntries = storage.entries().filterKeys { it.startsWith(KEY_PREFIX) }
+        val accountStorageKey = session.accountId.storageKey
+        val draftEntries = storage.entries().filterKeys { it.startsWith(accountDraftPrefix(accountStorageKey)) }
         val overflow = draftEntries.size + 1 - DeckCardDraftRetention.MAX_ENTRIES
         if (overflow <= 0) return
         val readableEntries = draftEntries.count { (storedKey, rawValue) ->
             try {
                 (rawValue as? String)
                     ?.let(::decode)
-                    ?.let { stored -> isReadableRetentionEntry(session, storedKey, stored) } == true
+                    ?.let { stored -> isReadableRetentionEntry(accountStorageKey, storedKey, stored) } == true
             } catch (_: AndroidDeckDraftRecoveryException) {
                 false
             }
@@ -253,11 +356,10 @@ internal class AndroidDeckCardDraftStore(
     }
 
     private fun isReadableRetentionEntry(
-        session: NextcloudSession,
+        accountStorageKey: String,
         storedKey: String,
         stored: StoredDeckCardDraft,
-    ): Boolean = stored.storageKey?.let { recorded -> recorded == storedKey }
-        ?: (storageKey(session, stored.draft.key) == storedKey)
+    ): Boolean = stored.storageKey == storedKey && stored.accountStorageKey == accountStorageKey
 
     private fun isQuarantined(storedKey: String): Boolean =
         quarantineKey(storedKey) in storage.entries()
@@ -271,36 +373,68 @@ internal class AndroidDeckCardDraftStore(
     }
 
     private fun quarantineKey(storedKey: String): String =
-        "$QUARANTINE_PREFIX${storedKey.removePrefix(KEY_PREFIX)}"
+        quarantineKey(storedKey, KEY_PREFIX, QUARANTINE_PREFIX)
+
+    private fun quarantineKey(storedKey: String, draftPrefix: String, markerPrefix: String): String =
+        "$markerPrefix${storedKey.removePrefix(draftPrefix)}"
 
     internal fun storageKey(session: NextcloudSession, key: DeckCardDraftKey): String {
+        return storageKey(session.accountId.storageKey, key)
+    }
+
+    private fun storageKey(accountStorageKey: String, key: DeckCardDraftKey): String {
         val scope = listOf(
-            NextcloudDocumentIds.accountKey(session),
             key.boardId.toString(),
             key.stackId.toString(),
             key.cardId?.toString() ?: "new",
         ).joinToString(separator = ":")
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(scope.toByteArray(Charsets.UTF_8))
-            .joinToString(separator = "") { byte ->
-                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
-            }
-        return "$KEY_PREFIX$digest"
+        return "${accountDraftPrefix(accountStorageKey)}${sha256(scope)}"
     }
+
+    private fun legacyStorageKey(accountIdentity: String, key: DeckCardDraftKey): String {
+        val scope = listOf(
+            accountIdentity,
+            key.boardId.toString(),
+            key.stackId.toString(),
+            key.cardId?.toString() ?: "new",
+        ).joinToString(separator = ":")
+        return "$LEGACY_KEY_PREFIX${sha256(scope)}"
+    }
+
+    internal fun legacyStorageKey(session: NextcloudSession, key: DeckCardDraftKey): String =
+        legacyStorageKey(NextcloudDocumentIds.accountKey(session), key)
+
+    private fun accountDraftPrefix(accountStorageKey: String) = "$KEY_PREFIX${accountStorageKey}_"
+
+    private fun accountQuarantinePrefix(accountStorageKey: String) = "$QUARANTINE_PREFIX${accountStorageKey}_"
+
+    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
 
     private data class StoredDeckCardDraft(
         val draft: PersistedDeckCardDraft,
         val updatedAtEpochMillis: Long,
         val storageKey: String?,
+        val accountStorageKey: String?,
     )
 
     internal companion object {
         private val STORAGE_LOCK = Any()
         const val PREFERENCES = "nextcloud_native_deck_drafts"
-        const val KEY_PREFIX = "draft_"
-        const val QUARANTINE_PREFIX = "submitted_"
+        const val KEY_PREFIX = "draft_v2_"
+        const val QUARANTINE_PREFIX = "submitted_v2_"
+        const val LEGACY_KEY_PREFIX = "draft_"
+        const val LEGACY_QUARANTINE_PREFIX = "submitted_"
         const val QUARANTINE_MARKER = "confirmed"
-        const val FORMAT_VERSION = 1
+        const val LEGACY_FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
+        private val ACCOUNT_STORAGE_KEY_PATTERN = Regex("[0-9a-f]{64}")
+        private val LEGACY_ACCOUNT_IDENTITY_PATTERN = Regex("[0-9a-f]{32}")
+        private val LEGACY_DRAFT_KEY_PATTERN = Regex("^draft_[0-9a-f]{64}$")
+        private val LEGACY_QUARANTINE_KEY_PATTERN = Regex("^submitted_[0-9a-f]{64}$")
     }
 }
 
