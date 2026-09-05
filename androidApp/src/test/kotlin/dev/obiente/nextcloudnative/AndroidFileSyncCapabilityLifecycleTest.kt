@@ -454,6 +454,24 @@ class AndroidFileSyncCapabilityLifecycleTest {
         assertTrue(fixture.grants.writeGranted)
     }
 
+    @Test
+    fun `postcommit pair removal failure releases from the authoritative state immediately`() {
+        val fixture = fixture()
+        fixture.lifecycle.acquire(ROOT_URI, "Notes")
+        fixture.lifecycle.bindReady(ROOT_URI, PAIR_ID)
+        fixture.lifecycle.preparePairCleanup(PAIR_ID)
+
+        assertFailsWith<IllegalStateException> {
+            fixture.lifecycle.persistPairRemoval(load = { state() }) {
+                error("save reported failure after commit")
+            }
+        }
+
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
     private fun fixture(
         generation: String = NEW_GENERATION,
         readGranted: Boolean = false,
