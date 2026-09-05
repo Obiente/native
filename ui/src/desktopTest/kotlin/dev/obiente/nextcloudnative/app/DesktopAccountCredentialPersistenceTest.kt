@@ -659,16 +659,12 @@ class DesktopAccountCredentialPersistenceTest {
     }
 
     @Test
-    fun malformedCredentialRemovalJournalBlocksRecoveryAndLaterStorageRewrite() =
+    fun malformedCredentialRemovalEntryDoesNotBlockValidCleanupOrLaterRemoval() =
         withStore { preferences, secrets ->
             val removed = firstSession()
             val retained = secondSession()
             val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
-            var persistenceFlushes = 0
-            val persistence = persistence(preferences, secrets, diagnostics) {
-                persistenceFlushes += 1
-                preferences.flush()
-            }
+            val persistence = persistence(preferences, secrets, diagnostics)
             persistence.saveSession(removed)
             persistence.saveSession(retained)
             DesktopAccountRegistryPreferenceStore(preferences).write(
@@ -677,18 +673,17 @@ class DesktopAccountCredentialPersistenceTest {
             val malformedJournal = "${removed.accountId.storageKey},truncated"
             preferences.put("accountCredentialRemovals", malformedJournal)
             preferences.flush()
-            val flushesBeforeRecovery = persistenceFlushes
-
             assertEquals(retained, persistence.loadActiveSession())
-            assertNotNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
-            assertEquals(malformedJournal, preferences.get("accountCredentialRemovals", null))
+            assertNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
+            assertEquals("truncated", preferences.get("accountCredentialRemovals", null))
 
-            assertFailsWith<IllegalStateException> { persistence.removeAccount(retained.accountId) }
+            assertTrue(persistence.removeAccount(retained.accountId))
 
-            assertEquals(retained.accountId, persistence.activeAccountId())
-            assertNotNull(secrets.load(desktopAccountSecretReference(retained.accountId)))
-            assertEquals(malformedJournal, preferences.get("accountCredentialRemovals", null))
-            assertEquals(flushesBeforeRecovery, persistenceFlushes)
+            assertNull(persistence.activeAccountId())
+            assertNull(secrets.load(desktopAccountSecretReference(retained.accountId)))
+            assertEquals("truncated", preferences.get("accountCredentialRemovals", null))
+            assertNull(preferences.get("server", null))
+            assertNull(preferences.get("login", null))
             assertEquals(
                 listOf("ACCOUNT_CREDENTIAL_REMOVAL_JOURNAL_INVALID"),
                 diagnostics.mapNotNull { it.code },
@@ -722,13 +717,17 @@ class DesktopAccountCredentialPersistenceTest {
         assertEquals(removed.serverUrl, preferences.get("accountLegacyCleanupV2.0.server", null))
         assertNotNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
         assertNotNull(secrets.load(desktopSessionSecretReference(removed.serverUrl, removed.loginName)))
+        assertEquals(removed.serverUrl, preferences.get("server", null))
+        assertEquals(removed.loginName, preferences.get("login", null))
 
         crashDuringRemoval = false
-        persistence(preferences, secrets).loadActiveSession()
+        assertNull(persistence(preferences, secrets).loadActiveSession())
         assertNull(secrets.load(desktopAccountSecretReference(removed.accountId)))
         assertNull(secrets.load(desktopSessionSecretReference(removed.serverUrl, removed.loginName)))
         assertNull(preferences.get("accountCredentialRemovals", null))
         assertNull(preferences.get("accountLegacyCleanupV2.0.server", null))
+        assertNull(preferences.get("server", null))
+        assertNull(preferences.get("login", null))
     }
 
     @Test
