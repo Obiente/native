@@ -11,10 +11,12 @@ internal fun acquireAndroidDocumentProviderReadLease(
     expectedIncarnation: NextcloudDocumentIncarnation,
     loadCurrentSession: () -> NextcloudSession?,
     loadCurrentIncarnation: (String) -> NextcloudDocumentIncarnation,
-    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    operationGuard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
 ): AndroidAccountOperationLease {
     val accountIdentity = NextcloudDocumentIds.accountKey(expectedSession)
-    val lease = guard.acquireBlocking(accountIdentity)
+    val lifetimeLease = lifetimeGuard.acquireReadBlocking(accountIdentity)
+    val operationLease = operationGuard.acquireBlocking(accountIdentity)
     return try {
         checkAndroidDocumentProviderReadAccess(
             expectedSession,
@@ -22,9 +24,11 @@ internal fun acquireAndroidDocumentProviderReadLease(
             loadCurrentSession,
             loadCurrentIncarnation,
         )
-        lease
+        operationLease.close()
+        lifetimeLease
     } catch (failure: Throwable) {
-        lease.close()
+        operationLease.close()
+        lifetimeLease.close()
         throw failure
     }
 }
@@ -34,7 +38,8 @@ internal inline fun <Result> withAndroidDocumentProviderReadAccess(
     expectedIncarnation: NextcloudDocumentIncarnation,
     noinline loadCurrentSession: () -> NextcloudSession?,
     noinline loadCurrentIncarnation: (String) -> NextcloudDocumentIncarnation,
-    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    operationGuard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
     action: (NextcloudSession) -> Result,
 ): Result {
     val lease = acquireAndroidDocumentProviderReadLease(
@@ -42,7 +47,8 @@ internal inline fun <Result> withAndroidDocumentProviderReadAccess(
         expectedIncarnation,
         loadCurrentSession,
         loadCurrentIncarnation,
-        guard,
+        operationGuard,
+        lifetimeGuard,
     )
     return try {
         action(expectedSession)

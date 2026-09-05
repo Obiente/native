@@ -2,10 +2,12 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import android.provider.DocumentsContract
+import android.util.Log
 import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
 
 internal sealed interface AndroidDocumentProviderIncarnationRecord {
     val incarnation: NextcloudDocumentIncarnation
@@ -131,19 +133,26 @@ internal class AndroidDocumentProviderIncarnationStore(
 
     fun reconcilePending(
         ownership: (String) -> AndroidDocumentProviderAccountOwnership,
+        onMalformedJournal: (Exception) -> Unit = { failure -> throw failure },
     ) = synchronized(LOCK) {
         keys().asSequence()
             .filter { key -> key.startsWith(RETIREMENT_JOURNAL_KEY_PREFIX) }
             .sorted()
             .forEach { key ->
-                val accountIdentity = key.removePrefix(RETIREMENT_JOURNAL_KEY_PREFIX)
-                requireAccountIdentity(accountIdentity)
-                val encoded = read(key) ?: return@forEach
-                val retirement = decodeAndroidDocumentProviderRetirement(encoded)
-                require(retirement.accountIdentity == accountIdentity) {
-                    "The document provider retirement journal has the wrong account."
+                val recovery = try {
+                    val accountIdentity = key.removePrefix(RETIREMENT_JOURNAL_KEY_PREFIX)
+                    requireAccountIdentity(accountIdentity)
+                    val encoded = read(key) ?: return@forEach
+                    val retirement = decodeAndroidDocumentProviderRetirement(encoded)
+                    require(retirement.accountIdentity == accountIdentity) {
+                        "The document provider retirement journal has the wrong account."
+                    }
+                    accountIdentity to retirement
+                } catch (failure: Exception) {
+                    onMalformedJournal(failure)
+                    return@forEach
                 }
-                reconcile(retirement, ownership(accountIdentity))
+                reconcile(recovery.second, ownership(recovery.first))
             }
     }
 
@@ -339,7 +348,7 @@ internal fun prepareAndroidDocumentProviderAccountSave(
     current: AndroidAccountCredentialState,
 ) {
     val store = AndroidDocumentProviderIncarnationStore(context)
-    store.reconcilePending(current.registry::documentProviderAccountOwnership)
+    store.reconcilePendingForCredentialAccess(current.registry)
     store.prepareForAccountSave(
         NextcloudDocumentIds.accountKey(session),
         session.accountId in current.sessions,
@@ -350,8 +359,38 @@ internal fun reconcileAndroidDocumentProviderAccountRemovals(
     context: Context,
     registry: NextcloudAccountRegistry,
 ): NextcloudAccountRegistry = registry.also {
-    AndroidDocumentProviderIncarnationStore(context).reconcilePending(registry::documentProviderAccountOwnership)
+    reconcileAndroidDocumentProviderAccountRemovalsWhenCredentialMutationIdle(
+        ANDROID_ACCOUNT_CREDENTIAL_MUTATION_MUTEX,
+    ) {
+        AndroidDocumentProviderIncarnationStore(context).reconcilePendingForCredentialAccess(registry)
+    }
 }
+
+internal inline fun reconcileAndroidDocumentProviderAccountRemovalsWhenCredentialMutationIdle(
+    credentialMutationMutex: Mutex,
+    reconcile: () -> Unit,
+): Boolean {
+    if (!credentialMutationMutex.tryLock()) return false
+    return try {
+        reconcile()
+        true
+    } finally {
+        credentialMutationMutex.unlock()
+    }
+}
+
+private fun AndroidDocumentProviderIncarnationStore.reconcilePendingForCredentialAccess(
+    registry: NextcloudAccountRegistry,
+) = reconcilePending(
+    ownership = registry::documentProviderAccountOwnership,
+    onMalformedJournal = { failure ->
+        Log.e(
+            "NextcloudDocuments",
+            "A malformed document-provider retirement journal was left unavailable.",
+            failure,
+        )
+    },
+)
 
 internal fun completeAndroidDocumentProviderAccountRemoval(
     context: Context,
