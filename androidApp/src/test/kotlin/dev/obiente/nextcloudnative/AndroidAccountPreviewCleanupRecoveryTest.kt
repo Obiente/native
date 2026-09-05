@@ -22,9 +22,8 @@ class AndroidAccountPreviewCleanupRecoveryTest {
                 "${pending.accountStorageKey}:${pending.workIdentity}",
             )?.previewCacheIdentity,
         )
-        assertFailsWith<IllegalArgumentException> {
-            pending.copy(previewCacheIdentity = "f".repeat(64))
-        }
+        val mismatchedIdentity = if (pending.workIdentity.first() == 'f') "e".repeat(64) else "f".repeat(64)
+        assertFailsWith<IllegalArgumentException> { pending.copy(previewCacheIdentity = mismatchedIdentity) }
     }
 
     @Test
@@ -93,6 +92,7 @@ class AndroidAccountPreviewCleanupRecoveryTest {
         } finally {
             root.deleteRecursively()
         }
+        Unit
     }
 
     private fun session() = NextcloudSession(

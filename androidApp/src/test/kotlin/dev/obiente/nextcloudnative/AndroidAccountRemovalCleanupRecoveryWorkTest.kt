@@ -171,8 +171,10 @@ class AndroidAccountRemovalCleanupRecoveryWorkTest {
             loginName = "removed-user",
             appPassword = "fixture-password",
         )
+        val retainedIdentity = pendingAndroidAccountRemovalCleanup(retained)
         val crossed = pendingAndroidAccountRemovalCleanup(removed).copy(
-            workIdentity = NextcloudDocumentIds.accountKey(retained),
+            workIdentity = retainedIdentity.workIdentity,
+            previewCacheIdentity = retainedIdentity.previewCacheIdentity,
         )
         val events = mutableListOf<String>()
 
