@@ -272,6 +272,7 @@ class DesktopExternalFileHandoffTest {
         val root = Files.createTempDirectory("nextcloud-desktop-account-handoff-").toFile()
         val removed = "a".repeat(64)
         val retained = "b".repeat(64)
+        val freshLegacy = root.resolve("123e4567-e89b-12d3-a456-426614174000")
         try {
             val handoff = DesktopExternalFileHandoff(root, launchFile = { true })
             handoff.launch(removed, file(), ExternalFileHandoffAction.OpenWith, capability()) {
@@ -280,10 +281,13 @@ class DesktopExternalFileHandoffTest {
             handoff.launch(retained, file(), ExternalFileHandoffAction.OpenWith, capability()) {
                 NextcloudFileContent("retained".encodeToByteArray(), "application/pdf", "\"v1\"")
             }
+            freshLegacy.mkdir()
+            freshLegacy.resolve("payload.bin").writeText("unknown-account-legacy-copy")
 
             repeat(2) { handoff.removeAccount(removed) }
 
             assertFalse(root.resolve(removed).exists())
+            assertFalse(freshLegacy.exists())
             assertEquals("retained", root.resolve(retained).walkTopDown().first(File::isFile).readText())
         } finally {
             root.deleteRecursively()
