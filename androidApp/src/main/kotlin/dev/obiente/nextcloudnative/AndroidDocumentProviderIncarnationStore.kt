@@ -392,10 +392,14 @@ private fun AndroidDocumentProviderIncarnationStore.reconcilePendingForCredentia
     },
 )
 
-internal fun completeAndroidDocumentProviderAccountRemoval(
+internal fun AndroidAccountRemovalCleanupJournal.completeDocumentRetirement(
     context: Context,
-    retirement: AndroidDocumentProviderIncarnationRetirement,
-) = AndroidDocumentProviderIncarnationStore(context).complete(retirement)
+    retirement: AndroidDocumentProviderIncarnationRetirement?,
+    accountStorageKey: String,
+) {
+    AndroidDocumentProviderIncarnationStore(context).complete(requireNotNull(retirement))
+    clear(accountStorageKey)
+}
 
 private fun NextcloudAccountRegistry.documentProviderAccountOwnership(
     accountIdentity: String,

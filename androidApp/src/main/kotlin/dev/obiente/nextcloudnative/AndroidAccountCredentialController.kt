@@ -179,7 +179,9 @@ internal class AndroidAccountCredentialController(
                         rollbackAndroidAccountRemoval(appContext, requireNotNull(documentRetirement))
                         accountRemovalCleanupJournal.clear(accountId.storageKey)
                     },
-                    completeCommittedCleanup = { completeDocumentRetirement(documentRetirement, accountId.storageKey) },
+                    completeCommittedCleanup = {
+                        accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, accountId.storageKey)
+                    },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
             }
@@ -219,7 +221,9 @@ internal class AndroidAccountCredentialController(
                         },
                     )
                 },
-                completeCommittedCleanup = { completeDocumentRetirement(documentRetirement, accountId.storageKey) },
+                completeCommittedCleanup = {
+                    accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, accountId.storageKey)
+                },
                 recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
             )
         }
@@ -254,7 +258,7 @@ internal class AndroidAccountCredentialController(
                     persistInactiveRemoval = {},
                     rollbackInactiveRemoval = {},
                     completeCommittedCleanup = {
-                        completeDocumentRetirement(documentRetirement, expectedSession.accountId.storageKey)
+                        accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, expectedSession.accountId.storageKey)
                     },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
@@ -290,7 +294,7 @@ internal class AndroidAccountCredentialController(
                             persistInactiveRemoval = {},
                             rollbackInactiveRemoval = {},
                             completeCommittedCleanup = {
-                                completeDocumentRetirement(documentRetirement, session.accountId.storageKey)
+                                accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, session.accountId.storageKey)
                             },
                             recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                         )
@@ -364,7 +368,7 @@ internal class AndroidAccountCredentialController(
                         accountRemovalCleanupJournal.clear(activeSession.accountId.storageKey)
                     },
                     completeCommittedCleanup = {
-                        completeDocumentRetirement(documentRetirement, activeSession.accountId.storageKey)
+                        accountRemovalCleanupJournal.completeDocumentRetirement(appContext, documentRetirement, activeSession.accountId.storageKey)
                     },
                     recordCommittedCleanupFailure = ::recordAccountRemovalCleanupFailure,
                 )
@@ -623,12 +627,6 @@ internal class AndroidAccountCredentialController(
         return AndroidAccountCredentialStoreRead.Available(state)
     }
 
-    private fun completeDocumentRetirement(
-        retirement: AndroidDocumentProviderIncarnationRetirement?, accountStorageKey: String,
-    ) {
-        completeAndroidDocumentProviderAccountRemoval(appContext, requireNotNull(retirement))
-        accountRemovalCleanupJournal.clear(accountStorageKey)
-    }
     private fun readIndependentCredentialSlotState(
         allowUnavailableActiveAccountId: NextcloudAccountId? = null,
     ): AndroidAccountCredentialState? {
