@@ -9,11 +9,12 @@ internal fun removeActiveAndroidAccountCredentialState(
 ): AndroidAccountCredentialState = state.registry.activeAccountId?.let(state::remove) ?: state
 
 internal suspend fun rollbackUnavailableAndroidAccountRemoval(
+    active: Boolean = false,
     recovered: AndroidAccountCredentialState,
     persistRecovered: suspend (AndroidAccountCredentialState) -> Unit,
     clearCleanup: suspend () -> Unit,
 ) {
-    persistRecovered(recovered)
+    if (!active) persistRecovered(recovered)
     clearCleanup()
 }
 

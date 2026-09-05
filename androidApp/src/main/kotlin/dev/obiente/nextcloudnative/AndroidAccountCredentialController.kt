@@ -201,7 +201,7 @@ internal class AndroidAccountCredentialController(
                 clearActiveAccount = { clearSession(recovered, pendingCleanup, unavailableSession) },
                 rollbackRemoval = {
                     rollbackUnavailableAndroidAccountRemoval(
-                        recovered = recovered, persistRecovered = { state -> persistState(state) },
+                        active = target.wasActive, recovered = recovered, persistRecovered = { state -> persistState(state) },
                         clearCleanup = { accountRemovalCleanupJournal.clear(accountId.storageKey) },
                     )
                 },
@@ -297,12 +297,11 @@ internal class AndroidAccountCredentialController(
     }
 
     private suspend fun clearSession(
-        current: AndroidAccountCredentialState,
-        pendingCleanup: AndroidPendingAccountRemovalCleanup? = null,
+        current: AndroidAccountCredentialState, pendingCleanup: AndroidPendingAccountRemovalCleanup? = null,
         activeFallback: NextcloudSession? = null,
     ) {
-        val activeSession = current.activeSession ?: activeFallback ?: return
-        val replacement = current.remove(activeSession.accountId)
+        val removal = resolveAndroidActiveAccountRemovalTransition(current, activeFallback) ?: return
+        val replacement = removal.replacement
         val encodedReplacement = replacement.takeUnless { state ->
             state.registry.accounts.isEmpty() && state.sessions.isEmpty()
         }?.let(::encryptState)
@@ -406,6 +405,7 @@ internal class AndroidAccountCredentialController(
                         },
                         cancelAll = scheduler::cancelAll,
                         clearPublishedAccount = { publishAccountIdentity(null) },
+                        onScheduleMaintenanceFailure = ::recordAccountRemovalCleanupFailure,
                     )
                 },
                 clearHandoffs = handoffCleanup::complete,

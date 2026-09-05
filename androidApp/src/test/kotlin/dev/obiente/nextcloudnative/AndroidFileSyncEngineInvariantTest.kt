@@ -1015,6 +1015,29 @@ class AndroidFileSyncEngineInvariantTest {
     }
 
     @Test
+    fun committedSessionClearContainsMaintenanceFailures() {
+        val guard = AndroidFileSyncSessionSchedulingGuard()
+        guard.restorePersistedSession(load = { "account-old" }, accountIdOf = { it })
+        val events = mutableListOf<String>()
+
+        guard.clearSession(
+            persist = { events += "clear-session" },
+            clearPublishedAccount = {
+                events += "publish-none"
+                error("synthetic publication failure")
+            },
+            cancelAll = {
+                events += "cancel-all"
+                error("synthetic cancellation failure")
+            },
+            onScheduleMaintenanceFailure = { events += "diagnose" },
+        )
+
+        assertEquals(listOf("clear-session", "publish-none", "diagnose", "cancel-all", "diagnose"), events)
+        assertEquals(null, guard.capture("account-old"))
+    }
+
+    @Test
     fun newSessionGenerationCanScheduleWhileOldDedupeEntryFinishes() {
         val guard = AndroidFileSyncSessionSchedulingGuard()
         val registry = DeferredFileSyncPairSchedulingRegistry()

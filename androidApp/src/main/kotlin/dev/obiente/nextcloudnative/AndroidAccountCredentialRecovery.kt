@@ -208,6 +208,21 @@ internal fun resolveAndroidUnavailableAccountRemovalTarget(
     return AndroidUnavailableAccountRemovalTarget(record, available.activeAccountId == accountId)
 }
 
+internal data class AndroidActiveAccountRemovalTransition(
+    val identitySession: NextcloudSession,
+    val replacement: AndroidAccountCredentialState,
+)
+
+internal fun resolveAndroidActiveAccountRemovalTransition(
+    current: AndroidAccountCredentialState,
+    fallback: NextcloudSession? = null,
+): AndroidActiveAccountRemovalTransition? {
+    val session = current.activeSession ?: fallback ?: return null
+    val record = current.registry.accounts.firstOrNull { account -> account.id == session.accountId } ?: return null
+    check(session.accountRecord() == record) { "The fallback account identity changed." }
+    return AndroidActiveAccountRemovalTransition(session, current.remove(session.accountId))
+}
+
 internal fun restoreAndroidAccountCredentialStateWithoutAggregate(
     encodedRegistry: String?,
     loadSession: (NextcloudAccountId) -> NextcloudSession?,

@@ -78,16 +78,14 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         persist: () -> Unit,
         cancelAll: () -> Unit,
         clearPublishedAccount: () -> Unit = {},
+        onScheduleMaintenanceFailure: (Exception) -> Unit = {},
     ) {
         synchronized(monitor) {
             persist()
             generation += 1
             accountId = null
-            try {
-                clearPublishedAccount()
-            } finally {
-                cancelAll()
-            }
+            runScheduleMaintenance(onScheduleMaintenanceFailure, clearPublishedAccount)
+            runScheduleMaintenance(onScheduleMaintenanceFailure, cancelAll)
         }
     }
 
