@@ -53,11 +53,11 @@ ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileReadCache.k
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncEngine.kt|884
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncRemoteTree.kt|883
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopFileSyncStore.kt|808
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6269
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopNextcloudServices.kt|6280
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCache.kt|2762
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystem.kt|1697
 ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesJna.kt|1085
-ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProvider.kt|2373
+ui/src/desktopMain/kotlin/dev/obiente/nextcloudnative/app/WindowsCloudFilesProvider.kt|2355
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/DesktopVirtualRangeCacheTest.kt|2479
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/JvmSupportIntakeTest.kt|2890
 ui/src/desktopTest/kotlin/dev/obiente/nextcloudnative/app/LinuxVirtualFileSystemTest.kt|2149

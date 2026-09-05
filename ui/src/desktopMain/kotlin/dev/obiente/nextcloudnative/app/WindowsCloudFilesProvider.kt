@@ -356,6 +356,7 @@ internal class WindowsCloudFilesProvider(
     private val writebackAttempts = ConcurrentHashMap<String, Int>()
     private val namespaceMutationLock = Any()
     private val callbacksPaused = AtomicBoolean(false)
+    private val accountRemovalPaused = AtomicBoolean(false)
     private val corruptRootRecoveryLifecycleLock = Any()
     private val corruptRootStableAccessLock = Any()
     private val corruptRootRecoveryClaimed = AtomicBoolean(false)
@@ -380,6 +381,9 @@ internal class WindowsCloudFilesProvider(
         private set
     @Volatile private var watchService: WatchService? = null
     @Volatile private var watcherThread: Thread? = null
+    private val accountRemovalQuiescence = WindowsCloudFilesRemovalQuiescence(
+        ::pauseCallbacksForAccountRemoval, ::accountRemovalMutationState, ::resumeCallbacksAndReplayLocalChanges,
+    )
 
     fun start() {
         check(connection.get() == 0L) { "The Windows Cloud Files provider is already connected." }
@@ -390,7 +394,10 @@ internal class WindowsCloudFilesProvider(
         val rootIdentity = WindowsCloudFileIdentity(backend.accountId, "", "root", 0L, true)
         val encodedRootIdentity = WindowsCloudFileIdentityCodec.encode(rootIdentity)
         api.registerSyncRoot(root, backend.displayName, encodedRootIdentity)
-        connection.set(connectWithRegistrationRecovery(encodedRootIdentity))
+        connection.set(connectWindowsCloudFilesWithRegistrationRecovery(root, this, api) {
+            prepareRootDirectory()
+            api.registerSyncRoot(root, backend.displayName, encodedRootIdentity)
+        })
         try {
             try {
                 populateDirectory("", root)
@@ -433,6 +440,7 @@ internal class WindowsCloudFilesProvider(
         val claimDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(quiescenceTimeoutSeconds)
         while (!claimCorruptRootRecovery()) {
             check(!runtimeStopping.get()) { "Windows Cloud Files is stopping." }
+            check(!accountRemovalPaused.get()) { "Windows Cloud Files is paused for account removal." }
             runtimeRecoveryFailure.get()?.let { throw it }
             if (corruptRootRecoveryGeneration.get() != expectedGeneration) return
             check(System.nanoTime() < claimDeadline) {
@@ -490,8 +498,9 @@ internal class WindowsCloudFilesProvider(
                 "The Windows Cloud Files connection changed during corrupt-root recovery."
             }
         }
-        awaitPathOperationQuiescence(
+        awaitWindowsCloudFilesPathOperationQuiescence(
             System.nanoTime() + TimeUnit.SECONDS.toNanos(quiescenceTimeoutSeconds),
+            ::accountRemovalMutationState,
         )
         api.unregisterSyncRoot(root)
         val preserved = try {
@@ -625,7 +634,7 @@ internal class WindowsCloudFilesProvider(
     internal fun isCorruptRootRecoveryInProgress(): Boolean = corruptRootRecoveryClaimed.get()
 
     private fun claimCorruptRootRecovery(): Boolean = synchronized(corruptRootRecoveryLifecycleLock) {
-        !runtimeStopping.get() && corruptRootRecoveryClaimed.compareAndSet(false, true)
+        !runtimeStopping.get() && !accountRemovalPaused.get() && corruptRootRecoveryClaimed.compareAndSet(false, true)
     }
 
     private fun scheduleCorruptRootRecoveryAfterStartup(
@@ -697,22 +706,6 @@ internal class WindowsCloudFilesProvider(
             ?.let(failure::addSuppressed)
     }
 
-    private fun connectWithRegistrationRecovery(syncRootIdentity: ByteArray): Long =
-        try {
-            api.connect(root, this)
-        } catch (firstFailure: WindowsCloudFilesOperationException) {
-            if (!isWindowsCloudFilesRegistrationMissingResult(firstFailure.hResult)) throw firstFailure
-            api.unregisterSyncRoot(root)
-            prepareRootDirectory()
-            api.registerSyncRoot(root, backend.displayName, syncRootIdentity)
-            try {
-                api.connect(root, this)
-            } catch (retryFailure: Throwable) {
-                retryFailure.addSuppressed(firstFailure)
-                throw retryFailure
-            }
-        }
-
     private fun prepareRootDirectory() {
         Files.createDirectories(root)
         check(!Files.isSymbolicLink(root)) { "The Windows Cloud Files root cannot be a symlink." }
@@ -754,7 +747,7 @@ internal class WindowsCloudFilesProvider(
                 else -> throw failure
             }
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
-            awaitWritebackRecovery(deadline)
+            awaitWindowsCloudFilesWritebackRecovery(deadline, ::accountRemovalMutationState)
         }
         deferredCorruption?.let { corruption ->
             val expectedGeneration = requireNotNull(deferredCorruptionGeneration)
@@ -829,37 +822,6 @@ internal class WindowsCloudFilesProvider(
         check(pendingDelayedCorruptRootRecoveries.isEmpty()) {
             "Timed out while recovering corrupt Windows Cloud Files metadata before activation."
         }
-    }
-
-    private fun awaitPathOperationQuiescence(deadline: Long) {
-        while (
-            (destructiveCallbackOperations.get() > 0 || pathOperations.isNotEmpty() ||
-                synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
-            System.nanoTime() < deadline
-        ) {
-            Thread.sleep(25L)
-        }
-        check(
-            destructiveCallbackOperations.get() == 0 && pathOperations.isEmpty() &&
-                synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
-        ) { "Timed out while quiescing callbacks and local edits before Windows Cloud Files recovery." }
-    }
-
-    private fun awaitWritebackRecovery(deadline: Long) {
-        while (
-            (pendingWritebacks.isNotEmpty() || pathOperations.isNotEmpty() ||
-                synchronized(queuedPathOperations) { queuedPathOperations.isNotEmpty() }) &&
-            System.nanoTime() < deadline
-        ) {
-            Thread.sleep(25L)
-        }
-        check(failedWritebacks.isEmpty()) {
-            "Local edits in the legacy Windows Cloud Files root could not be uploaded safely."
-        }
-        check(
-            pendingWritebacks.isEmpty() && pathOperations.isEmpty() &&
-                synchronized(queuedPathOperations) { queuedPathOperations.isEmpty() },
-        ) { "Timed out while uploading local edits from the legacy Windows Cloud Files root." }
     }
 
     override fun fetchData(info: WindowsCloudCallbackInfo, requiredOffset: Long, requiredLength: Long) {
@@ -1050,7 +1012,10 @@ internal class WindowsCloudFilesProvider(
         if (!Files.exists(normalized) || api.placeholderState(normalized) != WindowsCloudPlaceholderState.Absent) return
         val relative = root.toAbsolutePath().normalize().relativize(normalized)
             .joinToString("/") { it.toString() }.windowsCloudPath()
-        submitPathOperation(relative) {
+        submitPathOperation(
+            relative,
+            deferredWhenPaused = { if (!runtimeStopping.get()) deferredLocalChanges.add(normalized) },
+        ) {
             if (Files.isDirectory(normalized)) uploadLocalTree(normalized) else uploadLocalEntry(normalized, relative)
         }
     }
@@ -1169,6 +1134,10 @@ internal class WindowsCloudFilesProvider(
         closeApi()
     }
 
+    internal fun quiesceWritesForAccountRemoval(timeoutSeconds: Long = DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS) =
+        accountRemovalQuiescence.tryQuiesce(timeoutSeconds)
+    internal fun resumeWritesAfterAccountRemovalFailure() = resumeCallbacksAndReplayLocalChanges()
+
     override fun close() {
         stopRuntime()
         closeApi()
@@ -1177,6 +1146,7 @@ internal class WindowsCloudFilesProvider(
     private fun stopRuntime() {
         synchronized(corruptRootRecoveryLifecycleLock) {
             runtimeStopping.set(true)
+            accountRemovalPaused.set(false)
             callbacksPaused.set(true)
         }
         awaitCorruptRootRecoveryCompletion(
@@ -1223,18 +1193,76 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun resumeCallbacksAndReplayLocalChanges() {
-        val replay = synchronized(namespaceMutationLock) {
-            if (runtimeStopping.get()) return
-            callbacksPaused.set(false)
-            deferredLocalChanges.toList().also(deferredLocalChanges::removeAll)
+        if (connection.get() == 0L && !runtimeStopping.get()) connection.set(api.connect(root, this))
+        if (watchService == null && initialPopulationSucceeded && !runtimeStopping.get()) startLocalWatcher()
+        val replay = synchronized(corruptRootRecoveryLifecycleLock) {
+            synchronized(namespaceMutationLock) {
+                if (runtimeStopping.get()) return
+                accountRemovalPaused.set(false)
+                callbacksPaused.set(false)
+                deferredLocalChanges.toList().also(deferredLocalChanges::removeAll)
+            }
         }
         replay.forEach(::scheduleLocalChange)
+    }
+
+    private fun pauseCallbacksForAccountRemoval(): Boolean {
+        val paused = synchronized(corruptRootRecoveryLifecycleLock) {
+            if (
+                runtimeStopping.get() || corruptRootRecoveryClaimed.get() || runtimeRecoveryFailure.get() != null
+            ) return@synchronized false
+            synchronized(namespaceMutationLock) {
+                if (callbacksPaused.get()) false else true.also {
+                    accountRemovalPaused.set(it)
+                    callbacksPaused.set(it)
+                }
+            }
+        }
+        if (!paused) return false
+        val key = connection.get()
+        if (key != 0L) {
+            api.disconnect(key)
+            check(connection.compareAndSet(key, 0L)) {
+                "The Windows Cloud Files connection changed during account removal."
+            }
+        }
+        stopLocalWatcherForAccountRemoval()
+        val deadline = System.nanoTime() +
+            TimeUnit.SECONDS.toNanos(DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS)
+        awaitWindowsCloudFilesPathOperationQuiescence(deadline, ::accountRemovalMutationState)
+        recoverLocalPlaceholders(failClosed = true, allowWhilePaused = true)
+        awaitWindowsCloudFilesWritebackRecovery(deadline, ::accountRemovalMutationState)
+        recoverUnmanagedLocalEntries(failClosed = true)
+        synchronized(namespaceMutationLock) { deferredLocalChanges.clear() }
+        true
+    }
+
+    private fun accountRemovalMutationState() = synchronized(queuedPathOperations) {
+        WindowsCloudFilesMutationState(
+            pendingWritebacks.size, failedWritebacks.size, pathOperations.size,
+            queuedPathOperations.size, destructiveCallbackOperations.get(),
+            pendingLocalChanges.size, deferredLocalChanges.size,
+        )
+    }
+
+    private fun stopLocalWatcherForAccountRemoval() {
+        runCatching { watchService?.close() }
+        watcherThread?.interrupt()
+        watcherThread = null
+        watchService = null
+        val scheduled = synchronized(namespaceMutationLock) {
+            pendingLocalChanges.values.toList().also { pendingLocalChanges.clear() }
+        }
+        scheduled.forEach { it.cancel(false) }
+        localChangeScheduler.submit(Runnable {}).get(
+            DEFAULT_CORRUPT_ROOT_QUIESCENCE_TIMEOUT_SECONDS,
+            TimeUnit.SECONDS,
+        )
     }
 
     private fun closeApi() {
         if (apiClosed.compareAndSet(false, true)) api.close()
     }
-
     private fun populateDirectory(relativePath: String, localDirectory: Path) {
         val identities = backend.list(relativePath)
         val missing = ArrayList<WindowsCloudFileIdentity>()
@@ -1843,14 +1871,23 @@ internal class WindowsCloudFilesProvider(
         return absoluteRoot.relativize(target).joinToString("/") { it.toString() }.windowsCloudPath()
     }
 
-    private fun submitPathOperation(path: String, block: () -> Unit) {
-        if (callbacksPaused.get()) return
-        failedWritebacks -= path
-        writebackAttempts.remove(path)
-        val shouldSchedule = synchronized(queuedPathOperations) {
-            if (callbacksPaused.get()) return
-            queuedPathOperations[path] = block
-            pathOperations.add(path)
+    private fun submitPathOperation(
+        path: String,
+        deferredWhenPaused: () -> Unit = {},
+        allowWhilePaused: Boolean = false,
+        block: () -> Unit,
+    ) {
+        val shouldSchedule = synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get() && !allowWhilePaused) {
+                deferredWhenPaused()
+                return
+            }
+            failedWritebacks -= path
+            writebackAttempts.remove(path)
+            synchronized(queuedPathOperations) {
+                queuedPathOperations[path] = block
+                pathOperations.add(path)
+            }
         }
         if (shouldSchedule) schedulePathOperationDrain(path)
     }
@@ -1962,15 +1999,21 @@ internal class WindowsCloudFilesProvider(
     }
 
     private fun scheduleLocalChange(path: Path) {
-        pendingLocalChanges.remove(path)?.cancel(false)
-        pendingLocalChanges[path] = localChangeScheduler.schedule(
-            {
-                pendingLocalChanges.remove(path)
-                runCatching { localEntryChanged(path) }
-            },
-            LOCAL_CHANGE_SETTLE_MILLIS,
-            TimeUnit.MILLISECONDS,
-        )
+        synchronized(namespaceMutationLock) {
+            if (callbacksPaused.get()) {
+                if (!runtimeStopping.get()) deferredLocalChanges.add(path)
+                return
+            }
+            pendingLocalChanges.remove(path)?.cancel(false)
+            pendingLocalChanges[path] = localChangeScheduler.schedule(
+                {
+                    pendingLocalChanges.remove(path)
+                    runCatching { localEntryChanged(path) }
+                },
+                LOCAL_CHANGE_SETTLE_MILLIS,
+                TimeUnit.MILLISECONDS,
+            )
+        }
     }
 
     private fun recoverLocalChanges() {
@@ -2043,7 +2086,10 @@ internal class WindowsCloudFilesProvider(
         }
     }
 
-    private fun recoverLocalPlaceholders(failClosed: Boolean = false) {
+    private fun recoverLocalPlaceholders(
+        failClosed: Boolean = false,
+        allowWhilePaused: Boolean = false,
+    ) {
         val recover = {
             Files.walk(root).use { paths ->
                 paths.filter { path -> path != root && !Files.isSymbolicLink(path) }.forEach { local ->
@@ -2066,7 +2112,11 @@ internal class WindowsCloudFilesProvider(
                     knownIdentities[original.path] = original
                     if (state != WindowsCloudPlaceholderState.Dirty || original.directory) return@forEach
                     if (!pendingWritebacks.add(original.path)) return@forEach
-                    submitPathOperation(original.path) {
+                    submitPathOperation(
+                        original.path,
+                        deferredWhenPaused = { if (!runtimeStopping.get()) deferredLocalChanges.add(local) },
+                        allowWhilePaused = allowWhilePaused,
+                    ) {
                         val current = requireNotNull(api.placeholderIdentity(local)) {
                             "The dirty Windows placeholder has no recoverable identity."
                         }.let(WindowsCloudFileIdentityCodec::decode)
@@ -2276,74 +2326,6 @@ internal class WindowsCloudFilesProvider(
         const val PLACEHOLDER_COLLISION_RETRY_DELAY_MILLIS = 25L
         const val RECONCILIATION_CHUNK_BYTES = 1024 * 1024
     }
-}
-
-private class AtomicLongState {
-    @Volatile private var value: Long = 0L
-    @Synchronized fun get(): Long = value
-    @Synchronized fun set(next: Long) { value = next }
-    @Synchronized fun compareAndSet(expected: Long, next: Long): Boolean {
-        if (value != expected) return false
-        value = next
-        return true
-    }
-}
-
-internal fun requireWindowsCloudCallbackPath(root: Path, normalizedPath: String, identityPath: String) {
-    // Windows can report the same directory through a long path in CFAPI while java.io.tmpdir or a
-    // configured root still contains an 8.3 component such as RUNNER~1. Compare real filesystem
-    // paths so the containment check does not reject that legitimate alias.
-    val absoluteRoot = root.windowsCloudRealPath()
-    val callbackTarget = Path.of(normalizedPath).windowsCloudRealPath()
-    require(callbackTarget.startsWith(absoluteRoot)) { "The Cloud Files callback escaped its sync root." }
-    val relative = if (callbackTarget == absoluteRoot) {
-        ""
-    } else {
-        absoluteRoot.relativize(callbackTarget).joinToString("/") { it.toString() }.windowsCloudPath()
-    }
-    require(relative == identityPath) { "The Cloud Files callback path does not match its identity." }
-}
-
-private fun Path.windowsCloudRealPath(): Path {
-    val absolute = toAbsolutePath().normalize()
-    var existing = absolute
-    while (!Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
-        existing = requireNotNull(existing.parent) { "The Cloud Files callback path has no existing ancestor." }
-    }
-    val realAncestor = existing.toRealPath(LinkOption.NOFOLLOW_LINKS)
-    return if (existing == absolute) realAncestor else realAncestor.resolve(existing.relativize(absolute)).normalize()
-}
-
-private fun windowsWildcardMatches(pattern: String, name: String): Boolean {
-    if (pattern == "*" || pattern == "*.*") return true
-    var patternIndex = 0
-    var nameIndex = 0
-    var starIndex = -1
-    var retryNameIndex = -1
-    while (nameIndex < name.length) {
-        if (patternIndex < pattern.length && (pattern[patternIndex] == '?' || pattern[patternIndex].equals(name[nameIndex], true))) {
-            patternIndex += 1
-            nameIndex += 1
-        } else if (patternIndex < pattern.length && pattern[patternIndex] == '*') {
-            starIndex = patternIndex++
-            retryNameIndex = nameIndex
-        } else if (starIndex >= 0) {
-            patternIndex = starIndex + 1
-            nameIndex = ++retryNameIndex
-        } else {
-            return false
-        }
-    }
-    while (patternIndex < pattern.length && pattern[patternIndex] == '*') patternIndex += 1
-    return patternIndex == pattern.length
-}
-
-private fun String.windowsCloudPath(): String {
-    val normalized = trim('/', '\\').replace('\\', '/')
-    if (normalized.isEmpty()) return ""
-    require(normalized.split('/').none { it.isEmpty() || it == "." || it == ".." })
-    require('\u0000' !in normalized)
-    return normalized
 }
 
 private const val WINDOWS_CLOUD_ALIGNMENT = 4 * 1024L
