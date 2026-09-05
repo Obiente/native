@@ -18,6 +18,7 @@ import dev.obiente.nextcloudnative.app.DurableUploadStatus
 import dev.obiente.nextcloudnative.app.LocalUploadFile
 import dev.obiente.nextcloudnative.app.MAX_DURABLE_UPLOAD_MESSAGE_CHARACTERS
 import dev.obiente.nextcloudnative.app.MultipartTextField
+import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
@@ -190,12 +191,7 @@ internal class DeckAttachmentUploadWorker(
         val accountServices = AndroidNextcloudServices(applicationContext)
         val session = accountServices.loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
-            val retainedSession = resolveStoredAndroidAccountSession(
-                accountIdentity = initial.accountId,
-                listAccounts = accountServices::listAccounts,
-                loadSession = { accountId -> accountServices.loadSession(accountId) },
-            )
-            if (durableUploadAccountMismatchOutcome(initial.accountId, retainedSession) ==
+            if (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.listAccounts()) ==
                 DurableUploadAccountMismatchOutcome.DeferRetainedAccount
             ) {
                 recordUploadDiagnostic(
@@ -348,9 +344,13 @@ internal enum class DurableUploadAccountMismatchOutcome {
 
 internal fun durableUploadAccountMismatchOutcome(
     expectedAccountId: String,
-    retainedSession: NextcloudSession?,
+    retainedAccounts: List<NextcloudAccountRecord>,
 ): DurableUploadAccountMismatchOutcome =
-    if (retainedSession != null && NextcloudDocumentIds.accountKey(retainedSession) == expectedAccountId) {
+    if (
+        retainedAccounts.any { account ->
+            NextcloudDocumentIds.accountKey(account.serverUrl, account.loginName) == expectedAccountId
+        }
+    ) {
         DurableUploadAccountMismatchOutcome.DeferRetainedAccount
     } else {
         DurableUploadAccountMismatchOutcome.AccountUnavailable
