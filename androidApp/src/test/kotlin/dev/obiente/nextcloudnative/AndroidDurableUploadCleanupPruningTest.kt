@@ -54,6 +54,7 @@ class AndroidDurableUploadCleanupPruningTest {
                 throw CancellationException("recovery stopped")
             }
         }
+        Unit
     }
 
     @Test
