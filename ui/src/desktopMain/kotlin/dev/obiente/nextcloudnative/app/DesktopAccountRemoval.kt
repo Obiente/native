@@ -135,6 +135,19 @@ internal fun requireDesktopAccountRemovalReady(accountId: String, linuxDesktop: 
     }
 }
 
+internal fun loadDesktopRemoteRevocationSession(
+    activeAccountId: NextcloudAccountId?,
+    expectedSession: NextcloudSession?,
+    loadSession: (NextcloudAccountId) -> NextcloudSession?,
+): NextcloudSession? {
+    if (expectedSession == null) return null
+    val activeSession = activeAccountId?.let(loadSession)
+    check(activeSession == expectedSession) {
+        "The account changed before its remote session could be revoked."
+    }
+    return activeSession
+}
+
 internal fun removeDesktopAccountCredential(
     preferences: Preferences,
     providerAccountId: String?,
