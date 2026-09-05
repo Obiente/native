@@ -1679,12 +1679,12 @@ internal class AndroidNextcloudServices(
             freedBytes = freed,
         )
     }
-
     override suspend fun chooseFileSyncLocalRoot(initialRootHint: String?): FileSyncLocalRoot? =
         checkNotNull(fileSyncRootPicker) {
             "The native folder chooser is not available from this Android component."
         }.choose(initialRootHint)
-
+    override fun abandonFileSyncLocalRoot(localRoot: FileSyncLocalRoot) =
+        fileSyncRootPicker?.abandon(localRoot.localRootId) ?: Unit
     override suspend fun loadIncomingShareRecoveries(
         session: NextcloudSession,
         userId: String,

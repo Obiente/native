@@ -98,6 +98,35 @@ internal fun <T> deferFileSyncSnapshotActionUntilIdle(
     return job
 }
 
+internal suspend fun reconcileFileSyncCapabilities(
+    lock: Mutex,
+    load: () -> AndroidFileSyncPersistedState,
+    capabilities: AndroidFileSyncCapabilityLifecycle,
+) {
+    lock.withLock {
+        try {
+            capabilities.reconcile(load())
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            // Fail closed. A later process retries without releasing from incomplete metadata.
+        }
+    }
+}
+
+internal fun recoverFailedFileSyncPairSave(
+    pairId: String,
+    load: () -> AndroidFileSyncPersistedState,
+    abandonUncommittedPair: (String) -> Unit,
+) {
+    val commitIsAbsent = try {
+        load().coordinator.pairs.none { it.id == pairId }
+    } catch (_: Exception) {
+        false
+    }
+    if (commitIsAbsent) runCatching { abandonUncommittedPair(pairId) }
+}
+
 /**
  * Reads a complete atomic snapshot without waiting for active execution.
  *
@@ -212,7 +241,6 @@ internal fun reconcileSafDownloadsBeforePairRemoval(
         false
     }
 }
-
 internal fun releaseSafGrantAfterPairRemoval(
     context: Context,
     localRootId: String,
