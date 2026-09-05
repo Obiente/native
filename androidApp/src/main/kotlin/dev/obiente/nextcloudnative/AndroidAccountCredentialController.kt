@@ -435,61 +435,66 @@ internal class AndroidAccountCredentialController(
         val session = requireNotNull(replacement.activeSession)
         val encrypted = encryptState(replacement)
         val scheduler = AndroidFileSyncScheduler(appContext)
-        withContext(Dispatchers.IO) {
-            commitAndroidAccountTransitionBeforeHandoffCleanup(
-                commitTransition = {
-                    ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
-                        replacementAccountId = NextcloudDocumentIds.accountKey(session),
-                        persist = {
-                            val editor = if (suspectEncrypted == null) {
-                                preferences.edit()
-                                    .putString(ANDROID_ACCOUNT_SESSION_KEY, encrypted)
-                                    .putString(
+        completeAndroidAccountSelectionTransition(
+            commitTransition = { markCommitted ->
+                commitAndroidAccountTransitionBeforeHandoffCleanup(
+                    commitTransition = {
+                        ANDROID_FILE_SYNC_SESSION_SCHEDULING_GUARD.replaceSession(
+                            replacementAccountId = NextcloudDocumentIds.accountKey(session),
+                            persist = {
+                                val editor = if (suspectEncrypted == null) {
+                                    preferences.edit()
+                                        .putString(ANDROID_ACCOUNT_SESSION_KEY, encrypted)
+                                        .putString(
+                                            ANDROID_ACCOUNT_REGISTRY_KEY,
+                                            encodeNextcloudAccountRegistry(replacement.registry),
+                                        )
+                                        .remove(KEY_TEST_READ_ONLY)
+                                } else {
+                                    prepareInvalidAndroidAccountCredentialRecoveryEdit(
+                                        editor = preferences.edit(),
+                                        replacementEncrypted = encrypted,
+                                    ).putString(
                                         ANDROID_ACCOUNT_REGISTRY_KEY,
                                         encodeNextcloudAccountRegistry(replacement.registry),
                                     )
-                                    .remove(KEY_TEST_READ_ONLY)
-                            } else {
-                                prepareInvalidAndroidAccountCredentialRecoveryEdit(
-                                    editor = preferences.edit(),
-                                    replacementEncrypted = encrypted,
-                                ).putString(
-                                    ANDROID_ACCOUNT_REGISTRY_KEY,
-                                    encodeNextcloudAccountRegistry(replacement.registry),
+                                }
+                                commitPreferences(handoffCleanup.prepare(prepareCredentialSlotEdit(editor, replacement)))
+                                markCommitted()
+                            },
+                            cancelAll = scheduler::cancelAll,
+                            publishAccount = publishAccountIdentity,
+                            restoreSchedules = scheduler::restorePersistedPairSchedules,
+                            onScheduleMaintenanceFailure = {
+                                recordCredentialFailure(
+                                    code = "FILE_SYNC_SCHEDULE_MAINTENANCE_FAILED",
+                                    operation = "account-selection.schedule-maintenance",
+                                    component = SupportDiagnosticComponent.Sync,
                                 )
-                            }
-                            commitPreferences(handoffCleanup.prepare(prepareCredentialSlotEdit(editor, replacement)))
-                        },
-                        cancelAll = scheduler::cancelAll,
-                        publishAccount = publishAccountIdentity,
-                        restoreSchedules = scheduler::restorePersistedPairSchedules,
-                        onScheduleMaintenanceFailure = {
-                            recordCredentialFailure(
-                                code = "FILE_SYNC_SCHEDULE_MAINTENANCE_FAILED",
-                                operation = "account-selection.schedule-maintenance",
-                                component = SupportDiagnosticComponent.Sync,
-                            )
-                        },
-                    )
-                },
-                clearHandoffs = handoffCleanup::complete,
-                recordFailure = ::recordAccountHandoffCleanupFailure,
-            )
-        }
-        clearAndroidPreviousPreviewAfterCommittedSelection(
-            previousSession = previousSession,
-            selectedSession = session,
-            clearPreviewAccount = clearPreviewAccount,
-            recordFailure = { recordAccountSelectionCacheCleanupFailure() },
-        )
-        resumeAndroidQueuedUploadsAfterSelection(
-            resume = { resumeQueuedUploads(NextcloudDocumentIds.accountKey(session)) },
-            notifyDocumentRootsChanged = notifyDocumentRootsChanged,
-            recordFailure = {
-                recordCredentialFailure(
-                    code = "DURABLE_UPLOAD_RESUME_FAILED",
-                    operation = "account-selection.upload-resume",
-                    component = SupportDiagnosticComponent.Storage,
+                            },
+                        )
+                    },
+                    clearHandoffs = handoffCleanup::complete,
+                    recordFailure = ::recordAccountHandoffCleanupFailure,
+                )
+            },
+            finishMaintenance = {
+                clearAndroidPreviousPreviewAfterCommittedSelection(
+                    previousSession = previousSession,
+                    selectedSession = session,
+                    clearPreviewAccount = clearPreviewAccount,
+                    recordFailure = { recordAccountSelectionCacheCleanupFailure() },
+                )
+                resumeAndroidQueuedUploadsAfterSelection(
+                    resume = { resumeQueuedUploads(NextcloudDocumentIds.accountKey(session)) },
+                    notifyDocumentRootsChanged = notifyDocumentRootsChanged,
+                    recordFailure = {
+                        recordCredentialFailure(
+                            code = "DURABLE_UPLOAD_RESUME_FAILED",
+                            operation = "account-selection.upload-resume",
+                            component = SupportDiagnosticComponent.Storage,
+                        )
+                    },
                 )
             },
         )
