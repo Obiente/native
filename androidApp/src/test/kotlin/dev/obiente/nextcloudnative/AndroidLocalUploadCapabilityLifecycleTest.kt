@@ -653,6 +653,12 @@ class AndroidLocalUploadCapabilityLifecycleTest {
     }
 
     @Test
+    fun `capability acquisition reserves space before reaching the persisted limit`() {
+        assertTrue(durableUploadCapabilityHasCapacity(trackedCapabilityCount = 63, maximumTrackedCapabilities = 64))
+        assertFalse(durableUploadCapabilityHasCapacity(trackedCapabilityCount = 64, maximumTrackedCapabilities = 64))
+    }
+
+    @Test
     fun `capability restore preserves cancellation`() {
         assertFailsWith<CancellationException> {
             releaseStoredDurableUploadCapability<String>(
