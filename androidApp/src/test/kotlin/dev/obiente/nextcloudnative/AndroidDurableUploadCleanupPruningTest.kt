@@ -46,6 +46,26 @@ class AndroidDurableUploadCleanupPruningTest {
     }
 
     @Test
+    fun `unsupported account registry schedules terminal cleanup but not queued uploads`() = runBlocking {
+        val pending = fixtureJob(index = 1, cleanupPending = true)
+        val queued = fixtureJob(index = 2, state = DurableUploadState.Queued)
+        val scheduled = mutableListOf<AndroidDurableMultipartUploadJob>()
+        val accountResolutionAvailable = androidCredentialFreeRegistryAllowsAccountResolution(
+            """{"version":99,"accounts":[]}""",
+        )
+
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(pending, queued),
+            allowQueuedScheduling = accountResolutionAvailable,
+            schedule = scheduled::add,
+        )
+
+        assertFalse(accountResolutionAvailable)
+        assertTrue(allScheduled)
+        assertEquals(listOf(pending), scheduled)
+    }
+
+    @Test
     fun `terminal cleanup reconciliation preserves cancellation`() = runBlocking {
         val pending = fixtureJob(index = 1, cleanupPending = true)
 
