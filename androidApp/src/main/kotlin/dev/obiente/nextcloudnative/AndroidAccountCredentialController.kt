@@ -3,7 +3,6 @@ package dev.obiente.nextcloudnative
 import android.content.Context
 import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudAccountId
-import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.SupportDiagnosticComponent
@@ -57,7 +56,9 @@ internal class AndroidAccountCredentialController(
         },
     )
 
-    fun listAccounts(): List<NextcloudAccountRecord> = readRegistryForCredentialLoad()?.accounts.orEmpty()
+    fun accountRetentionSnapshot(): AndroidAccountRetentionSnapshot = readRegistryForCredentialLoad()
+        ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts) }
+        ?: AndroidAccountRetentionSnapshot.Unavailable
 
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
 

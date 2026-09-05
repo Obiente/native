@@ -240,6 +240,7 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
         }
         if (retiredPairs.isEmpty()) return@withLock
         val scheduler = AndroidFileSyncScheduler(context)
+        val notifications = AndroidNotificationCoordinator(context)
         retireConfiguredFileSyncAccountPairs(
             retiredPairs = retiredPairs,
             retainedPairs = retainedPairs,
@@ -247,6 +248,9 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
                 reconcileSafDownloadsBeforePairRemoval(context, pair.localRootId)
             },
             cancelSchedule = { pair -> scheduler.cancel(pair.id) },
+            cancelNotification = { pair ->
+                notifications.cancel(pair.accountId, androidFileSyncNotificationId(pair.id))
+            },
             persistRetirement = { store.save(removeAndroidFileSyncAccountPairs(current, accountId)) },
             releaseLocalGrant = { localRootId ->
                 releaseSafGrantAfterPairRemoval(context, localRootId, releasesLocalGrant = true)
@@ -260,6 +264,7 @@ internal suspend fun retireConfiguredFileSyncAccountPairs(
     retainedPairs: List<FileSyncPair>,
     reconcileLocalDownloads: suspend (FileSyncPair) -> Boolean,
     cancelSchedule: suspend (FileSyncPair) -> Unit,
+    cancelNotification: suspend (FileSyncPair) -> Unit,
     persistRetirement: suspend () -> Unit,
     releaseLocalGrant: suspend (String) -> Unit,
 ) {
@@ -269,7 +274,10 @@ internal suspend fun retireConfiguredFileSyncAccountPairs(
         }
         currentCoroutineContext().ensureActive()
     }
-    retiredPairs.forEach { pair -> cancelSchedule(pair) }
+    retiredPairs.forEach { pair ->
+        cancelSchedule(pair)
+        cancelNotification(pair)
+    }
     currentCoroutineContext().ensureActive()
 
     val retainedLocalRoots = retainedPairs.mapTo(hashSetOf()) { pair -> pair.localRootId }
