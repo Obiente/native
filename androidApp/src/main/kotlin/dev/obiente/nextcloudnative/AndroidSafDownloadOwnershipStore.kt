@@ -33,7 +33,7 @@ internal class AndroidSafDownloadOwnershipStore(
         ownershipRows().map(StoredOwnershipRow::transaction)
     }
 
-    fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
+    override fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
         val scope = scopeDigest(directoryIdentity)
         ownershipFiles().any { file -> ownershipReference(file)?.scope == scope }
     }
@@ -56,6 +56,8 @@ internal class AndroidSafDownloadOwnershipStore(
         private val referencesByToken = references.associateByTo(mutableMapOf()) { reference -> reference.token }
         private val rowsByToken = mutableMapOf<String, StoredOwnershipRow>()
         private val observedScopesByToken = mutableMapOf<String, MutableSet<String>>()
+        private val observedDirectoryIdentitiesByScope = mutableMapOf<String, String>()
+        private val observedNamesByScope = mutableMapOf<String, Set<String>>()
 
         init {
             check(referencesByToken.size == references.size) {
@@ -64,6 +66,19 @@ internal class AndroidSafDownloadOwnershipStore(
         }
 
         override fun hasPendingTransactions(): Boolean = referencesByToken.isNotEmpty()
+
+        override fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
+            val scope = scopeDigest(directoryIdentity)
+            IndexedScopedOwnership(scope).transactions(observedNamesByScope[scope].orEmpty()).isNotEmpty()
+        }
+
+        override fun observedPendingDirectoryIdentities(): Set<String> = synchronized(LOCK) {
+            observedDirectoryIdentitiesByScope.mapNotNullTo(linkedSetOf()) { (scope, identity) ->
+                identity.takeIf {
+                    IndexedScopedOwnership(scope).transactions(observedNamesByScope[scope].orEmpty()).isNotEmpty()
+                }
+            }
+        }
 
         override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
             require(directoryIdentity.isNotBlank())
@@ -75,6 +90,8 @@ internal class AndroidSafDownloadOwnershipStore(
             observedNames: Set<String>,
         ) = synchronized(LOCK) {
             val scope = scopeDigest(directoryIdentity)
+            observedDirectoryIdentitiesByScope[scope] = directoryIdentity
+            observedNamesByScope[scope] = observedNames.toSet()
             observedRecoveryTokens(observedNames).forEach { token ->
                 observedScopesByToken.getOrPut(token, ::mutableSetOf).add(scope)
             }

@@ -88,6 +88,10 @@ internal suspend fun preflightAndroidAccountRemoval(context: Context, session: N
 
 internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
     preflightAndroidAccountRemoval(context, session)
+    reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
+        context,
+        NextcloudDocumentIds.accountKey(session),
+    )
     ANDROID_FILE_RANGE_SESSION_COORDINATOR.quiesce(NextcloudDocumentIds.accountKey(session))
 }
 

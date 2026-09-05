@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.FileSyncPair
+import kotlinx.coroutines.CancellationException
 
 internal data class AndroidSafOwnedDownloadRecoveryDirectory(
     val documentId: String,
@@ -46,15 +47,42 @@ internal fun androidSafOwnedDownloadRecoveryDirectories(
     }
 }
 
-internal inline fun <Directory> reconcileRecordedAndroidSafDownloadDirectories(
+internal fun androidSafOwnedDownloadRecoveryDirectory(
+    rootDocumentId: String,
+    directoryDocumentId: String,
+): AndroidSafOwnedDownloadRecoveryDirectory? {
+    val root = runCatching { NextcloudDocumentIds.parse(rootDocumentId) }.getOrNull() ?: return null
+    val directory = runCatching { NextcloudDocumentIds.parse(directoryDocumentId) }.getOrNull() ?: return null
+    if (directory.accountKey != root.accountKey) return null
+    val relativePath = when {
+        root.path.isEmpty() -> directory.path
+        directory.path == root.path -> ""
+        directory.path.startsWith(root.path + "/") -> directory.path.removePrefix(root.path + "/")
+        else -> return null
+    }
+    return AndroidSafOwnedDownloadRecoveryDirectory(directoryDocumentId, relativePath)
+}
+
+internal fun <Directory> reconcileRecordedAndroidSafDownloadDirectories(
     candidates: List<Directory>,
     hasPendingRecovery: () -> Boolean,
     hasPendingForDirectory: (Directory) -> Boolean,
+    shouldContinue: () -> Boolean = { true },
     reconcileDirectory: (Directory) -> Unit,
 ): Boolean {
     if (!hasPendingRecovery()) return true
-    candidates.distinct().filter(hasPendingForDirectory).forEach(reconcileDirectory)
+    candidates.distinct().forEach { candidate ->
+        requireAndroidSafRetirementContinuation(shouldContinue)
+        if (!hasPendingForDirectory(candidate)) return@forEach
+        requireAndroidSafRetirementContinuation(shouldContinue)
+        reconcileDirectory(candidate)
+    }
+    requireAndroidSafRetirementContinuation(shouldContinue)
     return !hasPendingRecovery()
+}
+
+internal fun requireAndroidSafRetirementContinuation(shouldContinue: () -> Boolean) {
+    if (!shouldContinue()) throw CancellationException("Folder sync recovery was cancelled.")
 }
 
 internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
@@ -72,6 +100,7 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
         rootId = localRootId,
         downloadOwnershipStore = ownership,
     )
+    localTree.indexRecoveryLocationsIfNeeded(indexedOwnership, shouldContinue)
     val recordedDocumentIds = ownership.pendingTransactions().asSequence()
         .flatMap { transaction ->
             sequenceOf(transaction.stageDocumentIdentity, transaction.backupDocumentIdentity)
@@ -86,25 +115,32 @@ internal fun reconcileOwnProviderSafDownloadsBeforePairRemoval(
             }.getOrNull()
         }
         .toSet()
-    val candidates = androidSafOwnedDownloadRecoveryDirectories(
+    val recordedCandidates = androidSafOwnedDownloadRecoveryDirectories(
         rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri),
         localRecoveryPaths = localRecoveryPaths,
         recordedDocumentIds = recordedDocumentIds,
     ).map { candidate ->
         candidate to DocumentsContract.buildDocumentUriUsingTree(treeUri, candidate.documentId)
     }
-    val hasRelevantPendingRecovery = {
-        ownership.hasTreeScopedPendingTransactions() || candidates.any { (_, directoryUri) ->
-            ownership.hasPendingTransactionsForDirectory(directoryUri.toString())
-        }
+    val relocatedCandidates = indexedOwnership.observedPendingDirectoryIdentities().mapNotNull { identity ->
+        val directoryUri = runCatching { Uri.parse(identity) }.getOrNull() ?: return@mapNotNull null
+        val documentId = runCatching { DocumentsContract.getDocumentId(directoryUri) }.getOrNull()
+            ?: return@mapNotNull null
+        androidSafOwnedDownloadRecoveryDirectory(
+            rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri),
+            directoryDocumentId = documentId,
+        )?.let { candidate -> candidate to directoryUri }
     }
+    val candidates = recordedCandidates + relocatedCandidates
+    val hasRelevantPendingRecovery = indexedOwnership::hasPendingTransactions
     check(
         reconcileRecordedAndroidSafDownloadDirectories(
             candidates = candidates,
             hasPendingRecovery = hasRelevantPendingRecovery,
             hasPendingForDirectory = { (_, directoryUri) ->
-                ownership.hasPendingTransactionsForDirectory(directoryUri.toString())
+                indexedOwnership.hasPendingTransactionsForDirectory(directoryUri.toString())
             },
+            shouldContinue = shouldContinue,
             reconcileDirectory = { (candidate, directoryUri) ->
                 localTree.downloadPublisher(
                     parentUri = directoryUri,
