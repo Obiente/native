@@ -25,6 +25,7 @@ internal fun createAndroidFileSyncLocalTree(
             root = resolveMediaStoreSyncRoot(rootId, Environment.getExternalStorageDirectory()),
         )
     } else {
+        requireExternalAndroidPickerUri(rootId, appContext.packageName)
         AndroidSafFileSyncLocalTree(
             resolver = appContext.contentResolver,
             rootId = rootId,

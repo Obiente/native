@@ -66,6 +66,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
             return
         }
         val result = runCatching selectionResult@{
+            requireExternalAndroidPickerUri(uri.toString(), appContext.packageName)
             val metadata = resolver.queryUploadMetadata(uri)
             val mimeType = resolver.getType(uri)?.trim()?.lowercase()?.takeIf(String::isNotBlank)
             if (!isAcceptedUploadMimeType(mimeType, selection.acceptedMimeTypes)) {
@@ -156,9 +157,13 @@ internal class AndroidLocalUploadPicker(context: Context) {
             }
             if (cancelledAfterAcquire) return@selectionResult LocalUploadSelectionResult.Cancelled
             LocalUploadSelectionResult.Selected(file)
-        }.getOrElse {
+        }.getOrElse { failure ->
             LocalUploadSelectionResult.Rejected(
-                "The selected file could not be opened.",
+                if (failure is AndroidPickerUriRejectedException) {
+                    failure.rejection.message
+                } else {
+                    "The selected file could not be opened."
+                },
             )
         }
         resumeLocalUploadSelectionResult(
@@ -408,6 +413,14 @@ internal class AndroidLocalUploadPicker(context: Context) {
         if (source.file != file) {
             throw AndroidLocalUploadCapabilityUnavailableException(
                 "The persisted local file metadata changed.",
+            )
+        }
+        try {
+            requireExternalAndroidPickerUri(source.uri.toString(), appContext.packageName)
+        } catch (failure: AndroidPickerUriRejectedException) {
+            throw AndroidLocalUploadCapabilityUnavailableException(
+                "The persisted local file provider is not allowed.",
+                failure,
             )
         }
         if (!isDurableUploadCapabilityReady(source.phase)) {
