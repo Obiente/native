@@ -13,7 +13,6 @@ import java.awt.datatransfer.StringSelection
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
@@ -24,8 +23,6 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.PosixFilePermission
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
@@ -125,8 +122,6 @@ private const val MAX_VIRTUAL_FOLDER_DISCOVERED_ENTRIES = 100_000
 private const val MAX_VIRTUAL_FOLDER_STABILITY_ATTEMPTS = 3
 private const val VIRTUAL_FOLDER_REFRESH_INTERVAL_MILLIS = 6L * 60L * 60L * 1_000L
 private const val VIRTUAL_FOLDER_REFRESH_RETRY_MILLIS = 30L * 60L * 1_000L
-private const val KEY_WINDOWS_CLOUD_FILES_ROOT = "windows-cloud-files-root"
-private const val KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX = "wcfr."
 private const val KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX = "wcfpr."
 private const val KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR = "windows-cloud-files-recovery-cursor"
 private const val MAX_WINDOWS_CLOUD_FILES_RECOVERY_ROOTS_PER_ATTEMPT = 16
@@ -135,7 +130,6 @@ private const val KEY_VIRTUAL_FILE_PRIMARY_CACHE_PREFIX = "vfpc-primary."
 private const val KEY_VIRTUAL_FILE_OVERFLOW_CACHE_PREFIX = "vfpc-overflow."
 private const val VIRTUAL_FILE_PRIMARY_PREFERENCE_VERSION = "v2"
 private const val VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION = "v2"
-private const val WINDOWS_CLOUD_FILES_ROOT_SUFFIX = "-v2"
 
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
@@ -385,21 +379,6 @@ internal fun virtualFileLocationActionMessage(prefix: String, targetPath: String
     return "$prefix$displayedTarget."
 }
 
-internal fun desktopWindowsCloudFilesRoot(
-    accountId: String,
-    userHome: File = File(System.getProperty("user.home")),
-): File {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return File(File(userHome, "Nextcloud Native"), accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
-}
-
-internal fun windowsCloudFilesRootPreferenceKey(accountId: String): String {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    return "$KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX$accountId".also { key ->
-        check(key.length <= Preferences.MAX_KEY_LENGTH)
-    }
-}
-
 internal fun windowsCloudFilesPreservedRootPreferenceKey(accountId: String): String {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
     return "$KEY_WINDOWS_CLOUD_FILES_PRESERVED_ROOT_PREFIX$accountId".also { key ->
@@ -518,98 +497,6 @@ internal fun pagedPersistedWindowsCloudFilesRecoveryRoots(
         preferences.put(KEY_WINDOWS_CLOUD_FILES_RECOVERY_CURSOR, page.keys.last())
     }
     return page
-}
-
-private fun desktopLegacyWindowsCloudFilesRoot(accountId: String, userHome: File): File =
-    File(File(userHome, "Nextcloud Native"), accountId)
-
-internal fun unregisterSupersededWindowsCloudFilesRoot(
-    preferences: Preferences,
-    accountId: String,
-    userHome: File,
-    api: WindowsCloudFilesApi,
-) {
-    require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
-    val legacyRoot = validatedWindowsCloudFilesRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome), userHome)
-    api.unregisterSyncRoot(legacyRoot)
-    clearWindowsCloudFilesRootPreferences(preferences, accountId, legacyRoot)
-}
-
-private fun clearWindowsCloudFilesRootPreferences(
-    preferences: Preferences,
-    accountId: String,
-    removedRoot: Path,
-) {
-    listOf(KEY_WINDOWS_CLOUD_FILES_ROOT, windowsCloudFilesRootPreferenceKey(accountId)).forEach { key ->
-        val savedRoot = preferences.get(key, null)
-            ?.let(::File)
-            ?.toPath()
-            ?.toAbsolutePath()
-            ?.normalize()
-        if (savedRoot == removedRoot) preferences.remove(key)
-    }
-}
-
-internal fun unregisterWindowsCloudFilesRootForUninstall(
-    preferences: Preferences = Preferences.userRoot().node("dev/obiente/nextcloudnative"),
-    userHome: File = File(System.getProperty("user.home")),
-    apiFactory: () -> WindowsCloudFilesApi = ::JnaWindowsCloudFilesApi,
-) {
-    val rootsByPreference = linkedMapOf<Path, MutableSet<String>>()
-    fun addRoot(root: File?, preferenceKey: String? = null) {
-        if (root == null) return
-        val validated = validatedWindowsCloudFilesRoot(root, userHome)
-        rootsByPreference.getOrPut(validated) { linkedSetOf() }
-            .apply { preferenceKey?.let(::add) }
-    }
-    addRoot(
-        preferences.get(KEY_WINDOWS_CLOUD_FILES_ROOT, null)?.let(::File),
-        KEY_WINDOWS_CLOUD_FILES_ROOT,
-    )
-    preferences.keys().filter { it.startsWith(KEY_WINDOWS_CLOUD_FILES_ROOT_PREFIX) }.forEach { key ->
-        addRoot(preferences.get(key, null)?.let(::File), key)
-    }
-    val sessionAccountId = preferences.get("server", null)?.let { server ->
-        preferences.get("login", null)?.let { login ->
-            desktopFileCacheAccountId(NextcloudSession(server, login, "unused"))
-        }
-    }
-    sessionAccountId?.let { accountId ->
-        addRoot(
-            desktopWindowsCloudFilesRoot(accountId, userHome),
-            windowsCloudFilesRootPreferenceKey(accountId),
-        )
-        addRoot(desktopLegacyWindowsCloudFilesRoot(accountId, userHome))
-    }
-    if (rootsByPreference.isEmpty()) return
-    val api = apiFactory()
-    var firstFailure: Throwable? = null
-    try {
-        rootsByPreference.entries
-            .sortedByDescending { (root) -> root.fileName.toString().endsWith(WINDOWS_CLOUD_FILES_ROOT_SUFFIX) }
-            .forEach { (root, preferenceKeys) ->
-                runCatching { api.unregisterSyncRoot(root) }
-                    .onSuccess { preferenceKeys.forEach(preferences::remove) }
-                    .onFailure { failure -> if (firstFailure == null) firstFailure = failure }
-            }
-    } finally {
-        api.close()
-    }
-    firstFailure?.let { throw it }
-}
-
-private fun validatedWindowsCloudFilesRoot(root: File, userHome: File): Path {
-    val expectedParent = File(userHome, "Nextcloud Native").toPath().toAbsolutePath().normalize()
-    val normalizedRoot = root.toPath().toAbsolutePath().normalize()
-    val name = normalizedRoot.fileName.toString()
-    val accountId = name.removeSuffix(WINDOWS_CLOUD_FILES_ROOT_SUFFIX)
-    check(
-        normalizedRoot.parent == expectedParent &&
-            accountId.length == 64 &&
-            accountId.all { it in '0'..'9' || it in 'a'..'f' } &&
-            (name == accountId || name == accountId + WINDOWS_CLOUD_FILES_ROOT_SUFFIX),
-    ) { "The stored Windows Cloud Files root is invalid." }
-    return normalizedRoot
 }
 
 internal fun virtualFileProviderPreferenceKey(accountId: String): String {
@@ -794,27 +681,6 @@ private fun desktopContractCacheDirectory(name: String): File {
     return File(cacheRoot, "nextcloud-native/contracts/$name")
 }
 
-internal fun desktopPendingDynamicMutationDirectory(
-    osName: String = System.getProperty("os.name").orEmpty(),
-    environment: Map<String, String> = System.getenv(),
-    userHome: File = File(System.getProperty("user.home")),
-): File = when {
-    osName.startsWith("Windows", ignoreCase = true) -> {
-        val localAppData = environment["LOCALAPPDATA"]?.takeIf(String::isNotBlank)
-            ?.let(::File)
-            ?: File(userHome, "AppData/Local")
-        File(localAppData, "Nextcloud Native/State/Pending Mutations")
-    }
-    osName.startsWith("Mac", ignoreCase = true) ->
-        File(userHome, "Library/Application Support/Nextcloud Native/Pending Mutations")
-    else -> {
-        val stateRoot = environment["XDG_STATE_HOME"]?.takeIf(String::isNotBlank)
-            ?.let(::File)
-            ?: File(userHome, ".local/state")
-        File(stateRoot, "nextcloud-native/pending-mutations-v1")
-    }
-}.absoluteFile
-
 internal const val DESKTOP_PROJECT_CONTENT_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val DESKTOP_PROJECT_CONTENT_READ_TIMEOUT_SECONDS = 30L
 internal const val DESKTOP_PROJECT_CONTENT_WRITE_TIMEOUT_SECONDS = 30L
@@ -849,144 +715,6 @@ internal fun publishDesktopProjectContentCache(temporary: File, destination: Fil
     }
 }
 
-private val PENDING_MUTATION_DIRECTORY_PERMISSIONS = setOf(
-    PosixFilePermission.OWNER_READ,
-    PosixFilePermission.OWNER_WRITE,
-    PosixFilePermission.OWNER_EXECUTE,
-)
-private val PENDING_MUTATION_FILE_PERMISSIONS = setOf(
-    PosixFilePermission.OWNER_READ,
-    PosixFilePermission.OWNER_WRITE,
-)
-
-internal fun ensurePrivatePendingMutationDirectory(directory: File) {
-    Files.createDirectories(directory.toPath())
-    setPendingMutationPosixPermissions(directory.toPath(), PENDING_MUTATION_DIRECTORY_PERMISSIONS)
-}
-
-internal fun setPrivatePendingMutationFilePermissions(file: File) {
-    setPendingMutationPosixPermissions(file.toPath(), PENDING_MUTATION_FILE_PERMISSIONS)
-}
-
-private fun setPendingMutationPosixPermissions(path: Path, permissions: Set<PosixFilePermission>) {
-    if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
-        Files.setPosixFilePermissions(path, permissions)
-    }
-}
-
-private fun createPrivatePendingMutationTemporary(directory: File, targetName: String): Path {
-    val directoryPath = directory.toPath()
-    return if (Files.getFileStore(directoryPath).supportsFileAttributeView("posix")) {
-        Files.createTempFile(
-            directoryPath,
-            "$targetName-",
-            ".part",
-            PosixFilePermissions.asFileAttribute(PENDING_MUTATION_FILE_PERMISSIONS),
-        )
-    } else {
-        Files.createTempFile(directoryPath, "$targetName-", ".part")
-    }
-}
-
-internal fun writePrivatePendingMutationFile(
-    directory: File,
-    target: File,
-    bytes: ByteArray,
-) {
-    require(target.parentFile?.absoluteFile == directory.absoluteFile) {
-        "The pending mutation target must be inside its private directory."
-    }
-    ensurePrivatePendingMutationDirectory(directory)
-    val temporary = createPrivatePendingMutationTemporary(directory, target.name)
-    try {
-        FileOutputStream(temporary.toFile()).use { output ->
-            output.write(bytes)
-            output.fd.sync()
-        }
-        try {
-            Files.move(
-                temporary,
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            Files.move(
-                temporary,
-                target.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
-        setPrivatePendingMutationFilePermissions(target)
-    } finally {
-        Files.deleteIfExists(temporary)
-    }
-}
-
-internal suspend fun executeDesktopDynamicApiGet(
-    accountId: String,
-    requestIdentity: String,
-    cachePolicy: NextcloudApiCachePolicy,
-    coalescer: DynamicApiRequestCoalescer<NextcloudApiResponse>,
-    loadCached: () -> NextcloudApiResponse?,
-    invalidateCached: () -> Unit,
-    executeNetwork: suspend () -> NextcloudApiResponse,
-    commit: (NextcloudApiResponse) -> Unit,
-): NextcloudApiResponse {
-    when (cachePolicy) {
-        NextcloudApiCachePolicy.PreferCache -> loadCached()?.let { return it }
-        NextcloudApiCachePolicy.RefreshNetwork ->
-            coalescer.invalidateRequest(accountId, requestIdentity) {}
-        NextcloudApiCachePolicy.ForceNetwork ->
-            coalescer.invalidateRequest(accountId, requestIdentity, invalidateCached)
-    }
-    return coalescer.execute(
-        accountId = accountId,
-        requestIdentity = requestIdentity,
-        load = {
-            if (cachePolicy != NextcloudApiCachePolicy.PreferCache) {
-                executeNetwork()
-            } else {
-                loadCached() ?: executeNetwork()
-            }
-        },
-        commit = commit,
-    )
-}
-
-internal fun combinedAutomaticCacheExcess(
-    maximumBytes: Long,
-    completeFileBytes: Long,
-    rangeBytes: Long,
-    windowsCachedBytes: Long,
-    windowsPinnedBytes: Long,
-): Long {
-    require(maximumBytes > 0L)
-    require(listOf(completeFileBytes, rangeBytes, windowsCachedBytes, windowsPinnedBytes).all { it >= 0L })
-    require(windowsPinnedBytes <= windowsCachedBytes)
-    val total = listOf(
-        completeFileBytes,
-        rangeBytes,
-        windowsCachedBytes - windowsPinnedBytes,
-    ).fold(0L) { accumulated, bytes ->
-        if (bytes > Long.MAX_VALUE - accumulated) Long.MAX_VALUE else accumulated + bytes
-    }
-    return (total - maximumBytes).coerceAtLeast(0L)
-}
-
-internal class DesktopSessionPublicationGuard {
-    private val monitor = Any()
-
-    fun <Result> serialize(action: () -> Result): Result = synchronized(monitor, action)
-}
-
-internal fun closeVirtualFileProviderForReplacement(
-    provider: AutoCloseable?,
-    detach: () -> Unit,
-): Throwable? = runCatching { provider?.close() }
-    .onSuccess { detach() }
-    .exceptionOrNull()
-
 class DesktopNextcloudServices(
     private val onThemePreferenceChanged: (ThemePreference) -> Unit = {},
     private val onKeepRunningInBackgroundChanged: (Boolean) -> Unit = {},
@@ -1013,7 +741,15 @@ class DesktopNextcloudServices(
         ?: resolvedSupportDiagnosticsRoot?.resolve("support-submissions")
         ?: Files.createTempDirectory("nextcloud-native-test-support-intake").toFile()
     private val secretStore = defaultDesktopSecretStore()
+    private val accountCredentials = DesktopAccountCredentialPersistence(preferences, secretStore, supportDiagnostics::record)
+    private val accountSessionPublication = DesktopAccountSessionPublication(
+        supportDiagnostics::registerPrivateValue,
+    ) { identity ->
+        supportDiagnostics.setActiveAccountIdentity(identity)
+        supportIntake.setActiveAccountIdentity(identity)
+    }
     private val sessionPublicationGuard = DesktopSessionPublicationGuard()
+    private val accountOperationGuard = DesktopAccountOperationGuard()
     private val appUpdater = DesktopAppUpdater(
         preferences = preferences.node("app-updates-v1"),
         onInstallerConfirmationOpened = { target -> onDesktopUpdateInstallerOpened(target.platform) },
@@ -1060,6 +796,7 @@ class DesktopNextcloudServices(
     private var linuxVirtualMetadataBackend: CachingLinuxVirtualFileBackend? = null
     private var linuxVirtualFileMountIdentity: String? = null
     private var linuxVirtualFileFailure: String? = null
+    private val linuxProviderCleanup = DesktopLinuxProviderCleanupSlot()
     @Volatile
     private var windowsCloudFilesProvider: WindowsCloudFilesProvider? = null
     @Volatile
@@ -1112,6 +849,7 @@ class DesktopNextcloudServices(
         accountId: String,
         cache: DesktopVirtualRangeCache,
     ) {
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
         if (sessionClearing) return
         if (synchronized(virtualFileProviderLock) { accountId in virtualFileCacheTierMutations }) return
         if (cache.hasUnavailableRetainedOverflowRecords(accountId, relativePath)) return
@@ -1507,14 +1245,20 @@ class DesktopNextcloudServices(
                     }
                 }
         }
-        val accepted = synchronized(virtualFileProviderLock) {
-            synchronized(virtualFolderHydrationJobs) {
-                if (
-                    sessionClearing ||
-                    accountId in virtualFileCacheTierMutations ||
-                    virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
-                ) false
-                else true.also { virtualFolderHydrationJobs[jobKey] = job }
+        val accepted = accountOperationGuard.tryActivateResource {
+            if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
+                false
+            } else {
+                synchronized(virtualFileProviderLock) {
+                    synchronized(virtualFolderHydrationJobs) {
+                        if (
+                            sessionClearing ||
+                            accountId in virtualFileCacheTierMutations ||
+                            virtualFolderHydrationJobs[jobKey].occupiesVirtualFolderHydrationSlot()
+                        ) false
+                        else true.also { virtualFolderHydrationJobs[jobKey] = job }
+                    }
+                }
             }
         }
         if (accepted) job.start() else job.cancel()
@@ -1623,6 +1367,7 @@ class DesktopNextcloudServices(
         if (!isLinuxDesktop()) return
         session ?: return
         val accountId = desktopFileCacheAccountId(session)
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return
         val cache = virtualRangeCache(accountId)
         val kept = cache.loadFolderRetention(accountId).rules.filter { rule ->
             rule.retention == VirtualFolderRetention.KeepOnDevice
@@ -1644,8 +1389,10 @@ class DesktopNextcloudServices(
             )
         },
     )
+    private val accountSyncPairCleanupJournal = DesktopAccountSyncPairCleanupJournal(
+        preferences,
+    ) { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalMalformedDiagnostic()) }
     private val startOnLoginController = DesktopStartOnLoginController()
-    private val fileSyncRunLock = Mutex()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var backgroundFileSyncJob: Job? = null
     private val mutableFileSyncTraySnapshot = MutableStateFlow(
@@ -1679,6 +1426,10 @@ class DesktopNextcloudServices(
             backgroundFileSyncJob = serviceScope.launch {
                 restoreConfirmedStartOnLoginRegistration()
                 while (isActive) {
+                    recoverDesktopBackgroundAccountSyncPairCleanups(
+                        retry = { accountOperationGuard.serializeWhenSyncIdle { retryPendingAccountSyncPairCleanups() } },
+                        recordFailure = { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalFailureDiagnostic(it)) },
+                    )
                     if (!isFileSyncPaused()) {
                         runCatching { syncAllFileSyncPairs(DesktopFileSyncRunSource.Background) }
                     }
@@ -1935,12 +1686,30 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
+        accountOperationGuard.serializeResourceActivation {
+            activateVirtualFileProviderForCurrentAccount(session, userId)
+        }
+    }
+
+    private fun activateVirtualFileProviderForCurrentAccount(
+        session: NextcloudSession,
+        userId: String,
+    ): VirtualFileStorageActionResult {
+        if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
+            return VirtualFileStorageActionResult.Rejected(
+                "The account changed before virtual file storage could be activated.",
+            )
+        }
         if (!isLinuxDesktop() && !isWindowsDesktop()) {
-            return@withContext VirtualFileStorageActionResult.Unsupported(
+            return VirtualFileStorageActionResult.Unsupported(
                 "This desktop build does not have a system virtual-file adapter for the current operating system.",
             )
         }
         val accountId = desktopFileCacheAccountId(session)
+        if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) return unknownCleanupStateRejection()
+        runCatching(linuxProviderCleanup::retry).exceptionOrNull()?.let {
+            return VirtualFileStorageActionResult.Rejected(it.message ?: "The earlier Linux mount is still active.")
+        }
         var windowsCloudFilesRecoveryNotice = if (isWindowsDesktop()) {
             persistedWindowsCloudFilesRecoveryNotice(preferences, accountId)
         } else {
@@ -1955,7 +1724,7 @@ class DesktopNextcloudServices(
                     windowsCloudFilesProvider != null && windowsCloudFilesIdentity == accountId &&
                     windowsCloudFilesFailure == null && windowsCloudFilesProvider?.runtimeRecoveryFailure() == null
                 ) {
-                    return@withContext VirtualFileStorageActionResult.Completed(
+                    return VirtualFileStorageActionResult.Completed(
                         "Windows Cloud Files are already connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                     )
                 }
@@ -2081,13 +1850,13 @@ class DesktopNextcloudServices(
                     )
                     throw failure
                 }
-                return@withContext VirtualFileStorageActionResult.Completed(
+                return VirtualFileStorageActionResult.Completed(
                     windowsCloudFilesRecoveryNotice
                         ?: "Windows Cloud Files connected at ${desktopWindowsCloudFilesRoot(accountId).absolutePath}.",
                 )
             }
             if (linuxVirtualFileSystem != null && linuxVirtualFileMountIdentity == accountId) {
-                return@withContext VirtualFileStorageActionResult.Completed(
+                return VirtualFileStorageActionResult.Completed(
                     "Virtual files are already mounted at ${desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath}.",
                 )
             }
@@ -2173,7 +1942,7 @@ class DesktopNextcloudServices(
                 throw failure
             }
         }
-        VirtualFileStorageActionResult.Completed(
+        return VirtualFileStorageActionResult.Completed(
             "Virtual files mounted at ${desktopLinuxVirtualFileMountPoint(preferences, accountId).absolutePath}.",
         )
     }
@@ -2182,28 +1951,38 @@ class DesktopNextcloudServices(
         session: NextcloudSession,
         userId: String,
     ): VirtualFileStorageActionResult = withContext(Dispatchers.IO) {
-        synchronized(virtualFileProviderLock) {
-            linuxVirtualFileSystem?.unmount()
-            linuxVirtualFileSystem = null
-            linuxVirtualMetadataBackend = null
-            linuxVirtualFileMountIdentity = null
-            linuxVirtualFileFailure = null
-            windowsCloudFilesProvider?.close()
-            windowsCloudFilesProvider = null
-            windowsCloudFilesIdentity = null
-            windowsCloudFilesFailure = null
-            preferences.putBoolean(
-                virtualFileProviderPreferenceKey(desktopFileCacheAccountId(session)),
-                false,
+        accountOperationGuard.serializeResourceActivation {
+            val activeSession = loadSession()
+            if (!desktopResourceActivationMatchesActiveSession(activeSession, session)) {
+                return@serializeResourceActivation VirtualFileStorageActionResult.Rejected(
+                    "The account changed before virtual file storage could be deactivated.",
+                )
+            }
+            val accountId = desktopFileCacheAccountId(session)
+            synchronized(virtualFileProviderLock) {
+                if (desktopResourceDeactivationTargetsCurrentProvider(activeSession, session, linuxVirtualFileMountIdentity)) {
+                    linuxVirtualFileSystem?.unmount()
+                    linuxVirtualFileSystem = null
+                    linuxVirtualMetadataBackend = null
+                    linuxVirtualFileMountIdentity = null
+                    linuxVirtualFileFailure = null
+                }
+                if (desktopResourceDeactivationTargetsCurrentProvider(activeSession, session, windowsCloudFilesIdentity)) {
+                    windowsCloudFilesProvider?.close()
+                    windowsCloudFilesProvider = null
+                    windowsCloudFilesIdentity = null
+                    windowsCloudFilesFailure = null
+                }
+                preferences.putBoolean(virtualFileProviderPreferenceKey(accountId), false)
+            }
+            VirtualFileStorageActionResult.Completed(
+                if (isWindowsDesktop()) {
+                    "Windows Cloud Files disconnected. Placeholders, cached content, and remote files were kept."
+                } else {
+                    "Virtual files unmounted. Cached content and remote files were kept."
+                },
             )
         }
-        VirtualFileStorageActionResult.Completed(
-            if (isWindowsDesktop()) {
-                "Windows Cloud Files disconnected. Placeholders, cached content, and remote files were kept."
-            } else {
-                "Virtual files unmounted. Cached content and remote files were kept."
-            },
-        )
     }
 
     override suspend fun acknowledgeVirtualFileProviderRecovery(
@@ -2617,6 +2396,7 @@ class DesktopNextcloudServices(
         // A retained-metadata persistence callback can briefly enter virtualFileProviderLock.
         // Closing its backend while holding the same lock reverses that order and deadlocks.
         runCatching { providersToClose.first?.unmount() }
+        runCatching(linuxProviderCleanup::retry)
         runCatching { providersToClose.second?.close() }
         supportIntake.close()
         supportDiagnostics.close()
@@ -2674,7 +2454,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("remote_root", remoteRootPath, SupportDiagnosticValuePrivacy.RemotePath),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-add", diagnosticFields) {
-            fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
+            accountOperationGuard.serializeWhenSyncIdle addPair@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@addPair FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could be added.",
+                    )
+                }
+                fileSyncEngine.addPair(session, localRoot, remoteRootPath, configuration)
+            }
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.pair-add", diagnosticFields, result)
             runCatching {
@@ -2696,9 +2483,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-run", diagnosticFields) {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could start.",
+                    )
+                }
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
@@ -2746,9 +2538,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("choice", choice.name.lowercase()),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve", diagnosticFields) {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could start.",
+                    )
+                }
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
@@ -2793,9 +2590,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("conflict_count", resolutions.size.toString()),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.conflict-resolve-batch", diagnosticFields) {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync could start.",
+                    )
+                }
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         "Desktop syncing is paused. Resume it from the system tray first.",
                     )
                 }
@@ -2837,7 +2639,14 @@ class DesktopNextcloudServices(
             SupportDiagnosticFieldDraft("pair", pairId, SupportDiagnosticValuePrivacy.Identifier),
         )
         diagnoseDesktopSupportFailure(accountId, "sync.pair-remove", diagnosticFields) {
-            fileSyncEngine.removePair(session, userId, pairId)
+            accountOperationGuard.withSyncRunLock syncRun@{
+                if (!desktopSyncRunMatchesActiveSession(loadSession(), session)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(
+                        "The account changed before this desktop sync pair could be removed.",
+                    )
+                }
+                fileSyncEngine.removePair(session, userId, pairId)
+            }
         }.also { result ->
             recordDesktopFileSyncResult(accountId, "sync.pair-remove", diagnosticFields, result)
             runCatching {
@@ -2918,23 +2727,26 @@ class DesktopNextcloudServices(
     ): FileSyncCenterActionResult = withContext(Dispatchers.IO) {
         var diagnosticAccountId: String? = null
         try {
-            fileSyncRunLock.withLock {
+            accountOperationGuard.withSyncRunLock syncRun@{
                 if (isFileSyncPaused()) {
-                    return@withLock FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
+                    return@syncRun FileSyncCenterActionResult.Rejected("Desktop syncing is paused.")
                 }
                 val session = loadSession()
-                    ?: return@withLock FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
+                    ?: return@syncRun FileSyncCenterActionResult.Rejected("Sign in before syncing folders.")
                 val accountId = desktopFileCacheAccountId(session)
                 diagnosticAccountId = accountId
+                if (accountSyncPairCleanupJournal.blocksAccountActivation(accountId)) {
+                    return@syncRun FileSyncCenterActionResult.Rejected(DESKTOP_UNKNOWN_CLEANUP_STATE_MESSAGE)
+                }
                 val userId = runCatching { loadServerInfo(session).userId }.getOrElse { failure ->
-                    return@withLock FileSyncCenterActionResult.Rejected(
+                    return@syncRun FileSyncCenterActionResult.Rejected(
                         failure.message ?: "Could not load the signed-in account.",
                     )
                 }
                 val initial = loadDesktopFileSyncCenter(session)
                 if (initial.pairs.isEmpty()) {
                     publishFileSyncTraySnapshot(initial, emptyList())
-                    return@withLock FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
+                    return@syncRun FileSyncCenterActionResult.Completed("No desktop sync folders are configured.")
                 }
                 mutableFileSyncTraySnapshot.value = mutableFileSyncTraySnapshot.value.copy(
                     phase = DesktopFileSyncTrayPhase.Syncing,
@@ -3526,10 +3338,20 @@ class DesktopNextcloudServices(
     ): String? = withContext(Dispatchers.IO) { durableMutationRecovery.load(accountScope, kind) }
 
     override suspend fun saveDurableMutationRecovery(
+        session: NextcloudSession,
         accountScope: String,
         kind: DurableMutationRecoveryKind,
         encoded: String,
-    ): Boolean = withContext(Dispatchers.IO) { durableMutationRecovery.save(accountScope, kind, encoded) }
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (durableMutationAccountScope(session) != accountScope) return@withContext false
+        accountOperationGuard.withAccountPrivateStatePublication(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { false },
+        ) {
+            durableMutationRecovery.save(accountScope, kind, encoded)
+        }
+    }
 
     override suspend fun clearDurableMutationRecovery(
         accountScope: String,
@@ -3622,17 +3444,23 @@ class DesktopNextcloudServices(
         targetRecordId: String,
         values: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
-        val encoded = requireNotNull(
-            encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
-        ) { "The pending dynamic mutation is invalid." }
-        val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
-            "The pending dynamic mutation identity is invalid."
+        accountOperationGuard.withAccountPrivateStatePublication(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be recorded.") },
+        ) {
+            val encoded = requireNotNull(
+                encodePersistedDynamicMutation(appId, actionId, targetRecordId, values),
+            ) { "The pending dynamic mutation is invalid." }
+            val target = requireNotNull(pendingDynamicMutationFile(session, appId, actionId, targetRecordId)) {
+                "The pending dynamic mutation identity is invalid."
+            }
+            writePrivatePendingMutationFile(
+                directory = pendingDynamicMutationDirectory,
+                target = target,
+                bytes = encoded.encodeToByteArray(),
+            )
         }
-        writePrivatePendingMutationFile(
-            directory = pendingDynamicMutationDirectory,
-            target = target,
-            bytes = encoded.encodeToByteArray(),
-        )
         Unit
     }
 
@@ -3642,8 +3470,14 @@ class DesktopNextcloudServices(
         actionId: String,
         targetRecordId: String,
     ) = withContext(Dispatchers.IO) {
-        pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
-            check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+        accountOperationGuard.withAccountPrivateStatePublication(
+            expectedSession = session,
+            resolveSession = { loadSession(session.accountId) },
+            unavailable = { error("The account changed before the pending mutation could be cleared.") },
+        ) {
+            pendingDynamicMutationFile(session, appId, actionId, targetRecordId)?.let { target ->
+                check(!target.exists() || target.delete()) { "Could not clear the pending mutation." }
+            }
         }
         Unit
     }
@@ -3664,229 +3498,406 @@ class DesktopNextcloudServices(
             "${desktopFileCacheAccountId(session)}-$appId-$digest.json",
         )
     }
-
-    override fun loadSession(): NextcloudSession? {
-        return sessionPublicationGuard.serialize {
-            val server = preferences.get(KEY_SERVER, null)
-            val login = preferences.get(KEY_LOGIN, null)
-            if (server == null || login == null) {
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-                return@serialize null
-            }
-            val password = secretStore.load(desktopSessionSecretReference(server, login))
-                ?.decodeToString()
-                ?.takeIf(String::isNotBlank)
-            if (password == null) {
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-                return@serialize null
-            }
-            listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
-            NextcloudSession(server, login, password).also { session ->
-                restoreDesktopAccountRegistry(preferences, session, supportDiagnostics::record)
-                val accountIdentity = desktopFileCacheAccountId(session)
-                supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-                supportIntake.setActiveAccountIdentity(accountIdentity)
-            }
+    override fun loadSession(): NextcloudSession? = sessionPublicationGuard.serialize {
+        val session = accountCredentials.loadActiveSession()
+        if (session == null) {
+            supportDiagnostics.setActiveAccountIdentity(null)
+            supportIntake.setActiveAccountIdentity(null)
+        } else {
+            accountSessionPublication.publish(session)
         }
+        session
     }
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        sessionPublicationGuard.serialize {
-            val encodedRegistry = prepareDesktopAccountRegistry(session)
-            listOf(session.serverUrl, session.loginName, session.appPassword)
-                .forEach(supportDiagnostics::registerPrivateValue)
-            try {
-                secretStore.save(
-                    reference = desktopSessionSecretReference(session.serverUrl, session.loginName),
-                    username = session.loginName,
-                    secret = session.appPassword.encodeToByteArray(),
-                )
-            } catch (failure: Throwable) {
-                recordSupportDiagnostic(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "credentials.save",
-                        outcome = "failed",
-                        code = if (failure is DesktopSecretStoreUnavailableException) {
-                            "DESKTOP_SECRET_STORE_UNAVAILABLE"
-                        } else {
-                            "DESKTOP_SECRET_STORE_FAILED"
-                        },
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
-                )
-                throw failure
-            }
-            persistDesktopAccountRegistry(preferences, encodedRegistry)
-            preferences.put(KEY_SERVER, session.serverUrl)
-            preferences.put(KEY_LOGIN, session.loginName)
-            val accountIdentity = desktopFileCacheAccountId(session)
-            supportDiagnostics.setActiveAccountIdentity(accountIdentity)
-            supportIntake.setActiveAccountIdentity(accountIdentity)
-        }
+        val persistedSession = accountOperationGuard.persistSessionAndActivateDynamicReads(
+            persist = {
+                retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(session))
+                sessionPublicationGuard.serialize {
+                    val activeAccountId = accountCredentials.activeAccountId()
+                    val activeSession = activeAccountId?.let(accountCredentials::loadSession)
+                    val invalidatesLiveResources = desktopSessionSaveSwitchesAccount(activeAccountId, session.accountId) ||
+                        desktopSessionSaveReplacesActiveCredential(activeSession, session)
+                    requireDesktopSessionSaveAllowed(
+                        !invalidatesLiveResources || !hasLiveAccountResources(), ::recordSupportDiagnostic,
+                    )
+                    accountCredentials.saveSession(session).also(accountSessionPublication::publish)
+                }
+            },
+            activate = { dynamicApiRequestCoalescer.activateAccount(desktopFileCacheAccountId(it)) },
+        )
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
+        persistedSession
+    }
+    override fun listAccounts() = sessionPublicationGuard.serialize(accountCredentials::listAccounts)
+    override fun activeAccountId() = sessionPublicationGuard.serialize(accountCredentials::activeAccountId)
+    override fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
+        sessionPublicationGuard.serialize {
+            accountCredentials.loadSession(accountId)?.also { session ->
+                accountSessionPublication.register(session)
+            }
+        }
+    override suspend fun selectAccount(accountId: NextcloudAccountId): NextcloudSession? =
+        withContext(Dispatchers.IO) {
+            accountOperationGuard.serialize operation@{
+                if (activeAccountId() == accountId) {
+                    listAccounts().firstOrNull { it.id == accountId }
+                        ?.let(accountSyncPairCleanupJournal::requireAccountActivationAllowed)
+                    return@operation loadSession(accountId)
+                }
+                if (hasLiveAccountResources()) {
+                    recordSupportDiagnostic(desktopAccountSelectionBlockedDiagnostic())
+                    return@operation null
+                }
+                val syncJob = synchronized(this@DesktopNextcloudServices) {
+                    backgroundFileSyncJob.also { backgroundFileSyncJob = null }
+                }
+                restartDesktopSyncAfterSelection(
+                    select = {
+                        syncJob?.cancel()
+                        syncJob?.join()
+                        reopenDesktopSessionAfterSelection(
+                            selected = accountOperationGuard.withSyncRunLock {
+                                val selectedRecord = sessionPublicationGuard.serialize {
+                                    accountCredentials.listAccounts().firstOrNull { account -> account.id == accountId }
+                                }
+                                selectedRecord?.let { record ->
+                                    retryPendingAccountSyncPairCleanup(desktopFileCacheAccountId(record))
+                                }
+                                sessionPublicationGuard.serialize {
+                                    accountCredentials.selectAccount(accountId)?.also { session ->
+                                        accountSessionPublication.publish(session)
+                                    }
+                                }
+                            },
+                            reopen = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
+                        )
+                    },
+                    restart = ::startDesktopSyncLifecycle,
+                )
+            }
+        }
+    private fun hasLiveAccountResources(): Boolean =
+        synchronized(fileRangeSessionLock) { activeFileRangeSessions.isNotEmpty() } ||
+            synchronized(virtualFolderHydrationJobs) {
+                hasLiveVirtualFolderHydrationJobs(virtualFolderHydrationJobs.values)
+            } ||
+            synchronized(virtualFileProviderLock) {
+                linuxVirtualFileSystem != null || windowsCloudFilesProvider != null ||
+                    virtualFileCacheTierMutations.isNotEmpty()
+            }
+    override suspend fun removeAccount(accountId: NextcloudAccountId): Boolean = withContext(Dispatchers.IO) {
+        accountOperationGuard.serialize {
+            if (activeAccountId() == accountId) {
+                clearSessionForAccountOperation()
+                true
+            } else {
+                val account = listAccounts().firstOrNull { record -> record.id == accountId }
+                    ?: return@serialize false
+                val providerAccountId = desktopFileCacheAccountId(account)
+                val durableMutationScope = desktopDurableMutationAccountScope(account)
+                requireDesktopAccountRemovalReady(providerAccountId, isLinuxDesktop())
+                accountOperationGuard.withSyncRunLock {
+                    fileSyncEngine.requireAccountRemovalReady(providerAccountId)
+                    val removed = removeDesktopAccountBeforeSyncPairCleanup(
+                        accountId = providerAccountId,
+                        durableMutationAccountScope = durableMutationScope,
+                        prepareCleanup = accountSyncPairCleanupJournal::prepare,
+                        commitCleanup = accountSyncPairCleanupJournal::commit,
+                        clearCleanup = accountSyncPairCleanupJournal::clear,
+                        accountOwnership = ::desktopAccountOwnership,
+                        removeCredential = { sessionPublicationGuard.serialize {
+                            removeDesktopAccountCredential(preferences, providerAccountId, {
+                                accountCredentials.listAccounts().any { account -> account.id == accountId }
+                            }) {
+                                accountCredentials.removeAccount(accountId)
+                            }
+                        } },
+                        removeSyncPairs = ::removeDesktopAccountOwnedState,
+                    ) {
+                        recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(providerAccountId, it))
+                    }
+                    removed
+                }
+            }
+        }
     }
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
+        accountOperationGuard.serialize { clearSessionForAccountOperation() }
+    }
+    private suspend fun clearSessionForAccountOperation(
+        expectedSession: NextcloudSession? = null, revokeRemoteSession: suspend (NextcloudSession) -> Unit = {},
+    ) {
         val userHome = File(System.getProperty("user.home"))
         val rangeSessions = synchronized(fileRangeSessionLock) {
             sessionClearing = true
             activeFileRangeSessions.toList()
         }
         var cleared = false
+        var quiescedLinuxFileSystem: LinuxNextcloudVirtualFileSystem? = null
+        var quiescedWindowsCloudFiles: WindowsCloudFilesProvider? = null
+        var linuxFileSystemQuiesced = false
+        var windowsCloudFilesQuiesced = false
+        var providerPreferenceAccountId: String? = null
+        var providerWasEnabledBeforeRemoval = false
+        var remoteRevocationAttempted = false
+        var credentialRemovalStatus: Boolean? = false
+        var removalFailure: Throwable? = null
         try {
-            val accountId = desktopStoredSessionAccountId(preferences)
+            val activeAccountId = activeAccountId()
+            val activeRecord = activeAccountId?.let { id ->
+                listAccounts().firstOrNull { account -> account.id == id }
+            }
+            val activeSession = loadDesktopRemoteRevocationSession(activeAccountId, expectedSession, ::loadSession)
+            val accountId = activeSession?.let(::desktopFileCacheAccountId)
+                ?: activeRecord?.let(::desktopFileCacheAccountId)
+            val durableMutationScope = activeSession?.let(::durableMutationAccountScope)
+                ?: activeRecord?.let(::desktopDurableMutationAccountScope)
             val syncJob = synchronized(this) {
                 val active = backgroundFileSyncJob
                 backgroundFileSyncJob = null
                 active
             }
             syncJob?.cancel()
-            val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
-            rangeSessions.forEach { source -> runCatching(source::close) }
-            hydrationJobs.forEach { job -> job.join() }
-            accountId?.let { clearedAccountId ->
-                val prefix = "$clearedAccountId\u0000"
-                synchronized(virtualFolderMutationLock) {
-                    virtualFolderMutationGenerationsByJob.keys.removeIf { key -> key.startsWith(prefix) }
-                    virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith(prefix) }
-                    virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
-                }
-            }
             syncJob?.join()
-            synchronized(virtualFileProviderLock) {
-                linuxVirtualFileSystem?.unmount()
-                linuxVirtualFileSystem = null
-                linuxVirtualMetadataBackend = null
-                linuxVirtualFileMountIdentity = null
-                linuxVirtualFileFailure = null
-                val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
-                val provider = windowsCloudFilesProvider
-                try {
-                    if (provider != null) {
-                        provider.removeSyncRoot()
-                    } else if (isWindowsDesktop()) {
-                        unregisterWindowsCloudFilesRootForUninstall(preferences)
+            accountOperationGuard.withSyncRunLock {
+                quiescedLinuxFileSystem = synchronized(virtualFileProviderLock) {
+                    linuxVirtualFileSystem?.takeIf { linuxVirtualFileMountIdentity == accountId }
+                }
+                linuxFileSystemQuiesced = quiescedLinuxFileSystem?.quiesceWrites() == true
+                check(quiescedLinuxFileSystem == null || linuxFileSystemQuiesced) {
+                    "Close files being edited through the Linux virtual filesystem before removing this account."
+                }
+                quiescedWindowsCloudFiles = synchronized(virtualFileProviderLock) {
+                    windowsCloudFilesProvider?.takeIf { windowsCloudFilesIdentity == accountId }
+                }
+                windowsCloudFilesQuiesced = quiescedWindowsCloudFiles?.quiesceWritesForAccountRemoval() == true
+                check(quiescedWindowsCloudFiles == null || windowsCloudFilesQuiesced) {
+                    "Finish local Windows Cloud Files changes before removing this account."
+                }
+                accountId?.let { currentAccountId ->
+                    providerPreferenceAccountId = currentAccountId
+                    val key = virtualFileProviderPreferenceKey(currentAccountId)
+                    providerWasEnabledBeforeRemoval = preferences.getBoolean(key, false)
+                    setDesktopVirtualFileProviderPreference(preferences, currentAccountId, enabled = false)
+                }
+                accountId
+                    ?.also { requireDesktopAccountRemovalReady(it, isLinuxDesktop()) }
+                    ?.let { fileSyncEngine.requireAccountRemovalReady(it) }
+                completeDesktopSignOutAfterRemoteRevocation(expectedSession, { session ->
+                    remoteRevocationAttempted = true
+                    revokeRemoteSession(session)
+                }) {
+                val hydrationJobs = accountId?.let(::cancelAllVirtualFolderHydration).orEmpty()
+                rangeSessions.forEach { source -> runCatching(source::close) }
+                hydrationJobs.forEach { job -> job.join() }
+                accountId?.let { clearedAccountId ->
+                    val prefix = "$clearedAccountId\u0000"
+                    synchronized(virtualFolderMutationLock) {
+                        virtualFolderMutationGenerationsByJob.keys.removeIf { key -> key.startsWith(prefix) }
+                        virtualFolderCompletedGenerations.keys.removeIf { key -> key.startsWith(prefix) }
+                        virtualFolderRetryAtEpochMillis.keys.removeIf { key -> key.startsWith(prefix) }
                     }
-                    windowsCloudFilesFailure = null
-                } catch (failure: Throwable) {
-                    windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
-                    supportDiagnostics.record(
-                        SupportDiagnosticEventDraft(
-                            severity = SupportDiagnosticSeverity.Error,
-                            component = SupportDiagnosticComponent.VirtualFiles,
-                            operation = "cloud-files.signout-cleanup",
-                            outcome = "failed",
-                            fields = accountId?.let {
-                                listOf(
-                                    SupportDiagnosticFieldDraft(
-                                        "account",
-                                        it,
-                                        SupportDiagnosticValuePrivacy.Identifier,
-                                    ),
-                                )
-                            }.orEmpty(),
-                            exception = failure.toSupportDiagnosticExceptionDraft(),
-                        ),
-                    )
-                } finally {
-                    runCatching { provider?.close() }
-                    windowsCloudFilesProvider = null
-                    windowsCloudFilesIdentity = null
-                    preferences.remove(KEY_WINDOWS_CLOUD_FILES_ROOT)
-                    accountId?.let {
-                        clearWindowsCloudFilesRootPreferences(
-                            preferences,
-                            it,
-                            desktopWindowsCloudFilesRoot(it, userHome).toPath(),
-                        )
-                        clearWindowsCloudFilesRootPreferences(
-                            preferences,
-                            it,
-                            desktopLegacyWindowsCloudFilesRoot(it, userHome).toPath(),
-                        )
+                }
+                val teardownVirtualFiles = {
+                    val linuxProvider = synchronized(virtualFileProviderLock) {
+                        detachedDesktopLinuxProvider(
+                            linuxVirtualFileSystem, linuxVirtualMetadataBackend, linuxVirtualFileMountIdentity,
+                        ).also {
+                            linuxVirtualFileSystem = null
+                            linuxVirtualMetadataBackend = null
+                            linuxVirtualFileMountIdentity = null
+                            linuxVirtualFileFailure = null
+                        }
                     }
-                    if (isWindowsDesktop()) {
-                        val uninstallFailure = runCatching {
-                            unregisterWindowsCloudFilesRootForUninstall(preferences, userHome = userHome)
-                        }.exceptionOrNull()
-                        if (uninstallFailure != null) {
-                            windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
-                                uninstallFailure.message ?: windowsCloudFilesFailureMessage
-                            )
+                    linuxProvider?.let(linuxProviderCleanup::unmountOrRetain)
+                    synchronized(virtualFileProviderLock) {
+                        val windowsCloudFilesFailureMessage = "Could not remove the Windows Cloud Files root."
+                        val provider = windowsCloudFilesProvider
+                        try {
+                            if (provider != null) {
+                                provider.removeSyncRoot()
+                            }
+                            windowsCloudFilesFailure = null
+                        } catch (failure: Throwable) {
+                            windowsCloudFilesFailure = failure.message ?: windowsCloudFilesFailureMessage
                             supportDiagnostics.record(
                                 SupportDiagnosticEventDraft(
                                     severity = SupportDiagnosticSeverity.Error,
                                     component = SupportDiagnosticComponent.VirtualFiles,
-                                    operation = "cloud-files.signout-cleanup-retry",
+                                    operation = "cloud-files.signout-cleanup",
                                     outcome = "failed",
-                                    fields = accountId?.let {
-                                        listOf(
-                                            SupportDiagnosticFieldDraft(
-                                                "account",
-                                                it,
-                                                SupportDiagnosticValuePrivacy.Identifier,
-                                            ),
-                                        )
-                                    }.orEmpty(),
-                                    exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
+                                    fields = desktopAccountDiagnosticFields(accountId),
+                                    exception = failure.toSupportDiagnosticExceptionDraft(),
                                 ),
                             )
+                        } finally {
+                            runCatching { provider?.close() }
+                            windowsCloudFilesProvider = null
+                            windowsCloudFilesIdentity = null
+                            if (isWindowsDesktop() && accountId != null) {
+                                val uninstallFailure = runCatching {
+                                    unregisterWindowsCloudFilesRootsForAccountRemoval(
+                                        preferences = preferences,
+                                        accountId = accountId,
+                                        userHome = userHome,
+                                    )
+                                }.exceptionOrNull()
+                                windowsCloudFilesFailure = windowsCloudFilesFailureAfterFallbackCleanup(
+                                    windowsCloudFilesFailure, uninstallFailure, windowsCloudFilesFailureMessage,
+                                )
+                                if (uninstallFailure != null) {
+                                    supportDiagnostics.record(
+                                        SupportDiagnosticEventDraft(
+                                            severity = SupportDiagnosticSeverity.Error,
+                                            component = SupportDiagnosticComponent.VirtualFiles,
+                                            operation = "cloud-files.signout-cleanup-retry",
+                                            outcome = "failed",
+                                            fields = desktopAccountDiagnosticFields(accountId),
+                                            exception = uninstallFailure.toSupportDiagnosticExceptionDraft(),
+                                        ),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+                mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(phase = DesktopFileSyncTrayPhase.Idle)
+                val finishCommittedRemoval = {
+                    finishCommittedDesktopAccountRemoval(
+                        markRemovalCommitted = { cleared = true },
+                        teardownVirtualFiles = teardownVirtualFiles,
+                        clearDiagnosticIdentity = { supportDiagnostics.setActiveAccountIdentity(null) },
+                        clearIntakeIdentity = { supportIntake.setActiveAccountIdentity(null) },
+                    )
+                }
+                try {
+                    clearDesktopActiveAccountBeforeSyncPairCleanup(
+                        accountId, durableMutationScope, accountSyncPairCleanupJournal, ::desktopAccountOwnership,
+                        {
+                            commitDesktopAccountRemovalBeforeVirtualFileTeardown(
+                                commitRemoval = {
+                                    var committedFailure = false
+                                    try {
+                                        sessionPublicationGuard.serialize {
+                                            check(
+                                                activeAccountId == null || removeDesktopAccountCredential(
+                                                    preferences, accountId,
+                                                    credentialStillExists = {
+                                                        accountCredentials.listAccounts().any { it.id == activeAccountId }
+                                                    },
+                                                    commitStatusObserved = { credentialRemovalStatus = it },
+                                                    finishCommittedRemoval = { committedFailure = true },
+                                                ) { accountCredentials.removeAccount(activeAccountId) },
+                                            )
+                                        }
+                                    } catch (failure: Throwable) {
+                                        if (committedFailure) runCatching(finishCommittedRemoval)
+                                            .exceptionOrNull()?.let(failure::addSuppressed)
+                                        throw failure
+                                    }
+                                },
+                                teardownVirtualFiles = finishCommittedRemoval,
+                            )
+                        },
+                        ::removeDesktopAccountOwnedState, ::recordSupportDiagnostic,
+                    )
+                } finally {
+                    if (cleared && accountId != null) schedulePendingAccountSyncPairCleanupRetry()
+                }
+                }
             }
-            mutableFileSyncTraySnapshot.value = DesktopFileSyncTraySnapshot(
-                phase = DesktopFileSyncTrayPhase.Idle,
+        } catch (failure: Throwable) { removalFailure = failure; throw failure } finally {
+            val reopen = shouldResumeDesktopWritesAfterRemovalFailure(
+                cleared, remoteRevocationAttempted, credentialRemovalStatus,
             )
-            val server = preferences.get(KEY_SERVER, null)
-            val login = preferences.get(KEY_LOGIN, null)
-            runCatching {
-                if (server != null && login != null) secretStore.clear(desktopSessionSecretReference(server, login))
-            }.onFailure { failure ->
-                supportDiagnostics.record(
-                    SupportDiagnosticEventDraft(
-                        severity = SupportDiagnosticSeverity.Error,
-                        component = SupportDiagnosticComponent.Authentication,
-                        operation = "credentials.clear",
-                        outcome = "failed",
-                        exception = failure.toSupportDiagnosticExceptionDraft(),
-                    ),
+            if (reopen) {
+                val recoveryFailure = recoverDesktopAccountAfterPrecommitFailure(
+                    restoreProviderPreference = { providerPreferenceAccountId?.let {
+                        setDesktopVirtualFileProviderPreference(preferences, it, providerWasEnabledBeforeRemoval)
+                    } },
+                    resumeVirtualFileSystem = { if (linuxFileSystemQuiesced) quiescedLinuxFileSystem?.resumeWrites() },
+                    resumeWindowsCloudFiles = {
+                        if (windowsCloudFilesQuiesced) quiescedWindowsCloudFiles?.resumeWritesAfterAccountRemovalFailure()
+                    },
+                    reopenSession = { synchronized(fileRangeSessionLock) { sessionClearing = false } },
+                    restartLifecycle = {
+                        if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
+                    },
                 )
-                if (failure is DesktopSecretDeletionRecoveryUnavailableException ||
-                    failure is DesktopSecretLegacyCleanupUnavailableException) throw failure
-            }
-            sessionPublicationGuard.serialize {
-                preferences.remove(KEY_SERVER)
-                preferences.remove(KEY_LOGIN)
-                clearDesktopAccountRegistry(preferences)
-                supportDiagnostics.setActiveAccountIdentity(null)
-                supportIntake.setActiveAccountIdentity(null)
-            }
-            cleared = true
-        } finally {
-            if (!cleared) {
-                synchronized(fileRangeSessionLock) { sessionClearing = false }
-                if (desktopStoredSessionAccountId(preferences) != null) startDesktopSyncLifecycle()
+                recoveryFailure?.let { removalFailure?.addSuppressed(it) ?: throw it }
             }
         }
     }
+    private suspend fun retryPendingAccountSyncPairCleanup(accountId: String) {
+        accountSyncPairCleanupJournal.pending().singleOrNull { it.accountId == accountId }?.let { cleanup ->
+            retryDesktopAccountSyncPairCleanup(
+                cleanup, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState, accountSyncPairCleanupJournal::clear,
+            )
+        }
+        requireDesktopAccountActivationAllowed(accountSyncPairCleanupJournal.blocksAccountActivation(accountId))
+    }
+
+    private suspend fun retryPendingAccountSyncPairCleanups() =
+        retryPendingDesktopAccountSyncPairCleanups(
+            accountSyncPairCleanupJournal, ::desktopAccountOwnership, ::removeDesktopAccountOwnedState,
+            { accountId, failure ->
+                recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
+            },
+        )
+
+    private fun schedulePendingAccountSyncPairCleanupRetry() = serviceScope.launch {
+        retryDesktopAccountSyncPairCleanupsBounded {
+            var pending = true
+            recoverDesktopBackgroundAccountSyncPairCleanups(
+                retry = { accountOperationGuard.serializeWhenSyncIdle {
+                    retryPendingAccountSyncPairCleanups()
+                    pending = accountSyncPairCleanupJournal.pending().isNotEmpty()
+                } },
+                recordFailure = { recordSupportDiagnostic(desktopAccountSyncPairCleanupJournalFailureDiagnostic(it)) },
+            )
+            pending
+        }
+    }
+
+    private suspend fun removeDesktopAccountOwnedState(cleanup: DesktopAccountSyncPairCleanup) {
+        val accountId = cleanup.accountId
+        clearDesktopDynamicApiState(accountId, dynamicApiRequestCoalescer, dynamicApiReadCache)
+        removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
+        cleanup.durableMutationAccountScope?.let(durableMutationRecovery::removeAccount)
+        externalFileHandoff.removeAccount(accountId)
+        removeDesktopAccountPrivateStorage(accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId))
+        if (!isWindowsDesktop()) return
+        try {
+            unregisterWindowsCloudFilesRootsForAccountRemoval(
+                preferences = preferences,
+                accountId = accountId,
+            )
+        } catch (failure: Throwable) {
+            recordVirtualFileFailure(
+                operation = "cloud-files.account-removal-cleanup",
+                accountId = accountId,
+                root = desktopWindowsCloudFilesRoot(accountId).toPath(),
+                failure = failure,
+            )
+            throw failure
+        }
+    }
+
+    private fun desktopAccountOwnership(accountId: String): DesktopAccountOwnership =
+        sessionPublicationGuard.serialize { accountCredentials.accountOwnership(accountId) }
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
         deckCardDrafts.load(session, key)
     }
-
     override suspend fun saveDeckCardDraft(
         session: NextcloudSession,
         draft: PersistedDeckCardDraft,
     ) = withContext(Dispatchers.IO) {
         deckCardDrafts.save(session, draft)
     }
-
     override suspend fun clearDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
@@ -3908,11 +3919,9 @@ class DesktopNextcloudServices(
             runCatching { openExternalUrlNow(url) }
         }
     }
-
     override suspend fun openLoginUrl(url: String) = withContext(Dispatchers.IO) {
         openExternalUrlNow(url)
     }
-
     private fun openExternalUrlNow(url: String) {
         try {
             externalUrlLauncher.open(url)
@@ -3931,19 +3940,23 @@ class DesktopNextcloudServices(
         action: ExternalFileHandoffAction,
     ): ExternalFileHandoffResult {
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launchStreamed(file, action, capability) { output, maximumBytes ->
-            val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
-            downloadDesktopDetachedFile(
-                noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
-                output, maximumBytes, USER_AGENT,
-                failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
-                limitMessage = "The file exceeds the platform byte representation.",
-                requestHeaders = mapOf("If-Match" to expectedEtag),
-                handoffEtag = expectedEtag,
-                onNetworkFailure = { started, attempt, failure ->
-                    recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
-                },
-            )
+        return accountOperationGuard.withExternalFileHandoffSession(session, { loadSession(session.accountId) }) {
+            externalFileHandoff.launchStreamed(
+                desktopFileCacheAccountId(session), file, action, capability,
+            ) { output, maximumBytes ->
+                val expectedEtag = requireSafeFileRangeEtag(requireNotNull(file.etag))
+                downloadDesktopDetachedFile(
+                    noRedirectHttpClient, session, buildNextcloudFileUrl(session.serverUrl, userId, file.path),
+                    output, maximumBytes, USER_AGENT,
+                    failureMessage = { status -> "Opening the file in another app failed (HTTP $status)." },
+                    limitMessage = "The file exceeds the platform byte representation.",
+                    requestHeaders = mapOf("If-Match" to expectedEtag),
+                    handoffEtag = expectedEtag,
+                    onNetworkFailure = { started, attempt, failure ->
+                        recordDesktopStreamingFailure(session, "external_file", started, attempt, failure)
+                    },
+                )
+            }
         }
     }
 
@@ -3962,18 +3975,22 @@ class DesktopNextcloudServices(
             ocsApiRequest = true,
         ).requireSafe()
         val capability = (externalFileHandoffSupport as ExternalFileHandoffSupport.Available).capability
-        return externalFileHandoff.launchDetached(attachment, action, capability) { output, maximumBytes ->
-            downloadDesktopDetachedFile(
-                noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
-                output, maximumBytes, USER_AGENT,
-                failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
-                limitMessage = "The Deck attachment exceeds the platform byte representation.",
-                accept = "*/*",
-                requestHeaders = mapOf("OCS-APIRequest" to "true"),
-                onNetworkFailure = { started, attempt, failure ->
-                    recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
-                },
-            )
+        return accountOperationGuard.withExternalFileHandoffSession(session, { loadSession(session.accountId) }) {
+            externalFileHandoff.launchDetached(
+                desktopFileCacheAccountId(session), attachment, action, capability,
+            ) { output, maximumBytes ->
+                downloadDesktopDetachedFile(
+                    noRedirectHttpClient, session, buildNextcloudApiUrl(session.serverUrl, requestSpec),
+                    output, maximumBytes, USER_AGENT,
+                    failureMessage = { status -> "Opening the Deck attachment failed (HTTP $status)." },
+                    limitMessage = "The Deck attachment exceeds the platform byte representation.",
+                    accept = "*/*",
+                    requestHeaders = mapOf("OCS-APIRequest" to "true"),
+                    onNetworkFailure = { started, attempt, failure ->
+                        recordDesktopStreamingFailure(session, "deck_attachment", started, attempt, failure)
+                    },
+                )
+            }
         }
     }
 
@@ -4521,8 +4538,14 @@ class DesktopNextcloudServices(
                 }
             },
         )
-        val registered = synchronized(fileRangeSessionLock) {
-            if (sessionClearing) false else activeFileRangeSessions.add(rangeSession)
+        val registered = accountOperationGuard.tryActivateResource {
+            if (!desktopResourceActivationMatchesActiveSession(loadSession(), session)) {
+                false
+            } else {
+                synchronized(fileRangeSessionLock) {
+                    if (sessionClearing) false else activeFileRangeSessions.add(rangeSession)
+                }
+            }
         }
         if (!registered) {
             rangeSession.close()
@@ -4691,24 +4714,28 @@ class DesktopNextcloudServices(
         )
         val expectedHandoffEtag = requireSafeFileRangeEtag(requireNotNull(historicalCopy.etag))
         val specification = fileVersionContentRequest(userId, fileId, version.id)
-        return externalFileHandoff.launchStreamed(historicalCopy, action, capability) { output, maximumBytes ->
-            downloadDesktopDetachedFile(
-                noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
-                output, maximumBytes, USER_AGENT,
-                failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
-                limitMessage = "The historical version exceeds the platform byte representation.",
-                handoffEtag = expectedHandoffEtag,
-                validateResponseEtag = { returnedEtag ->
-                    if (version.etag != null && returnedEtag != null) {
-                        check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
-                            "The historical version changed while it was being exported."
+        return accountOperationGuard.withExternalFileHandoffSession(session, { loadSession(session.accountId) }) {
+            externalFileHandoff.launchStreamed(
+                desktopFileCacheAccountId(session), historicalCopy, action, capability,
+            ) { output, maximumBytes ->
+                downloadDesktopDetachedFile(
+                    noRedirectHttpClient, session, session.serverUrl + specification.relativePath,
+                    output, maximumBytes, USER_AGENT,
+                    failureMessage = { status -> "Downloading the historical version failed (HTTP $status)." },
+                    limitMessage = "The historical version exceeds the platform byte representation.",
+                    handoffEtag = expectedHandoffEtag,
+                    validateResponseEtag = { returnedEtag ->
+                        if (version.etag != null && returnedEtag != null) {
+                            check(requireSafeFileRangeEtag(returnedEtag) == requireSafeFileRangeEtag(version.etag)) {
+                                "The historical version changed while it was being exported."
+                            }
                         }
-                    }
-                },
-                onNetworkFailure = { started, attempt, failure ->
-                    recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
-                },
-            )
+                    },
+                    onNetworkFailure = { started, attempt, failure ->
+                        recordDesktopStreamingFailure(session, "file_version", started, attempt, failure)
+                    },
+                )
+            }
         }
     }
 
@@ -5537,7 +5564,6 @@ class DesktopNextcloudServices(
                 hasMoreHistory = response.status != 304 && nextCursor != null,
             )
         }
-
     override suspend fun sendTalkMessage(session: NextcloudSession, token: String, message: String) =
         withContext(Dispatchers.IO) {
             val response = request(
@@ -5551,20 +5577,23 @@ class DesktopNextcloudServices(
             check(response.status in 200..299) { "Sending the Talk message failed (HTTP ${response.status})." }
             Unit
         }
-
-    override suspend fun revokeSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
-        request("DELETE", session.serverUrl + "/ocs/v2.php/core/apppassword", session, ocsRequest = true)
-        Unit
+    override suspend fun revokeSession(session: NextcloudSession): Unit = withContext(Dispatchers.IO) {
+        accountOperationGuard.serialize {
+            clearSessionForAccountOperation(expectedSession = session) { current ->
+                request("DELETE", current.serverUrl + "/ocs/v2.php/core/apppassword", current,
+                    ocsRequest = true, accountMutationSerialized = true,
+                )
+            }
+        }
     }
-
-    private fun ocsGet(session: NextcloudSession, path: String): JSONObject {
+    private suspend fun ocsGet(session: NextcloudSession, path: String): JSONObject {
         val separator = if ('?' in path) '&' else '?'
         val response = request("GET", session.serverUrl + path + separator + "format=json", session, ocsRequest = true)
         check(response.status in 200..299) { "Nextcloud API request failed (HTTP ${response.status})." }
         return JSONObject(response.text)
     }
 
-    private fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
+    private suspend fun loadFileEtag(session: NextcloudSession, userId: String, path: String): String? {
         val response = request(
             "PROPFIND",
             buildNextcloudFileUrl(session.serverUrl, userId, path),
@@ -5584,7 +5613,7 @@ class DesktopNextcloudServices(
             .documentElement.firstText(DAV, "getetag")
     }
 
-    private fun request(
+    private suspend fun request(
         method: String,
         url: String,
         session: NextcloudSession? = null,
@@ -5603,7 +5632,13 @@ class DesktopNextcloudServices(
         onNetworkFailure: (JvmNetworkFailureDiagnostic) -> Unit = {},
         onFailurePhase: (JvmNetworkFailurePhase) -> Unit = {},
         diagnosticIgnoredHttpStatuses: Set<Int> = emptySet(),
+        accountMutationSerialized: Boolean = false,
     ): HttpResponse {
+        if (session != null && !method.isReadOnlyJvmNetworkMethod() && !accountMutationSerialized) {
+            return accountOperationGuard.withAuthenticatedMutationSession(session, ::loadSession) { current -> request(
+                method, url, current, body, contentType, ocsRequest, headers, rawBody, maxResponseBytes, expectedSuccessResponseBytes, expectedSuccessResponseStatus, client, streamingBody, mutationExecutor,
+                onAmbiguousMutationResult, onNetworkFailure, onFailurePhase, diagnosticIgnoredHttpStatuses, true) }
+        }
         val started = System.nanoTime()
         require((expectedSuccessResponseBytes == null) == (expectedSuccessResponseStatus == null))
         val requestBody = when {
@@ -5942,8 +5977,6 @@ class DesktopNextcloudServices(
         const val APP_ID = "dev.obiente.nextcloudnative"
         const val KEY_THEME = "theme"
         const val KEY_LAST_OPENED_APP = "last_opened_app"
-        const val KEY_SERVER = "server"
-        const val KEY_LOGIN = "login"
         const val KEY_FILE_SYNC_PAUSED = "file_sync_paused"
         const val KEY_START_ON_LOGIN = "start_on_login"
         const val KEY_KEEP_RUNNING_IN_BACKGROUND = "keep_running_in_background"
@@ -6086,8 +6119,6 @@ internal fun requireVirtualFolderListingCapacity(
 internal fun isCompleteRetainedTreeListing(listingPath: String, retainedRoot: String): Boolean =
     listingPath == retainedRoot || listingPath.startsWith("$retainedRoot/")
 
-internal fun Job?.occupiesVirtualFolderHydrationSlot(): Boolean = this != null && !isCompleted
-
 internal fun removeVirtualFolderHydrationJobIfOwned(
     jobs: MutableMap<String, Job>,
     key: String,
@@ -6113,16 +6144,6 @@ internal fun advanceAffectedVirtualFolderGenerations(
         } else {
             generations[key] = current + 1L
         }
-    }
-}
-
-internal fun handleDesktopFileVersionRestoreStatus(status: Int, onRestored: () -> Unit) {
-    when (status) {
-        in 200..299 -> onRestored()
-        403 -> error("You do not have permission to restore this file version.")
-        404 -> error("This historical version no longer exists.")
-        409 -> error("The server could not restore this version to the current file.")
-        else -> error("Restoring the file version failed (HTTP $status).")
     }
 }
 
@@ -6167,73 +6188,6 @@ internal fun publishDesktopLinuxFallbackMetadataBestEffort(
         runCatching { store.store(path, snapshot) }
     }
 }
-
-internal fun parseDesktopFileVersionDavRecords(xml: ByteArray): List<FileVersionDavRecord> {
-    val factory = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = true
-        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        setFeature("http://xml.org/sax/features/external-general-entities", false)
-        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-    }
-    val responses = factory.newDocumentBuilder().parse(ByteArrayInputStream(xml))
-        .getElementsByTagNameNS(FILE_VERSION_DESKTOP_DAV_NAMESPACE, "response")
-    return buildList {
-        for (index in 0 until responses.length) {
-            val response = responses.item(index)
-            val properties = response.successfulFileVersionPropertyRoot() ?: continue
-            add(
-                FileVersionDavRecord(
-                    href = response.fileVersionFirstText(FILE_VERSION_DESKTOP_DAV_NAMESPACE, "href").orEmpty(),
-                    contentLength = properties.fileVersionFirstText(
-                        FILE_VERSION_DESKTOP_DAV_NAMESPACE,
-                        "getcontentlength",
-                    ),
-                    lastModified = properties.fileVersionFirstText(
-                        FILE_VERSION_DESKTOP_DAV_NAMESPACE,
-                        "getlastmodified",
-                    ),
-                    etag = properties.fileVersionFirstText(FILE_VERSION_DESKTOP_DAV_NAMESPACE, "getetag"),
-                    author = properties.fileVersionFirstText(FILE_VERSION_DESKTOP_NC_NAMESPACE, "version-author"),
-                    label = properties.fileVersionFirstText(FILE_VERSION_DESKTOP_NC_NAMESPACE, "version-label"),
-                ),
-            )
-        }
-    }
-}
-
-private fun org.w3c.dom.Node.successfulFileVersionPropertyRoot(): org.w3c.dom.Node? {
-    val element = this as? org.w3c.dom.Element ?: return null
-    val propstats = element.getElementsByTagNameNS(FILE_VERSION_DESKTOP_DAV_NAMESPACE, "propstat")
-    if (propstats.length > 0) {
-        for (index in 0 until propstats.length) {
-            val propstat = propstats.item(index)
-            val status = propstat.fileVersionFirstText(FILE_VERSION_DESKTOP_DAV_NAMESPACE, "status").orEmpty()
-            if (status.isFileVersionDavSuccessStatus()) return propstat
-        }
-        return null
-    }
-    return if (
-        element.getElementsByTagNameNS(FILE_VERSION_DESKTOP_DAV_NAMESPACE, "status")
-            .item(0)?.textContent.orEmpty().isFileVersionDavSuccessStatus()
-    ) {
-        element
-    } else {
-        null
-    }
-}
-
-private fun String.isFileVersionDavSuccessStatus(): Boolean =
-    trim().split(' ').any { token -> token.toIntOrNull()?.let { it in 200..299 } == true }
-
-private fun org.w3c.dom.Node.fileVersionFirstText(namespace: String, localName: String): String? =
-    (this as? org.w3c.dom.Element)
-        ?.getElementsByTagNameNS(namespace, localName)
-        ?.item(0)
-        ?.textContent
-        ?.takeIf(String::isNotBlank)
-
-private const val FILE_VERSION_DESKTOP_DAV_NAMESPACE = "DAV:"
-private const val FILE_VERSION_DESKTOP_NC_NAMESPACE = "http://nextcloud.org/ns"
 
 internal fun parseDesktopSystemTagsDavResponse(xml: ByteArray): List<NextcloudSystemTag> {
     val factory = DocumentBuilderFactory.newInstance().apply {

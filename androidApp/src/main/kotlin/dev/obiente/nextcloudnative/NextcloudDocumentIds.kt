@@ -18,17 +18,26 @@ internal object NextcloudDocumentIds {
     private val decoder = Base64.getUrlDecoder()
 
     fun accountKey(session: NextcloudSession): String {
-        return accountDigest(session)
+        return accountKey(session.serverUrl, session.loginName)
+    }
+
+    fun accountKey(serverUrl: String, loginName: String): String {
+        return accountDigest(serverUrl, loginName)
             .take(16)
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
     /** Full digest for private caches which require a canonical SHA-256 directory key. */
     fun cacheAccountId(session: NextcloudSession): String =
-        accountDigest(session)
+        accountDigest(session.serverUrl, session.loginName)
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    fun rootId(session: NextcloudSession): String = documentId(session, "")
+    fun rootId(session: NextcloudSession): String = rootId(accountKey(session))
+
+    fun rootId(accountKey: String): String {
+        require(accountKeyPattern.matches(accountKey)) { "Invalid document account." }
+        return "$PREFIX:$accountKey:"
+    }
 
     fun documentId(session: NextcloudSession, path: String): String {
         val normalizedPath = normalizePath(path)
@@ -56,8 +65,8 @@ internal object NextcloudDocumentIds {
             require(reference.accountKey == accountKey(session)) { "Document belongs to another account." }
         }
 
-    private fun accountDigest(session: NextcloudSession): ByteArray {
-        val identity = session.serverUrl.trimEnd('/') + "\n" + session.loginName
+    private fun accountDigest(serverUrl: String, loginName: String): ByteArray {
+        val identity = serverUrl.trimEnd('/') + "\n" + loginName
         return MessageDigest.getInstance("SHA-256").digest(identity.encodeToByteArray())
     }
 

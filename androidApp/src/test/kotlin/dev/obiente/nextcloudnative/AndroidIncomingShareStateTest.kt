@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.MAX_NEXTCLOUD_UPLOAD_CHUNKS
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.NextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
+import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import java.nio.file.Files
 import java.security.MessageDigest
@@ -13,8 +15,47 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 
 class AndroidIncomingShareStateTest {
+    @Test
+    fun retainedOrUnknownAccountWithUnreadableCredentialsRetriesIncomingShareUpload() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountIdentity = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertTrue(
+            shouldRetryIncomingShareForMissingSession(
+                accountIdentity,
+                AndroidAccountRetentionSnapshot.Available(listOf(retainedSession.accountRecord())),
+            ),
+        )
+        assertTrue(
+            shouldRetryIncomingShareForMissingSession(
+                accountIdentity,
+                AndroidAccountRetentionSnapshot.Unavailable,
+            ),
+        )
+        assertFalse(
+            shouldRetryIncomingShareForMissingSession(
+                accountIdentity,
+                AndroidAccountRetentionSnapshot.Available(emptyList()),
+            ),
+        )
+        assertFalse(
+            shouldRetryIncomingShareForMissingSession(
+                accountIdentity,
+                AndroidAccountRetentionSnapshot.Available(
+                    listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+                ),
+            ),
+        )
+    }
+
     @Test
     fun staleWorkerTransitionCannotOverwriteCancellation() {
         val canceled = request(AndroidIncomingShareState.Canceled)
@@ -706,6 +747,122 @@ class AndroidIncomingShareStateTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun accountRemovalCancelsEveryShareWorkerBeforeReleasingChunksAndStaging() = runBlocking {
+        val uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            userId = "alice",
+            destinationPath = "Shared",
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = uploadId,
+            ),
+        )
+        val corruptId = "fedcba98-7654-3210-fedc-ba9876543210"
+        val events = mutableListOf<String>()
+
+        removeAndroidIncomingShareRequests(
+            requests = listOf(
+                AndroidIncomingShareAccountRequest(staged.id, staged),
+                AndroidIncomingShareAccountRequest(corruptId, request = null),
+            ),
+            cancelWork = { requestId -> events += "cancel:$requestId" },
+            releaseChunk = { request, chunkId -> events += "release:${request.id}:$chunkId" },
+            removeRequest = { requestId -> events += "remove:$requestId" },
+        )
+
+        assertEquals(
+            listOf(
+                "cancel:${staged.id}",
+                "cancel:$corruptId",
+                "release:${staged.id}:$uploadId",
+                "remove:${staged.id}",
+                "remove:$corruptId",
+            ),
+            events,
+        )
+        assertEquals(
+            setOf(
+                incomingShareUploadWorkName(staged.id),
+                incomingShareRetryWorkName(staged.id),
+                incomingShareCleanupWorkName(staged.id),
+                incomingShareChunkCleanupWorkName(staged.id),
+                incomingShareReleaseWorkName(staged.id),
+                incomingShareAbandonedStagingWorkName(staged.id),
+            ),
+            incomingShareAccountWorkNames(staged.id).toSet(),
+        )
+    }
+
+    @Test
+    fun accountRemovalRetainsLocalShareAfterRemoteChunkCleanupFails() = runBlocking {
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            removeAndroidIncomingShareRequests(
+                requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+                cancelWork = { events += "cancel" },
+                releaseChunk = { _, _ -> error("synthetic offline cleanup failure") },
+                recordChunkReleaseFailure = { events += "release-failed" },
+                removeRequest = { events += "remove" },
+            )
+        }
+
+        assertEquals(listOf("cancel", "release-failed"), events)
+    }
+
+    @Test
+    fun credentiallessRecoveryAbandonsRemoteChunkAndRemovesPrivateStagingOnce() = runBlocking {
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+        val events = mutableListOf<String>()
+
+        removeAndroidIncomingShareRequests(
+            requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+            cancelWork = { events += "cancel" },
+            releaseChunk = null,
+            recordChunkAbandonment = { _, _ -> events += "abandon-remote" },
+            removeRequest = { events += "remove" },
+        )
+
+        assertEquals(listOf("cancel", "abandon-remote", "remove"), events)
+    }
+
+    @Test
+    fun accountRemovalPreservesChunkCleanupCancellation() = runBlocking {
+        val staged = request(AndroidIncomingShareState.Uploading).copy(
+            chunkSession = AndroidIncomingShareChunkSession(
+                fileIndex = 0,
+                targetName = "first.txt",
+                uploadId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+        var removed = false
+
+        assertFailsWith<CancellationException> {
+            removeAndroidIncomingShareRequests(
+                requests = listOf(AndroidIncomingShareAccountRequest(staged.id, staged)),
+                cancelWork = {},
+                releaseChunk = { _, _ -> throw CancellationException("synthetic cancellation") },
+                removeRequest = { removed = true },
+            )
+        }
+        assertFalse(removed)
     }
 
     private fun request(state: AndroidIncomingShareState) = AndroidIncomingShareRequest(

@@ -30,6 +30,7 @@ import dev.obiente.nextcloudnative.app.afterProcessRecovery
 import dev.obiente.nextcloudnative.app.localUploadFile
 import dev.obiente.nextcloudnative.app.toSupportDiagnosticExceptionDraft
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -90,6 +91,18 @@ internal class AndroidDurableMultipartUploads(context: Context) {
             .map(AndroidDurableMultipartUploadJob::status)
             .toList()
 
+    suspend fun resumeQueuedForAccount(accountId: String) {
+        queuedDurableUploadsForAccount(store.list(), accountId).forEach { job ->
+            try {
+                schedule(job, ExistingWorkPolicy.APPEND_OR_REPLACE).await()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The queue stays authoritative; status refresh or a later activation can retry.
+            }
+        }
+    }
+
     fun dismiss(session: NextcloudSession, scope: DurableUploadScope, uploadId: String): Boolean {
         val job = store.find(uploadId) ?: return false
         if (
@@ -104,10 +117,13 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         return true
     }
 
-    private fun schedule(job: AndroidDurableMultipartUploadJob): Operation =
+    private fun schedule(
+        job: AndroidDurableMultipartUploadJob,
+        policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
+    ): Operation =
         WorkManager.getInstance(appContext).enqueueUniqueWork(
-            "deck-attachment-${job.id}",
-            ExistingWorkPolicy.KEEP,
+            durableUploadWorkName(job.id),
+            policy,
             OneTimeWorkRequestBuilder<DeckAttachmentUploadWorker>()
                 .setInputData(Data.Builder().putString(DeckAttachmentUploadWorker.KEY_JOB_ID, job.id).build())
                 .setConstraints(
@@ -122,6 +138,8 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
     }
 }
+
+internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
 
 internal class DeckAttachmentUploadWorker(
     appContext: Context,
@@ -151,13 +169,43 @@ internal class DeckAttachmentUploadWorker(
         }
         if (initial.state != DurableUploadState.Queued) return@withContext Result.success()
 
-        val session = AndroidNextcloudServices(applicationContext).loadSession()
+        return@withContext uploadQueuedJob(store, initial, picker, jobId)
+    }
+
+    private suspend fun uploadQueuedJob(
+        store: AndroidDurableMultipartUploadStore,
+        initial: AndroidDurableMultipartUploadJob,
+        picker: AndroidLocalUploadPicker,
+        jobId: String,
+    ): Result = ANDROID_ACCOUNT_OPERATION_GUARD.withAccount(initial.accountId) {
+        performQueuedUpload(store, initial, picker, jobId)
+    }
+
+    private suspend fun performQueuedUpload(
+        store: AndroidDurableMultipartUploadStore,
+        initial: AndroidDurableMultipartUploadJob,
+        picker: AndroidLocalUploadPicker,
+        jobId: String,
+    ): Result {
+        val accountServices = AndroidNextcloudServices(applicationContext)
+        val session = accountServices.loadSession()
         if (session == null || NextcloudDocumentIds.accountKey(session) != initial.accountId) {
+            if (durableUploadAccountMismatchOutcome(initial.accountId, accountServices.accountRetentionSnapshot()) ==
+                DurableUploadAccountMismatchOutcome.DeferAccountRecovery
+            ) {
+                recordUploadDiagnostic(
+                    severity = SupportDiagnosticSeverity.Warning,
+                    outcome = "account-deferred",
+                    accountId = initial.accountId,
+                    jobId = jobId,
+                )
+                return Result.success()
+            }
             store.transition(
                 jobId,
                 expected = DurableUploadState.Queued,
                 target = DurableUploadState.Failed,
-                message = "The account used for this upload is no longer active.",
+                message = "The account used for this upload is no longer available.",
             )
             picker.release(initial.request.file)
             recordUploadDiagnostic(
@@ -166,7 +214,7 @@ internal class DeckAttachmentUploadWorker(
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return@withContext Result.failure()
+            return Result.failure()
         }
         val capabilityReady = runCatching {
             picker.requirePersisted(initial.request.file)
@@ -186,15 +234,19 @@ internal class DeckAttachmentUploadWorker(
                 accountId = initial.accountId,
                 jobId = jobId,
             )
-            return@withContext Result.failure()
+            return Result.failure()
         }
         val started = store.transition(
             jobId,
             expected = DurableUploadState.Queued,
             target = DurableUploadState.Uploading,
             message = null,
-        ) ?: return@withContext Result.success()
-        val services = AndroidNextcloudServices(applicationContext, localUploadPicker = picker)
+        ) ?: return Result.success()
+        val services = AndroidNextcloudServices(
+            applicationContext,
+            localUploadPicker = picker,
+            accountMutationLeaseHeld = true,
+        )
         val outcome = runCatching {
             services.executeNextcloudMultipartUpload(session, started.request)
         }
@@ -252,7 +304,7 @@ internal class DeckAttachmentUploadWorker(
             )
             picker.release(started.request.file)
         }
-        Result.success()
+        return Result.success()
     }
 
     private fun recordUploadDiagnostic(
@@ -282,6 +334,32 @@ internal class DeckAttachmentUploadWorker(
     internal companion object {
         const val KEY_JOB_ID = "job_id"
     }
+}
+
+internal enum class DurableUploadAccountMismatchOutcome {
+    DeferAccountRecovery,
+    AccountUnavailable,
+}
+
+internal fun durableUploadAccountMismatchOutcome(
+    expectedAccountId: String,
+    accountSnapshot: AndroidAccountRetentionSnapshot,
+): DurableUploadAccountMismatchOutcome = when (accountSnapshot) {
+    is AndroidAccountRetentionSnapshot.Available -> {
+        if (androidAccountIdentityIsRetained(expectedAccountId, accountSnapshot.accounts)) {
+            DurableUploadAccountMismatchOutcome.DeferAccountRecovery
+        } else {
+            DurableUploadAccountMismatchOutcome.AccountUnavailable
+        }
+    }
+    AndroidAccountRetentionSnapshot.Unavailable -> DurableUploadAccountMismatchOutcome.DeferAccountRecovery
+}
+
+internal fun queuedDurableUploadsForAccount(
+    jobs: List<AndroidDurableMultipartUploadJob>,
+    accountId: String,
+): List<AndroidDurableMultipartUploadJob> = jobs.filter { job ->
+    job.accountId == accountId && job.state == DurableUploadState.Queued
 }
 
 internal data class AndroidDurableMultipartUploadJob(
@@ -379,6 +457,13 @@ internal class AndroidDurableMultipartUploadStore(
 
     fun remove(id: String) = synchronized(LOCK) {
         writeAll(readAll().filterNot { it.id == id })
+    }
+
+    fun removeForAccount(accountId: String): List<AndroidDurableMultipartUploadJob> = synchronized(LOCK) {
+        val current = readAll()
+        val removed = current.filter { job -> job.accountId == accountId }
+        if (removed.isNotEmpty()) writeAll(current.filterNot { job -> job.accountId == accountId })
+        removed
     }
 
     fun transition(

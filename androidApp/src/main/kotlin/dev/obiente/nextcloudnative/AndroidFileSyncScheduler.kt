@@ -5,7 +5,9 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -53,17 +55,21 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         persist: () -> Unit,
         cancelAll: () -> Unit,
         publishAccount: (String) -> Unit = {},
+        restoreSchedules: (String) -> Unit = {},
+        onScheduleMaintenanceFailure: (Exception) -> Unit = {},
     ) {
         synchronized(monitor) {
             val accountChanged = accountId != replacementAccountId
+            persist()
             generation += 1
-            accountId = null
+            accountId = replacementAccountId
             try {
-                persist()
-                accountId = replacementAccountId
                 publishAccount(replacementAccountId)
             } finally {
-                if (accountChanged) cancelAll()
+                if (accountChanged) {
+                    runScheduleMaintenance(onScheduleMaintenanceFailure, cancelAll)
+                }
+                runScheduleMaintenance(onScheduleMaintenanceFailure) { restoreSchedules(replacementAccountId) }
             }
         }
     }
@@ -72,16 +78,14 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         persist: () -> Unit,
         cancelAll: () -> Unit,
         clearPublishedAccount: () -> Unit = {},
+        onScheduleMaintenanceFailure: (Exception) -> Unit = {},
     ) {
         synchronized(monitor) {
+            persist()
             generation += 1
             accountId = null
-            try {
-                persist()
-                clearPublishedAccount()
-            } finally {
-                cancelAll()
-            }
+            runScheduleMaintenance(onScheduleMaintenanceFailure, clearPublishedAccount)
+            runScheduleMaintenance(onScheduleMaintenanceFailure, cancelAll)
         }
     }
 
@@ -101,6 +105,14 @@ internal class AndroidFileSyncSessionSchedulingGuard {
         } else {
             action()
             true
+        }
+    }
+
+    private fun runScheduleMaintenance(onFailure: (Exception) -> Unit, action: () -> Unit) {
+        try {
+            action()
+        } catch (failure: Exception) {
+            runCatching { onFailure(failure) }
         }
     }
 }
@@ -161,6 +173,28 @@ internal class AndroidFileSyncScheduler(context: Context) {
         workManager.enqueueUniquePeriodicWork(
             workName(pairId),
             ExistingPeriodicWorkPolicy.UPDATE,
+            request,
+        )
+    }
+
+    fun restorePersistedPairSchedules(accountId: String) {
+        val request = OneTimeWorkRequestBuilder<AndroidFileSyncScheduleRestorationWorker>()
+            .setInputData(
+                Data.Builder()
+                    .putString(AndroidFileSyncScheduleRestorationWorker.KEY_ACCOUNT_ID, accountId)
+                    .build(),
+            )
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .addTag(TAG)
+            .build()
+        workManager.enqueueUniqueWork(
+            "file-sync-restore-$accountId",
+            ExistingWorkPolicy.REPLACE,
             request,
         )
     }

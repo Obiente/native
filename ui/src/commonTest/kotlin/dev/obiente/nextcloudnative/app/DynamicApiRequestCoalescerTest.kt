@@ -3,10 +3,15 @@ package dev.obiente.nextcloudnative.app
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.fail
 
 class DynamicApiRequestCoalescerTest {
@@ -70,6 +75,99 @@ class DynamicApiRequestCoalescerTest {
         assertEquals("new", read.await())
         assertEquals(2, loadNumber)
         assertEquals(listOf("new"), committed)
+    }
+
+    @Test
+    fun `account removal fence terminates already entered reads without committing`() = runBlocking {
+        supervisorScope {
+            val coalescer = DynamicApiRequestCoalescer<String>()
+            val readStarted = CompletableDeferred<Unit>()
+            val finishRead = CompletableDeferred<Unit>()
+            val committed = mutableListOf<String>()
+            var loads = 0
+
+            val owner = async {
+                coalescer.execute("account-a", "GET items", load = {
+                    loads += 1
+                    readStarted.complete(Unit)
+                    finishRead.await()
+                    "removed-account-data"
+                }, commit = committed::add)
+            }
+            readStarted.await()
+            val waiter = async(start = CoroutineStart.UNDISPATCHED) {
+                coalescer.execute("account-a", "GET items", load = { fail("must coalesce") })
+            }
+            coalescer.fenceAccount("account-a") { committed.clear() }
+            finishRead.complete(Unit)
+
+            assertFailsWith<DynamicReadAccountFencedException> { owner.await() }
+            assertFailsWith<DynamicReadAccountFencedException> { waiter.await() }
+            assertEquals(1, loads)
+            assertEquals(emptyList(), committed)
+        }
+    }
+
+    @Test
+    fun `read invoked after an account removal fence stays closed until activation`() = runBlocking {
+        val coalescer = DynamicApiRequestCoalescer<String>()
+
+        coalescer.fenceAccount("account-a") {}
+
+        assertFailsWith<DynamicReadAccountFencedException> {
+            coalescer.execute("account-a", "GET items", load = { fail("must remain closed") })
+        }
+        coalescer.activateAccount("account-a")
+        assertEquals(
+            "re-added-account-data",
+            coalescer.execute("account-a", "GET items", load = { "re-added-account-data" }),
+        )
+    }
+
+    @Test
+    fun `readding an account does not let its stale read commit`() = runBlocking {
+        supervisorScope {
+            val coalescer = DynamicApiRequestCoalescer<String>()
+            val readStarted = CompletableDeferred<Unit>()
+            val finishRead = CompletableDeferred<Unit>()
+            val committed = mutableListOf<String>()
+            val stale = async {
+                coalescer.execute("account-a", "GET items", load = {
+                    readStarted.complete(Unit)
+                    finishRead.await()
+                    "removed-account-data"
+                }, commit = committed::add)
+            }
+
+            readStarted.await()
+            coalescer.fenceAccount("account-a") { committed.clear() }
+            coalescer.activateAccount("account-a")
+            val replacement = async {
+                coalescer.execute("account-a", "GET items", load = { "replacement-account-data" }, commit = committed::add)
+            }
+            finishRead.complete(Unit)
+
+            assertFailsWith<DynamicReadAccountFencedException> { stale.await() }
+            assertEquals("replacement-account-data", replacement.await())
+            assertEquals(listOf("replacement-account-data"), committed)
+        }
+    }
+
+    @Test
+    fun `cancelled owner remains cancelled and releases its in flight entry`() = runBlocking {
+        val coalescer = DynamicApiRequestCoalescer<String>()
+        var loads = 0
+        val cancelled = launch(start = CoroutineStart.UNDISPATCHED) {
+            coalescer.execute("account-a", "GET items", load = {
+                loads += 1
+                awaitCancellation()
+            })
+        }
+
+        cancelled.cancelAndJoin()
+
+        assertEquals("fresh", coalescer.execute("account-a", "GET items", load = { "fresh" }))
+        assertEquals(1, loads)
     }
 
     @Test

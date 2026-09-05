@@ -36,18 +36,6 @@ internal data class DesktopVirtualRangeCacheSummary(
     val tierAttention: String? = null,
 )
 
-internal data class VirtualRangeRevision(
-    val relativePath: String,
-    val remoteRevision: String,
-    val fileSize: Long,
-) {
-    init {
-        FileOfflineKey("account", relativePath)
-        require(remoteRevision.isNotBlank() && remoteRevision.none(Char::isISOControl))
-        require(fileSize > 0L)
-    }
-}
-
 private data class ActiveVirtualRangeRevision(
     val file: FileOfflineKey,
     val remoteRevision: String,
@@ -1216,14 +1204,34 @@ internal class DesktopVirtualRangeCache(
     @Synchronized
     fun removeCopiedPrimaryAccount(accountId: String) {
         check(activePaths.keys.none { it.accountId == accountId } && activeRevisions.keys.none { it.file.accountId == accountId })
-        val directory = accountDirectory(accountId)
-        if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return
-        directory.listFiles().orEmpty()
-            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
-            .forEach(File::delete)
-        directory.delete()
+        purgeDesktopAccountCacheDirectory(root, accountId)
         loadedIndexes.remove(accountId)
         recoveredAccounts.remove(accountId)
+    }
+
+    @Synchronized
+    fun removeAccount(accountId: String) {
+        check(
+            activePaths.keys.none { it.accountId == accountId } &&
+                activeRevisions.keys.none { it.file.accountId == accountId },
+        ) { "Close files from this account before removing its cache." }
+        val configuredOverflow = overflowRoot
+        try {
+            if (configuredOverflow != null) {
+                check(isOverflowRootAvailable(configuredOverflow)) {
+                    "Reconnect the overflow cache drive before removing this account."
+                }
+            }
+            purgeDesktopAccountCacheDirectory(root, accountId)
+            configuredOverflow?.let { overflow -> purgeDesktopAccountCacheDirectory(overflow, accountId) }
+        } finally {
+            loadedIndexes.remove(accountId)
+            recoveredAccounts.remove(accountId)
+            recoveredOverflowAccounts.remove(accountId)
+            dirtyAccessTimeAccounts.remove(accountId)
+            lastAccessTimePersistence.remove(accountId)
+            deferredInvalidationRevisions.removeAll { revision -> revision.file.accountId == accountId }
+        }
     }
 
     @Synchronized
@@ -2524,17 +2532,6 @@ internal class DesktopVirtualRangeCache(
                 "retained-metadata-v1\\.json)\\.[^.]+\\.tmp",
         )
     }
-}
-
-internal fun defaultDesktopVirtualRangeCache(
-    policy: () -> VirtualFileCachePolicy,
-): DesktopVirtualRangeCache {
-    val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
-    val cacheRoot = xdgCache?.let(::File) ?: File(System.getProperty("user.home"), ".cache")
-    return DesktopVirtualRangeCache(
-        root = File(cacheRoot, "nextcloud-native/virtual-ranges"),
-        policy = policy,
-    )
 }
 
 @Serializable

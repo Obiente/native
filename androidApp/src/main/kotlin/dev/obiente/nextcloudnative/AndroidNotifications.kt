@@ -268,6 +268,10 @@ internal class AndroidNotificationCoordinator(private val context: Context) {
         }
     }
 
+    fun cancel(accountKey: String, notificationId: Int) {
+        NotificationManagerCompat.from(context).cancel(accountKey, notificationId)
+    }
+
     private fun openAppIntent(
         action: String,
         requestCode: Int,
