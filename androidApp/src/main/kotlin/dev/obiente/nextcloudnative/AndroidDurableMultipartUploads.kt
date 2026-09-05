@@ -21,7 +21,6 @@ import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.localUploadFile
 import java.util.UUID
-import java.util.concurrent.Executor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -72,28 +71,15 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         }
     }
 
-    fun statuses(session: NextcloudSession, scope: DurableUploadScope): List<DurableUploadStatus> =
-        store.list(NextcloudDocumentIds.accountKey(session), scope)
-            .asSequence()
-            .onEach { job ->
-                if (job.state == DurableUploadState.Queued) {
-                    runCatching {
-                        val operation = schedule(job)
-                        observeDurableUploadSchedulingResult(
-                            result = operation.result,
-                            addListener = { listener ->
-                                operation.result.addListener(listener, DIRECT_COMPLETION_EXECUTOR)
-                            },
-                        )
-                    }.onFailure {
-                        requestQueuedDurableUploadSchedulingRecovery()
-                    }
-                }
-            }
+    fun statuses(session: NextcloudSession, scope: DurableUploadScope): List<DurableUploadStatus> {
+        val jobs = store.list(NextcloudDocumentIds.accountKey(session), scope)
+        requestDurableUploadSchedulingRecoveryForQueuedStatuses(jobs)
+        return jobs.asSequence()
             .sortedByDescending(AndroidDurableMultipartUploadJob::updatedAtEpochMillis)
             .take(MAX_VISIBLE_UPLOADS_PER_RESOURCE)
             .map(AndroidDurableMultipartUploadJob::status)
             .toList()
+    }
 
     suspend fun resumeQueuedForAccount(accountId: String) {
         queuedDurableUploadsForAccount(store.list(), accountId).forEach { job ->
@@ -158,13 +144,19 @@ internal class AndroidDurableMultipartUploads(context: Context) {
 
     private companion object {
         const val MAX_VISIBLE_UPLOADS_PER_RESOURCE = 12
-        val DIRECT_COMPLETION_EXECUTOR = Executor(Runnable::run)
     }
 }
 
 internal val DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY = ExistingWorkPolicy.REPLACE
 
 internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
+
+internal fun requestDurableUploadSchedulingRecoveryForQueuedStatuses(
+    jobs: List<AndroidDurableMultipartUploadJob>,
+    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
+) {
+    if (jobs.any { job -> job.state == DurableUploadState.Queued }) requestRecovery()
+}
 
 internal data class AndroidDurableMultipartUploadJob(
     val id: String,
