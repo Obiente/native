@@ -33,8 +33,11 @@ internal class DesktopExternalFileHandoff(
     private val launchFile: (File) -> Boolean = ::launchDesktopFile,
     private val exportFile: (File) -> DesktopStagedFileExport = ::exportDesktopStagedFile,
     private val reservations: DesktopStagingSpaceReservations = sharedDesktopStagingSpaceReservations,
+    private val cacheReservations: DesktopExternalFileCacheReservations = sharedDesktopExternalFileCacheReservations,
+    private val maximumCacheBytes: Long = MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES,
 ) {
     init {
+        require(maximumCacheBytes in 1L..MAX_DESKTOP_EXTERNAL_FILE_CACHE_BYTES)
         pruneLegacyDesktopExternalFileCache(root)
     }
 
@@ -135,55 +138,59 @@ internal class DesktopExternalFileHandoff(
         download: suspend (FileOutputStream, Long) -> DesktopDetachedDownload,
     ): File {
         val canonicalRoot = prepareAccountRoot(accountId)
+        val globalRoot = requireNotNull(canonicalRoot.parentFile)
         val cacheMaximumBytes = pruneDesktopExternalFileCache(
-            requireNotNull(canonicalRoot.parentFile),
+            globalRoot,
             declaredByteCount ?: 0L,
+            maximumBytes = maximumCacheBytes,
         )
-        val reservation = reservations.reserve(
-            root = canonicalRoot,
-            declaredByteCount = declaredByteCount,
-            reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
-        )
-        reservation.use {
-            val maximumBytes = minOf(reservation.maximumBytes, cacheMaximumBytes)
-            val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
-            check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
-            check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
-                "Unsafe desktop handoff directory."
-            }
-            val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
-            check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
-                "Unsafe desktop handoff filename."
-            }
-            val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
-            try {
-                val downloaded = FileOutputStream(temporary).use { output ->
-                    download(output, maximumBytes).also {
-                        output.fd.sync()
+        cacheReservations.reserve(globalRoot, cacheMaximumBytes, declaredByteCount).use { cacheReservation ->
+            val reservation = reservations.reserve(
+                root = canonicalRoot,
+                declaredByteCount = declaredByteCount,
+                reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+            )
+            reservation.use {
+                val maximumBytes = minOf(reservation.maximumBytes, cacheReservation.maximumBytes)
+                val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
+                check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
+                check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
+                    "Unsafe desktop handoff directory."
+                }
+                val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
+                check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
+                    "Unsafe desktop handoff filename."
+                }
+                val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
+                try {
+                    val downloaded = FileOutputStream(temporary).use { output ->
+                        download(output, maximumBytes).also {
+                            output.fd.sync()
+                        }
                     }
-                }
-                check(downloaded.byteCount in 0L..maximumBytes)
-                expectedEtag?.let { expected ->
-                    check(downloaded.etag == expected) {
-                        "The file changed while it was being prepared. Refresh and try again."
+                    check(downloaded.byteCount in 0L..maximumBytes)
+                    expectedEtag?.let { expected ->
+                        check(downloaded.etag == expected) {
+                            "The file changed while it was being prepared. Refresh and try again."
+                        }
                     }
+                    verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
+                    check(temporary.length() == downloaded.byteCount) {
+                        "The desktop attachment cache copy is incomplete."
+                    }
+                    moveAtomicallyOrReplace(temporary, target, replaceExisting = false)
+                    check(target.isFile && target.length() == downloaded.byteCount) {
+                        "Could not publish the desktop attachment cache copy."
+                    }
+                    check(target.setWritable(false, false) || !target.canWrite()) {
+                        "Could not make the detached desktop attachment read-only."
+                    }
+                    return target
+                } catch (failure: Throwable) {
+                    temporary.delete()
+                    deleteDesktopExternalFileTree(operationDirectory.toPath())
+                    throw failure
                 }
-                verifyDownloadedDeckAttachmentSize(declaredByteCount, downloaded.byteCount)
-                check(temporary.length() == downloaded.byteCount) {
-                    "The desktop attachment cache copy is incomplete."
-                }
-                moveAtomicallyOrReplace(temporary, target, replaceExisting = false)
-                check(target.isFile && target.length() == downloaded.byteCount) {
-                    "Could not publish the desktop attachment cache copy."
-                }
-                check(target.setWritable(false, false) || !target.canWrite()) {
-                    "Could not make the detached desktop attachment read-only."
-                }
-                return target
-            } catch (failure: Throwable) {
-                temporary.delete()
-                deleteDesktopExternalFileTree(operationDirectory.toPath())
-                throw failure
             }
         }
     }
@@ -191,40 +198,47 @@ internal class DesktopExternalFileHandoff(
     private fun stageDetachedCopy(accountId: String, sourceName: String, bytes: ByteArray): File {
         require(bytes.size.toLong() <= MAX_IN_MEMORY_EXTERNAL_FILE_HANDOFF_BYTES)
         val canonicalRoot = prepareAccountRoot(accountId)
-        pruneDesktopExternalFileCache(requireNotNull(canonicalRoot.parentFile), bytes.size.toLong())
-        reservations.reserve(
-            root = canonicalRoot,
-            declaredByteCount = bytes.size.toLong(),
-            reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
-        ).use {
-            val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
-            check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
-            check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
-                "Unsafe desktop handoff directory."
-            }
-            val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
-            check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
-                "Unsafe desktop handoff filename."
-            }
-            val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
-            try {
-                FileOutputStream(temporary).use { output ->
-                    output.write(bytes)
-                    output.fd.sync()
+        val globalRoot = requireNotNull(canonicalRoot.parentFile)
+        val cacheMaximumBytes = pruneDesktopExternalFileCache(
+            globalRoot,
+            bytes.size.toLong(),
+            maximumBytes = maximumCacheBytes,
+        )
+        cacheReservations.reserve(globalRoot, cacheMaximumBytes, bytes.size.toLong()).use {
+            reservations.reserve(
+                root = canonicalRoot,
+                declaredByteCount = bytes.size.toLong(),
+                reserveBytes = STAGED_FILE_FREE_SPACE_RESERVE_BYTES,
+            ).use {
+                val operationDirectory = File(canonicalRoot, UUID.randomUUID().toString())
+                check(operationDirectory.mkdir()) { "Could not create a private desktop handoff directory." }
+                check(operationDirectory.canonicalFile.parentFile == canonicalRoot) {
+                    "Unsafe desktop handoff directory."
                 }
-                check(temporary.length() == bytes.size.toLong()) { "The desktop handoff copy is incomplete." }
-                moveAtomicallyOrReplace(temporary, target, replaceExisting = false)
-                check(target.isFile && target.length() == bytes.size.toLong()) {
-                    "Could not publish the desktop handoff copy."
+                val target = File(operationDirectory, sanitizeExternalFileName(sourceName))
+                check(target.canonicalFile.parentFile == operationDirectory.canonicalFile) {
+                    "Unsafe desktop handoff filename."
                 }
-                check(target.setWritable(false, false) || !target.canWrite()) {
-                    "Could not make the detached desktop copy read-only."
+                val temporary = File.createTempFile("payload-", ".tmp", operationDirectory)
+                try {
+                    FileOutputStream(temporary).use { output ->
+                        output.write(bytes)
+                        output.fd.sync()
+                    }
+                    check(temporary.length() == bytes.size.toLong()) { "The desktop handoff copy is incomplete." }
+                    moveAtomicallyOrReplace(temporary, target, replaceExisting = false)
+                    check(target.isFile && target.length() == bytes.size.toLong()) {
+                        "Could not publish the desktop handoff copy."
+                    }
+                    check(target.setWritable(false, false) || !target.canWrite()) {
+                        "Could not make the detached desktop copy read-only."
+                    }
+                    return target
+                } catch (failure: Throwable) {
+                    temporary.delete()
+                    deleteDesktopExternalFileTree(operationDirectory.toPath())
+                    throw failure
                 }
-                return target
-            } catch (failure: Throwable) {
-                temporary.delete()
-                deleteDesktopExternalFileTree(operationDirectory.toPath())
-                throw failure
             }
         }
     }
