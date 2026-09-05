@@ -42,19 +42,19 @@ class NextcloudNativeApplication : Application() {
                     var uploads: AndroidDurableMultipartUploads? = null
                     keepRetryingQueuedDurableUploadScheduling(
                         reconcile = {
-                            val accountRegistry = getSharedPreferences(
-                                ANDROID_ACCOUNT_PREFERENCES_NAME,
-                                Context.MODE_PRIVATE,
-                            ).getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
-                            if (androidCredentialFreeRegistryAllowsAccountResolution(accountRegistry)) {
-                                constructAndReconcileQueuedDurableUploads {
+                            constructAndReconcileQueuedDurableUploads {
+                                val accountRegistry = getSharedPreferences(
+                                    ANDROID_ACCOUNT_PREFERENCES_NAME,
+                                    Context.MODE_PRIVATE,
+                                ).getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
+                                if (androidCredentialFreeRegistryAllowsAccountResolution(accountRegistry)) {
                                     val available = uploads ?: AndroidDurableMultipartUploads(
                                         this@NextcloudNativeApplication,
                                     ).also { uploads = it }
                                     available::reconcileQueuedUploads
+                                } else {
+                                    suspend { true }
                                 }
-                            } else {
-                                true
                             }
                         },
                         wait = { delayMillis -> delay(delayMillis) },

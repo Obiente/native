@@ -582,8 +582,14 @@ class AndroidDurableMultipartUploadPolicyTest {
                 throw IOException("synthetic keystore failure")
             }
         }
+        val malformedPreference = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
+            constructAndReconcileQueuedDurableUploads {
+                throw ClassCastException("synthetic non-string account registry")
+            }
+        }
 
         assertTrue(failure.cause is IOException)
+        assertTrue(malformedPreference.cause is ClassCastException)
     }
 
     @Test
