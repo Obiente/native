@@ -120,6 +120,12 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                     .first()
                     .any { work -> !work.state.isFinished }
             },
+            cleanupCapability = { job ->
+                check(AndroidLocalUploadPicker(appContext).release(job.request.file)) {
+                    "The durable upload capability cleanup remains pending."
+                }
+                store.completeCapabilityCleanup(job.id)
+            },
             schedule = { job -> schedule(job).await() },
         )
 
@@ -148,7 +154,7 @@ internal class AndroidDurableMultipartUploads(context: Context) {
                 .setInputData(Data.Builder().putString(DeckAttachmentUploadWorker.KEY_JOB_ID, job.id).build())
                 .setConstraints(
                     Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .setRequiredNetworkType(networkTypeForDurableUploadWork(job))
                         .build(),
                 )
                 .build(),
@@ -184,6 +190,13 @@ internal suspend fun <Result> runDurableUploadEnqueueWithCancellationCleanup(
 internal val DURABLE_UPLOAD_ACCOUNT_RECOVERY_WORK_POLICY = ExistingWorkPolicy.REPLACE
 
 internal fun durableUploadWorkName(jobId: String) = "deck-attachment-$jobId"
+
+internal fun networkTypeForDurableUploadWork(job: AndroidDurableMultipartUploadJob): NetworkType {
+    require(job.state == DurableUploadState.Queued && !job.capabilityCleanupPending) {
+        "Only a queued durable upload can use network-constrained upload work."
+    }
+    return NetworkType.CONNECTED
+}
 
 internal fun requestDurableUploadSchedulingRecoveryForQueuedStatuses(
     jobs: List<AndroidDurableMultipartUploadJob>,
