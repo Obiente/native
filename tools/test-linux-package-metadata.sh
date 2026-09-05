@@ -24,16 +24,16 @@ assert root.findtext("pkgname") == "nextcloudnative"
 assert root.findtext("metadata_license") == "CC0-1.0"
 assert root.findtext("project_license") == "AGPL-3.0-or-later"
 assert root.find("icon[@type='stock']").text == "dev.obiente.nextcloudnative"
-assert root.find("icon[@type='remote']").text == "https://nc-native.obiente.dev/icon-512.png"
+assert root.find("icon[@type='remote']").text == "https://nati.ve/icon-512.png"
 assert root.findtext("launchable") == "nextcloudnative-NextcloudNative.desktop"
-assert root.find("url[@type='homepage']").text == "https://nc-native.obiente.dev/"
+assert root.find("url[@type='homepage']").text == "https://nati.ve/"
 screenshots = root.findall("./screenshots/screenshot")
 assert len(screenshots) >= 3
 assert sum(item.attrib.get("type") == "default" for item in screenshots) == 1
 for screenshot in screenshots:
     image = screenshot.find("image")
     assert image is not None
-    assert image.text.startswith("https://nc-native.obiente.dev/screenshots/")
+    assert image.text.startswith("https://nati.ve/screenshots/")
     local_image = screenshots_directory / Path(urlparse(image.text).path).name
     with local_image.open("rb") as source:
         assert source.read(16) == b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
@@ -44,7 +44,7 @@ for screenshot in screenshots:
 assert "available offline" not in " ".join(root.itertext()).lower()
 PY
 
-grep -Fq 'Homepage: https://nc-native.obiente.dev/' "$templates/control"
+grep -Fq 'Homepage: https://nati.ve/' "$templates/control"
 grep -Fq 'License: AGPL-3.0-or-later' "$templates/nextcloudnative.spec"
 grep -Fxq '%global _build_id_links none' "$templates/nextcloudnative.spec"
 if grep -Fq 'rm -rf' "$templates/nextcloudnative.spec" \
@@ -59,7 +59,7 @@ grep -Fq 'usr/share/applications/nextcloudnative-NextcloudNative.desktop' \
 grep -Fq 'usr/share/icons/hicolor/512x512/apps/dev.obiente.nextcloudnative.png' \
   "$templates/nextcloudnative.spec"
 grep -Fq 'tools/enrich-deb-appstream.sh' "$project_root/ui/build.gradle.kts"
-grep -Fq 'Homepage: https://nc-native.obiente.dev/' \
+grep -Fq 'Homepage: https://nati.ve/' \
   "$project_root/tools/enrich-deb-appstream.sh"
 grep -Fq 'libsecret-tools' \
   "$project_root/tools/enrich-deb-appstream.sh"
@@ -105,12 +105,12 @@ Version: 1.0.2971
 Architecture: amd64
 Maintainer: Obiente
 Depends: libasound2t64, libc6, libpng16-16t64
-Description: Nextcloud Native test package
+Description: nati.ve test package
 EOF
 cat >"$deb_root/opt/nextcloudnative/lib/app/nextcloudnative-NextcloudNative.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=Nextcloud Native
+Name=nati.ve
 Comment=Test package
 Categories=Network;
 Icon=nextcloudnative-NextcloudNative
@@ -157,7 +157,7 @@ chmod +x "$temporary/rpm2cpio" "$temporary/cpio" "$temporary/rpm"
 touch "$temporary/nextcloudnative.rpm"
 printf '%s\n' \
   '[Desktop Entry]' \
-  'Name=Nextcloud Native' \
+  'Name=nati.ve' \
   'Icon=dev.obiente.nextcloudnative' >"$temporary/application.desktop"
 cp "$project_root/website/public/icon-512.png" "$temporary/icon.png"
 

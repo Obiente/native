@@ -6,7 +6,7 @@ Version: APPLICATION_VERSION
 Release: APPLICATION_RELEASE
 License: AGPL-3.0-or-later
 Vendor: Obiente
-URL: https://nc-native.obiente.dev/
+URL: https://nati.ve/
 
 %if "xAPPLICATION_PREFIX" != "x"
 Prefix: APPLICATION_PREFIX
