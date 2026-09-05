@@ -20,7 +20,10 @@ internal fun installAndroidAccountRemovalCleanupRecovery(
     val appContext = context.applicationContext
     val preferences = appContext.getSharedPreferences(ANDROID_ACCOUNT_PREFERENCES, Context.MODE_PRIVATE)
     val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY) {
+        if (
+            key == ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY ||
+            key == ANDROID_PENDING_EXTERNAL_HANDOFF_CLEANUP_KEY
+        ) {
             AndroidAccountRemovalCleanupRecoveryWork.schedule(appContext, preferences)
         }
     }
@@ -33,7 +36,10 @@ internal object AndroidAccountRemovalCleanupRecoveryWork {
     private const val UNIQUE_WORK = "nextcloud-native-account-removal-cleanup"
 
     fun schedule(context: Context, preferences: SharedPreferences) {
-        if (!preferences.contains(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY)) return
+        if (
+            !preferences.contains(ANDROID_PENDING_ACCOUNT_REMOVAL_CLEANUP_KEY) &&
+            !hasPendingAndroidExternalHandoffCleanup(preferences)
+        ) return
         val request = OneTimeWorkRequestBuilder<AndroidAccountRemovalCleanupRecoveryWorker>()
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
@@ -61,6 +67,21 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
             } },
             recordMalformed = { Log.w(LOG_TAG, "Malformed account-removal cleanup journal retained") },
         )
+        val handoffCleanup = AndroidExternalFileHandoffCleanup(
+            context = applicationContext,
+            preferences = preferences,
+            commit = { editor -> ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
+                requireCommittedAndroidAccountCredentialEdit(editor)
+            } },
+        )
+        val handoffCompleted = retryPendingAndroidExternalHandoffCleanup(
+            pending = handoffCleanup.pending(),
+            clearHandoffs = handoffCleanup::clearHandoffs,
+            clearJournal = handoffCleanup::clearJournal,
+            recordFailure = {
+                logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message) }
+            },
+        )
         val registry = preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null)
             ?.let(::restoreAndroidCredentialFreeRegistry)
             ?.registry
@@ -86,7 +107,7 @@ internal class AndroidAccountRemovalCleanupRecoveryWorker(
                 logAndroidAccountRemovalCleanupRecoveryDeferred { message -> Log.w(LOG_TAG, message) }
             },
         )
-        if (completed) Result.success() else Result.retry()
+        if (completed && handoffCompleted) Result.success() else Result.retry()
     }
 }
 
