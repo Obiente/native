@@ -8,6 +8,8 @@ import java.io.EOFException
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.security.MessageDigest
 
 data class CachedDynamicApiResponse(
@@ -109,7 +111,26 @@ class DynamicApiResponseCache(
     @Synchronized
     fun invalidateAccount(accountId: String) {
         requireAccountId(accountId)
-        accountDirectory(accountId).deleteRecursively()
+        val directory = accountDirectory(accountId)
+        val path = directory.toPath()
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return
+        check(Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(path)) {
+            "The dynamic API response cache account path is unsafe."
+        }
+        val entries = checkNotNull(directory.listFiles()) {
+            "Could not read the dynamic API response cache account directory."
+        }
+        entries.forEach { entry ->
+            check(Files.isRegularFile(entry.toPath(), LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(entry.toPath())) {
+                "The dynamic API response cache contains an unsafe entry."
+            }
+            check(entry.delete() && !Files.exists(entry.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                "Could not delete a dynamic API response cache entry."
+            }
+        }
+        check(directory.delete() && !Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            "Could not delete the dynamic API response cache account directory."
+        }
     }
 
     @Synchronized
