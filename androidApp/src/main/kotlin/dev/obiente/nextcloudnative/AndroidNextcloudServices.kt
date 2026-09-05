@@ -937,7 +937,9 @@ internal class AndroidNextcloudServices(
     override fun loadSession(): NextcloudSession? = accountCredentials.loadSession()
 
     override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) =
-        withContext(Dispatchers.IO) { deckCardDrafts.migrateLegacyEntries(session) }
+        withContext(Dispatchers.IO) {
+            withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.migrateLegacyEntries(session) }
+        }
 
     override suspend fun saveSession(session: NextcloudSession): NextcloudSession {
         val persisted = accountCredentials.saveSession(session)
@@ -964,14 +966,14 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ): PersistedDeckCardDraft? = withContext(Dispatchers.IO) {
-        deckCardDrafts.load(session, key)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.load(session, key) }
     }
 
     override suspend fun saveDeckCardDraft(
         session: NextcloudSession,
         draft: PersistedDeckCardDraft,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.save(session, draft)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.save(session, draft) }
     }
 
     override suspend fun clearDeckCardDraft(
@@ -979,14 +981,14 @@ internal class AndroidNextcloudServices(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.clear(session, key, discardUnreadable)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.clear(session, key, discardUnreadable) }
     }
 
     override suspend fun quarantineSubmittedDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,
     ) = withContext(Dispatchers.IO) {
-        deckCardDrafts.quarantineAfterSubmit(session, key)
+        withAndroidDeckCardDraftSession(session, accountCredentials) { deckCardDrafts.quarantineAfterSubmit(session, key) }
     }
 
     override suspend fun discardAllDeckCardDrafts() = withContext(Dispatchers.IO) {

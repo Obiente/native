@@ -20,6 +20,43 @@ import kotlin.concurrent.thread
 
 class DesktopAccountOperationGuardTest {
     @Test
+    fun accountRemovalWaitsForCrossingDeckDraftSaveThenDeletesIt() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val saveEntered = CompletableDeferred<Unit>()
+        val releaseSave = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = session
+        var draftExists = false
+        val save = async {
+            guard.withAccountPrivateStatePublication(
+                expectedSession = session,
+                resolveSession = { current },
+                unavailable = { false },
+            ) {
+                saveEntered.complete(Unit)
+                releaseSave.await()
+                draftExists = true
+                true
+            }
+        }
+        saveEntered.await()
+        val removal = async {
+            guard.serialize {
+                current = null
+                draftExists = false
+            }
+        }
+        yield()
+
+        assertFalse(removal.isCompleted)
+        releaseSave.complete(Unit)
+        assertTrue(save.await())
+        removal.await()
+
+        assertFalse(draftExists)
+    }
+
+    @Test
     fun accountRemovalCannotOvertakePostSaveDynamicReadActivation() = runBlocking {
         val guard = DesktopAccountOperationGuard()
         val persistenceEntered = CompletableDeferred<Unit>()
@@ -664,7 +701,7 @@ class DesktopAccountOperationGuardTest {
 
         val removed = removeDesktopAccountBeforeSyncPairCleanup(
             accountId = CLEANUP_ACCOUNT_ID,
-            prepareCleanup = { _, _ -> events += "prepare-cleanup" },
+            prepareCleanup = { _, _, _ -> events += "prepare-cleanup" },
             commitCleanup = { events += "commit-cleanup" },
             clearCleanup = { events += "clear-cleanup" },
             accountOwnership = { DesktopAccountOwnership.Absent },
@@ -699,7 +736,7 @@ class DesktopAccountOperationGuardTest {
         assertFailsWith<CancellationException> {
             removeDesktopAccountBeforeSyncPairCleanup(
                 accountId = CLEANUP_ACCOUNT_ID,
-                prepareCleanup = { _, _ -> events += "prepare-cleanup" },
+                prepareCleanup = { _, _, _ -> events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
                 accountOwnership = { DesktopAccountOwnership.Absent },
@@ -728,7 +765,7 @@ class DesktopAccountOperationGuardTest {
         assertFailsWith<IllegalStateException> {
             removeDesktopAccountBeforeSyncPairCleanup(
                 accountId = CLEANUP_ACCOUNT_ID,
-                prepareCleanup = { _, _ -> events += "prepare-cleanup" },
+                prepareCleanup = { _, _, _ -> events += "prepare-cleanup" },
                 commitCleanup = { events += "commit-cleanup" },
                 clearCleanup = { events += "clear-cleanup" },
                 accountOwnership = { DesktopAccountOwnership.Absent },
@@ -799,7 +836,7 @@ class DesktopAccountOperationGuardTest {
         var malformedCount = 0
         try {
             preferences.put("fsac.$malformedAccountId", "future-phase")
-            preferences.put("fsac.$validAccountId", "committed")
+            preferences.put("fsac.$validAccountId", "v2|committed|$MUTATION_SCOPE")
             val journal = DesktopAccountSyncPairCleanupJournal(preferences) { malformedCount += 1 }
 
             assertEquals(
@@ -811,12 +848,13 @@ class DesktopAccountOperationGuardTest {
                     DesktopAccountSyncPairCleanup(
                         validAccountId,
                         DesktopAccountSyncPairCleanupPhase.Committed,
+                        MUTATION_SCOPE,
                     ),
                 ),
                 journal.pending(),
             )
             assertEquals("future-phase", preferences.get("fsac.$malformedAccountId", null))
-            assertEquals("committed", preferences.get("fsac.$validAccountId", null))
+            assertEquals("v2|committed|$MUTATION_SCOPE", preferences.get("fsac.$validAccountId", null))
             assertTrue(journal.blocksAccountActivation(malformedAccountId))
             assertFailsWith<IllegalStateException> { requireDesktopAccountActivationAllowed(true) }
             assertFalse(journal.blocksAccountActivation(validAccountId))
@@ -848,6 +886,7 @@ class DesktopAccountOperationGuardTest {
                 removeDesktopAccountBeforeSyncPairCleanup(
                     accountId = CLEANUP_ACCOUNT_ID,
                     durableMutationAccountScope = MUTATION_SCOPE,
+                    accountStorageKey = ACCOUNT_STORAGE_KEY,
                     prepareCleanup = firstJournal::prepare,
                     commitCleanup = firstJournal::commit,
                     clearCleanup = firstJournal::clear,
@@ -866,11 +905,15 @@ class DesktopAccountOperationGuardTest {
                         CLEANUP_ACCOUNT_ID,
                         DesktopAccountSyncPairCleanupPhase.Committed,
                         MUTATION_SCOPE,
+                        ACCOUNT_STORAGE_KEY,
                     ),
                 ),
                 restored.pending(),
             )
-            assertEquals("v2|committed|$MUTATION_SCOPE", preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null))
+            assertEquals(
+                "v3|committed|$MUTATION_SCOPE|$ACCOUNT_STORAGE_KEY",
+                preferences.get("fsac.$CLEANUP_ACCOUNT_ID", null),
+            )
 
             val retryEvents = mutableListOf<String>()
             retryDesktopAccountSyncPairCleanup(
@@ -957,5 +1000,6 @@ class DesktopAccountOperationGuardTest {
     private companion object {
         const val CLEANUP_ACCOUNT_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         const val MUTATION_SCOPE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        const val ACCOUNT_STORAGE_KEY = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
 }

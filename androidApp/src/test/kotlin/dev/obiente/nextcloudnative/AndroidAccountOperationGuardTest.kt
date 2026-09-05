@@ -17,6 +17,48 @@ import kotlinx.coroutines.yield
 
 class AndroidAccountOperationGuardTest {
     @Test
+    fun accountRemovalWaitsForCrossingDeckDraftSaveThenDeletesIt() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val credentialMutations = Mutex()
+        val session = NextcloudSession("https://cloud.example.test", "alice", "password")
+        val saveEntered = CompletableDeferred<Unit>()
+        val releaseSave = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = session
+        var draftExists = false
+        val save = async {
+            withAndroidAccountPrivateStatePublication(
+                expectedSession = session,
+                credentialMutationMutex = credentialMutations,
+                guard = guard,
+                resolveSession = { current },
+                unavailable = { false },
+            ) {
+                saveEntered.complete(Unit)
+                releaseSave.await()
+                draftExists = true
+                true
+            }
+        }
+        saveEntered.await()
+        val removal = async {
+            credentialMutations.withLock {
+                guard.withAccount(NextcloudDocumentIds.accountKey(session)) {
+                    current = null
+                    draftExists = false
+                }
+            }
+        }
+        yield()
+
+        assertFalse(removal.isCompleted)
+        releaseSave.complete(Unit)
+        assertTrue(save.await())
+        removal.await()
+
+        assertFalse(draftExists)
+    }
+
+    @Test
     fun removalInThePostSaveGapCannotReopenDynamicReads() = runBlocking {
         val guard = AndroidAccountOperationGuard()
         val credentialMutations = Mutex()

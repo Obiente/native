@@ -36,6 +36,7 @@ internal class DesktopDeckCardDraftStore(
 ) {
     @Synchronized
     fun load(session: NextcloudSession, key: DeckCardDraftKey): PersistedDeckCardDraft? {
+        migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), key)
         val file = draftFile(session, key)
         val quarantine = quarantineFile(file)
         if (quarantine.exists()) {
@@ -44,32 +45,40 @@ internal class DesktopDeckCardDraftStore(
         }
         if (!file.exists()) return null
         val encryptionKey = keyProvider.encryptionKey()
-        return readAuthenticated(file, encryptionKey, key).draft
+        return readAuthenticated(file, encryptionKey, key, session.accountId.storageKey).draft
     }
 
     @Synchronized
     fun save(session: NextcloudSession, persisted: PersistedDeckCardDraft) {
+        migrateLegacyEntries(session)
+        migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), persisted.key)
         val updatedAtEpochMillis = nowEpochMillis()
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
         val file = draftFile(session, persisted.key)
         val encryptionKey = keyProvider.encryptionKey()
         if (file.exists()) {
-            readAuthenticated(file, encryptionKey, persisted.key)
+            readAuthenticated(file, encryptionKey, persisted.key, session.accountId.storageKey)
         } else {
-            ensureCapacityForNewDraft(encryptionKey)
+            ensureCapacityForNewDraft(session.accountId.storageKey, encryptionKey)
         }
-        val plaintext = encodePlaintext(persisted, updatedAtEpochMillis)
+        val plaintext = encodePlaintext(
+            persisted,
+            updatedAtEpochMillis,
+            session.accountId.storageKey,
+            file.name,
+        )
         require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "The Deck card draft is too large." }
         val envelope = encrypt(plaintext, file.name, encryptionKey)
         require(envelope.size.toLong() <= MAX_ENVELOPE_BYTES) { "The Deck card draft is too large." }
         val verified = decode(envelope, file.name, encryptionKey)
+        requireStorageOwner(verified, session.accountId.storageKey, file.name)
         check(verified.draft == persisted && verified.updatedAtEpochMillis == updatedAtEpochMillis) {
             "The Deck card draft could not be verified."
         }
         ensurePrivateDirectory()
         clearQuarantineBeforeSave(file)
         publish(file, envelope)
-        prune(encryptionKey)
+        prune(session.accountId.storageKey, encryptionKey)
     }
 
     @Synchronized
@@ -78,10 +87,11 @@ internal class DesktopDeckCardDraftStore(
         key: DeckCardDraftKey,
         discardUnreadable: Boolean = false,
     ) {
+        migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), key)
         val file = draftFile(session, key)
         if (file.exists() && !discardUnreadable) {
             val encryptionKey = keyProvider.encryptionKey()
-            readAuthenticated(file, encryptionKey, key)
+            readAuthenticated(file, encryptionKey, key, session.accountId.storageKey)
         }
         check(!Files.isSymbolicLink(root.toPath())) {
             "Desktop Deck draft storage must not be a symbolic link."
@@ -93,6 +103,7 @@ internal class DesktopDeckCardDraftStore(
 
     @Synchronized
     fun quarantineAfterSubmit(session: NextcloudSession, key: DeckCardDraftKey) {
+        migrateLegacyEntry(session.accountId.storageKey, desktopFileCacheAccountId(session), key)
         val file = draftFile(session, key)
         val quarantine = quarantineFile(file)
         ensurePrivateDirectory()
@@ -109,27 +120,165 @@ internal class DesktopDeckCardDraftStore(
         val files = checkNotNull(root.listFiles()) {
             "Desktop Deck draft storage cannot be inspected for reset."
         }.filter { file ->
-            file.name.matches(DRAFT_FILE_PATTERN) || file.name.matches(SUBMITTED_FILE_PATTERN)
+            file.name.matches(DRAFT_FILE_PATTERN) || file.name.matches(SUBMITTED_FILE_PATTERN) ||
+                file.name.matches(LEGACY_DRAFT_FILE_PATTERN) || file.name.matches(LEGACY_SUBMITTED_FILE_PATTERN)
         }
         check(files.all(::deleteDurably)) { "Saved Deck card drafts could not be discarded." }
     }
 
+    @Synchronized
+    fun migrateLegacyEntries(session: NextcloudSession) {
+        val encryptionKey = try {
+            keyProvider.encryptionKey()
+        } catch (_: Exception) {
+            return
+        }
+        root.listFiles().orEmpty()
+            .filter { file -> file.name.matches(LEGACY_DRAFT_FILE_PATTERN) }
+            .forEach { file ->
+                val stored = try {
+                    readAuthenticated(file, encryptionKey)
+                } catch (_: DesktopDeckDraftRecoveryException) {
+                    null
+                } ?: return@forEach
+                if (
+                    stored.accountStorageKey == null &&
+                    stored.storageFileName == null &&
+                    legacyStorageFileName(desktopFileCacheAccountId(session), stored.draft.key) == file.name
+                ) {
+                    migrateLegacyEntry(
+                        session.accountId.storageKey,
+                        desktopFileCacheAccountId(session),
+                        stored.draft.key,
+                        stored,
+                        encryptionKey,
+                    )
+                }
+            }
+    }
+
+    @Synchronized
+    fun removeAccount(accountStorageKey: String, legacyAccountIdentity: String) {
+        require(ACCOUNT_STORAGE_KEY_PATTERN.matches(accountStorageKey))
+        require(ACCOUNT_STORAGE_KEY_PATTERN.matches(legacyAccountIdentity))
+        if (!root.exists()) return
+        check(root.isDirectory && !Files.isSymbolicLink(root.toPath())) {
+            "Desktop Deck draft storage cannot be removed safely."
+        }
+        val files = checkNotNull(root.listFiles()) {
+            "Desktop Deck draft storage cannot be inspected for account removal."
+        }
+        val targets = files.filter { file ->
+            file.name.startsWith(accountDraftPrefix(accountStorageKey)) ||
+                file.name.startsWith(accountSubmittedPrefix(accountStorageKey))
+        }.toMutableSet()
+        val encryptionKey = try {
+            keyProvider.encryptionKey()
+        } catch (_: Exception) {
+            null
+        }
+        if (encryptionKey != null) {
+            files.filter { file -> file.name.matches(LEGACY_DRAFT_FILE_PATTERN) }.forEach { file ->
+                val stored = try {
+                    readAuthenticated(file, encryptionKey)
+                } catch (_: DesktopDeckDraftRecoveryException) {
+                    null
+                } ?: return@forEach
+                if (
+                    stored.accountStorageKey == null &&
+                    stored.storageFileName == null &&
+                    legacyStorageFileName(legacyAccountIdentity, stored.draft.key) == file.name
+                ) {
+                    targets += file
+                    targets += legacyQuarantineFile(file)
+                }
+            }
+        }
+        check(targets.all(::deleteDurably)) {
+            "Saved Deck card drafts for the account could not be removed."
+        }
+    }
+
     internal fun storageFileName(session: NextcloudSession, key: DeckCardDraftKey): String {
+        return storageFileName(session.accountId.storageKey, key)
+    }
+
+    private fun storageFileName(accountStorageKey: String, key: DeckCardDraftKey): String {
         val scope = listOf(
-            desktopFileCacheAccountId(session),
             key.boardId.toString(),
             key.stackId.toString(),
             key.cardId?.toString() ?: "new",
         ).joinToString(separator = ":")
-        return "$FILE_PREFIX${sha256Hex(scope)}$FILE_SUFFIX"
+        return "${accountDraftPrefix(accountStorageKey)}${sha256Hex(scope)}$FILE_SUFFIX"
+    }
+
+    internal fun legacyStorageFileName(accountIdentity: String, key: DeckCardDraftKey): String {
+        val scope = listOf(
+            accountIdentity,
+            key.boardId.toString(),
+            key.stackId.toString(),
+            key.cardId?.toString() ?: "new",
+        ).joinToString(separator = ":")
+        return "$LEGACY_FILE_PREFIX${sha256Hex(scope)}$FILE_SUFFIX"
     }
 
     private fun draftFile(session: NextcloudSession, key: DeckCardDraftKey): File =
         File(root, storageFileName(session, key))
 
     private fun quarantineFile(draftFile: File): File {
-        val digest = draftFile.name.removePrefix(FILE_PREFIX).removeSuffix(FILE_SUFFIX)
-        return File(root, "$SUBMITTED_FILE_PREFIX$digest$SUBMITTED_FILE_SUFFIX")
+        val identity = draftFile.name.removePrefix(FILE_PREFIX).removeSuffix(FILE_SUFFIX)
+        return File(root, "$SUBMITTED_FILE_PREFIX$identity$SUBMITTED_FILE_SUFFIX")
+    }
+
+    private fun legacyQuarantineFile(draftFile: File): File {
+        val digest = draftFile.name.removePrefix(LEGACY_FILE_PREFIX).removeSuffix(FILE_SUFFIX)
+        return File(root, "$LEGACY_SUBMITTED_FILE_PREFIX$digest$SUBMITTED_FILE_SUFFIX")
+    }
+
+    private fun migrateLegacyEntry(
+        accountStorageKey: String,
+        legacyAccountIdentity: String,
+        key: DeckCardDraftKey,
+        decodedLegacy: StoredDeckCardDraft? = null,
+        providedEncryptionKey: ByteArray? = null,
+    ) {
+        val legacyFile = File(root, legacyStorageFileName(legacyAccountIdentity, key))
+        val legacyMarker = legacyQuarantineFile(legacyFile)
+        val target = File(root, storageFileName(accountStorageKey, key))
+        val targetMarker = quarantineFile(target)
+        if (!legacyFile.exists()) {
+            if (!legacyMarker.exists()) return
+            ensurePrivateDirectory()
+            publish(targetMarker, SUBMITTED_MARKER_BYTES)
+            deleteDurably(legacyMarker)
+            return
+        }
+        val encryptionKey = providedEncryptionKey ?: keyProvider.encryptionKey()
+        val legacy = decodedLegacy ?: readAuthenticated(legacyFile, encryptionKey, key)
+        if (
+            legacy.accountStorageKey != null || legacy.storageFileName != null ||
+            legacy.draft.key != key
+        ) {
+            throw DesktopDeckDraftRecoveryException(
+                IllegalArgumentException("The legacy Deck draft identity does not match."),
+            )
+        }
+        val plaintext = encodePlaintext(
+            legacy.draft,
+            legacy.updatedAtEpochMillis,
+            accountStorageKey,
+            target.name,
+        )
+        val envelope = encrypt(plaintext, target.name, encryptionKey)
+        ensurePrivateDirectory()
+        if (legacyMarker.exists()) publish(targetMarker, SUBMITTED_MARKER_BYTES)
+        if (target.exists()) {
+            readAuthenticated(target, encryptionKey, key, accountStorageKey)
+        } else {
+            publish(target, envelope)
+        }
+        deleteDurably(legacyFile)
+        deleteDurably(legacyMarker)
     }
 
     private fun clearQuarantineBeforeSave(draftFile: File) {
@@ -143,8 +292,12 @@ internal class DesktopDeckCardDraftStore(
     private fun encodePlaintext(
         persisted: PersistedDeckCardDraft,
         updatedAtEpochMillis: Long,
+        accountStorageKey: String,
+        storageFileName: String,
     ): ByteArray = JSONObject()
         .put("version", PLAINTEXT_FORMAT_VERSION)
+        .put("accountStorageKey", accountStorageKey)
+        .put("storageFileName", storageFileName)
         .put("updatedAtEpochMillis", updatedAtEpochMillis)
         .put("boardId", persisted.key.boardId)
         .put("stackId", persisted.key.stackId)
@@ -162,6 +315,7 @@ internal class DesktopDeckCardDraftStore(
         file: File,
         encryptionKey: ByteArray,
         expectedKey: DeckCardDraftKey? = null,
+        expectedAccountStorageKey: String? = null,
     ): StoredDeckCardDraft = try {
         if (!file.isSafeRegularFile() || file.length() !in 1..MAX_ENVELOPE_BYTES) {
             throw DesktopDeckDraftRecoveryException(
@@ -174,6 +328,7 @@ internal class DesktopDeckCardDraftStore(
                 IllegalArgumentException("The Deck draft resource identity does not match."),
             )
         }
+        expectedAccountStorageKey?.let { requireStorageOwner(stored, it, file.name) }
         stored
     } catch (failure: DesktopDeckDraftRecoveryException) {
         throw failure
@@ -207,11 +362,20 @@ internal class DesktopDeckCardDraftStore(
         val plaintext = cipher.doFinal(ciphertext)
         require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "The Deck draft is too large." }
         val value = JSONObject(plaintext.decodeToString())
-        require(value.getInt("version") == PLAINTEXT_FORMAT_VERSION) {
+        val version = value.getInt("version")
+        require(version == LEGACY_PLAINTEXT_FORMAT_VERSION || version == PLAINTEXT_FORMAT_VERSION) {
             "The Deck draft format is unsupported."
         }
         val updatedAtEpochMillis = value.getLong("updatedAtEpochMillis")
         require(updatedAtEpochMillis >= 0L) { "The Deck draft timestamp is invalid." }
+        val accountStorageKey = value.optString("accountStorageKey").takeIf(String::isNotBlank)
+        val storageFileName = value.optString("storageFileName").takeIf(String::isNotBlank)
+        require(
+            version == LEGACY_PLAINTEXT_FORMAT_VERSION && accountStorageKey == null && storageFileName == null ||
+                version == PLAINTEXT_FORMAT_VERSION &&
+                accountStorageKey?.matches(ACCOUNT_STORAGE_KEY_PATTERN) == true &&
+                storageFileName?.matches(DRAFT_FILE_PATTERN) == true,
+        ) { "The Deck draft account storage metadata is invalid." }
         StoredDeckCardDraft(
             draft = PersistedDeckCardDraft(
                 key = DeckCardDraftKey(
@@ -233,9 +397,19 @@ internal class DesktopDeckCardDraftStore(
                 ),
             ),
             updatedAtEpochMillis = updatedAtEpochMillis,
+            accountStorageKey = accountStorageKey,
+            storageFileName = storageFileName,
         )
     } catch (failure: Exception) {
         throw DesktopDeckDraftRecoveryException(failure)
+    }
+
+    private fun requireStorageOwner(stored: StoredDeckCardDraft, expectedOwner: String, expectedFileName: String) {
+        if (stored.accountStorageKey != expectedOwner || stored.storageFileName != expectedFileName) {
+            throw DesktopDeckDraftRecoveryException(
+                IllegalArgumentException("The Deck draft account storage identity does not match."),
+            )
+        }
     }
 
     private fun encrypt(
@@ -261,12 +435,12 @@ internal class DesktopDeckCardDraftStore(
             .encodeToByteArray()
     }
 
-    private fun prune(encryptionKey: ByteArray) {
+    private fun prune(accountStorageKey: String, encryptionKey: ByteArray) {
         val files = root.listFiles().orEmpty()
-            .filter { it.name.matches(DRAFT_FILE_PATTERN) }
+            .filter { it.name.startsWith(accountDraftPrefix(accountStorageKey)) }
         val entries = files.mapNotNull { file ->
             val stored = try {
-                readAuthenticated(file, encryptionKey)
+                readAuthenticated(file, encryptionKey, expectedAccountStorageKey = accountStorageKey)
             } catch (_: DesktopDeckDraftRecoveryException) {
                 // A keyring or filesystem failure can make valid ciphertext temporarily unreadable.
                 // Preserve it so a later app process can authenticate and recover the draft.
@@ -282,14 +456,14 @@ internal class DesktopDeckCardDraftStore(
         files.filter { it.name in namesToPrune }.forEach(::deleteDraft)
     }
 
-    private fun ensureCapacityForNewDraft(encryptionKey: ByteArray) {
+    private fun ensureCapacityForNewDraft(accountStorageKey: String, encryptionKey: ByteArray) {
         val files = root.listFiles().orEmpty()
-            .filter { it.name.matches(DRAFT_FILE_PATTERN) }
+            .filter { it.name.startsWith(accountDraftPrefix(accountStorageKey)) }
         val overflow = files.size + 1 - DeckCardDraftRetention.MAX_ENTRIES
         if (overflow <= 0) return
         val readableFiles = files.count { file ->
             try {
-                readAuthenticated(file, encryptionKey)
+                readAuthenticated(file, encryptionKey, expectedAccountStorageKey = accountStorageKey)
                 true
             } catch (_: DesktopDeckDraftRecoveryException) {
                 false
@@ -374,15 +548,24 @@ internal class DesktopDeckCardDraftStore(
     private data class StoredDeckCardDraft(
         val draft: PersistedDeckCardDraft,
         val updatedAtEpochMillis: Long,
+        val accountStorageKey: String?,
+        val storageFileName: String?,
     )
 
+    private fun accountDraftPrefix(accountStorageKey: String) = "$FILE_PREFIX${accountStorageKey}_"
+
+    private fun accountSubmittedPrefix(accountStorageKey: String) = "$SUBMITTED_FILE_PREFIX${accountStorageKey}_"
+
     internal companion object {
-        const val FILE_PREFIX = "draft_"
+        const val FILE_PREFIX = "draft_v2_"
+        const val LEGACY_FILE_PREFIX = "draft_"
         const val FILE_SUFFIX = ".json.enc"
-        const val SUBMITTED_FILE_PREFIX = "submitted_"
+        const val SUBMITTED_FILE_PREFIX = "submitted_v2_"
+        const val LEGACY_SUBMITTED_FILE_PREFIX = "submitted_"
         const val SUBMITTED_FILE_SUFFIX = ".marker"
         const val ENVELOPE_FORMAT_VERSION = 1
-        const val PLAINTEXT_FORMAT_VERSION = 1
+        const val LEGACY_PLAINTEXT_FORMAT_VERSION = 1
+        const val PLAINTEXT_FORMAT_VERSION = 2
         const val AES_KEY_BYTES = 32
         const val GCM_NONCE_BYTES = 12
         const val GCM_TAG_BYTES = 16
@@ -392,8 +575,11 @@ internal class DesktopDeckCardDraftStore(
         const val MAX_ENVELOPE_BYTES = 256L * 1024L
         const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
         const val AES_ALGORITHM = "AES"
-        val DRAFT_FILE_PATTERN = Regex("^draft_[0-9a-f]{64}\\.json\\.enc$")
-        val SUBMITTED_FILE_PATTERN = Regex("^submitted_[0-9a-f]{64}\\.marker$")
+        val DRAFT_FILE_PATTERN = Regex("^draft_v2_[0-9a-f]{64}_[0-9a-f]{64}\\.json\\.enc$")
+        val SUBMITTED_FILE_PATTERN = Regex("^submitted_v2_[0-9a-f]{64}_[0-9a-f]{64}\\.marker$")
+        val LEGACY_DRAFT_FILE_PATTERN = Regex("^draft_[0-9a-f]{64}\\.json\\.enc$")
+        val LEGACY_SUBMITTED_FILE_PATTERN = Regex("^submitted_[0-9a-f]{64}\\.marker$")
+        private val ACCOUNT_STORAGE_KEY_PATTERN = Regex("[0-9a-f]{64}")
         val SUBMITTED_MARKER_BYTES = "confirmed\n".encodeToByteArray()
     }
 }
@@ -419,7 +605,10 @@ internal fun desktopDeckLegacySecretRequired(
     if (!root.exists()) return false
     if (!root.isDirectory) return true
     val entries = listFiles(root) ?: return true
-    return entries.any { file -> file.name.matches(DesktopDeckCardDraftStore.DRAFT_FILE_PATTERN) }
+    return entries.any { file ->
+        file.name.matches(DesktopDeckCardDraftStore.DRAFT_FILE_PATTERN) ||
+            file.name.matches(DesktopDeckCardDraftStore.LEGACY_DRAFT_FILE_PATTERN)
+    }
 }
 
 internal fun interface DesktopDeckDraftKeyProvider {
