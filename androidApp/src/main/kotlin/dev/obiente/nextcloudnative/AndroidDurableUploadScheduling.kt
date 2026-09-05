@@ -3,7 +3,6 @@ package dev.obiente.nextcloudnative
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadState
 import java.util.UUID
-import java.util.concurrent.Future
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
@@ -119,29 +118,6 @@ internal suspend fun awaitDurableUploadWorkToStopRunning(
         } catch (_: Exception) {
             wait(retryDelayMillis)
         }
-    }
-}
-
-internal fun observeDurableUploadSchedulingResult(
-    result: Future<*>,
-    addListener: (Runnable) -> Unit,
-    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
-) {
-    val listener = Runnable {
-        if (!result.isDone) {
-            runCatching(requestRecovery)
-            return@Runnable
-        }
-        try {
-            result.get()
-        } catch (_: Exception) {
-            runCatching(requestRecovery)
-        }
-    }
-    try {
-        addListener(listener)
-    } catch (_: Exception) {
-        runCatching(requestRecovery)
     }
 }
 
