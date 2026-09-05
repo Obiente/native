@@ -1,7 +1,17 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.LocalUploadFile
+import dev.obiente.nextcloudnative.app.LocalUploadSelectionResult
+import dev.obiente.nextcloudnative.app.localUploadFile
 import java.security.GeneralSecurityException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -9,6 +19,80 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidLocalUploadCapabilityLifecycleTest {
+    @Test
+    fun `selected capability is released when cancellation wins result delivery`() {
+        val file = localUploadFile(
+            selectionId = "selection-1234567890",
+            displayName = "cancelled.txt",
+            mimeType = "text/plain",
+            sizeBytes = 12L,
+        )
+        val dispatcher = PausedDispatcher()
+        var resumeSelection: ((LocalUploadSelectionResult) -> Unit)? = null
+        var delivered = false
+        var persistedCapability: LocalUploadFile? = file
+        var cachedCapability: LocalUploadFile? = file
+        val scopeJob = Job()
+        val selectionJob = CoroutineScope(scopeJob + dispatcher).launch(start = CoroutineStart.UNDISPATCHED) {
+            suspendCancellableCoroutine<LocalUploadSelectionResult> { continuation ->
+                resumeSelection = { result ->
+                    resumeLocalUploadSelectionResult(
+                        continuation = continuation,
+                        result = result,
+                        releaseSelected = { cancelledFile ->
+                            assertEquals(cachedCapability, cancelledFile)
+                            persistedCapability = null
+                            cachedCapability = null
+                        },
+                    )
+                }
+            }
+            delivered = true
+        }
+
+        checkNotNull(resumeSelection)(LocalUploadSelectionResult.Selected(file))
+        selectionJob.cancel()
+        dispatcher.runAll()
+
+        assertTrue(selectionJob.isCancelled)
+        assertFalse(delivered)
+        assertEquals(null, persistedCapability)
+        assertEquals(null, cachedCapability)
+        scopeJob.cancel()
+    }
+
+    @Test
+    fun `non-selected results do not request capability cleanup when delivery is cancelled`() {
+        listOf(
+            LocalUploadSelectionResult.Cancelled,
+            LocalUploadSelectionResult.Rejected("synthetic rejection"),
+        ).forEach { result ->
+            val dispatcher = PausedDispatcher()
+            var resumeSelection: (() -> Unit)? = null
+            var releases = 0
+            val scopeJob = Job()
+            val selectionJob = CoroutineScope(scopeJob + dispatcher).launch(start = CoroutineStart.UNDISPATCHED) {
+                suspendCancellableCoroutine<LocalUploadSelectionResult> { continuation ->
+                    resumeSelection = {
+                        resumeLocalUploadSelectionResult(
+                            continuation = continuation,
+                            result = result,
+                            releaseSelected = { releases += 1 },
+                        )
+                    }
+                }
+            }
+
+            checkNotNull(resumeSelection).invoke()
+            selectionJob.cancel()
+            dispatcher.runAll()
+
+            assertTrue(selectionJob.isCancelled)
+            assertEquals(0, releases)
+            scopeJob.cancel()
+        }
+    }
+
     @Test
     fun `permission is taken before metadata commit and retained after success`() {
         val events = mutableListOf<String>()
@@ -170,6 +254,18 @@ class AndroidLocalUploadCapabilityLifecycleTest {
                 releasePermission = {},
                 removeMetadata = { true },
             )
+        }
+    }
+
+    private class PausedDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+
+        fun runAll() {
+            while (tasks.isNotEmpty()) tasks.removeFirst().run()
         }
     }
 }
