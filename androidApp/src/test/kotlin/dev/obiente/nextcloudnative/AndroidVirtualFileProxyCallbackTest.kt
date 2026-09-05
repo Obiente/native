@@ -275,6 +275,7 @@ class AndroidVirtualFileProxyCallbackTest {
             callback.onRead(0L, 1, ByteArray(1))
         }
         callback.cancel()
+        assertEquals(1, released)
         callback.onRelease()
         callback.onRelease()
 
