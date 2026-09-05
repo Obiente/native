@@ -25,6 +25,19 @@ internal class AndroidSafDownloadOwnershipStore(
         ownershipFiles().isNotEmpty()
     }
 
+    fun hasTreeScopedPendingTransactions(): Boolean = synchronized(LOCK) {
+        ownershipFiles(directory, listFiles).isNotEmpty()
+    }
+
+    fun pendingTransactions(): List<AndroidSafOwnedDownloadTransaction> = synchronized(LOCK) {
+        ownershipRows().map(StoredOwnershipRow::transaction)
+    }
+
+    fun hasPendingTransactionsForDirectory(directoryIdentity: String): Boolean = synchronized(LOCK) {
+        val scope = scopeDigest(directoryIdentity)
+        ownershipFiles().any { file -> ownershipReference(file)?.scope == scope }
+    }
+
     override fun forDirectory(directoryIdentity: String): AndroidSafDownloadOwnership {
         require(directoryIdentity.isNotBlank())
         return ScopedOwnership(scopeDigest(directoryIdentity))
