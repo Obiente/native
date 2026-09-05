@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -102,12 +103,16 @@ internal class AndroidIncomingShareUploadWorker(
     ): Result {
         var request = initialRequest
         val services = AndroidNextcloudServices(applicationContext)
+        val retainedAccounts = services.listAccounts()
         val session = resolveStoredAndroidAccountSession(
             accountIdentity = accountIdentity,
-            listAccounts = services::listAccounts,
+            listAccounts = { retainedAccounts },
             loadSession = { accountId -> services.loadSession(accountId) },
         )
         if (session == null) {
+            if (shouldDeferIncomingShareForMissingSession(accountIdentity, retainedAccounts)) {
+                return Result.success()
+            }
             return failUnavailableAccount(store, requestId)
         }
         AndroidNotificationCoordinator(applicationContext).ensureChannels()
@@ -331,6 +336,12 @@ internal class AndroidIncomingShareUploadWorker(
         const val KEY_REQUEST_ID = "request_id"
     }
 }
+
+internal fun shouldDeferIncomingShareForMissingSession(
+    accountIdentity: String,
+    retainedAccounts: List<NextcloudAccountRecord>,
+): Boolean = durableUploadAccountMismatchOutcome(accountIdentity, retainedAccounts) ==
+    DurableUploadAccountMismatchOutcome.DeferRetainedAccount
 
 internal fun Throwable.incomingShareRetryNotBeforeEpochMillis(nowEpochMillis: Long): Long? {
     require(nowEpochMillis >= 0L)
