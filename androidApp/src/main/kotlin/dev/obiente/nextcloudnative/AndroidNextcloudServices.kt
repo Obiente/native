@@ -442,6 +442,8 @@ internal class AndroidNextcloudServices(
         androidCredentialFreeRegistryAllowsAccountResolution(
             preferences.getString(ANDROID_ACCOUNT_REGISTRY_KEY, null),
         )
+    internal fun durableUploadAccountRegistry(): DurableUploadAccountRegistry =
+        accountCredentials.durableUploadAccountRegistry()
     private val memoriesTimeline = MemoriesPreferredTimelineReadService { session, request ->
         executeNextcloudApi(session, request)
     }
