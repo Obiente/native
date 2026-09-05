@@ -322,10 +322,12 @@ class AndroidExternalFileHandoffTest {
     }
 
     @Test
-    fun `durable clear failure preserves live handoff authority and reports failure`() {
+    fun `durable clear failure revokes readers and retry prevents restart restoration`() {
         val root = Files.createTempDirectory("nextcloud-handoff-clear-test-").toFile()
-        val store = AndroidExternalFileHandoffStore(root.resolve("records.bin"))
+        val stateFile = root.resolve("records.bin")
+        val store = AndroidExternalFileHandoffStore(stateFile, deleteStateFile = { false })
         val session = NextcloudSession("https://cloud.example.test", "person", "secret")
+        var cleanupPending = true
         AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
         try {
             AndroidExternalFileHandoffRegistry.bind(store, nowEpochMillis = 10L)
@@ -334,17 +336,37 @@ class AndroidExternalFileHandoffTest {
                 handoffFile(size = 4L),
                 nowEpochMillis = 10L,
             )
-            assertTrue(store.stateFile.delete())
-            assertTrue(store.stateFile.mkdir())
-            store.stateFile.resolve("blocker").writeText("keep directory non-empty")
+            val lease = requireNotNull(AndroidExternalFileHandoffRegistry.acquire(record.documentId, session, 11L))
+            var revoked = false
+            lease.onRevoked { revoked = true }
 
-            assertFailsWith<AndroidExternalFileHandoffStoreException> {
-                AndroidExternalFileHandoffRegistry.clear()
-            }
-            assertEquals(
-                record,
-                AndroidExternalFileHandoffRegistry.peek(record.documentId, session, nowEpochMillis = 11L),
+            assertFalse(
+                retryPendingAndroidExternalHandoffCleanup(
+                    pending = cleanupPending,
+                    clearHandoffs = AndroidExternalFileHandoffRegistry::clear,
+                    clearJournal = { cleanupPending = false },
+                    recordFailure = {},
+                ),
             )
+            assertTrue(revoked)
+            assertFalse(lease.isValid())
+            assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, 11L))
+            assertTrue(stateFile.isFile)
+
+            AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
+            val restartedStore = AndroidExternalFileHandoffStore(stateFile)
+            assertTrue(
+                retryPendingAndroidExternalHandoffCleanup(
+                    pending = cleanupPending,
+                    clearHandoffs = { AndroidExternalFileHandoffRegistry.clearPersisted(restartedStore) },
+                    clearJournal = { cleanupPending = false },
+                    recordFailure = {},
+                ),
+            )
+            AndroidExternalFileHandoffRegistry.bind(restartedStore, nowEpochMillis = 11L)
+            assertFalse(cleanupPending)
+            assertEquals(null, AndroidExternalFileHandoffRegistry.peek(record.documentId, session, 11L))
+            assertFalse(stateFile.exists())
         } finally {
             AndroidExternalFileHandoffRegistry.resetProcessStateForTests()
             root.deleteRecursively()
