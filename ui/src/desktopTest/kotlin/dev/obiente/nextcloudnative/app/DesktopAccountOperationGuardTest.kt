@@ -656,6 +656,43 @@ class DesktopAccountOperationGuardTest {
     }
 
     @Test
+    fun malformedCleanupEntryDoesNotHideValidTombstonesOrBlockNewRemoval() {
+        val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
+        val malformedAccountId = "1".repeat(64)
+        val validAccountId = "2".repeat(64)
+        val newAccountId = "3".repeat(64)
+        var malformedCount = 0
+        try {
+            preferences.put("fsac.$malformedAccountId", "future-phase")
+            preferences.put("fsac.$validAccountId", "committed")
+            val journal = DesktopAccountSyncPairCleanupJournal(preferences) { malformedCount += 1 }
+
+            assertEquals(
+                listOf(
+                    DesktopAccountSyncPairCleanup(
+                        validAccountId,
+                        DesktopAccountSyncPairCleanupPhase.Committed,
+                    ),
+                ),
+                journal.pending(),
+            )
+            assertNull(preferences.get("fsac.$malformedAccountId", null))
+            assertEquals("committed", preferences.get("fsac.$validAccountId", null))
+            assertEquals(1, malformedCount)
+
+            journal.prepare(newAccountId)
+
+            assertEquals(
+                setOf(validAccountId, newAccountId),
+                journal.pending().mapTo(linkedSetOf(), DesktopAccountSyncPairCleanup::accountId),
+            )
+            assertEquals(1, malformedCount)
+        } finally {
+            preferences.removeNode()
+        }
+    }
+
+    @Test
     fun committedPairCleanupFailureSurvivesRestartAndBlocksReactivationUntilRetry() = runBlocking {
         val preferences = Preferences.userRoot().node("desktop-account-cleanup-test-${UUID.randomUUID()}")
         val firstJournal = DesktopAccountSyncPairCleanupJournal(preferences)

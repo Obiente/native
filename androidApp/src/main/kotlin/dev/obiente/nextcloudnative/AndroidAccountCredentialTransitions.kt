@@ -8,6 +8,15 @@ internal fun removeActiveAndroidAccountCredentialState(
     state: AndroidAccountCredentialState,
 ): AndroidAccountCredentialState = state.registry.activeAccountId?.let(state::remove) ?: state
 
+internal suspend fun rollbackUnavailableAndroidAccountRemoval(
+    recovered: AndroidAccountCredentialState,
+    persistRecovered: suspend (AndroidAccountCredentialState) -> Unit,
+    clearCleanup: suspend () -> Unit,
+) {
+    persistRecovered(recovered)
+    clearCleanup()
+}
+
 internal suspend fun resumeAndroidQueuedUploadsAfterSelection(
     resume: suspend () -> Unit,
     notifyDocumentRootsChanged: () -> Unit,
