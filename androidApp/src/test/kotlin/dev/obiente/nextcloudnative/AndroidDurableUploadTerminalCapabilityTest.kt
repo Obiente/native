@@ -7,18 +7,21 @@ class AndroidDurableUploadTerminalCapabilityTest {
     @Test
     fun `terminal worker retries while capability cleanup remains uncommitted`() {
         var releaseAttempts = 0
+        var recoveryRequests = 0
 
         val result = resultAfterDurableUploadCapabilityRelease(
             releaseCapability = {
                 releaseAttempts += 1
                 false
             },
+            onCleanupRetained = { recoveryRequests += 1 },
             releasedResult = "finished",
             retainedResult = "retry",
         )
 
         assertEquals("retry", result)
         assertEquals(1, releaseAttempts)
+        assertEquals(1, recoveryRequests)
     }
 
     @Test

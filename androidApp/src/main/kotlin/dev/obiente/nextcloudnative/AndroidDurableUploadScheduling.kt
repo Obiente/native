@@ -168,12 +168,17 @@ internal suspend fun reconcileQueuedDurableUploads(
     jobs: List<AndroidDurableMultipartUploadJob>,
     allowQueuedScheduling: Boolean = true,
     schedulerOwns: suspend (AndroidDurableMultipartUploadJob) -> Boolean = { false },
+    cleanupCapability: suspend (AndroidDurableMultipartUploadJob) -> Unit,
     schedule: suspend (AndroidDurableMultipartUploadJob) -> Unit,
 ): Boolean {
     var allScheduled = true
     jobs.filter { job -> job.requiresSchedulingRecovery(allowQueuedScheduling) }.forEach { job ->
         try {
-            if (!schedulerOwns(job)) schedule(job)
+            if (job.capabilityCleanupPending) {
+                cleanupCapability(job)
+            } else if (!schedulerOwns(job)) {
+                schedule(job)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
