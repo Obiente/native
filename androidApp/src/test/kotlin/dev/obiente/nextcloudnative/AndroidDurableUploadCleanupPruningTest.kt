@@ -88,6 +88,29 @@ class AndroidDurableUploadCleanupPruningTest {
     }
 
     @Test
+    fun `wrong typed account registry runs terminal cleanup but not queued uploads`() = runBlocking {
+        val pending = fixtureJob(index = 1, cleanupPending = true)
+        val queued = fixtureJob(index = 2, state = DurableUploadState.Queued)
+        val cleaned = mutableListOf<AndroidDurableMultipartUploadJob>()
+        val scheduled = mutableListOf<AndroidDurableMultipartUploadJob>()
+        val accountResolutionAvailable = durableUploadAccountResolutionAvailable {
+            throw ClassCastException("synthetic wrong-typed account registry")
+        }
+
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(pending, queued),
+            allowQueuedScheduling = accountResolutionAvailable,
+            cleanupCapability = cleaned::add,
+            schedule = scheduled::add,
+        )
+
+        assertFalse(accountResolutionAvailable)
+        assertTrue(allScheduled)
+        assertEquals(listOf(pending), cleaned)
+        assertTrue(scheduled.isEmpty())
+    }
+
+    @Test
     fun `terminal cleanup reconciliation preserves cancellation`() = runBlocking {
         val pending = fixtureJob(index = 1, cleanupPending = true)
 
