@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.provider.DocumentsContract
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 internal val NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS: Int =
     Intent.FLAG_GRANT_READ_URI_PERMISSION or
@@ -11,10 +14,21 @@ internal val NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS: Int =
         Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
 
 internal fun requireAndroidAccountRemovalWritebacksResolved(resolved: Boolean) {
-    check(resolved) {
-        "Finish or discard pending document changes before removing this account."
-    }
+    if (!resolved) rejectAndroidAccountRemovalForPendingDocumentChanges()
 }
+
+internal fun rejectAndroidAccountRemovalForPendingDocumentChanges(): Nothing =
+    error("Finish or discard pending document changes before removing this account.")
+
+internal suspend fun <Result> withAndroidAccountRemovalLease(
+    accountIdentity: String,
+    guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
+    action: suspend () -> Result,
+): Result = guard.tryWithAccount(
+    accountId = accountIdentity,
+    unavailable = { rejectAndroidAccountRemovalForPendingDocumentChanges() },
+    action = action,
+)
 
 internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     preflight: suspend () -> Unit,
@@ -22,8 +36,29 @@ internal suspend fun revokeAndroidSessionAfterRemovalPreflight(
     removeLocalAccount: suspend () -> Unit,
 ) {
     preflight()
-    revoke()
-    removeLocalAccount()
+    val revocationFailure: Exception? = try {
+        revoke()
+        null
+    } catch (cancelled: CancellationException) {
+        cancelled
+    } catch (failure: Exception) {
+        failure
+    }
+    val localRemovalFailure = try {
+        withContext(NonCancellable) { removeLocalAccount() }
+        null
+    } catch (failure: Exception) {
+        failure
+    }
+    if (revocationFailure is CancellationException) {
+        localRemovalFailure?.let(revocationFailure::addSuppressed)
+        throw revocationFailure
+    }
+    if (localRemovalFailure != null) {
+        revocationFailure?.let(localRemovalFailure::addSuppressed)
+        throw localRemovalFailure
+    }
+    revocationFailure?.let { throw it }
 }
 
 internal suspend fun revokeAndroidSessionWithAccountLease(
@@ -32,7 +67,7 @@ internal suspend fun revokeAndroidSessionWithAccountLease(
     preflight: suspend () -> Unit,
     revoke: suspend () -> Unit,
     removeLocalAccount: suspend () -> Unit,
-) = guard.withAccount(accountIdentity) {
+) = withAndroidAccountRemovalLease(accountIdentity, guard) {
     revokeAndroidSessionAfterRemovalPreflight(preflight, revoke, removeLocalAccount)
 }
 
