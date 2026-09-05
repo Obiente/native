@@ -543,6 +543,7 @@ class AndroidDurableMultipartUploadPolicyTest {
         val allScheduled = reconcileQueuedDurableUploads(
             jobs = listOf(owned, missing),
             schedulerOwns = { job -> job == owned },
+            cleanupCapability = { error("Queued uploads must not enter local cleanup.") },
             schedule = { job -> attempted += job.id },
         )
 
@@ -927,10 +928,14 @@ class AndroidDurableMultipartUploadPolicyTest {
         )
         val attempted = mutableListOf<String>()
 
-        val allScheduled = reconcileQueuedDurableUploads(listOf(first, completed, second)) { job ->
-            attempted += job.id
-            if (job == first) throw IOException("Synthetic scheduler rejection")
-        }
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(first, completed, second),
+            cleanupCapability = { error("Completed history must not enter cleanup.") },
+            schedule = { job ->
+                attempted += job.id
+                if (job == first) throw IOException("Synthetic scheduler rejection")
+            },
+        )
 
         assertEquals(listOf(first.id, second.id), attempted)
         assertFalse(allScheduled)
