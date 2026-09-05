@@ -86,16 +86,34 @@ internal suspend fun preflightAndroidAccountRemoval(context: Context, session: N
     requireAndroidFileSyncAccountRemovalReady(context, NextcloudDocumentIds.accountKey(session))
 }
 
-internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
+internal suspend fun prepareAndroidAccountRemoval(
+    context: Context,
+    session: NextcloudSession,
+): AndroidDocumentProviderIncarnationRetirement {
     preflightAndroidAccountRemoval(context, session)
+    return AndroidDocumentProviderIncarnationStore(context)
+        .retireForRemoval(NextcloudDocumentIds.accountKey(session))
 }
 
+internal fun rollbackAndroidAccountRemoval(
+    context: Context,
+    retirement: AndroidDocumentProviderIncarnationRetirement,
+) = AndroidDocumentProviderIncarnationStore(context).rollback(retirement)
+
 internal fun revokeAndroidAccountDocumentGrants(context: Context, accountIdentity: String) {
-    AndroidAccountDocumentGrantScope.entries.forEach { scope ->
-        context.revokeUriPermission(
-            scope.uri(nextcloudDocumentsAuthority(context.packageName), NextcloudDocumentIds.rootId(accountIdentity)),
-            NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS,
-        )
+    val retired = AndroidDocumentProviderIncarnationStore(context).retiredIncarnation(accountIdentity)
+        ?: NextcloudDocumentIncarnation.Legacy
+    val rootIds = listOf(
+        NextcloudDocumentIds.rootId(accountIdentity, NextcloudDocumentIncarnation.Legacy),
+        NextcloudDocumentIds.rootId(accountIdentity, retired),
+    ).distinct()
+    rootIds.forEach { rootId ->
+        AndroidAccountDocumentGrantScope.entries.forEach { scope ->
+            context.revokeUriPermission(
+                scope.uri(nextcloudDocumentsAuthority(context.packageName), rootId),
+                NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS,
+            )
+        }
     }
 }
 

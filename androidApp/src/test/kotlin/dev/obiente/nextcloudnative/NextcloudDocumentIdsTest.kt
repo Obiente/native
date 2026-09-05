@@ -9,6 +9,8 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class NextcloudDocumentIdsTest {
+    private val legacy = NextcloudDocumentIncarnation.Legacy
+
     @Test
     fun cacheAccountIdIsAFullSha256Digest() {
         val digest = NextcloudDocumentIds.cacheAccountId(session)
@@ -26,13 +28,13 @@ class NextcloudDocumentIdsTest {
 
     @Test
     fun rootAndUnicodePathsRoundTripWithoutLeakingAccountDetails() {
-        val root = NextcloudDocumentIds.rootId(session)
-        assertEquals("", NextcloudDocumentIds.requireForSession(root, session).path)
+        val root = NextcloudDocumentIds.rootId(session, legacy)
+        assertEquals("", NextcloudDocumentIds.requireForSession(root, session, legacy).path)
 
-        val id = NextcloudDocumentIds.documentId(session, "/Photos/July & August/旅行.jpg/")
+        val id = NextcloudDocumentIds.documentId(session, legacy, "/Photos/July & August/旅行.jpg/")
         assertEquals(
             "Photos/July & August/旅行.jpg",
-            NextcloudDocumentIds.requireForSession(id, session).path,
+            NextcloudDocumentIds.requireForSession(id, session, legacy).path,
         )
         assertFalse(id.contains("cloud.example"))
         assertFalse(id.contains("alice"))
@@ -43,8 +45,8 @@ class NextcloudDocumentIdsTest {
     fun documentIdsAreStableAcrossCredentialRotation() {
         val rotated = session.copy(appPassword = "new-app-password")
         assertEquals(
-            NextcloudDocumentIds.documentId(session, "Documents/report.pdf"),
-            NextcloudDocumentIds.documentId(rotated, "Documents/report.pdf"),
+            NextcloudDocumentIds.documentId(session, legacy, "Documents/report.pdf"),
+            NextcloudDocumentIds.documentId(rotated, legacy, "Documents/report.pdf"),
         )
     }
 
@@ -65,22 +67,80 @@ class NextcloudDocumentIdsTest {
     @Test
     fun accountIdentitySeparatesOtherwiseEqualPaths() {
         val other = session.copy(loginName = "bob")
-        val aliceId = NextcloudDocumentIds.documentId(session, "Documents/report.pdf")
-        val bobId = NextcloudDocumentIds.documentId(other, "Documents/report.pdf")
+        val aliceId = NextcloudDocumentIds.documentId(session, legacy, "Documents/report.pdf")
+        val bobId = NextcloudDocumentIds.documentId(other, legacy, "Documents/report.pdf")
         assertNotEquals(aliceId, bobId)
         assertFailsWith<IllegalArgumentException> {
-            NextcloudDocumentIds.requireForSession(aliceId, other)
+            NextcloudDocumentIds.requireForSession(aliceId, other, legacy)
         }
     }
 
     @Test
     fun rejectsTraversalAndMalformedIds() {
         assertFailsWith<IllegalArgumentException> {
-            NextcloudDocumentIds.documentId(session, "Documents/../secrets.txt")
+            NextcloudDocumentIds.documentId(session, legacy, "Documents/../secrets.txt")
         }
         assertFailsWith<IllegalArgumentException> { NextcloudDocumentIds.parse("not-a-nextcloud-document") }
-        val rootWithNonCanonicalPadding = NextcloudDocumentIds.rootId(session) + "=="
+        val rootWithNonCanonicalPadding = NextcloudDocumentIds.rootId(session, legacy) + "=="
         assertFailsWith<IllegalArgumentException> { NextcloudDocumentIds.parse(rootWithNonCanonicalPadding) }
+    }
+
+    @Test
+    fun versionedIdsRejectEarlierFileAndSubfolderGrantIds() {
+        val first = NextcloudDocumentIncarnation.Versioned("1".repeat(32))
+        val replacement = NextcloudDocumentIncarnation.Versioned("2".repeat(32))
+        val fileId = NextcloudDocumentIds.documentId(session, first, "Documents/report.pdf")
+        val subfolderId = NextcloudDocumentIds.documentId(session, first, "Documents/Private")
+
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.requireForSession(fileId, session, replacement)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.requireForSession(subfolderId, session, replacement)
+        }
+        assertEquals(
+            "Documents/report.pdf",
+            NextcloudDocumentIds.requireForSession(
+                NextcloudDocumentIds.documentId(session, replacement, "Documents/report.pdf"),
+                session,
+                replacement,
+            ).path,
+        )
+    }
+
+    @Test
+    fun versionedRootIdentityChangesWithTheAccountIncarnation() {
+        val first = NextcloudDocumentIncarnation.Versioned("1".repeat(32))
+        val replacement = NextcloudDocumentIncarnation.Versioned("2".repeat(32))
+
+        assertNotEquals(
+            NextcloudDocumentIds.rootId(session, first),
+            NextcloudDocumentIds.rootId(session, replacement),
+        )
+        assertNotEquals(
+            NextcloudDocumentIds.providerRootId(session, first),
+            NextcloudDocumentIds.providerRootId(session, replacement),
+        )
+    }
+
+    @Test
+    fun providerRootIdsRoundTripTheirAccountAndIncarnation() {
+        val versioned = NextcloudDocumentIncarnation.Versioned("1".repeat(32))
+
+        assertEquals(
+            NextcloudDocumentRootReference(NextcloudDocumentIds.accountKey(session), legacy),
+            NextcloudDocumentIds.parseProviderRootId(NextcloudDocumentIds.providerRootId(session, legacy)),
+        )
+        assertEquals(
+            NextcloudDocumentRootReference(NextcloudDocumentIds.accountKey(session), versioned),
+            NextcloudDocumentIds.parseProviderRootId(NextcloudDocumentIds.providerRootId(session, versioned)),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.parseProviderRootId("${NextcloudDocumentIds.accountKey(session)}:broken")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NextcloudDocumentIds.parseProviderRootId("${NextcloudDocumentIds.accountKey(session)}:${"1".repeat(32)}:extra")
+        }
     }
 
     @Test
