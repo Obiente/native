@@ -1,0 +1,48 @@
+package dev.obiente.nextcloudnative
+
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+
+class AndroidDurableUploadSchedulingRecoveryTest {
+    @Test
+    fun `immediate recovery interrupts an unrelated worker follow up delay`() = runBlocking {
+        val recoverySignal = AndroidDurableUploadSchedulingRecoverySignal()
+        val workId = UUID.randomUUID()
+        val delayEntered = CompletableDeferred<Unit>()
+        val expected = CancellationException("monitor stopped after immediate recovery")
+        var recoveryRuns = 0
+
+        recoverySignal.requestAfterWorkStopsRunning(workId)
+        val monitoring = async {
+            assertFailsWith<CancellationException> {
+                monitorQueuedDurableUploadScheduling(
+                    recover = {
+                        recoveryRuns += 1
+                        if (recoveryRuns == 2) throw expected
+                    },
+                    awaitWorkStopsRunning = { requestedWorkId ->
+                        assertEquals(workId, requestedWorkId)
+                    },
+                    wait = {
+                        delayEntered.complete(Unit)
+                        CompletableDeferred<Unit>().await()
+                    },
+                    recoverySignal = recoverySignal,
+                )
+            }
+        }
+
+        delayEntered.await()
+        recoverySignal.request()
+
+        assertTrue(monitoring.await() === expected)
+        assertEquals(2, recoveryRuns)
+    }
+}
