@@ -499,6 +499,7 @@ internal class AndroidNextcloudServices(
         prepareAccountRemoval = { session -> prepareAndroidAccountRemoval(appContext, session) },
         removeQueuedUploads = accountOwnedStateCleanup::remove,
         retryQueuedUploadsCleanup = accountOwnedStateCleanup::retry,
+        retryQueuedUploadsCleanupWithoutCredentials = accountOwnedStateCleanup::retryWithoutCredentials,
     )
 
     init {
