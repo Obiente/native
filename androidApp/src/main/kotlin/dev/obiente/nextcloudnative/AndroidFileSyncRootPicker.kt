@@ -47,6 +47,7 @@ internal class AndroidFileSyncRootPicker(private val context: Context) {
         }
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         val result = runCatching {
+            requireExternalAndroidPickerUri(uri.toString(), context.applicationContext.packageName)
             context.contentResolver.takePersistableUriPermission(uri, flags)
             FileSyncLocalRoot(uri.toString(), queryDisplayName(context.contentResolver, uri))
         }
