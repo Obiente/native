@@ -2,6 +2,9 @@ package dev.obiente.nextcloudnative.app
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -11,6 +14,25 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class HomeWorkspaceLayoutTest {
+    @Test
+    fun `coordinator defers preference reads until its effect runs`() = runBlocking {
+        val storage = RecordingHomeWorkspaceStorage()
+        val currentScope = scope(HomeFormFactor.Phone)
+        val legacyDigest = "b".repeat(64)
+        val coordinator = HomeWorkspaceLayoutLoadCoordinator {
+            HomeWorkspaceLayoutRepository(storage).loadWithMigration(currentScope, legacyDigest)
+        }
+
+        assertEquals(0, storage.readCount)
+        assertEquals(null, coordinator.state)
+
+        val loaded = coordinator.load(Dispatchers.Unconfined)
+
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), loaded.layout)
+        assertEquals(2, storage.readCount)
+        assertEquals(loaded, coordinator.state)
+    }
+
     @Test
     fun `defaults are useful and distinct for each form factor`() {
         val phone = defaultHomeWorkspaceLayout(scope(HomeFormFactor.Phone))
@@ -289,6 +311,115 @@ class HomeWorkspaceLayoutTest {
     }
 
     @Test
+    fun `legacy account layout returns a migration plan without writing during load`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyLayout = defaultHomeWorkspaceLayout(legacyScope)
+            .hide(HomeSectionIds.PhotoBackup)
+            .resize(HomeSectionIds.Activity, HomeSectionSize.Dense)
+        assertTrue(repository.save(legacyLayout))
+
+        val loaded = repository.loadWithMigration(currentScope, legacyScope.accountScopeDigest)
+
+        assertEquals(currentScope, loaded.layout.scope)
+        assertEquals(legacyLayout.sections, loaded.layout.sections)
+        assertFalse(loaded.storageAuthoritative)
+        assertTrue(loaded.legacyMigrationRequired)
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), repository.load(currentScope))
+        assertTrue(repository.save(loaded.layout))
+        assertEquals(loaded.layout, repository.load(currentScope))
+        assertEquals(currentScope.persistenceKey, storage.lastKey)
+    }
+
+    @Test
+    fun `legacy promotion cannot overwrite a newer canonical layout`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyLayout = defaultHomeWorkspaceLayout(legacyScope).hide(HomeSectionIds.PhotoBackup)
+        assertTrue(repository.save(legacyLayout))
+        val loaded = repository.loadWithMigration(currentScope, legacyScope.accountScopeDigest)
+        val newer = defaultHomeWorkspaceLayout(currentScope).hide(HomeSectionIds.Activity)
+        assertTrue(repository.save(newer))
+
+        val resolved = repository.resolveLegacyMigration(loaded)
+
+        assertEquals(newer, resolved.layout)
+        assertTrue(resolved.storageAuthoritative)
+        assertFalse(resolved.legacyMigrationRequired)
+    }
+
+    @Test
+    fun `failed canonical read never overwrites it from a stale legacy layout`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyLayout = defaultHomeWorkspaceLayout(legacyScope).hide(HomeSectionIds.PhotoBackup)
+        val canonicalLayout = defaultHomeWorkspaceLayout(currentScope).hide(HomeSectionIds.Activity)
+        assertTrue(repository.save(canonicalLayout))
+        val canonicalValue = storage.value(currentScope.persistenceKey)
+        assertTrue(repository.save(legacyLayout))
+        storage.failedReadKey = currentScope.persistenceKey
+
+        val loaded = repository.load(currentScope, legacyScope.accountScopeDigest)
+
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), loaded)
+        assertEquals(legacyScope.persistenceKey, storage.lastKey)
+        assertEquals(canonicalValue, storage.value(currentScope.persistenceKey))
+        storage.failedReadKey = null
+        assertEquals(canonicalLayout, repository.load(currentScope))
+    }
+
+    @Test
+    fun `canonical read cancellation remains control flow`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        storage.failedReadKey = currentScope.persistenceKey
+        storage.readFailure = CancellationException("synthetic cancellation")
+
+        assertFailsWith<CancellationException> {
+            repository.load(currentScope, legacyAccountScopeDigest = "b".repeat(64))
+        }
+        assertEquals(null, storage.lastKey)
+    }
+
+    @Test
+    fun `legacy read cancellation remains control flow`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        storage.failedReadKey = legacyScope.persistenceKey
+        storage.readFailure = CancellationException("synthetic legacy cancellation")
+
+        assertFailsWith<CancellationException> {
+            repository.load(currentScope, legacyAccountScopeDigest = legacyScope.accountScopeDigest)
+        }
+        assertEquals(null, storage.lastKey)
+    }
+
+    @Test
+    fun `failed legacy read leaves default layout non authoritative`() {
+        val storage = RecordingHomeWorkspaceStorage()
+        val repository = HomeWorkspaceLayoutRepository(storage)
+        val currentScope = scope(HomeFormFactor.Phone, digit = 'a')
+        val legacyScope = scope(HomeFormFactor.Phone, digit = 'b')
+        storage.failedReadKey = legacyScope.persistenceKey
+
+        val loaded = repository.loadWithMigration(currentScope, legacyScope.accountScopeDigest)
+
+        assertEquals(defaultHomeWorkspaceLayout(currentScope), loaded.layout)
+        assertFalse(loaded.storageAuthoritative)
+        assertFalse(loaded.legacyMigrationRequired)
+        assertEquals(null, storage.value(currentScope.persistenceKey))
+    }
+
+    @Test
     fun `repository reports snapshot encoding failures without touching storage`() {
         val storage = RecordingHomeWorkspaceStorage()
         val repository = HomeWorkspaceLayoutRepository(
@@ -342,13 +473,28 @@ class HomeWorkspaceLayoutTest {
         private val values = mutableMapOf<String, String>()
         var lastKey: String? = null
         var lastValue: String? = null
+        var failedReadKey: String? = null
+        var readFailure: Throwable = IllegalStateException("synthetic canonical read failure")
+        var readCount: Int = 0
 
-        override fun read(persistenceKey: String): String? = values[persistenceKey]
+        override fun read(persistenceKey: String): String? {
+            readCount += 1
+            if (persistenceKey == failedReadKey) throw readFailure
+            return values[persistenceKey]
+        }
 
         override fun write(persistenceKey: String, encodedSnapshot: String) {
             lastKey = persistenceKey
             lastValue = encodedSnapshot
             values[persistenceKey] = encodedSnapshot
         }
+
+        override fun writeIfAbsent(persistenceKey: String, encodedSnapshot: String): Boolean {
+            if (persistenceKey in values) return false
+            write(persistenceKey, encodedSnapshot)
+            return true
+        }
+
+        fun value(persistenceKey: String): String? = values[persistenceKey]
     }
 }

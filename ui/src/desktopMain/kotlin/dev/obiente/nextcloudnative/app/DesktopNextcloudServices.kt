@@ -3684,15 +3684,16 @@ class DesktopNextcloudServices(
             }
             listOf(server, login, password).forEach(supportDiagnostics::registerPrivateValue)
             NextcloudSession(server, login, password).also { session ->
+                restoreDesktopAccountRegistry(preferences, session, supportDiagnostics::record)
                 val accountIdentity = desktopFileCacheAccountId(session)
                 supportDiagnostics.setActiveAccountIdentity(accountIdentity)
                 supportIntake.setActiveAccountIdentity(accountIdentity)
             }
         }
     }
-
     override suspend fun saveSession(session: NextcloudSession) = withContext(Dispatchers.IO) {
         sessionPublicationGuard.serialize {
+            val encodedRegistry = prepareDesktopAccountRegistry(session)
             listOf(session.serverUrl, session.loginName, session.appPassword)
                 .forEach(supportDiagnostics::registerPrivateValue)
             try {
@@ -3718,6 +3719,7 @@ class DesktopNextcloudServices(
                 )
                 throw failure
             }
+            persistDesktopAccountRegistry(preferences, encodedRegistry)
             preferences.put(KEY_SERVER, session.serverUrl)
             preferences.put(KEY_LOGIN, session.loginName)
             val accountIdentity = desktopFileCacheAccountId(session)
@@ -3727,7 +3729,6 @@ class DesktopNextcloudServices(
         synchronized(fileRangeSessionLock) { sessionClearing = false }
         startDesktopSyncLifecycle()
     }
-
     override suspend fun clearSession() = withContext(Dispatchers.IO) {
         val userHome = File(System.getProperty("user.home"))
         val rangeSessions = synchronized(fileRangeSessionLock) {
@@ -3860,6 +3861,7 @@ class DesktopNextcloudServices(
             sessionPublicationGuard.serialize {
                 preferences.remove(KEY_SERVER)
                 preferences.remove(KEY_LOGIN)
+                clearDesktopAccountRegistry(preferences)
                 supportDiagnostics.setActiveAccountIdentity(null)
                 supportIntake.setActiveAccountIdentity(null)
             }
@@ -3871,7 +3873,6 @@ class DesktopNextcloudServices(
             }
         }
     }
-
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,
         key: DeckCardDraftKey,

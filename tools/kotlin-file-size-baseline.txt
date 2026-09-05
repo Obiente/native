@@ -8,7 +8,7 @@ contractAcquisition/src/test/kotlin/dev/obiente/nextcloudnative/contracts/Signed
 ui/src/androidMain/kotlin/dev/obiente/nextcloudnative/app/AndroidCompatibilityVideoPlaybackService.kt|808
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityWorkspace.kt|1157
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatus.kt|919
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1841
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DashboardStatusScreens.kt|1838
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DeckNativeActions.kt|1158
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/DynamicNativeRuntime.kt|2512
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/FileOfflineCenterScreen.kt|2600
@@ -28,7 +28,7 @@ ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudMediaViewer.kt
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNativeApp.kt|12432
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudNotes.kt|1693
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPhotoEditor.kt|808
-ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1730
+ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/NextcloudPlatform.kt|1724
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoEditing.kt|847
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoFolderBrowsing.kt|895
 ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/PhotoTimelinePaging.kt|860

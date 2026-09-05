@@ -92,7 +92,7 @@ private sealed interface CalendarLoadState {
 }
 
 private object CalendarWorkspaceMemoryCache {
-    private val entries = linkedMapOf<String, CalendarLoadState.Ready>()
+    private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, CalendarLoadState.Ready>()
 
     fun get(
         session: NextcloudSession,
@@ -116,8 +116,8 @@ private object CalendarWorkspaceMemoryCache {
         userId: String,
         month: CalendarMonth,
         timeWindow: GroupwareDavTimeWindow,
-    ): String = "${session.serverUrl.trimEnd('/')}\n${session.loginName}\n$userId\n" +
-        "${month.year}-${month.month}\n${timeWindow.startUtc}-${timeWindow.endUtc}"
+    ): Pair<NextcloudAccountId, String> = session.accountId to
+        "$userId\n${month.year}-${month.month}\n${timeWindow.startUtc}-${timeWindow.endUtc}"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
