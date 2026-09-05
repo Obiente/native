@@ -224,6 +224,27 @@ internal class AndroidLocalUploadPicker(context: Context) {
         }
     }
 
+    fun markOwnershipCheckPending(file: LocalUploadFile): Boolean = synchronized(CAPABILITY_LOCK) {
+        val source = try {
+            selections[file.selectionId] ?: load(file.selectionId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        if (source == null || source.file != file) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        if (source.phase != CapabilityPhase.Ready) {
+            return@synchronized retainCapabilityCleanup(file.selectionId)
+        }
+        val ownershipCheckPending = source.copy(phase = CapabilityPhase.OwnershipCheckPending)
+        selections[file.selectionId] = ownershipCheckPending
+        val persisted = durableUploadCleanupStep { persist(ownershipCheckPending) }
+        requestQueuedDurableUploadSchedulingRecovery()
+        persisted
+    }
+
     fun reconcileCapabilities(ownedSelectionIds: Set<String>): Boolean = synchronized(CAPABILITY_LOCK) {
         val capabilities = try {
             loadCapabilitySnapshot().toMutableMap()
@@ -235,17 +256,34 @@ internal class AndroidLocalUploadPicker(context: Context) {
         var allRecovered = true
         capabilities.values
             .sortedBy { capability -> capability.file.selectionId }
-            .filter { capability ->
-                shouldRecoverDurableUploadCapability(
+            .forEach { capability ->
+                val selectionId = capability.file.selectionId
+                val ownedByDurableJob = selectionId in ownedSelectionIds
+                if (
+                    shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
+                        phase = capability.phase,
+                        ownedByDurableJob = ownedByDurableJob,
+                    )
+                ) {
+                    val ready = capability.copy(
+                        phase = CapabilityPhase.Ready,
+                        processGeneration = PROCESS_GENERATION,
+                    )
+                    if (durableUploadCleanupStep { persist(ready) }) {
+                        capabilities[selectionId] = ready
+                        selections[selectionId] = ready
+                    } else {
+                        allRecovered = false
+                    }
+                    return@forEach
+                }
+                if (!shouldRecoverDurableUploadCapability(
                     phase = capability.phase,
                     processGeneration = capability.processGeneration,
                     currentProcessGeneration = PROCESS_GENERATION,
-                    ownedByDurableJob = capability.file.selectionId in ownedSelectionIds,
-                    cleanupExplicitlyPending = capability.file.selectionId in PENDING_CLEANUP_SELECTIONS,
-                )
-            }
-            .forEach { capability ->
-                val selectionId = capability.file.selectionId
+                    ownedByDurableJob = ownedByDurableJob,
+                    cleanupExplicitlyPending = selectionId in PENDING_CLEANUP_SELECTIONS,
+                )) return@forEach
                 val ownedElsewhere = capabilities.anyOtherCapabilityOwnsUri(
                     capability.uri,
                     selectionId,
@@ -389,7 +427,7 @@ internal class AndroidLocalUploadPicker(context: Context) {
         }
         val processGeneration = payload.optionalStrictString("processGeneration")
             ?.also(::requireSafeProcessGeneration)
-        val grantPreExisting = payload.optionalStrictBoolean("grantPreExisting") ?: true
+        val grantPreExisting = persistedDurableUploadGrantPreExisting(payload)
         return SelectedSource(
             uri = Uri.parse(payload.getString("uri")),
             file = file,
@@ -452,6 +490,9 @@ internal fun JSONObject.optionalStrictBoolean(key: String): Boolean? {
         value
     }
 }
+
+internal fun persistedDurableUploadGrantPreExisting(payload: JSONObject): Boolean =
+    payload.optionalStrictBoolean("grantPreExisting") ?: false
 
 internal class AndroidLocalUploadCapabilityUnavailableException(
     message: String,
@@ -530,6 +571,7 @@ internal fun acquireDurableUploadCapability(
 internal enum class CapabilityPhase(val persistedValue: String) {
     Acquiring("acquiring"),
     Ready("ready"),
+    OwnershipCheckPending("ownership-check-pending"),
     CleanupPending("cleanup-pending");
 
     companion object {
@@ -550,6 +592,11 @@ internal fun shouldRecoverDurableUploadCapability(
         phase != CapabilityPhase.Ready ||
         processGeneration != currentProcessGeneration
 )
+
+internal fun shouldRestoreDurableUploadCapabilityAfterOwnershipCheck(
+    phase: CapabilityPhase,
+    ownedByDurableJob: Boolean,
+): Boolean = phase == CapabilityPhase.OwnershipCheckPending && ownedByDurableJob
 
 internal fun isDurableUploadCapabilityReady(phase: CapabilityPhase): Boolean =
     phase == CapabilityPhase.Ready

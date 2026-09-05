@@ -75,6 +75,7 @@ internal class AndroidDurableMultipartUploads(
         selectionId = file.selectionId,
         hasActiveSelection = store::hasActiveSelection,
         releaseSelection = { picker.release(file) },
+        markOwnershipCheckPending = { picker.markOwnershipCheckPending(file) },
     )
 
     suspend fun <Result> runEnqueueWithCancellationCleanup(
@@ -186,12 +187,30 @@ internal fun releaseUnownedDurableUploadSelection(
     selectionId: String,
     hasActiveSelection: (String) -> Boolean,
     releaseSelection: () -> Boolean,
+    markOwnershipCheckPending: () -> Boolean = { false },
 ): Boolean = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
-    val selectionIsDefinitelyInactive = runCatching {
-        !hasActiveSelection(selectionId)
-    }.getOrNull() == true
-    if (!selectionIsDefinitelyInactive) return@synchronized false
-    runCatching(releaseSelection).getOrDefault(false)
+    val active = try {
+        hasActiveSelection(selectionId)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        try {
+            markOwnershipCheckPending()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The capability remains in its previous fail-closed state.
+        }
+        return@synchronized false
+    }
+    if (active) return@synchronized false
+    try {
+        releaseSelection()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
 }
 
 internal suspend fun <Result> runDurableUploadEnqueueWithCancellationCleanup(
