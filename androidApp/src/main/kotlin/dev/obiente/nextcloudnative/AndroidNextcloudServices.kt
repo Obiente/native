@@ -1158,20 +1158,7 @@ internal class AndroidNextcloudServices(
     }
 
     private fun notifyDocumentsDocumentChanged(session: NextcloudSession, path: String) {
-        appContext.contentResolver.notifyChange(
-            DocumentsContract.buildDocumentUri(
-                nextcloudDocumentsAuthority(appContext.packageName),
-                NextcloudDocumentIds.documentId(session, path),
-            ),
-            null,
-        )
-        appContext.contentResolver.notifyChange(
-            DocumentsContract.buildChildDocumentsUri(
-                nextcloudDocumentsAuthority(appContext.packageName),
-                NextcloudDocumentIds.documentId(session, NextcloudDocumentIds.parentPath(path)),
-            ),
-            null,
-        )
+        notifyAndroidDocumentChanged(appContext, session, path)
     }
 
     override suspend fun beginLogin(
