@@ -54,8 +54,7 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
                     workManager.cancelUniqueWork(workName).await()
                 }
             },
-            releaseChunk = { request, uploadId ->
-                if (session == null || webDav == null) return@removeAndroidIncomingShareRequests
+            releaseChunk = if (session == null || webDav == null) null else { request, uploadId ->
                 val userId = requireNotNull(request.userId?.takeIf(String::isNotBlank)) {
                     "The staged share chunk is missing its account owner."
                 }
@@ -68,6 +67,9 @@ internal class AndroidIncomingShareAccountCleanup(context: Context) {
             },
             recordChunkReleaseFailure = {
                 Log.w(LOG_TAG, "Remote staged-share chunk cleanup deferred during account removal")
+            },
+            recordChunkAbandonment = { _, _ ->
+                Log.w(LOG_TAG, "Remote staged-share chunk abandoned after credential removal")
             },
             removeRequest = { requestId ->
                 check(store.remove(requestId)) { "The staged share data could not be released." }
@@ -116,17 +118,21 @@ internal fun incomingShareAccountWorkNames(requestId: String): List<String> = li
 internal suspend fun removeAndroidIncomingShareRequests(
     requests: List<AndroidIncomingShareAccountRequest>,
     cancelWork: suspend (String) -> Unit,
-    releaseChunk: suspend (AndroidIncomingShareRequest, String) -> Unit,
+    releaseChunk: (suspend (AndroidIncomingShareRequest, String) -> Unit)?,
     recordChunkReleaseFailure: (Throwable) -> Unit = {},
+    recordChunkAbandonment: (AndroidIncomingShareRequest, String) -> Unit = { _, _ -> },
     removeRequest: (String) -> Unit,
 ) {
     requests.forEach { request -> cancelWork(request.id) }
     val retained = mutableSetOf<String>()
     var firstReleaseFailure: Exception? = null
     requests.forEach { accountRequest ->
-        accountRequest.request?.chunkSession?.let { chunk ->
+        accountRequest.request?.chunkSession?.takeIf { releaseChunk == null }?.let { chunk ->
+            recordChunkAbandonment(accountRequest.request, chunk.uploadId)
+        }
+        accountRequest.request?.chunkSession?.takeIf { releaseChunk != null }?.let { chunk ->
             try {
-                releaseChunk(accountRequest.request, chunk.uploadId)
+                requireNotNull(releaseChunk)(accountRequest.request, chunk.uploadId)
             } catch (failure: kotlinx.coroutines.CancellationException) {
                 throw failure
             } catch (failure: Exception) {
