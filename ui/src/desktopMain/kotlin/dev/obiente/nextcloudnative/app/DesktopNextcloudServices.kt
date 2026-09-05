@@ -3712,13 +3712,10 @@ class DesktopNextcloudServices(
         var removalFailure: Throwable? = null
         try {
             val activeAccountId = activeAccountId()
-            val activeSession = activeAccountId?.let(::loadSession)
-            check(expectedSession == null || activeSession == expectedSession) {
-                "The account changed before its remote session could be revoked."
-            }
             val activeRecord = activeAccountId?.let { id ->
                 listAccounts().firstOrNull { account -> account.id == id }
             }
+            val activeSession = loadDesktopRemoteRevocationSession(activeAccountId, expectedSession, ::loadSession)
             val accountId = activeSession?.let(::desktopFileCacheAccountId)
                 ?: activeRecord?.let(::desktopFileCacheAccountId)
             val syncJob = synchronized(this) {
