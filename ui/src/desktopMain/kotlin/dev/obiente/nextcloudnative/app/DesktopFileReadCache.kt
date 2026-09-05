@@ -143,6 +143,18 @@ internal class DesktopFileReadCache(
     }
 
     @Synchronized
+    fun removeAccount(accountId: String) {
+        try {
+            purgeDesktopAccountCacheDirectory(root, accountId)
+            virtualListingInvalidationPreferences.remove(accountId)
+            virtualListingInvalidationPreferences.flush()
+        } finally {
+            loadedIndexes.remove(accountId)
+            failedVirtualListingInvalidations.remove(accountId)
+        }
+    }
+
+    @Synchronized
     fun storeListing(
         accountId: String,
         path: String,
@@ -1354,18 +1366,6 @@ private data class MetadataShardIndexGroup(
         require(ordinary.isEmpty() != virtual.isEmpty())
     }
 }
-
-internal fun desktopFileCacheAccountId(session: NextcloudSession): String =
-    sha256Hex("${session.serverUrl}\u0000${session.loginName}")
-
-private fun desktopFilesCacheDirectory(): File {
-    val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
-    val cacheRoot = xdgCache?.let(::File) ?: File(System.getProperty("user.home"), ".cache")
-    return File(cacheRoot, "nextcloud-native/files")
-}
-
-internal fun defaultDesktopFileReadCache(): DesktopFileReadCache =
-    DesktopFileReadCache(desktopFilesCacheDirectory())
 
 private fun String.cachePath(): String {
     require(length <= 8_192)
