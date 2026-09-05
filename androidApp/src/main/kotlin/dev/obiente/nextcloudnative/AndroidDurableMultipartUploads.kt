@@ -589,9 +589,18 @@ private fun JSONObject.toJob(): AndroidDurableMultipartUploadJob {
         request = request,
         state = DurableUploadState.valueOf(getString("state")),
         message = if (isNull("message")) null else getString("message"),
-        capabilityCleanupPending = optBoolean("capabilityCleanupPending", false),
+        capabilityCleanupPending = readCapabilityCleanupPending(),
         updatedAtEpochMillis = getLong("updatedAt"),
     )
+}
+
+private fun JSONObject.readCapabilityCleanupPending(): Boolean {
+    if (!has("capabilityCleanupPending")) return false
+    val persisted = get("capabilityCleanupPending")
+    check(persisted is Boolean) {
+        "The persisted capability cleanup marker is not a boolean."
+    }
+    return persisted
 }
 
 internal fun resolveDurableUploadResource(
