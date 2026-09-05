@@ -6,6 +6,7 @@ import dev.obiente.nextcloudnative.app.NextcloudApiMethod
 import dev.obiente.nextcloudnative.app.NextcloudMultipartUploadRequest
 import dev.obiente.nextcloudnative.app.localUploadFile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -14,6 +15,47 @@ import kotlin.test.assertTrue
 import org.json.JSONArray
 
 class AndroidDurableUploadCleanupPruningTest {
+    @Test
+    fun `reconciliation schedules pending terminal cleanup but skips completed history`() = runBlocking {
+        val pending = fixtureJob(index = 1, cleanupPending = true)
+        val history = fixtureJob(index = 2)
+        val scheduled = mutableListOf<AndroidDurableMultipartUploadJob>()
+
+        val allScheduled = reconcileQueuedDurableUploads(
+            jobs = listOf(pending, history),
+            schedule = { job -> scheduled += job },
+        )
+
+        assertTrue(allScheduled)
+        assertEquals(listOf(pending), scheduled)
+    }
+
+    @Test
+    fun `terminal cleanup scheduling failure is aggregated without blocking queued work`() = runBlocking {
+        val pending = fixtureJob(index = 1, cleanupPending = true)
+        val queued = fixtureJob(index = 2, state = DurableUploadState.Queued)
+        val attempts = mutableListOf<String>()
+
+        val allScheduled = reconcileQueuedDurableUploads(listOf(pending, queued)) { job ->
+            attempts += job.id
+            if (job == pending) error("synthetic cleanup scheduling failure")
+        }
+
+        assertFalse(allScheduled)
+        assertEquals(listOf(pending.id, queued.id), attempts)
+    }
+
+    @Test
+    fun `terminal cleanup reconciliation preserves cancellation`() = runBlocking {
+        val pending = fixtureJob(index = 1, cleanupPending = true)
+
+        assertFailsWith<CancellationException> {
+            reconcileQueuedDurableUploads(listOf(pending)) {
+                throw CancellationException("recovery stopped")
+            }
+        }
+    }
+
     @Test
     fun `pruning retains terminal rows until capability cleanup commits`() {
         val pending = fixtureJob(
