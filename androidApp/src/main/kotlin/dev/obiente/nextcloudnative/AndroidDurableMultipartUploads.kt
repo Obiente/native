@@ -114,9 +114,21 @@ internal class AndroidDurableMultipartUploads(
         }
     }
 
-    suspend fun reconcileQueuedUploads(allowQueuedScheduling: Boolean = true): Boolean =
-        reconcileQueuedDurableUploads(
-            jobs = store.list(),
+    suspend fun reconcileQueuedUploads(allowQueuedScheduling: Boolean = true): Boolean {
+        val (jobs, capabilitiesRecovered) = synchronized(AndroidDurableMultipartUploadStore.LOCK) {
+            val snapshot = store.list()
+            val retainedSelectionIds = snapshot.asSequence()
+                .filter { job ->
+                    job.state == DurableUploadState.Queued ||
+                        job.state == DurableUploadState.Uploading ||
+                        job.capabilityCleanupPending
+                }
+                .map { job -> job.request.file.selectionId }
+                .toSet()
+            snapshot to picker.reconcileCapabilities(retainedSelectionIds)
+        }
+        val uploadsRecovered = reconcileQueuedDurableUploads(
+            jobs = jobs,
             allowQueuedScheduling = allowQueuedScheduling,
             schedulerOwns = { job ->
                 workManager.getWorkInfosForUniqueWorkFlow(durableUploadWorkName(job.id))
@@ -131,6 +143,8 @@ internal class AndroidDurableMultipartUploads(
             },
             schedule = { job -> schedule(job).await() },
         )
+        return capabilitiesRecovered && uploadsRecovered
+    }
 
     fun dismiss(session: NextcloudSession, scope: DurableUploadScope, uploadId: String): Boolean {
         val job = store.find(uploadId) ?: return false
