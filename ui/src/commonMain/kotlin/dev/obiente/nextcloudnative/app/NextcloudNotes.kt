@@ -1378,6 +1378,7 @@ internal fun NextcloudNoteEditor(
                                     .encodeForDurableStorage()
                                 val saved = try {
                                     services.saveDurableMutationRecovery(
+                                        session,
                                         accountScope,
                                         DurableMutationRecoveryKind.NoteDeletion,
                                         encoded,

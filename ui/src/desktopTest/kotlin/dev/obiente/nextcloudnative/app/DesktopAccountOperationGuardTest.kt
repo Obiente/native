@@ -20,6 +20,95 @@ import kotlin.concurrent.thread
 
 class DesktopAccountOperationGuardTest {
     @Test
+    fun lateDurableWriterCannotPublishAfterRemovalAndCredentialReplacement() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replacement = original.copy(appPassword = "replacement-password")
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = original
+        var durablePublished = false
+        val removal = async {
+            guard.serialize {
+                current = replacement
+                removalEntered.complete(Unit)
+                releaseRemoval.await()
+            }
+        }
+        removalEntered.await()
+
+        val staleWriter = async {
+            guard.withAccountPrivateStatePublication(
+                expectedSession = original,
+                resolveSession = { current },
+                unavailable = { false },
+            ) {
+                durablePublished = true
+                true
+            }
+        }
+        yield()
+        assertFalse(staleWriter.isCompleted)
+        releaseRemoval.complete(Unit)
+        removal.await()
+
+        assertFalse(staleWriter.await())
+        assertFalse(durablePublished)
+        assertTrue(
+            guard.withAccountPrivateStatePublication(
+                expectedSession = replacement,
+                resolveSession = { current },
+                unavailable = { false },
+                publish = { true },
+            ),
+        )
+    }
+
+    @Test
+    fun latePendingWriterCannotPublishAfterRemovalAndReadd() = runBlocking {
+        val guard = DesktopAccountOperationGuard()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val readded = original.copy(appPassword = "new-password")
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = original
+        var pendingPublished = false
+        val removal = async {
+            guard.serialize {
+                current = readded
+                removalEntered.complete(Unit)
+                releaseRemoval.await()
+            }
+        }
+        removalEntered.await()
+
+        val staleWriter = async {
+            guard.withAccountPrivateStatePublication(
+                expectedSession = original,
+                resolveSession = { current },
+                unavailable = { false },
+            ) {
+                pendingPublished = true
+                true
+            }
+        }
+        yield()
+        releaseRemoval.complete(Unit)
+        removal.await()
+
+        assertFalse(staleWriter.await())
+        assertFalse(pendingPublished)
+        assertTrue(
+            guard.withAccountPrivateStatePublication(
+                expectedSession = readded,
+                resolveSession = { current },
+                unavailable = { false },
+                publish = { true },
+            ),
+        )
+    }
+
+    @Test
     fun abortedAccountSelectionAlwaysRestartsDesktopSync() = runBlocking {
         var restartCount = 0
 

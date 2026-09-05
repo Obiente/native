@@ -2,7 +2,6 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import dev.obiente.nextcloudnative.app.DynamicApiRequestCoalescer
-import dev.obiente.nextcloudnative.app.NextcloudApiResponse
 import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.durableMutationAccountScope
 import dev.obiente.nextcloudnative.contracts.DynamicApiResponseCache
@@ -17,11 +16,9 @@ internal class AndroidAccountOwnedStateCleanup(
     private val clearPreviewAccount: (String) -> Unit = AndroidNativeMediaPreviewCache(
         File(context.applicationContext.cacheDir, "native-media-previews-v1"),
     )::clearAccount,
-    private val dynamicApiReadCache: DynamicApiResponseCache = DynamicApiResponseCache(
+    private val dynamicApiState: AndroidDynamicApiProcessState = androidDynamicApiProcessState(
         File(context.applicationContext.cacheDir, "dynamic-api-v1"),
     ),
-    private val dynamicApiRequestCoalescer: DynamicApiRequestCoalescer<NextcloudApiResponse> =
-        DynamicApiRequestCoalescer(),
 ) {
     private val appContext = context.applicationContext
     private val fileOffline = AndroidFileOfflineAccountCleanup(appContext)
@@ -98,7 +95,7 @@ internal class AndroidAccountOwnedStateCleanup(
     }
 
     private suspend fun clearDynamicApiState(accountIdentity: String) =
-        clearAndroidDynamicApiState(accountIdentity, dynamicApiRequestCoalescer, dynamicApiReadCache)
+        clearAndroidDynamicApiState(accountIdentity, dynamicApiState.coalescer, dynamicApiState.cache)
 }
 
 internal suspend fun <T> clearAndroidDynamicApiState(

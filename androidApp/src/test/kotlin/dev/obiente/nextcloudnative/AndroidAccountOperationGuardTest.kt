@@ -10,10 +10,115 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 
 class AndroidAccountOperationGuardTest {
+    @Test
+    fun lateDurableWriterCannotPublishAfterRemovalAndCredentialReplacement() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val credentialMutations = Mutex()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replacement = original.copy(appPassword = "replacement-password")
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = original
+        var durablePublished = false
+        val removal = async {
+            credentialMutations.withLock {
+                guard.withAccount(NextcloudDocumentIds.accountKey(original)) {
+                    current = replacement
+                    removalEntered.complete(Unit)
+                    releaseRemoval.await()
+                }
+            }
+        }
+        removalEntered.await()
+
+        val staleWriter = async {
+            withAndroidAccountPrivateStatePublication(
+                expectedSession = original,
+                credentialMutationMutex = credentialMutations,
+                guard = guard,
+                resolveSession = { current },
+                unavailable = { false },
+            ) {
+                durablePublished = true
+                true
+            }
+        }
+        yield()
+        assertFalse(staleWriter.isCompleted)
+        releaseRemoval.complete(Unit)
+        removal.await()
+
+        assertFalse(staleWriter.await())
+        assertFalse(durablePublished)
+        assertTrue(
+            withAndroidAccountPrivateStatePublication(
+                expectedSession = replacement,
+                credentialMutationMutex = credentialMutations,
+                guard = guard,
+                resolveSession = { current },
+                unavailable = { false },
+                publish = { true },
+            ),
+        )
+    }
+
+    @Test
+    fun latePendingWriterCannotPublishAfterRemovalAndReadd() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val credentialMutations = Mutex()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val readded = original.copy(appPassword = "new-password")
+        val removalEntered = CompletableDeferred<Unit>()
+        val releaseRemoval = CompletableDeferred<Unit>()
+        var current: NextcloudSession? = original
+        var pendingPublished = false
+        val removal = async {
+            credentialMutations.withLock {
+                guard.withAccount(NextcloudDocumentIds.accountKey(original)) {
+                    current = readded
+                    removalEntered.complete(Unit)
+                    releaseRemoval.await()
+                }
+            }
+        }
+        removalEntered.await()
+
+        val staleWriter = async {
+            withAndroidAccountPrivateStatePublication(
+                expectedSession = original,
+                credentialMutationMutex = credentialMutations,
+                guard = guard,
+                resolveSession = { current },
+                unavailable = { false },
+            ) {
+                pendingPublished = true
+                true
+            }
+        }
+        yield()
+        releaseRemoval.complete(Unit)
+        removal.await()
+
+        assertFalse(staleWriter.await())
+        assertFalse(pendingPublished)
+        assertTrue(
+            withAndroidAccountPrivateStatePublication(
+                expectedSession = readded,
+                credentialMutationMutex = credentialMutations,
+                guard = guard,
+                resolveSession = { current },
+                unavailable = { false },
+                publish = { true },
+            ),
+        )
+    }
+
     @Test
     fun staleSyncSessionIsRejectedAfterAnAccountTransition() {
         val previous = dev.obiente.nextcloudnative.app.NextcloudSession(
