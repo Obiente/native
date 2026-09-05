@@ -20,7 +20,7 @@ import kotlinx.coroutines.runBlocking
 
 class AndroidIncomingShareStateTest {
     @Test
-    fun retainedAccountWithUnreadableCredentialsDefersIncomingShareUpload() {
+    fun retainedOrUnknownAccountWithUnreadableCredentialsRetriesIncomingShareUpload() {
         val retainedSession = NextcloudSession(
             serverUrl = "https://cloud.example.test/nextcloud",
             loginName = "alice",
@@ -29,16 +29,29 @@ class AndroidIncomingShareStateTest {
         val accountIdentity = NextcloudDocumentIds.accountKey(retainedSession)
 
         assertTrue(
-            shouldDeferIncomingShareForMissingSession(
+            shouldRetryIncomingShareForMissingSession(
                 accountIdentity,
-                listOf(retainedSession.accountRecord()),
+                AndroidAccountRetentionSnapshot.Available(listOf(retainedSession.accountRecord())),
             ),
         )
-        assertFalse(shouldDeferIncomingShareForMissingSession(accountIdentity, emptyList()))
-        assertFalse(
-            shouldDeferIncomingShareForMissingSession(
+        assertTrue(
+            shouldRetryIncomingShareForMissingSession(
                 accountIdentity,
-                listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+                AndroidAccountRetentionSnapshot.Unavailable,
+            ),
+        )
+        assertFalse(
+            shouldRetryIncomingShareForMissingSession(
+                accountIdentity,
+                AndroidAccountRetentionSnapshot.Available(emptyList()),
+            ),
+        )
+        assertFalse(
+            shouldRetryIncomingShareForMissingSession(
+                accountIdentity,
+                AndroidAccountRetentionSnapshot.Available(
+                    listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+                ),
             ),
         )
     }

@@ -14,7 +14,6 @@ import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import dev.obiente.nextcloudnative.app.NextcloudAccountRecord
 import dev.obiente.nextcloudnative.app.useAndroidNextcloudCertificateTrust
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -103,15 +102,17 @@ internal class AndroidIncomingShareUploadWorker(
     ): Result {
         var request = initialRequest
         val services = AndroidNextcloudServices(applicationContext)
-        val retainedAccounts = services.listAccounts()
-        val session = resolveStoredAndroidAccountSession(
-            accountIdentity = accountIdentity,
-            listAccounts = { retainedAccounts },
-            loadSession = { accountId -> services.loadSession(accountId) },
-        )
+        val accountSnapshot = services.accountRetentionSnapshot()
+        val session = (accountSnapshot as? AndroidAccountRetentionSnapshot.Available)?.let { available ->
+            resolveStoredAndroidAccountSession(
+                accountIdentity = accountIdentity,
+                listAccounts = { available.accounts },
+                loadSession = { accountId -> services.loadSession(accountId) },
+            )
+        }
         if (session == null) {
-            if (shouldDeferIncomingShareForMissingSession(accountIdentity, retainedAccounts)) {
-                return Result.success()
+            if (shouldRetryIncomingShareForMissingSession(accountIdentity, accountSnapshot)) {
+                return Result.retry()
             }
             return failUnavailableAccount(store, requestId)
         }
@@ -336,11 +337,6 @@ internal class AndroidIncomingShareUploadWorker(
         const val KEY_REQUEST_ID = "request_id"
     }
 }
-
-internal fun shouldDeferIncomingShareForMissingSession(
-    accountIdentity: String,
-    retainedAccounts: List<NextcloudAccountRecord>,
-): Boolean = androidAccountIdentityIsRetained(accountIdentity, retainedAccounts)
 
 internal fun Throwable.incomingShareRetryNotBeforeEpochMillis(nowEpochMillis: Long): Long? {
     require(nowEpochMillis >= 0L)

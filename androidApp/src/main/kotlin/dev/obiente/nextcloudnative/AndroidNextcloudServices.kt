@@ -449,9 +449,9 @@ internal class AndroidNextcloudServices(
     private val dynamicDiscoveryCacheDirectory = File(appContext.filesDir, "contracts/discoveries-v1")
     private val pendingDynamicMutationDirectory = File(appContext.filesDir, "mutations/dynamic-v1")
     private val fileOfflineRepository = AndroidFileOfflineRepository(appContext)
-    private val accountOwnedStateCleanup = AndroidAccountOwnedStateCleanup(appContext)
     private val fileReadCache = AndroidFileReadCache(File(appContext.cacheDir, "files-read-v1"))
     private val virtualFileCache = AndroidVirtualFileCache(appContext)
+    private val accountOwnedStateCleanup = AndroidAccountOwnedStateCleanup(appContext, fileReadCache, virtualFileCache)
     private val dynamicApiReadCache = DynamicApiResponseCache(File(appContext.cacheDir, "dynamic-api-v1"))
     private val nativeMediaPreviewCache = AndroidNativeMediaPreviewCache(
         File(appContext.cacheDir, "native-media-previews-v1"),
@@ -942,14 +942,14 @@ internal class AndroidNextcloudServices(
     override fun loadSession(): NextcloudSession? = accountCredentials.loadSession()
 
     override suspend fun prepareDeckCardDraftRecovery(session: NextcloudSession) =
-        withContext(Dispatchers.IO) {
-            deckCardDrafts.migrateLegacyEntries(session)
-        }
+        withContext(Dispatchers.IO) { deckCardDrafts.migrateLegacyEntries(session) }
 
     override suspend fun saveSession(session: NextcloudSession): NextcloudSession =
         accountCredentials.saveSession(session)
 
-    override fun listAccounts() = accountCredentials.listAccounts()
+    internal fun accountRetentionSnapshot() = accountCredentials.accountRetentionSnapshot()
+
+    override fun listAccounts() = accountRetentionSnapshot().accountsOrEmpty()
 
     override fun activeAccountId() = accountCredentials.activeAccountId()
 
