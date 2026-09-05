@@ -1115,6 +1115,7 @@ internal class LinuxNextcloudVirtualFileSystem(
     private var openDirectoryEntries = 0L
     private val pendingCreatedFiles = ConcurrentHashMap<String, LinuxSharedWriteHandle>()
     private val namespaceLock = Any()
+    private val readsEnabled = java.util.concurrent.atomic.AtomicBoolean(true)
     private val writeLifecycle = LinuxVirtualWriteLifecycle(
         hasOpenWriteHandles = { writeHandles.isNotEmpty() },
         hasPendingCreatedFiles = { pendingCreatedFiles.isNotEmpty() },
@@ -1125,7 +1126,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         require(mountOwnerGid in 0L..MAX_UNSIGNED_UNIX_ID)
     }
 
-    override fun getattr(path: String, stat: FileStat): Int = fuseResult {
+    override fun getattr(path: String, stat: FileStat): Int = fuseReadResult {
         val normalized = path.linuxVirtualPath()
         val pending = pendingCreatedFiles[normalized]?.delegate
         val node = visibleNode(normalized)
@@ -1135,7 +1136,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         0
     }
 
-    override fun opendir(path: String, fileInfo: FuseFileInfo): Int = fuseResult {
+    override fun opendir(path: String, fileInfo: FuseFileInfo): Int = fuseReadResult {
         val id = openAndRegisterDirectorySnapshot(path)
         fileInfo.fh.set(id)
         0
@@ -1147,7 +1148,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         filler: FuseFillDir,
         offset: Long,
         fileInfo: FuseFileInfo,
-    ): Int = fuseResult {
+    ): Int = fuseReadResult {
         val normalized = path.linuxVirtualPath()
         val handleId = fileInfo.fh.get()
         val existingHandle = directoryHandles[handleId]?.takeIf { it.path == normalized }
@@ -1184,6 +1185,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         val normalized = path.linuxVirtualPath()
         val flags = fileInfo.flags.intValue()
         val writeAccess = flags and OPEN_ACCESS_MASK != OPEN_READ_ONLY
+        if (!writeAccess && !readsEnabled.get()) return -ErrorCodes.EIO()
         pendingCreatedFiles[normalized]?.let { pending ->
             if (writeAccess && flags and OPEN_TRUNCATE != 0) pending.delegate.truncate(0L)
             fileInfo.fh.set(registerWriteHandle(pending, writable = writeAccess))
@@ -1218,7 +1220,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         requestedSize: Long,
         offset: Long,
         fileInfo: FuseFileInfo,
-    ): Int = fuseResult {
+    ): Int = fuseReadResult {
         if (offset < 0L || requestedSize < 0L || requestedSize > Int.MAX_VALUE) return -ErrorCodes.EINVAL()
         val id = fileInfo.fh.get()
         if (id == EMPTY_FILE_HANDLE) return 0
@@ -1253,7 +1255,7 @@ internal class LinuxNextcloudVirtualFileSystem(
         0
     }
 
-    override fun access(path: String, mask: Int): Int = fuseResult {
+    override fun access(path: String, mask: Int): Int = fuseReadResult {
         val normalized = path.linuxVirtualPath()
         if (pendingCreatedFiles.containsKey(normalized) || visibleNode(normalized) != null) 0 else -ErrorCodes.ENOENT()
     }
@@ -1386,6 +1388,7 @@ internal class LinuxNextcloudVirtualFileSystem(
 
     internal fun resumeWrites() = writeLifecycle.resume()
 
+    override fun disableReads() = readsEnabled.set(false)
     override fun unmount() {
         val fuseAbortHandle = fuseAbortHandleProvider(mountedAt)
         runLinuxFuseUnmountLifecycle(
@@ -1614,6 +1617,9 @@ internal class LinuxNextcloudVirtualFileSystem(
         -ErrorCodes.EIO()
     }
 
+    private inline fun fuseReadResult(operation: () -> Int): Int =
+        if (readsEnabled.get()) fuseResult(operation) else -ErrorCodes.EIO()
+
     private inline fun fuseMutationResult(operation: () -> Int): Int = fuseResult {
         writeLifecycle.beginMutation()
         try {
@@ -1638,9 +1644,7 @@ internal class LinuxNextcloudVirtualFileSystem(
 /** Stable across refreshes and app restarts so file managers can reconcile large directory models. */
 internal fun stableLinuxVirtualInode(path: String): Long {
     var hash = -0x340d631b7bdddcdbL
-    path.forEach { character ->
-        hash = (hash xor character.code.toLong()) * 0x100000001b3L
-    }
+    path.forEach { character -> hash = (hash xor character.code.toLong()) * 0x100000001b3L }
     return (hash and Long.MAX_VALUE).coerceAtLeast(2L)
 }
 
@@ -1685,12 +1689,8 @@ private fun String.linuxVirtualPath(): String {
         if (character != '/') continue
         require(index > segmentStart)
         val segmentLength = index - segmentStart
-        require(
-            segmentLength != 1 || this[segmentStart] != '.',
-        )
-        require(
-            segmentLength != 2 || this[segmentStart] != '.' || this[segmentStart + 1] != '.',
-        )
+        require(segmentLength != 1 || this[segmentStart] != '.')
+        require(segmentLength != 2 || this[segmentStart] != '.' || this[segmentStart + 1] != '.')
         segmentStart = index + 1
     }
     return if (start == 0 && end == length) this else substring(start, end)
