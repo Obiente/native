@@ -318,7 +318,9 @@ internal class AndroidFileSyncEngine(context: Context) {
             var remoteCleanupRejected = false
             val removed = removeConfiguredFileSyncPair(
                 reconcileLocalDownloads = {
-                    reconcileSafDownloadsBeforePairRemoval(appContext, pair.localRootId)
+                    reconcileSafDownloadsBeforePairRemoval(
+                        appContext, pair.localRootId, androidSafOwnedDownloadRecoveryPaths(pair),
+                    )
                 },
                 cleanRemoteUploads = {
                     val cleanupResult = cleanupJvmFileSyncOwnedUploads(
@@ -410,6 +412,10 @@ internal class AndroidFileSyncEngine(context: Context) {
                 FileSyncRejectionScope.Preflight,
             )
         }
+        androidFileSyncRootRejection(initialPair.localRootId, appContext.packageName)?.let { rejection ->
+            return FileSyncCenterActionResult.Rejected(rejection.message, FileSyncRejectionScope.Preflight)
+        }
+        val local = createAndroidFileSyncLocalTree(appContext, initialPair.localRootId)
         return withAndroidMediaBackupLedger(appContext, initialPair) { mediaLedger ->
         val remote = androidFileSyncOwnedRemoteTree(
             session, userId, initialPair, webDav,
@@ -432,7 +438,6 @@ internal class AndroidFileSyncEngine(context: Context) {
             configuration.includesSyncPath(relativePath, kind)
         }
         val remoteEntries = remote.scan(includes).map(AndroidRemoteSyncDocument::entry)
-        val local = createAndroidFileSyncLocalTree(appContext, initialPair.localRootId)
         val contentReadBudget = AndroidFileSyncContentReadBudget()
         val scannedLocalDocuments = local.scan(includes, remote::shouldContinueTransfer)
         val strengthenedLocalDocuments = strengthenAndroidFileSyncReplacementEntries(

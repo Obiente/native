@@ -160,6 +160,7 @@ internal suspend fun commitConfiguredFileSyncPairRemoval(
 internal suspend fun reconcileSafDownloadsBeforePairRemoval(
     context: Context,
     localRootId: String,
+    localRecoveryPaths: Set<String>,
 ): Boolean {
     if (!localRootId.startsWith("content://")) return true
     val shouldContinue = androidFileSyncJobContinuation(currentCoroutineContext()[Job])
@@ -187,7 +188,19 @@ internal suspend fun reconcileSafDownloadsBeforePairRemoval(
     }
     if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
     val reconciled = reconcileSafDownloadsBeforePairRemoval(hasPersistedGrant, hasPendingRecovery) {
-        createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
+        if (
+            androidPickerUriRejection(localRootId, context.applicationContext.packageName) ==
+            AndroidPickerUriRejection.OwnDocumentsProvider
+        ) {
+            reconcileOwnProviderSafDownloadsBeforePairRemoval(
+                context = context,
+                localRootId = localRootId,
+                localRecoveryPaths = localRecoveryPaths,
+                shouldContinue = shouldContinue,
+            )
+        } else {
+            createAndroidFileSyncLocalTree(context, localRootId).reconcileOwnedDownloads(shouldContinue)
+        }
     }
     if (!shouldContinue()) throw CancellationException("Pair removal was cancelled.")
     return reconciled
@@ -245,7 +258,11 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
             retiredPairs = retiredPairs,
             retainedPairs = retainedPairs,
             reconcileLocalDownloads = { pair ->
-                reconcileSafDownloadsBeforePairRemoval(context, pair.localRootId)
+                reconcileSafDownloadsBeforePairRemoval(
+                    context,
+                    pair.localRootId,
+                    androidSafOwnedDownloadRecoveryPaths(pair),
+                )
             },
             cancelSchedule = { pair -> scheduler.cancel(pair.id) },
             cancelNotification = { pair ->

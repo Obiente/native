@@ -571,7 +571,7 @@ internal class AndroidSafFileSyncLocalTree(
         return listedChildren.filter { it.uri in visibleUris }
     }
 
-    private fun downloadPublisher(
+    internal fun downloadPublisher(
         parentUri: Uri,
         parentPath: String,
         shouldContinue: () -> Boolean = { !Thread.currentThread().isInterrupted },
