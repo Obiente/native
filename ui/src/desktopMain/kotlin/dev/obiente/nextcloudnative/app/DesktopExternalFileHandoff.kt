@@ -449,6 +449,7 @@ internal fun deleteDesktopExternalFileTree(root: Path): Boolean {
     return try {
         Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (!attrs.isSymbolicLink) file.toFile().setWritable(true, false)
                 Files.delete(file)
                 return FileVisitResult.CONTINUE
             }
