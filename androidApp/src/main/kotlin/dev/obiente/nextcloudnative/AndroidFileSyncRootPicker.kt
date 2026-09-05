@@ -10,6 +10,7 @@ import dev.obiente.nextcloudnative.app.FileSyncLocalRoot
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Single-flight bridge from common suspend APIs to Android's native document-tree picker.
@@ -51,8 +52,7 @@ internal class AndroidFileSyncRootPicker(private val context: Context) {
             context.contentResolver.takePersistableUriPermission(uri, flags)
             FileSyncLocalRoot(uri.toString(), queryDisplayName(context.contentResolver, uri))
         }
-        result.onSuccess(continuation::resume)
-            .onFailure { continuation.cancel(it) }
+        resumeAndroidFileSyncPickerContinuation(continuation, result)
     }
 
     private fun queryDisplayName(resolver: ContentResolver, treeUri: Uri): String {
@@ -68,4 +68,11 @@ internal class AndroidFileSyncRootPicker(private val context: Context) {
             if (cursor.moveToFirst()) cursor.getString(0)?.trim().orEmpty() else ""
         }.orEmpty().ifBlank { "Selected folder" }
     }
+}
+
+internal fun <Value> resumeAndroidFileSyncPickerContinuation(
+    continuation: CancellableContinuation<Value>,
+    result: Result<Value>,
+) {
+    result.fold(continuation::resume, continuation::resumeWithException)
 }

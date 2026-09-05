@@ -6,7 +6,9 @@ import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.SyncEntryKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 
 class AndroidFileSyncProviderFeedbackRecoveryTest {
@@ -83,4 +85,79 @@ class AndroidFileSyncProviderFeedbackRecoveryTest {
             events,
         )
     }
+
+    @Test
+    fun `account removal recovers target downloads before credential deletion`() = runBlocking {
+        val retained = pair("retained", "other-account")
+        val first = pair("first", accountKey)
+        val second = pair("second", accountKey)
+        val events = mutableListOf<String>()
+
+        removeAndroidAccountCredentialData(
+            active = true,
+            prepareAccountRemoval = {
+                reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
+                    pairs = listOf(retained, first, second),
+                    accountId = accountKey,
+                    reconcileLocalDownloads = { pair ->
+                        events += "recover:${pair.id}"
+                        true
+                    },
+                )
+            },
+            removeQueuedUploads = { events += "remove-owned-state" },
+            clearActiveAccount = { events += "delete-credential" },
+            rollbackActiveRemoval = {},
+            persistInactiveRemoval = {},
+            rollbackInactiveRemoval = {},
+        )
+
+        assertEquals(
+            listOf("recover:first", "recover:second", "delete-credential", "remove-owned-state"),
+            events,
+        )
+    }
+
+    @Test
+    fun `cancelled own provider retirement stops before the next directory`() {
+        val events = mutableListOf<String>()
+        var continuationChecks = 0
+
+        assertFailsWith<CancellationException> {
+            reconcileRecordedAndroidSafDownloadDirectories(
+                candidates = listOf("first", "second"),
+                hasPendingRecovery = { true },
+                hasPendingForDirectory = {
+                    events += "check:$it"
+                    true
+                },
+                shouldContinue = {
+                    continuationChecks += 1
+                    continuationChecks < 3
+                },
+                reconcileDirectory = { events += "reconcile:$it" },
+            )
+        }
+
+        assertEquals(listOf("check:first", "reconcile:first"), events)
+    }
+
+    @Test
+    fun `relocated recovery directory keeps its exact relative path`() {
+        val root = NextcloudDocumentIds.documentId(accountKey, "Sync")
+        val relocated = NextcloudDocumentIds.documentId(accountKey, "Sync/Moved/Parent")
+
+        assertEquals(
+            AndroidSafOwnedDownloadRecoveryDirectory(relocated, "Moved/Parent"),
+            androidSafOwnedDownloadRecoveryDirectory(root, relocated),
+        )
+    }
+
+    private fun pair(id: String, owner: String) = FileSyncPair(
+        id = id,
+        accountId = owner,
+        localRootId = "content://external/tree/$id",
+        remoteRootPath = id,
+        configuration = FileSyncConfiguration(deviceLabel = "Phone"),
+    )
 }

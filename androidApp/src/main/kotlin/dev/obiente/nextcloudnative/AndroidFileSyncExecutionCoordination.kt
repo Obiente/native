@@ -276,6 +276,39 @@ internal suspend fun retireAndroidFileSyncAccountPairs(context: Context, account
     }
 }
 
+internal suspend fun reconcileAndroidFileSyncAccountDownloadsBeforeCredentialRemoval(
+    context: Context,
+    accountId: String,
+) {
+    AndroidFileSyncEngine.ENGINE_LOCK.withLock {
+        reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
+            pairs = AndroidFileSyncStore(context).load().coordinator.pairs,
+            accountId = accountId,
+            reconcileLocalDownloads = { pair ->
+                reconcileSafDownloadsBeforePairRemoval(
+                    context = context,
+                    localRootId = pair.localRootId,
+                    localRecoveryPaths = androidSafOwnedDownloadRecoveryPaths(pair),
+                )
+            },
+        )
+    }
+}
+
+internal suspend fun reconcileConfiguredFileSyncAccountDownloadsBeforeCredentialRemoval(
+    pairs: List<FileSyncPair>,
+    accountId: String,
+    reconcileLocalDownloads: suspend (FileSyncPair) -> Boolean,
+) {
+    require(accountId.isNotBlank())
+    pairs.filter { pair -> pair.accountId == accountId }.forEach { pair ->
+        check(reconcileLocalDownloads(pair)) {
+            "A local download still needs safe recovery. Run this folder sync before removing the account."
+        }
+        currentCoroutineContext().ensureActive()
+    }
+}
+
 internal suspend fun retireConfiguredFileSyncAccountPairs(
     retiredPairs: List<FileSyncPair>,
     retainedPairs: List<FileSyncPair>,

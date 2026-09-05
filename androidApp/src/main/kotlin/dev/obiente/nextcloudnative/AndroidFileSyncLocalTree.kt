@@ -98,7 +98,7 @@ internal class AndroidSafFileSyncLocalTree(
         }
     }
 
-    private fun indexRecoveryLocationsIfNeeded(
+    internal fun indexRecoveryLocationsIfNeeded(
         ownershipDirectory: AndroidSafDownloadOwnershipDirectory,
         shouldContinue: () -> Boolean,
     ) = indexAndroidSafRecoveryLocationsIfNeeded(ownershipDirectory) {
