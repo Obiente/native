@@ -61,6 +61,10 @@ internal class AndroidAccountCredentialController(
         ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts, registry.activeAccountId) }
         ?: AndroidAccountRetentionSnapshot.Unavailable
 
+    fun durableUploadAccountRegistry(): DurableUploadAccountRegistry = readCredentialFreeRegistry()
+        ?.let { registry -> DurableUploadAccountRegistry.Available(registry.accounts) }
+        ?: DurableUploadAccountRegistry.Unavailable
+
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
 
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
