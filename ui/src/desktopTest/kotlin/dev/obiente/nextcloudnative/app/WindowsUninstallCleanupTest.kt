@@ -13,6 +13,42 @@ import kotlin.test.assertTrue
 
 class WindowsUninstallCleanupTest {
     @Test
+    fun successfulFallbackCleanupClearsAnEarlierProviderFailure() {
+        assertEquals(
+            null,
+            windowsCloudFilesFailureAfterFallbackCleanup(
+                providerFailure = "provider removal failed",
+                fallbackFailure = null,
+                defaultMessage = "cleanup failed",
+            ),
+        )
+    }
+
+    @Test
+    fun failedFallbackCleanupPreservesTheEarlierProviderFailure() {
+        assertEquals(
+            "provider removal failed",
+            windowsCloudFilesFailureAfterFallbackCleanup(
+                providerFailure = "provider removal failed",
+                fallbackFailure = IllegalStateException("fallback failed"),
+                defaultMessage = "cleanup failed",
+            ),
+        )
+    }
+
+    @Test
+    fun failedFallbackCleanupPublishesItsOwnFailureWhenTheProviderSucceeded() {
+        assertEquals(
+            "fallback failed",
+            windowsCloudFilesFailureAfterFallbackCleanup(
+                providerFailure = null,
+                fallbackFailure = IllegalStateException("fallback failed"),
+                defaultMessage = "cleanup failed",
+            ),
+        )
+    }
+
+    @Test
     fun preservedRootRecordSurvivesReloadUntilAcknowledged() {
         val nodeName = "windows-preserved-root-test-${UUID.randomUUID()}"
         val preferences = Preferences.userRoot().node(nodeName)
