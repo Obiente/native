@@ -121,6 +121,31 @@ class AndroidAccountRemovalCleanupRecoveryWorkTest {
     }
 
     @Test
+    fun handoffCleanupJournalIsClearedOnlyAfterDurableCleanupSucceeds() {
+        val events = mutableListOf<String>()
+
+        val firstCompleted = retryPendingAndroidExternalHandoffCleanup(
+            pending = true,
+            clearHandoffs = {
+                events += "clear-handoffs"
+                error("synthetic persistence failure")
+            },
+            clearJournal = { events += "clear-journal" },
+            recordFailure = { events += "failure" },
+        )
+        val retryCompleted = retryPendingAndroidExternalHandoffCleanup(
+            pending = true,
+            clearHandoffs = { events += "retry-handoffs" },
+            clearJournal = { events += "clear-journal" },
+            recordFailure = { events += "failure" },
+        )
+
+        assertFalse(firstCompleted)
+        assertTrue(retryCompleted)
+        assertEquals(listOf("clear-handoffs", "failure", "retry-handoffs", "clear-journal"), events)
+    }
+
+    @Test
     fun cleanupJournalReadCancellationIsPropagated() {
         var recorded = false
 

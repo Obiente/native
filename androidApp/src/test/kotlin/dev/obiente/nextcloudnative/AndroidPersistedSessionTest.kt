@@ -860,6 +860,15 @@ class AndroidPersistedSessionTest {
     }
 
     @Test
+    fun accountTransitionPersistsHandoffCleanupBeforeItCanCommit() {
+        val writes = linkedMapOf<String, String>()
+
+        prepareAndroidExternalHandoffCleanup(recoveryRecordingEditor(writes, linkedSetOf()))
+
+        assertEquals("pending", writes[ANDROID_PENDING_EXTERNAL_HANDOFF_CLEANUP_KEY])
+    }
+
+    @Test
     fun handoffCleanupFailureDoesNotHideACommittedAccountTransition() {
         val events = mutableListOf<String>()
 
