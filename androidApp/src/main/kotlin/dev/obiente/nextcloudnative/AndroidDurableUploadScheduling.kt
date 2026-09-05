@@ -2,6 +2,8 @@ package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.DurableUploadEnqueueResult
 import dev.obiente.nextcloudnative.app.DurableUploadState
+import java.util.UUID
+import java.util.concurrent.Future
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
@@ -34,15 +36,42 @@ internal class AndroidDurableUploadStartCoordinator {
 
 private val ANDROID_DURABLE_UPLOAD_START_COORDINATOR = AndroidDurableUploadStartCoordinator()
 
+internal data class AndroidDurableUploadSchedulingRecoveryBatch(
+    val immediate: Boolean,
+    val workIdsToAwait: List<UUID>,
+)
+
 internal class AndroidDurableUploadSchedulingRecoverySignal {
-    private val requests = Channel<Unit>(Channel.CONFLATED)
+    private val monitor = Any()
+    private val wakeups = Channel<Unit>(Channel.CONFLATED)
+    private var immediatePending = false
+    private val workIdsToAwait = linkedSetOf<UUID>()
 
     fun request() {
-        requests.trySend(Unit)
+        synchronized(monitor) {
+            immediatePending = true
+        }
+        wakeups.trySend(Unit)
     }
 
-    suspend fun await() {
-        requests.receive()
+    fun requestAfterWorkStopsRunning(workId: UUID) {
+        synchronized(monitor) {
+            workIdsToAwait += workId
+        }
+        wakeups.trySend(Unit)
+    }
+
+    suspend fun await(): AndroidDurableUploadSchedulingRecoveryBatch {
+        wakeups.receive()
+        return synchronized(monitor) {
+            AndroidDurableUploadSchedulingRecoveryBatch(
+                immediate = immediatePending,
+                workIdsToAwait = workIdsToAwait.toList(),
+            ).also {
+                immediatePending = false
+                workIdsToAwait.clear()
+            }
+        }
     }
 }
 
@@ -53,14 +82,66 @@ internal fun requestQueuedDurableUploadSchedulingRecovery() {
     ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.request()
 }
 
+internal fun requestQueuedDurableUploadSchedulingRecoveryAfterWorkStopsRunning(workId: UUID) {
+    ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL.requestAfterWorkStopsRunning(workId)
+}
+
 internal suspend fun monitorQueuedDurableUploadScheduling(
     recover: suspend () -> Unit,
+    awaitWorkStopsRunning: suspend (UUID) -> Unit = {},
     recoverySignal: AndroidDurableUploadSchedulingRecoverySignal =
         ANDROID_DURABLE_UPLOAD_SCHEDULING_RECOVERY_SIGNAL,
 ) {
+    recover()
     while (true) {
-        recover()
-        recoverySignal.await()
+        val requests = recoverySignal.await()
+        if (requests.immediate) recover()
+        if (requests.workIdsToAwait.isNotEmpty()) {
+            requests.workIdsToAwait.forEach { workId -> awaitWorkStopsRunning(workId) }
+            recover()
+        }
+    }
+}
+
+internal suspend fun awaitDurableUploadWorkToStopRunning(
+    workId: UUID,
+    retryDelayMillis: Long = 1_000L,
+    awaitWorkStopsRunning: suspend (UUID) -> Unit,
+    wait: suspend (Long) -> Unit,
+) {
+    require(retryDelayMillis > 0L)
+    while (true) {
+        try {
+            awaitWorkStopsRunning(workId)
+            return
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            wait(retryDelayMillis)
+        }
+    }
+}
+
+internal fun observeDurableUploadSchedulingResult(
+    result: Future<*>,
+    addListener: (Runnable) -> Unit,
+    requestRecovery: () -> Unit = ::requestQueuedDurableUploadSchedulingRecovery,
+) {
+    val listener = Runnable {
+        if (!result.isDone) {
+            runCatching(requestRecovery)
+            return@Runnable
+        }
+        try {
+            result.get()
+        } catch (_: Exception) {
+            runCatching(requestRecovery)
+        }
+    }
+    try {
+        addListener(listener)
+    } catch (_: Exception) {
+        runCatching(requestRecovery)
     }
 }
 
