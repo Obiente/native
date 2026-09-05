@@ -111,9 +111,10 @@ internal class AndroidDurableMultipartUploads(context: Context) {
         }
     }
 
-    suspend fun reconcileQueuedUploads(): Boolean =
+    suspend fun reconcileQueuedUploads(allowQueuedScheduling: Boolean = true): Boolean =
         reconcileQueuedDurableUploads(
             jobs = store.list(),
+            allowQueuedScheduling = allowQueuedScheduling,
             schedulerOwns = { job ->
                 workManager.getWorkInfosForUniqueWorkFlow(durableUploadWorkName(job.id))
                     .first()
