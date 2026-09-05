@@ -86,11 +86,20 @@ internal suspend fun preflightAndroidAccountRemoval(context: Context, session: N
     requireAndroidFileSyncAccountRemovalReady(context, NextcloudDocumentIds.accountKey(session))
 }
 
-internal suspend fun prepareAndroidAccountRemoval(context: Context, session: NextcloudSession) {
+internal suspend fun prepareAndroidAccountRemoval(
+    context: Context,
+    session: NextcloudSession,
+): AndroidDocumentProviderIncarnationRetirement {
     preflightAndroidAccountRemoval(context, session)
     ANDROID_FILE_RANGE_SESSION_COORDINATOR.quiesce(NextcloudDocumentIds.accountKey(session))
-    AndroidDocumentProviderIncarnationStore(context).retire(NextcloudDocumentIds.accountKey(session))
+    return AndroidDocumentProviderIncarnationStore(context)
+        .retireForRemoval(NextcloudDocumentIds.accountKey(session))
 }
+
+internal fun rollbackAndroidAccountRemoval(
+    context: Context,
+    retirement: AndroidDocumentProviderIncarnationRetirement,
+) = AndroidDocumentProviderIncarnationStore(context).rollback(retirement)
 
 internal fun revokeAndroidAccountDocumentGrants(context: Context, accountIdentity: String) {
     val retired = AndroidDocumentProviderIncarnationStore(context).retiredIncarnation(accountIdentity)
