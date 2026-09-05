@@ -29,7 +29,7 @@ class DesktopLinuxProviderCleanupTest {
         assertTrue(aborted)
         assertTrue(abortHandleClosed)
         assertSame(provider, cleanup.pendingForTest())
-        assertFailsWith<LinuxVirtualFileSystemException>(fileSystem::beginMutation)
+        assertFailsWith<LinuxVirtualFileSystemException> { fileSystem.beginMutation() }
     }
 
     @Test
@@ -41,7 +41,7 @@ class DesktopLinuxProviderCleanupTest {
         assertFailsWith<IllegalStateException> { cleanup.unmountOrRetain(provider) }
 
         assertSame(provider, cleanup.pendingForTest())
-        assertFailsWith<LinuxVirtualFileSystemException>(fileSystem::beginMutation)
+        assertFailsWith<LinuxVirtualFileSystemException> { fileSystem.beginMutation() }
     }
 }
 
