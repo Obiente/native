@@ -259,6 +259,17 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
         finishCleanup(record)
     }
 
+    fun finishPairCleanupOrRetry(
+        pairId: String,
+        load: () -> AndroidFileSyncPersistedState,
+    ) = synchronized(LIFECYCLE_LOCK) {
+        val pending = store.list().singleOrNull {
+            pairId in it.pairIds && it.phase == AndroidFileSyncCapabilityPhase.CleanupPending
+        } ?: return@synchronized
+        if (finishCleanup(pending)) return@synchronized
+        reconcile(load())
+    }
+
     fun persistPairRemoval(
         load: () -> AndroidFileSyncPersistedState,
         persist: () -> Unit,
@@ -299,14 +310,14 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                             it.copy(phase = AndroidFileSyncCapabilityPhase.Owned, pairIds = matchingIds)
                         }
                     } else {
-                        prepareAndFinishCleanup(record)
+                        check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
                 AndroidFileSyncCapabilityPhase.Owned -> {
                     if (matchingIds.isNotEmpty() && matchingIds != record.pairIds) {
                         store.replace(record.id, record.phase) { it.copy(pairIds = matchingIds) }
                     } else if (matchingIds.isEmpty() && record.processGeneration != processGeneration) {
-                        prepareAndFinishCleanup(record)
+                        check(prepareAndFinishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
                 AndroidFileSyncCapabilityPhase.CleanupPending -> {
@@ -315,7 +326,7 @@ internal class AndroidFileSyncCapabilityLifecycle internal constructor(
                             it.copy(phase = AndroidFileSyncCapabilityPhase.Owned, pairIds = matchingIds)
                         }
                     } else {
-                        finishCleanup(record)
+                        check(finishCleanup(record)) { CLEANUP_RETRY_MESSAGE }
                     }
                 }
             }
@@ -485,3 +496,4 @@ private fun grantFlags(read: Boolean, write: Boolean): Int =
 private const val MAX_CAPABILITY_RECORDS = 64
 private const val MAX_CAPABILITY_URI_CHARACTERS = 8 * 1024
 private const val MAX_CAPABILITY_DISPLAY_NAME_CHARACTERS = 256
+private const val CLEANUP_RETRY_MESSAGE = "Saved folder access cleanup is still pending."

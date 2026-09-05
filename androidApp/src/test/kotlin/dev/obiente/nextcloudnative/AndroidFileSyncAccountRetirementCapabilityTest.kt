@@ -133,6 +133,41 @@ class AndroidFileSyncAccountRetirementCapabilityTest {
         assertFalse(fixture.grants.writeGranted)
     }
 
+    @Test
+    fun `failed retirement grant cleanup remains journaled for an empty-state retry`() = runBlocking {
+        val fixture = fixture()
+        val retired = listOf(pair(FIRST_PAIR_ID, REMOVED_ACCOUNT))
+        fixture.lifecycle.reconcile(state(retired))
+        fixture.grants.failRelease = true
+
+        assertFailsWith<IllegalStateException> {
+            retireConfiguredFileSyncAccountPairs(
+                retiredPairs = retired,
+                reconcileLocalDownloads = { true },
+                cancelSchedule = {},
+                cancelNotification = {},
+                prepareLocalGrantCleanup = fixture.lifecycle::preparePairCleanup,
+                persistRetirement = {},
+                finishLocalGrantCleanup = { pairId ->
+                    fixture.lifecycle.finishPairCleanupOrRetry(pairId) { state(emptyList()) }
+                },
+            )
+        }
+        assertEquals(AndroidFileSyncCapabilityPhase.CleanupPending, fixture.store.list().single().phase)
+
+        fixture.grants.failRelease = false
+        val remaining = reconcileAndroidFileSyncAccountRetirement(
+            state(emptyList()),
+            REMOVED_ACCOUNT,
+            fixture.lifecycle,
+        )
+
+        assertTrue(remaining.isEmpty())
+        assertTrue(fixture.store.list().isEmpty())
+        assertFalse(fixture.grants.readGranted)
+        assertFalse(fixture.grants.writeGranted)
+    }
+
     private suspend fun retire(
         lifecycle: AndroidFileSyncCapabilityLifecycle,
         retiredPairs: List<FileSyncPair>,
@@ -145,7 +180,9 @@ class AndroidFileSyncAccountRetirementCapabilityTest {
             cancelNotification = {},
             prepareLocalGrantCleanup = { pairId -> lifecycle.preparePairCleanup(pairId) },
             persistRetirement = persist,
-            finishLocalGrantCleanup = { pairId -> lifecycle.finishPairCleanup(pairId) },
+            finishLocalGrantCleanup = { pairId ->
+                lifecycle.finishPairCleanupOrRetry(pairId) { state(emptyList()) }
+            },
         )
     }
 
@@ -190,11 +227,13 @@ class AndroidFileSyncAccountRetirementCapabilityTest {
         var readGranted = true
         var writeGranted = true
         var releaseCount = 0
+        var failRelease = false
 
         override fun exactGrant(uri: String) = AndroidFileSyncGrantState(readGranted, writeGranted)
         override fun takeExactReadWriteGrant(uri: String) = error("Legacy adoption must not take a grant")
         override fun releaseExactGrant(uri: String, read: Boolean, write: Boolean) {
             releaseCount += 1
+            if (failRelease) error("release failed")
             if (read) readGranted = false
             if (write) writeGranted = false
         }
