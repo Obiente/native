@@ -3672,7 +3672,7 @@ class DesktopNextcloudServices(
                         prepareCleanup = accountSyncPairCleanupJournal::prepare,
                         commitCleanup = accountSyncPairCleanupJournal::commit,
                         clearCleanup = accountSyncPairCleanupJournal::clear,
-                        accountStillExists = ::desktopAccountExists,
+                        accountOwnership = ::desktopAccountOwnership,
                         removeCredential = { sessionPublicationGuard.serialize {
                             removeDesktopAccountCredential(preferences, providerAccountId, {
                                 accountCredentials.listAccounts().any { account -> account.id == accountId }
@@ -3842,7 +3842,7 @@ class DesktopNextcloudServices(
                 clearDesktopActiveAccountBeforeSyncPairCleanup(
                     accountId,
                     accountSyncPairCleanupJournal,
-                    ::desktopAccountExists,
+                    ::desktopAccountOwnership,
                     {
                         commitDesktopAccountRemovalBeforeVirtualFileTeardown(
                             commitRemoval = {
@@ -3908,7 +3908,7 @@ class DesktopNextcloudServices(
         if (cleanup != null) {
             retryDesktopAccountSyncPairCleanup(
                 cleanup = cleanup,
-                accountStillExists = ::desktopAccountExists,
+                accountOwnership = ::desktopAccountOwnership,
                 removeSyncPairs = ::removeDesktopAccountOwnedState,
                 clearCleanup = accountSyncPairCleanupJournal::clear,
             )
@@ -3919,7 +3919,7 @@ class DesktopNextcloudServices(
     private suspend fun retryPendingAccountSyncPairCleanups() {
         retryPendingDesktopAccountSyncPairCleanups(
             cleanupJournal = accountSyncPairCleanupJournal,
-            accountStillExists = ::desktopAccountExists,
+            accountOwnership = ::desktopAccountOwnership,
             removeSyncPairs = ::removeDesktopAccountOwnedState,
             recordCleanupFailure = { accountId, failure ->
                 recordSupportDiagnostic(desktopAccountSyncPairCleanupFailureDiagnostic(accountId, failure))
@@ -3928,7 +3928,7 @@ class DesktopNextcloudServices(
     }
 
     private suspend fun removeDesktopAccountOwnedState(accountId: String) {
-        fileSyncEngine.removeAccountPairs(accountId)
+        removeDesktopAccountPrivateStorage(accountId, fileSyncEngine, fileReadCache, virtualRangeCache(accountId))
         if (!isWindowsDesktop()) return
         try {
             unregisterWindowsCloudFilesRootsForAccountRemoval(
@@ -3946,8 +3946,8 @@ class DesktopNextcloudServices(
         }
     }
 
-    private fun desktopAccountExists(accountId: String): Boolean = sessionPublicationGuard.serialize {
-        accountCredentials.listAccounts().any { account -> desktopFileCacheAccountId(account) == accountId }
+    private fun desktopAccountOwnership(accountId: String): DesktopAccountOwnership = sessionPublicationGuard.serialize {
+        accountCredentials.accountOwnership(accountId)
     }
     override suspend fun loadDeckCardDraft(
         session: NextcloudSession,

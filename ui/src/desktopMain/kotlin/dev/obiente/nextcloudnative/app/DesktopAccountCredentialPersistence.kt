@@ -43,6 +43,21 @@ internal class DesktopAccountCredentialPersistence(
         return readLegacyAccountRecord()?.id
     }
 
+    fun accountOwnership(accountId: String): DesktopAccountOwnership {
+        val read = readRegistry()
+        val knownAccounts = read.registry?.accounts
+        if (knownAccounts != null) {
+            return if (knownAccounts.any { account -> desktopFileCacheAccountId(account) == accountId }) {
+                DesktopAccountOwnership.Present
+            } else {
+                DesktopAccountOwnership.Absent
+            }
+        }
+        val legacyMatches = readLegacyAccountRecord()?.let(::desktopFileCacheAccountId) == accountId
+        if (legacyMatches) return DesktopAccountOwnership.Present
+        return if (read.encoded == null) DesktopAccountOwnership.Absent else DesktopAccountOwnership.Unknown
+    }
+
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? {
         retryPendingCredentialSave()
         retryPendingCredentialRemoval()
@@ -68,7 +83,11 @@ internal class DesktopAccountCredentialPersistence(
         val read = readRegistry()
         val registry = read.registry
             ?: restoreLegacySession(read)?.let { requireNotNull(readRegistry().registry) }
-            ?: if (read.encoded == null) NextcloudAccountRegistry.Empty else throw invalidRegistryForMutation()
+            ?: when {
+                read.encoded == null -> NextcloudAccountRegistry.Empty
+                read.unsupportedVersion -> throw unsupportedRegistryForMutation()
+                else -> NextcloudAccountRegistry.Empty
+            }
         val previousRecord = registry.accounts.firstOrNull { account -> account.id == session.accountId }
         val persistedSession = previousRecord
             ?.let { record -> session.copy(serverUrl = record.serverUrl, loginName = record.loginName) }
@@ -574,9 +593,9 @@ internal class DesktopAccountCredentialPersistence(
         preferences.get(KEY_SERVER, null) == record.serverUrl &&
             preferences.get(KEY_LOGIN, null) == record.loginName
 
-    private fun invalidRegistryForMutation(): IllegalStateException {
-        recordCredentialDiagnostic("ACCOUNT_REGISTRY_MALFORMED", "account-registry.persist")
-        return IllegalStateException("The local account registry is invalid.")
+    private fun unsupportedRegistryForMutation(): IllegalStateException {
+        recordCredentialDiagnostic("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED", "account-registry.persist")
+        return IllegalStateException("The local account registry was written by a newer app version.")
     }
 
     private fun recordCredentialDiagnostic(
