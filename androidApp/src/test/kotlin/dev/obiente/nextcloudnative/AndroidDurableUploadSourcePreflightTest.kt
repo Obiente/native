@@ -131,6 +131,29 @@ class AndroidDurableUploadSourcePreflightTest {
     }
 
     @Test
+    fun `malformed capability metadata is terminal while storage failures stay retryable`() {
+        assertFailsWith<AndroidLocalUploadCapabilityUnavailableException> {
+            readAndroidLocalUploadCapability<Unit> {
+                throw AndroidLocalUploadCapabilityMalformedException("invalid JSON")
+            }
+        }
+        assertFailsWith<AndroidLocalUploadCapabilityUnavailableException> {
+            readAndroidLocalUploadCapability {
+                readAndroidLocalUploadCapabilityPreference {
+                    throw ClassCastException("not a string")
+                }
+            }
+        }
+        assertFailsWith<AndroidLocalUploadCapabilityReadException> {
+            readAndroidLocalUploadCapability {
+                readAndroidLocalUploadCapabilityPreference {
+                    throw IOException("preferences unavailable")
+                }
+            }
+        }
+    }
+
+    @Test
     fun `later provider success starts exactly once`() = runBlocking {
         var providerAttempts = 0
         var starts = 0
