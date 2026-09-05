@@ -1,8 +1,10 @@
 package dev.obiente.nextcloudnative
 
 import dev.obiente.nextcloudnative.app.MAX_NEXTCLOUD_UPLOAD_CHUNKS
+import dev.obiente.nextcloudnative.app.NextcloudSession
 import dev.obiente.nextcloudnative.app.NextcloudUploadTransferPlan
 import dev.obiente.nextcloudnative.app.RemoteFolderSelectionAccess
+import dev.obiente.nextcloudnative.app.accountRecord
 import dev.obiente.nextcloudnative.app.nextcloudUploadTransferPlan
 import java.nio.file.Files
 import java.security.MessageDigest
@@ -17,6 +19,30 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 
 class AndroidIncomingShareStateTest {
+    @Test
+    fun retainedAccountWithUnreadableCredentialsDefersIncomingShareUpload() {
+        val retainedSession = NextcloudSession(
+            serverUrl = "https://cloud.example.test/nextcloud",
+            loginName = "alice",
+            appPassword = "fixture-password",
+        )
+        val accountIdentity = NextcloudDocumentIds.accountKey(retainedSession)
+
+        assertTrue(
+            shouldDeferIncomingShareForMissingSession(
+                accountIdentity,
+                listOf(retainedSession.accountRecord()),
+            ),
+        )
+        assertFalse(shouldDeferIncomingShareForMissingSession(accountIdentity, emptyList()))
+        assertFalse(
+            shouldDeferIncomingShareForMissingSession(
+                accountIdentity,
+                listOf(retainedSession.copy(loginName = "another-account").accountRecord()),
+            ),
+        )
+    }
+
     @Test
     fun staleWorkerTransitionCannotOverwriteCancellation() {
         val canceled = request(AndroidIncomingShareState.Canceled)
