@@ -15,6 +15,7 @@ internal data class DesktopAccountSyncPairCleanup(
 
 internal class DesktopAccountSyncPairCleanupJournal(
     private val preferences: Preferences,
+    private val recordMalformed: () -> Unit = {},
 ) {
     fun prepare(accountId: String) = persist(accountId, DesktopAccountSyncPairCleanupPhase.Prepared)
 
@@ -26,25 +27,38 @@ internal class DesktopAccountSyncPairCleanupJournal(
         preferences.flush()
     }
 
-    fun pending(): List<DesktopAccountSyncPairCleanup> = preferences.keys()
-        .asSequence()
-        .filter { key -> key.startsWith(KEY_PREFIX) }
-        .map { key ->
-            val accountId = key.removePrefix(KEY_PREFIX)
-            validateDesktopSyncPairCleanupAccountId(accountId)
-            val phase = when (preferences.get(key, null)) {
-                PREPARED -> DesktopAccountSyncPairCleanupPhase.Prepared
-                COMMITTED -> DesktopAccountSyncPairCleanupPhase.Committed
-                else -> error("The desktop account sync cleanup journal is invalid.")
+    fun pending(): List<DesktopAccountSyncPairCleanup> {
+        val malformedKeys = mutableListOf<String>()
+        val cleanups = preferences.keys()
+            .asSequence()
+            .filter { key -> key.startsWith(KEY_PREFIX) }
+            .mapNotNull { key ->
+                val accountId = key.removePrefix(KEY_PREFIX)
+                val cleanup = runCatching {
+                    validateDesktopSyncPairCleanupAccountId(accountId)
+                    val phase = when (preferences.get(key, null)) {
+                        PREPARED -> DesktopAccountSyncPairCleanupPhase.Prepared
+                        COMMITTED -> DesktopAccountSyncPairCleanupPhase.Committed
+                        else -> error("The desktop account sync cleanup journal is invalid.")
+                    }
+                    DesktopAccountSyncPairCleanup(accountId, phase)
+                }.getOrNull()
+                if (cleanup == null) malformedKeys += key
+                cleanup
             }
-            DesktopAccountSyncPairCleanup(accountId, phase)
+            .toList()
+        if (malformedKeys.isNotEmpty()) quarantineMalformed(malformedKeys)
+        check(cleanups.size <= MAX_LOCAL_ACCOUNTS) {
+            "The desktop account sync cleanup journal is too large."
         }
-        .toList()
-        .also { cleanups ->
-            check(cleanups.size <= MAX_LOCAL_ACCOUNTS) {
-                "The desktop account sync cleanup journal is too large."
-            }
-        }
+        return cleanups
+    }
+
+    private fun quarantineMalformed(keys: List<String>) {
+        keys.forEach { key -> runCatching { preferences.remove(key) } }
+        runCatching(preferences::flush)
+        runCatching(recordMalformed)
+    }
 
     private fun persist(accountId: String, phase: DesktopAccountSyncPairCleanupPhase) {
         validateDesktopSyncPairCleanupAccountId(accountId)
@@ -265,4 +279,12 @@ internal fun desktopAccountSyncPairCleanupJournalFailureDiagnostic(failure: Exce
         operation = "account.remove-sync-cleanup-journal",
         outcome = "failed",
         exception = failure.toSupportDiagnosticExceptionDraft(),
+    )
+
+internal fun desktopAccountSyncPairCleanupJournalMalformedDiagnostic() =
+    SupportDiagnosticEventDraft(
+        severity = SupportDiagnosticSeverity.Warning,
+        component = SupportDiagnosticComponent.Sync,
+        operation = "account.remove-sync-cleanup-journal",
+        outcome = "malformed-entry-quarantined",
     )
