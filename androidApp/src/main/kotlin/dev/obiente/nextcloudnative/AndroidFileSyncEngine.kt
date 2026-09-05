@@ -91,7 +91,10 @@ internal class AndroidFileSyncEngine(context: Context) {
     private val scheduledMediaReconciliations = ConcurrentHashMap.newKeySet<String>()
     private val scheduledPairScheduling = DeferredFileSyncPairSchedulingRegistry()
     private val stagingRoot = File(appContext.cacheDir, "file-sync-staging")
-
+    private val capabilities = AndroidFileSyncCapabilityLifecycle(appContext)
+    init {
+        reconciliationScope.launch { reconcileFileSyncCapabilities(ENGINE_LOCK, store::load, capabilities) }
+    }
     suspend fun loadCenter(
         session: NextcloudSession,
         userId: String,
@@ -257,14 +260,9 @@ internal class AndroidFileSyncEngine(context: Context) {
         val normalizedRemote = normalizeRemoteRoot(remoteRootPath)
         val accountId = NextcloudDocumentIds.accountKey(session)
         val current = store.load()
-        if (current.coordinator.pairs.any {
-                it.accountId == accountId &&
-                    it.localRootId == localRoot.localRootId &&
-                    it.remoteRootPath == normalizedRemote
-            }
-        ) {
+        if (hasDuplicateAndroidFileSyncRoot(current.coordinator.pairs, accountId, localRoot.localRootId, normalizedRemote)) {
             return@withLock FileSyncCenterActionResult.Rejected(
-                "That local and Nextcloud folder pair already exists.",
+                "That local folder already belongs to a folder sync pair.",
             )
         }
         val pair = FileSyncPair(
@@ -274,12 +272,17 @@ internal class AndroidFileSyncEngine(context: Context) {
             remoteRootPath = normalizedRemote,
             configuration = configuration,
         )
-        store.save(
-            current.copy(
+        val ownsSafGrant = localRoot.localRootId.startsWith("content://")
+        if (ownsSafGrant) capabilities.bindReady(localRoot.localRootId, pair.id)
+        try {
+            store.save(current.copy(
                 coordinator = addFileSyncPair(current.coordinator, pair),
                 localDisplayNames = current.localDisplayNames + (pair.id to localRoot.displayName),
-            ),
-        )
+            ))
+        } catch (failure: Exception) {
+            if (ownsSafGrant) recoverFailedFileSyncPairSave(pair.id, store::load, capabilities::abandonUncommittedPair)
+            throw failure
+        }
         scheduler.schedule(pair.id, accountId, userId, pair.configuration)
         FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
     }
@@ -312,8 +315,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     "This folder sync pair belongs to another account.",
                 )
             }
-            val releasesLocalGrant = pair.localRootId.startsWith("content://") &&
-                current.coordinator.pairs.none { it.id != pairId && it.localRootId == pair.localRootId }
+            capabilities.reconcile(current)
             var cleanedCoordinator: FileSyncCoordinatorState? = null
             var remoteCleanupRejected = false
             val removed = removeConfiguredFileSyncPair(
@@ -351,6 +353,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     }
                 },
                 persistRemoval = {
+                    capabilities.preparePairCleanup(pairId)
                     val remaining = removeFileSyncPair(requireNotNull(cleanedCoordinator), pairId)
                     store.save(
                         current.copy(
@@ -360,9 +363,7 @@ internal class AndroidFileSyncEngine(context: Context) {
                     )
                 },
                 cancelSchedule = { scheduler.cancel(pairId) },
-                releaseLocalGrant = {
-                    releaseSafGrantAfterPairRemoval(appContext, pair.localRootId, releasesLocalGrant)
-                },
+                releaseLocalGrant = { capabilities.finishPairCleanup(pairId) },
             )
             if (!removed) {
                 return@withLock FileSyncCenterActionResult.Rejected(if (remoteCleanupRejected) {

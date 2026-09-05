@@ -2,7 +2,6 @@ package dev.obiente.nextcloudnative
 
 import android.content.ContentResolver
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.activity.result.ActivityResultLauncher
@@ -17,7 +16,10 @@ import kotlin.coroutines.resume
  * Only the selected tree receives a durable read/write grant. The sync engine never needs broad
  * storage access for SAF-backed pairs.
  */
-internal class AndroidFileSyncRootPicker(private val context: Context) {
+internal class AndroidFileSyncRootPicker(
+    private val context: Context,
+    private val capabilities: AndroidFileSyncCapabilityLifecycle = AndroidFileSyncCapabilityLifecycle(context),
+) {
     private var launcher: ActivityResultLauncher<Uri?>? = null
     private var pending: CancellableContinuation<FileSyncLocalRoot?>? = null
 
@@ -45,13 +47,17 @@ internal class AndroidFileSyncRootPicker(private val context: Context) {
             continuation.resume(null)
             return
         }
-        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         val result = runCatching {
-            context.contentResolver.takePersistableUriPermission(uri, flags)
-            FileSyncLocalRoot(uri.toString(), queryDisplayName(context.contentResolver, uri))
+            capabilities.acquire(uri.toString(), queryDisplayName(context.contentResolver, uri))
         }
-        result.onSuccess(continuation::resume)
+        result.onSuccess { localRoot ->
+            resumeFileSyncRootSelection(continuation, localRoot, capabilities::abandonSelection)
+        }
             .onFailure { continuation.cancel(it) }
+    }
+
+    fun abandon(localRootId: String) {
+        runCatching { capabilities.abandonSelection(localRootId) }
     }
 
     private fun queryDisplayName(resolver: ContentResolver, treeUri: Uri): String {
@@ -66,5 +72,15 @@ internal class AndroidFileSyncRootPicker(private val context: Context) {
         )?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0)?.trim().orEmpty() else ""
         }.orEmpty().ifBlank { "Selected folder" }
+    }
+}
+
+internal fun resumeFileSyncRootSelection(
+    continuation: CancellableContinuation<FileSyncLocalRoot?>,
+    localRoot: FileSyncLocalRoot,
+    abandon: (String) -> Unit,
+) {
+    continuation.resume(localRoot) { _, undeliveredRoot, _ ->
+        runCatching { abandon(undeliveredRoot.localRootId) }
     }
 }
