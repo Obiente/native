@@ -3820,10 +3820,10 @@ class DesktopNextcloudServices(
                                         userHome = userHome,
                                     )
                                 }.exceptionOrNull()
+                                windowsCloudFilesFailure = windowsCloudFilesFailureAfterFallbackCleanup(
+                                    windowsCloudFilesFailure, uninstallFailure, windowsCloudFilesFailureMessage,
+                                )
                                 if (uninstallFailure != null) {
-                                    windowsCloudFilesFailure = windowsCloudFilesFailure ?: (
-                                        uninstallFailure.message ?: windowsCloudFilesFailureMessage
-                                    )
                                     supportDiagnostics.record(
                                         SupportDiagnosticEventDraft(
                                             severity = SupportDiagnosticSeverity.Error,
