@@ -1358,7 +1358,7 @@ internal class AndroidNextcloudServices(
         session: NextcloudSession,
         userId: String,
         path: String,
-    ): NextcloudFileListing = withContext(Dispatchers.IO) {
+    ): NextcloudFileListing = withRetainedAndroidAccountFileRead(session, { loadSession(session.accountId) }) read@{
         val accountId = NextcloudDocumentIds.accountKey(session)
         try {
             val response = request(
@@ -1377,7 +1377,7 @@ internal class AndroidNextcloudServices(
             } else {
                 if (response.status >= 500) {
                     fileReadCache.cachedListing(accountId, path)?.files?.let {
-                        return@withContext NextcloudFileListing(it, NextcloudFileListingSource.Cache)
+                        return@read NextcloudFileListing(it, NextcloudFileListingSource.Cache)
                     }
                 }
                 throw NextcloudFileListingHttpException(response.status)
