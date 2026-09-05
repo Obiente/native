@@ -323,6 +323,26 @@ class DesktopAccountCredentialPersistenceTest {
             listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"),
             diagnostics.mapNotNull { it.code }.distinct(),
         )
+        assertEquals(DesktopAccountOwnership.Present, persistence.accountOwnership(desktopFileCacheAccountId(session)))
+        assertFailsWith<IllegalStateException> { persistence.saveSession(secondSession()) }
+        assertEquals(futureRegistry, preferences.get(DESKTOP_ACCOUNT_REGISTRY_KEY, null))
+        assertNull(secrets.load(desktopAccountSecretReference(secondSession().accountId)))
+        assertEquals(listOf("ACCOUNT_REGISTRY_VERSION_UNSUPPORTED"), diagnostics.mapNotNull { it.code }.distinct())
+    }
+
+    @Test
+    fun malformedRegistryWithoutLegacyCredentialIsReplacedByFreshSignIn() = withStore { preferences, secrets ->
+        val session = firstSession()
+        preferences.put(DESKTOP_ACCOUNT_REGISTRY_KEY, "{not-json")
+        val diagnostics = mutableListOf<SupportDiagnosticEventDraft>()
+        val persistence = persistence(preferences, secrets, diagnostics)
+
+        assertEquals(DesktopAccountOwnership.Unknown, persistence.accountOwnership(desktopFileCacheAccountId(session)))
+        assertEquals(session, persistence.saveSession(session))
+
+        assertEquals(session.accountId, decodeRegistry(preferences).activeAccountId)
+        assertEquals(session, persistence(preferences, secrets).loadActiveSession())
+        assertTrue(diagnostics.any { it.code == "ACCOUNT_REGISTRY_MALFORMED" })
     }
 
     @Test
