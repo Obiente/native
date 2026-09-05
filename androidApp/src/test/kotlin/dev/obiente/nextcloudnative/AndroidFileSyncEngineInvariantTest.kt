@@ -561,6 +561,7 @@ class AndroidFileSyncEngineInvariantTest {
             retainedPairs = retainedPairs,
             reconcileLocalDownloads = { pair -> events += "reconcile-${pair.id}"; true },
             cancelSchedule = { pair -> events += "cancel-${pair.id}" },
+            cancelNotification = { pair -> events += "cancel-notification-${pair.id}" },
             persistRetirement = { events += "persist-retirement" },
             releaseLocalGrant = { localRootId -> events += "release-$localRootId" },
         )
@@ -571,8 +572,11 @@ class AndroidFileSyncEngineInvariantTest {
                 "reconcile-retired-b",
                 "reconcile-retired-c",
                 "cancel-retired-a",
+                "cancel-notification-retired-a",
                 "cancel-retired-b",
+                "cancel-notification-retired-b",
                 "cancel-retired-c",
+                "cancel-notification-retired-c",
                 "persist-retirement",
                 "release-$retiredRoot",
             ),
@@ -594,6 +598,7 @@ class AndroidFileSyncEngineInvariantTest {
                 retainedPairs = emptyList(),
                 reconcileLocalDownloads = { pair -> events += "reconcile-${pair.id}"; pair.id == "retired-a" },
                 cancelSchedule = { pair -> events += "cancel-${pair.id}" },
+                cancelNotification = { pair -> events += "cancel-notification-${pair.id}" },
                 persistRetirement = { events += "persist-retirement" },
                 releaseLocalGrant = { localRootId -> events += "release-$localRootId" },
             )
@@ -619,12 +624,36 @@ class AndroidFileSyncEngineInvariantTest {
                     events += "cancel-${pair.id}"
                     if (pair.id == "pair-b") error("synthetic WorkManager cancellation failure")
                 },
+                cancelNotification = { pair -> events += "cancel-notification-${pair.id}" },
                 persistRetirement = { events += "persist-retirement" },
                 releaseLocalGrant = { localRootId -> events += "release-$localRootId" },
             )
         }
 
-        assertEquals(listOf("cancel-pair-a", "cancel-pair-b"), events)
+        assertEquals(listOf("cancel-pair-a", "cancel-notification-pair-a", "cancel-pair-b"), events)
+    }
+
+    @Test
+    fun accountRetirementKeepsPairStateWhenConflictNotificationCannotBeCanceled() = runBlocking {
+        val pair = fileSyncPair("pair", "removed-account", "root")
+        val events = mutableListOf<String>()
+
+        assertFailsWith<IllegalStateException> {
+            retireConfiguredFileSyncAccountPairs(
+                retiredPairs = listOf(pair),
+                retainedPairs = emptyList(),
+                reconcileLocalDownloads = { true },
+                cancelSchedule = { events += "cancel-schedule" },
+                cancelNotification = {
+                    events += "cancel-notification"
+                    error("synthetic notification cancellation failure")
+                },
+                persistRetirement = { events += "persist-retirement" },
+                releaseLocalGrant = { events += "release-grant" },
+            )
+        }
+
+        assertEquals(listOf("cancel-schedule", "cancel-notification"), events)
     }
 
     @Test

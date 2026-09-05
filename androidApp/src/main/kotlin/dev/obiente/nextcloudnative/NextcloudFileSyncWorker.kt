@@ -60,7 +60,7 @@ internal class NextcloudFileSyncWorker(
                 pair.conflicts.firstOrNull()?.let { conflict ->
                     AndroidNotificationCoordinator(applicationContext).post(
                         NextcloudNotificationEvent.SyncConflict(
-                            id = stableNotificationId(pairId),
+                            id = androidFileSyncNotificationId(pairId),
                             accountKey = accountId,
                             path = conflict.relativePath,
                             detail = syncConflictNotificationDetail(pair.conflictCount),
@@ -145,16 +145,13 @@ internal class NextcloudFileSyncWorker(
             .setOnlyAlertOnce(true)
             .setProgress(0, 0, true)
             .build()
-        val id = stableNotificationId(pairId)
+        val id = androidFileSyncNotificationId(pairId)
         return if (Build.VERSION.SDK_INT >= 29) {
             ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
             ForegroundInfo(id, notification)
         }
     }
-
-    private fun stableNotificationId(pairId: String): Int =
-        pairId.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
 
     private fun isForegroundServiceStartNotAllowed(error: IllegalStateException): Boolean =
         Build.VERSION.SDK_INT >= 31 && isForegroundServiceStartNotAllowedApi31(error)
@@ -169,6 +166,9 @@ internal class NextcloudFileSyncWorker(
         const val KEY_USER_ID = "user_id"
     }
 }
+
+internal fun androidFileSyncNotificationId(pairId: String): Int =
+    pairId.hashCode().let { if (it == Int.MIN_VALUE) 1 else kotlin.math.abs(it) }.coerceAtLeast(1)
 
 internal class AndroidFileSyncScheduleRestorationWorker(
     appContext: Context,
