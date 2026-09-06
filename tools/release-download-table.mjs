@@ -17,7 +17,7 @@ const packageRows = [
     ],
   },
   { platform: "Windows", formats: [{ label: "MSI (x86-64)", pattern: /^NextcloudNative-.*\.msi$/ }] },
-  { platform: "macOS preview", formats: [{ label: "DMG (Intel)", pattern: /^NextcloudNative-.*\.dmg$/ }] },
+  { platform: "macOS preview", formats: [{ label: "DMG (Intel)", pattern: /^(?:NextcloudNative|nati\.ve)-.*\.dmg$/ }] },
 ];
 
 function fail(message) {

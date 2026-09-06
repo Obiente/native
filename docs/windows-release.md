@@ -194,3 +194,18 @@ success, failure, and reboot-required results. They verify quiet arguments,
 quoted package paths, parent-exit ordering, gate release, and relaunch behavior
 without modifying an installed application. MSI behavior uses the documented
 [Windows Installer command-line options](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/msiexec).
+
+## Installed application name
+
+The MSI product name, launcher description, desktop shortcut, and Start menu
+shortcut are `nati.ve`.
+The package verifier checks both shortcuts as well as the product name. The
+packaging step applies display metadata before artifact verification and
+attestation. WinGet uses the branded MSI display name for installed-app matching.
+
+The `NextcloudNative.exe` launcher, installation directory, MSI upgrade UUID,
+and `Obiente.NextcloudNative` WinGet identifier remain stable so existing update,
+startup, and Explorer registrations keep resolving the same installation.
+Artifact filenames also retain the legacy Windows name. A newly built installer
+is required to update installed display metadata; replacing the app JAR alone
+does not rename existing shortcuts or the Windows installed-app entry.

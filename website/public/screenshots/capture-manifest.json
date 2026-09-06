@@ -422,7 +422,7 @@
         "gradle/wrapper/gradle-wrapper.properties": "aef287d114ce3153c3d535697a61928f5034990d570cbb2e93df549e9671483d",
         "settings.gradle.kts": "0acbe4b907815189abfedb2256c8659558e5a7e6995a3681a2bdfb05e335fd1a",
         "tools/marketing-capture-inputs.txt": "3c96e83e1ba2d715b1cda9cedf036fc97b78c3ca63b7fc930325ed536940c1f3",
-        "ui/build.gradle.kts": "43613c2ad7f2801f421f1d2638c0b1751c51377a2f897c70ae16a8efe1fe9e64",
+        "ui/build.gradle.kts": "2ecda1dd8c3ea78d3249c6c562cf8338a9a89f56dbd91d2db1af6b27eee8fb72",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/AccountSettingsScreen.kt": "7b93d571553fa8c364681f172edecde3109b45db9a4ff6f9f6fb12f8f6280a0e",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityFilters.kt": "569265895b9442292c043f5ecbe2cdd55a9da6761a77b19b5f81fff34e999a10",
         "ui/src/commonMain/kotlin/dev/obiente/nextcloudnative/app/ActivityHistoryPresentation.kt": "88f25cd079f7d7fc1553f8969818740816e2788542b70377ea11f64201c44474",

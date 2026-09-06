@@ -83,7 +83,7 @@ $publisher = Read-MsiProperty -Name "Manufacturer"
 $productCode = Read-MsiProperty -Name "ProductCode"
 $upgradeCode = Read-MsiProperty -Name "UpgradeCode"
 
-if ($productName -ne "NextcloudNative") {
+if ($productName -ne "nati.ve") {
     throw "Unexpected Windows product name: $productName"
 }
 if ($publisher -ne "Obiente") {
