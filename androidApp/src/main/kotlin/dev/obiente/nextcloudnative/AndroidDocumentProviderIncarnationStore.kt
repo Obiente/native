@@ -5,6 +5,7 @@ import android.provider.DocumentsContract
 import android.util.Log
 import dev.obiente.nextcloudnative.app.NextcloudAccountRegistry
 import dev.obiente.nextcloudnative.app.NextcloudSession
+import java.nio.charset.CharacterCodingException
 import java.util.Base64
 import java.util.UUID
 import kotlinx.coroutines.NonCancellable
@@ -446,7 +447,11 @@ private fun decodeRetirementField(value: String): String {
     } catch (failure: IllegalArgumentException) {
         throw IllegalArgumentException("Invalid document provider retirement journal encoding.", failure)
     }
-    val decodedText = decoded.decodeToString(throwOnInvalidSequence = true)
+    val decodedText = try {
+        decoded.decodeToString(throwOnInvalidSequence = true)
+    } catch (failure: CharacterCodingException) {
+        throw IllegalArgumentException("Invalid document provider retirement journal text.", failure)
+    }
     require(encodeRetirementField(decodedText) == value) {
         "The document provider retirement journal encoding is not canonical."
     }
