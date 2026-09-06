@@ -4296,6 +4296,7 @@ class DesktopNextcloudServices(
         monthResolver: PhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
         memoriesTimeline.navigationSnapshot(
+            accountId = session.accountId,
             accountScope = desktopFileCacheAccountId(session),
             monthResolver = monthResolver,
         )

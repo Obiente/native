@@ -1928,6 +1928,7 @@ internal class AndroidNextcloudServices(
         monthResolver: PhotoTimelineMonthResolver,
     ): MemoriesTimelineNavigationSnapshot? = withContext(Dispatchers.IO) {
         memoriesTimeline.navigationSnapshot(
+            accountId = session.accountId,
             accountScope = NextcloudDocumentIds.cacheAccountId(session),
             monthResolver = monthResolver,
         )
