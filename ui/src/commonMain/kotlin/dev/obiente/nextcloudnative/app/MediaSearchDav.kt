@@ -1,8 +1,6 @@
 package dev.obiente.nextcloudnative.app
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 const val MAXIMUM_MEDIA_SEARCH_RESULTS = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE
 const val PHOTO_TIMELINE_PARTITION_PAGE_SIZE = DEFAULT_PHOTO_TIMELINE_PAGE_SIZE
@@ -10,8 +8,6 @@ const val MAXIMUM_RAW_MEDIA_SEARCH_PATTERNS_PER_REQUEST = 8
 const val MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS = 15
 const val MAXIMUM_MEDIA_SEARCH_RESULT_PAGES = 2 + MAXIMUM_RAW_MEDIA_SEARCH_REQUESTS
 private val MEDIA_SEARCH_MIME_PATTERNS = listOf("image/%", "video/%")
-private const val DEFAULT_MEDIA_TIMELINE_CARRYOVER_ACCOUNT_LIMIT = 4
-private const val DEFAULT_MEDIA_TIMELINE_CARRYOVER_CURSOR_LIMIT = 4
 
 enum class MediaSearchDavPartition {
     ImageMime,
@@ -44,87 +40,6 @@ data class MediaTimelineDavPage(
     val rawObserved: Boolean,
     val optionalRawSearchRetryPending: Boolean = false,
 )
-
-/**
- * Retains at most one already-fetched server page per active SearchDAV partition.
- *
- * The store is deliberately runtime-only. Its compact cursor remains sufficient for a stateless
- * retry when the process, account LRU, or refresh generation has discarded buffered records.
- */
-class MediaTimelineDavCarryoverStore(
-    private val maximumAccountScopes: Int = DEFAULT_MEDIA_TIMELINE_CARRYOVER_ACCOUNT_LIMIT,
-    private val maximumCursorsPerAccount: Int = DEFAULT_MEDIA_TIMELINE_CARRYOVER_CURSOR_LIMIT,
-) {
-    private data class AccountState(
-        val generation: Long,
-        val continuations: LinkedHashMap<String, MediaTimelineDavCarryover>,
-    )
-
-    private val mutex = Mutex()
-    private val accounts = linkedMapOf<String, AccountState>()
-    private var nextGeneration = 0L
-
-    init {
-        require(maximumAccountScopes > 0)
-        require(maximumCursorsPerAccount > 0)
-    }
-
-    internal suspend fun beginAccountGeneration(accountScope: String): Long =
-        mutex.withLock {
-            requireMediaTimelineAccountScope(accountScope)
-            nextGeneration = if (nextGeneration == Long.MAX_VALUE) 1L else nextGeneration + 1L
-            accounts.remove(accountScope)
-            accounts[accountScope] = AccountState(nextGeneration, linkedMapOf())
-            while (accounts.size > maximumAccountScopes) {
-                accounts.remove(accounts.keys.first())
-            }
-            nextGeneration
-        }
-
-    internal suspend fun take(
-        accountScope: String,
-        generation: Long,
-        cursor: PhotoTimelineCursor,
-    ): MediaTimelineDavCarryover? = mutex.withLock {
-        requireMediaTimelineAccountScope(accountScope)
-        val account = accounts[accountScope]?.takeIf { it.generation == generation }
-            ?: return@withLock null
-        val continuation = account.continuations.remove(cursor.value)
-        accounts.remove(accountScope)
-        accounts[accountScope] = account
-        continuation
-    }
-
-    internal suspend fun put(
-        accountScope: String,
-        generation: Long,
-        cursor: PhotoTimelineCursor,
-        carryover: MediaTimelineDavCarryover,
-    ) {
-        mutex.withLock {
-            requireMediaTimelineAccountScope(accountScope)
-            val account = accounts[accountScope]?.takeIf { it.generation == generation }
-                ?: return@withLock
-            account.continuations.remove(cursor.value)
-            account.continuations[cursor.value] = carryover
-            while (account.continuations.size > maximumCursorsPerAccount) {
-                account.continuations.remove(account.continuations.keys.first())
-            }
-            accounts.remove(accountScope)
-            accounts[accountScope] = account
-        }
-    }
-}
-
-private fun requireMediaTimelineAccountScope(accountScope: String) {
-    require(
-        accountScope.isNotBlank() &&
-            accountScope.length <= 256 &&
-            accountScope.none(Char::isISOControl),
-    ) {
-        "The photo timeline carryover scope is invalid."
-    }
-}
 
 fun mediaSearchDavRequestBody(
     userId: String,
@@ -247,15 +162,24 @@ suspend fun collectMediaTimelineDavPage(
     shouldSearchRaw: (List<NextcloudFile>) -> Boolean,
     carryoverStore: MediaTimelineDavCarryoverStore? = null,
     carryoverAccountScope: String? = null,
+    carryoverAccountId: NextcloudAccountId? = null,
 ): MediaTimelineDavPage {
-    require((carryoverStore == null) == (carryoverAccountScope == null)) {
+    require(
+        (carryoverStore == null && carryoverAccountScope == null && carryoverAccountId == null) ||
+            (carryoverStore != null && carryoverAccountScope != null && carryoverAccountId != null),
+    ) {
         "The photo timeline carryover scope is invalid."
     }
     carryoverAccountScope?.let(::requireMediaTimelineAccountScope)
+    val carryoverProducer = carryoverStore?.producer(requireNotNull(carryoverAccountId))
     val decodedCursor = cursor?.let(::decodeMediaTimelineDavCursor)
     val runtimeGeneration = when {
         carryoverStore == null -> null
-        cursor == null -> carryoverStore.beginAccountGeneration(requireNotNull(carryoverAccountScope))
+        cursor == null -> carryoverStore.beginAccountGeneration(
+            accountId = requireNotNull(carryoverAccountId),
+            accountScope = requireNotNull(carryoverAccountScope),
+            producer = carryoverProducer,
+        )
         else -> decodedCursor?.runtimeGeneration
     }
     val runtimeCarryover = if (
@@ -264,9 +188,11 @@ suspend fun collectMediaTimelineDavPage(
         runtimeGeneration != null
     ) {
         carryoverStore.take(
+            accountId = requireNotNull(carryoverAccountId),
             accountScope = requireNotNull(carryoverAccountScope),
             generation = runtimeGeneration,
             cursor = cursor,
+            producer = carryoverProducer,
         )
     } else {
         null
@@ -471,10 +397,12 @@ suspend fun collectMediaTimelineDavPage(
         merged.carryover.partitions.isNotEmpty()
     ) {
         carryoverStore.put(
+            accountId = requireNotNull(carryoverAccountId),
             accountScope = requireNotNull(carryoverAccountScope),
             generation = runtimeGeneration,
             cursor = nextCursor,
             carryover = merged.carryover,
+            producer = carryoverProducer,
         )
     }
     return MediaTimelineDavPage(
