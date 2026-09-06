@@ -287,8 +287,7 @@ internal class AndroidFileSyncEngine(context: Context) {
         } else {
             store.save(updated)
         }
-        scheduler.schedule(pair.id, accountId, userId, pair.configuration)
-        FileSyncCenterActionResult.Completed("Folder sync pair added. Run it to review the first sync.")
+        committedFileSyncPairResult { scheduler.schedule(pair.id, accountId, userId, pair.configuration) }
     }
 
     private fun FileSyncConfiguration.scheduleDescription(): String {

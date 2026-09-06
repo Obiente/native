@@ -2,6 +2,7 @@ package dev.obiente.nextcloudnative
 
 import android.content.Context
 import android.net.Uri
+import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncDirection
 import dev.obiente.nextcloudnative.app.FileSyncOperation
 import dev.obiente.nextcloudnative.app.FileSyncPair
@@ -129,13 +130,14 @@ internal fun recoverFailedFileSyncPairSave(
     pairId: String,
     load: () -> AndroidFileSyncPersistedState,
     abandonUncommittedPair: (String) -> Unit,
-) {
-    val commitIsAbsent = try {
-        load().coordinator.pairs.none { it.id == pairId }
+): Boolean {
+    val commitIsPresent = try {
+        load().coordinator.pairs.any { it.id == pairId }
     } catch (_: Exception) {
-        false
+        return false
     }
-    if (commitIsAbsent) runCatching { abandonUncommittedPair(pairId) }
+    if (!commitIsPresent) runCatching { abandonUncommittedPair(pairId) }
+    return commitIsPresent
 }
 
 internal fun bindAndPersistFileSyncPair(
@@ -149,9 +151,27 @@ internal fun bindAndPersistFileSyncPair(
         bindReady()
         persist()
     } catch (failure: Exception) {
-        recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)
+        if (recoverFailedFileSyncPairSave(pairId, load, abandonUncommittedPair)) return
         throw failure
     }
+}
+
+internal fun scheduleCommittedFileSyncPair(schedule: () -> Unit): Boolean = try {
+    schedule()
+    true
+} catch (failure: CancellationException) {
+    throw failure
+} catch (_: Exception) {
+    false
+}
+
+internal fun committedFileSyncPairResult(schedule: () -> Unit): FileSyncCenterActionResult {
+    val scheduled = scheduleCommittedFileSyncPair(schedule)
+    return FileSyncCenterActionResult.Completed(if (scheduled) {
+        "Folder sync pair added. Run it to review the first sync."
+    } else {
+        "Folder sync pair added. Automatic checks will retry when folder sync status is loaded."
+    })
 }
 
 /**

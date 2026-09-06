@@ -1,5 +1,6 @@
 package dev.obiente.nextcloudnative
 
+import dev.obiente.nextcloudnative.app.FileSyncCenterActionResult
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import java.util.UUID
@@ -587,6 +588,52 @@ class AndroidFileSyncCapabilityLifecycleTest {
         assertEquals(setOf(PAIR_ID), fixture.store.list().single().pairIds)
         assertTrue(fixture.grants.readGranted)
         assertTrue(fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `save failure after authoritative commit completes without releasing ownership`() {
+        val fixture = fixture()
+        fixture.lifecycle.acquire(ACCOUNT_ID, ROOT_URI, "Notes")
+        var persisted = state()
+
+        bindAndPersistFileSyncPair(
+            pairId = PAIR_ID,
+            bindReady = { fixture.lifecycle.bindReady(ACCOUNT_ID, ROOT_URI, PAIR_ID) },
+            persist = {
+                persisted = state(pair())
+                error("save reported failure after commit")
+            },
+            load = { persisted },
+            abandonUncommittedPair = fixture.lifecycle::abandonUncommittedPair,
+        )
+
+        val owned = fixture.store.list().single()
+        assertEquals(listOf(PAIR_ID), persisted.coordinator.pairs.map(FileSyncPair::id))
+        assertEquals(AndroidFileSyncCapabilityPhase.Owned, owned.phase)
+        assertEquals(setOf(PAIR_ID), owned.pairIds)
+        assertTrue(fixture.grants.readGranted)
+        assertTrue(fixture.grants.writeGranted)
+    }
+
+    @Test
+    fun `postcommit scheduling failure is contained for durable retry`() {
+        var attempts = 0
+
+        val failedScheduleResult = committedFileSyncPairResult {
+            attempts += 1
+            error("synthetic scheduling failure")
+        }
+        val scheduledResult = committedFileSyncPairResult { attempts += 1 }
+
+        assertEquals(2, attempts)
+        assertEquals(
+            "Folder sync pair added. Automatic checks will retry when folder sync status is loaded.",
+            (failedScheduleResult as FileSyncCenterActionResult.Completed).message,
+        )
+        assertEquals(
+            "Folder sync pair added. Run it to review the first sync.",
+            (scheduledResult as FileSyncCenterActionResult.Completed).message,
+        )
     }
 
     @Test
