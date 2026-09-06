@@ -84,6 +84,32 @@ internal fun virtualFileCachePreferenceKey(prefix: String, accountId: String): S
     return desktopAccountPreferenceKey(prefix, accountId)
 }
 
+internal fun desktopVirtualFileProviderLocation(
+    preferences: Preferences,
+    accountId: String,
+    userHome: File = File(System.getProperty("user.home")),
+): VirtualFileProviderLocation {
+    val stored = preferences.get(virtualFileProviderRootPreferenceKey(accountId), null)
+        ?.takeIf { path -> path.length <= Preferences.MAX_VALUE_LENGTH }
+        ?.let(::File)
+        ?.absoluteFile
+        ?.normalize()
+    val folderName = stored?.name?.takeIf(String::isValidVirtualFileProviderFolderName)
+    val parent = stored?.parentFile
+    return if (folderName != null && parent != null) {
+        VirtualFileProviderLocation(parent.absolutePath, folderName)
+    } else {
+        VirtualFileProviderLocation(userHome.absolutePath, "Nextcloud Native")
+    }
+}
+
+internal fun desktopLinuxVirtualFileMountPoint(
+    preferences: Preferences,
+    accountId: String,
+): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
+    File(location.parentPath, location.folderName).absoluteFile.normalize()
+}
+
 private fun desktopAccountPreferenceKey(prefix: String, accountId: String): String {
     require(accountId.length == 64 && accountId.all { it in '0'..'9' || it in 'a'..'f' })
     return "$prefix$accountId".also { key -> check(key.length <= Preferences.MAX_KEY_LENGTH) }

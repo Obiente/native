@@ -132,32 +132,6 @@ private const val VIRTUAL_FILE_OVERFLOW_PREFERENCE_VERSION = "v2"
 private fun isLinuxDesktop(): Boolean =
     System.getProperty("os.name").orEmpty().lowercase().contains("linux")
 
-private fun desktopVirtualFileProviderLocation(
-    preferences: Preferences,
-    accountId: String,
-    userHome: File = File(System.getProperty("user.home")),
-): VirtualFileProviderLocation {
-    val stored = preferences.get(virtualFileProviderRootPreferenceKey(accountId), null)
-        ?.takeIf { path -> path.length <= Preferences.MAX_VALUE_LENGTH }
-        ?.let(::File)
-        ?.absoluteFile
-        ?.normalize()
-    val folderName = stored?.name?.takeIf(String::isValidVirtualFileProviderFolderName)
-    val parent = stored?.parentFile
-    return if (folderName != null && parent != null) {
-        VirtualFileProviderLocation(parent.absolutePath, folderName)
-    } else {
-        VirtualFileProviderLocation(userHome.absolutePath, "Nextcloud Native")
-    }
-}
-
-private fun desktopLinuxVirtualFileMountPoint(
-    preferences: Preferences,
-    accountId: String,
-): File = desktopVirtualFileProviderLocation(preferences, accountId).let { location ->
-    File(location.parentPath, location.folderName).absoluteFile.normalize()
-}
-
 private data class DesktopVirtualFileCacheTiers(
     val configuration: VirtualFileCacheTierConfiguration,
     val primaryIdentity: String?,
@@ -3847,10 +3821,7 @@ class DesktopNextcloudServices(
         val accountId = cleanup.accountId
         dynamicDiscoveryCache.retireAccount(cleanup.accountStorageKey, accountId)
         clearDesktopDynamicApiState(
-            accountId,
-            dynamicApiRequestCoalescer,
-            dynamicApiReadCache,
-            cleanup.accountStorageKey,
+            accountId, dynamicApiRequestCoalescer, dynamicApiReadCache, cleanup.accountStorageKey,
         )
         supportIntake.removeAccount(accountId)
         removeDesktopPendingDynamicMutations(pendingDynamicMutationDirectory, accountId)
