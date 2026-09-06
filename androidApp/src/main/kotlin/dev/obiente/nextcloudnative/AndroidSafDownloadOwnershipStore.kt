@@ -45,7 +45,12 @@ internal class AndroidSafDownloadOwnershipStore(
 
     fun indexed(): AndroidSafDownloadOwnershipDirectory = synchronized(LOCK) {
         val files = ownershipFiles()
-        IndexedOwnershipDirectory(files.mapNotNull(::ownershipReference), files.size)
+        val references = files.map { file ->
+            checkNotNull(ownershipReference(file)) {
+                "SAF download recovery row name is invalid."
+            }
+        }
+        IndexedOwnershipDirectory(references, files.size)
     }
 
     private inner class IndexedOwnershipDirectory(

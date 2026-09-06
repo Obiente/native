@@ -4,8 +4,10 @@ import dev.obiente.nextcloudnative.app.FileSyncBaseline
 import dev.obiente.nextcloudnative.app.FileSyncConfiguration
 import dev.obiente.nextcloudnative.app.FileSyncPair
 import dev.obiente.nextcloudnative.app.SyncEntryKind
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
@@ -116,6 +118,27 @@ class AndroidFileSyncProviderFeedbackRecoveryTest {
             listOf("recover:first", "recover:second", "delete-credential", "remove-owned-state"),
             events,
         )
+    }
+
+    @Test
+    fun `account removal blocks unclassified ownership evidence`() {
+        val root = Files.createTempDirectory("saf-provider-removal-invalid-row-").toFile()
+        try {
+            val invalid = root.resolve("unclassified.row").apply { writeBytes(byteArrayOf(0x01)) }
+            val store = AndroidSafDownloadOwnershipStore(root)
+
+            val removalReady = reconcileSafDownloadsBeforePairRemoval(
+                hasPersistedGrant = true,
+                hasPendingRecovery = store.hasPendingTransactions(),
+                reconcile = { store.indexed() },
+            )
+
+            assertFalse(removalReady)
+            assertTrue(invalid.isFile)
+            assertTrue(store.hasPendingTransactions())
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test
