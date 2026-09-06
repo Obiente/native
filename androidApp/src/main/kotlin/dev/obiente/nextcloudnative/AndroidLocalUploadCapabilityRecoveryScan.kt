@@ -13,7 +13,21 @@ internal class DurableUploadCapabilityRecoveryScan<Capability> {
         loadStoredCapability: (String) -> Capability?,
     ): DurableUploadCapabilitySnapshot<Capability> {
         require(maximumRows > 0)
-        val storedIds = storedSelectionIds.toSet()
+        val storedIds = linkedSetOf<String>()
+        storedSelectionIds.forEach { selectionId ->
+            if (selectionId !in storedIds && storedIds.size == maximumRows) {
+                capabilities.clear()
+                malformed.clear()
+                return DurableUploadCapabilitySnapshot(
+                    capabilities = emptyMap(),
+                    malformedCapabilities = emptyMap(),
+                    storedCapabilityCount = maximumRows + 1,
+                    scanComplete = false,
+                    recoveryQuarantined = true,
+                )
+            }
+            storedIds += selectionId
+        }
         capabilities.keys.retainAll(storedIds)
         malformed.keys.retainAll(storedIds)
         cachedCapabilities.forEach { (selectionId, capability) ->

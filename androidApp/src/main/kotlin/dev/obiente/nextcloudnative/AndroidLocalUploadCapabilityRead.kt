@@ -19,6 +19,19 @@ internal class AndroidLocalUploadCapabilityMalformedException(
     val grantPreExisting: Boolean? = null,
 ) : IllegalStateException(message, cause)
 
+internal fun requireDurableUploadCapabilityReady(phase: CapabilityPhase) {
+    if (phase == CapabilityPhase.OwnershipCheckPending) {
+        throw AndroidLocalUploadCapabilityReadException(
+            "The local file selection ownership check is still pending.",
+        )
+    }
+    if (!isDurableUploadCapabilityReady(phase)) {
+        throw AndroidLocalUploadCapabilityUnavailableException(
+            "The local file selection is pending capability cleanup.",
+        )
+    }
+}
+
 internal inline fun readAndroidLocalUploadCapabilityPreference(read: () -> String?): String? = try {
     read()
 } catch (failure: ClassCastException) {

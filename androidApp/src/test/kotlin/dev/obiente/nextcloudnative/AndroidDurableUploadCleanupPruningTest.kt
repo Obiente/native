@@ -18,7 +18,7 @@ import org.json.JSONObject
 
 class AndroidDurableUploadCleanupPruningTest {
     @Test
-    fun `oversized terminal cleanup jobs remain eligible for paged capability recovery`() {
+    fun `oversized terminal cleanup state is quarantined before capability loading`() {
         val jobs = (1..1_025).map { index ->
             fixtureJob(
                 index = index,
@@ -30,26 +30,17 @@ class AndroidDurableUploadCleanupPruningTest {
         val storedIds = jobs.map { job -> job.request.file.selectionId }
         val scan = DurableUploadCapabilityRecoveryScan<CapabilityPhase>()
 
-        val first = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
+        var loaded = 0
+        val snapshot = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
+            loaded += 1
             CapabilityPhase.CleanupPending
-        }
-        val second = scan.loadPage(emptyMap(), storedIds, maximumRows = 1_024) {
-            CapabilityPhase.CleanupPending
-        }
-        val recoverable = second.capabilities.count { (selectionId, phase) ->
-            shouldRecoverDurableUploadCapability(
-                phase = phase,
-                processGeneration = "prior-generation",
-                currentProcessGeneration = "current-generation",
-                ownedByDurableJob = selectionId in retained,
-                cleanupExplicitlyPending = true,
-            )
         }
 
         assertTrue(retained.isEmpty())
-        assertFalse(first.scanComplete)
-        assertTrue(second.scanComplete)
-        assertEquals(1_025, recoverable)
+        assertFalse(snapshot.scanComplete)
+        assertTrue(snapshot.recoveryQuarantined)
+        assertTrue(snapshot.capabilities.isEmpty())
+        assertEquals(0, loaded)
     }
 
     @Test

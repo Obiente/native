@@ -88,10 +88,15 @@ internal data class DurableUploadCapabilitySnapshot<Capability>(
     val malformedCapabilities: Map<String, MalformedDurableUploadCapability>,
     private val storedCapabilityCount: Int? = null,
     val scanComplete: Boolean = true,
+    val recoveryQuarantined: Boolean = false,
 ) {
     val trackedCapabilityCount: Int
         get() = storedCapabilityCount ?: (capabilities.keys + malformedCapabilities.keys).size
 }
+
+internal fun malformedDurableUploadCapabilityCanBecomeActionable(
+    capability: MalformedDurableUploadCapability,
+): Boolean = capability.cleanupPermissionIdentity != null
 
 internal fun <Capability> loadDurableUploadCapabilitySnapshot(
     cachedCapabilities: Map<String, Capability>,
