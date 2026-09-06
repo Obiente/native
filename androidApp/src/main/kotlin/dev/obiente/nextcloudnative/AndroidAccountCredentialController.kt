@@ -56,9 +56,9 @@ internal class AndroidAccountCredentialController(
             publishAccountIdentity(accountIdentity)
         },
     )
-    fun accountRetentionSnapshot(): AndroidAccountRetentionSnapshot = readRegistryForCredentialLoad()
-        ?.let { registry -> AndroidAccountRetentionSnapshot.Available(registry.accounts, registry.activeAccountId) }
-        ?: AndroidAccountRetentionSnapshot.Unavailable
+    fun accountRetentionSnapshot(): AndroidAccountRetentionSnapshot = readRegistryForCredentialLoad()?.let { registry ->
+        AndroidAccountRetentionSnapshot.Available(registry.accounts, registry.activeAccountId)
+    } ?: AndroidAccountRetentionSnapshot.Unavailable
     fun activeAccountId(): NextcloudAccountId? = readCredentialFreeRegistry()?.activeAccountId
     fun loadSession(accountId: NextcloudAccountId): NextcloudSession? =
         ANDROID_ACCOUNT_CREDENTIAL_STORE_GUARD.serialize {
@@ -732,7 +732,6 @@ internal class AndroidAccountCredentialController(
             throw failure
         }
     }
-
     private fun encryptState(state: AndroidAccountCredentialState): String = try {
         sessionCipher.encrypt(encodeAndroidAccountCredentialState(state))
     } catch (failure: Exception) {
@@ -742,7 +741,6 @@ internal class AndroidAccountCredentialController(
         )
         throw failure
     }
-
     private fun encryptCredentialSlot(session: NextcloudSession): String = try {
         sessionCipher.encrypt(encodeAndroidPersistedSession(session))
     } catch (failure: Exception) {
@@ -752,7 +750,6 @@ internal class AndroidAccountCredentialController(
         )
         throw failure
     }
-
     private fun prepareCredentialSlotEdit(
         editor: SharedPreferences.Editor,
         state: AndroidAccountCredentialState,
