@@ -26,7 +26,7 @@ internal fun homeWorkspaceAccountPersistenceKeys(
     legacyAccountScopeDigest: String? = null,
 ): Set<String> = buildSet {
     setOfNotNull(accountScopeDigest, legacyAccountScopeDigest).forEach { digest ->
-        require(digest.isCanonicalSha256Digest()) {
+        require(digest.length == 64 && digest.all { character -> character in '0'..'9' || character in 'a'..'f' }) {
             "The home workspace account scope must be a canonical SHA-256 digest."
         }
         add("apps:pins:1:$digest")
