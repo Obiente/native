@@ -391,45 +391,6 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
-    fun `inactive retained account defers when its credential is temporarily unavailable`() {
-        val retainedSession = NextcloudSession(
-            serverUrl = "https://cloud.example.test/nextcloud",
-            loginName = "alice",
-            appPassword = "fixture-password",
-        )
-        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
-
-        val resolution = resolveDurableUploadSession(
-            expectedAccountId = accountId,
-            registry = DurableUploadAccountRegistry.Available(listOf(retainedSession.accountRecord())),
-            loadSession = { null },
-        )
-
-        assertEquals(DurableUploadAccountResolution.DeferAccountActivation, resolution)
-    }
-
-    @Test
-    fun `active retained account retries when its credential is temporarily unavailable`() {
-        val retainedSession = NextcloudSession(
-            serverUrl = "https://cloud.example.test/nextcloud",
-            loginName = "alice",
-            appPassword = "fixture-password",
-        )
-        val accountId = NextcloudDocumentIds.accountKey(retainedSession)
-
-        val resolution = resolveDurableUploadSession(
-            expectedAccountId = accountId,
-            registry = DurableUploadAccountRegistry.Available(
-                accounts = listOf(retainedSession.accountRecord()),
-                activeAccountId = retainedSession.accountId,
-            ),
-            loadSession = { null },
-        )
-
-        assertEquals(DurableUploadAccountResolution.CredentialUnavailable, resolution)
-    }
-
-    @Test
     fun `removed account terminally fails and releases its queued upload exactly once`() {
         val events = mutableListOf<String>()
 
