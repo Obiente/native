@@ -9,6 +9,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal val NEXTCLOUD_DOCUMENTS_URI_GRANT_FLAGS: Int =
@@ -95,6 +96,7 @@ internal suspend fun revokeAndroidSessionWithAccountLease(
 internal class AndroidAccountRemovalLifetimeGuard {
     private val monitor = Any()
     private val accounts = mutableMapOf<String, AccountLifetime>()
+    private val resetAdmissionGate = Mutex()
 
     fun acquireReadBlocking(accountIdentity: String): AndroidAccountOperationLease =
         runBlocking { acquireRead(accountIdentity) }
@@ -118,8 +120,26 @@ internal class AndroidAccountRemovalLifetimeGuard {
         }
     }
 
+    suspend fun <Result> withCredentialReset(
+        accountIdentities: Collection<String>,
+        action: suspend () -> Result,
+    ): Result {
+        resetAdmissionGate.lock()
+        val leases = mutableListOf<AndroidAccountOperationLease>()
+        return try {
+            val trackedAccountIdentities = synchronized(monitor) { accounts.keys.toList() }
+            (accountIdentities + trackedAccountIdentities).distinct().sorted().forEach { accountIdentity ->
+                leases += acquireRemovalAfterAdmission(accountIdentity)
+            }
+            action()
+        } finally {
+            leases.asReversed().forEach(AndroidAccountOperationLease::close)
+            resetAdmissionGate.unlock()
+        }
+    }
+
     private suspend fun acquireRead(accountIdentity: String): AndroidAccountOperationLease {
-        val lifetime = reference(accountIdentity)
+        val lifetime = referenceWithResetAdmission(accountIdentity)
         var gateAcquired = false
         try {
             lifetime.removalGate.lock()
@@ -146,7 +166,17 @@ internal class AndroidAccountRemovalLifetimeGuard {
     }
 
     private suspend fun acquireRemoval(accountIdentity: String): AndroidAccountOperationLease {
-        val lifetime = reference(accountIdentity)
+        val lifetime = referenceWithResetAdmission(accountIdentity)
+        return acquireRemoval(accountIdentity, lifetime)
+    }
+
+    private suspend fun acquireRemovalAfterAdmission(accountIdentity: String): AndroidAccountOperationLease =
+        acquireRemoval(accountIdentity, reference(accountIdentity))
+
+    private suspend fun acquireRemoval(
+        accountIdentity: String,
+        lifetime: AccountLifetime,
+    ): AndroidAccountOperationLease {
         var gateAcquired = false
         try {
             lifetime.removalGate.lock()
@@ -169,6 +199,9 @@ internal class AndroidAccountRemovalLifetimeGuard {
             releaseReference(accountIdentity, lifetime)
         }
     }
+
+    private suspend fun referenceWithResetAdmission(accountIdentity: String): AccountLifetime =
+        resetAdmissionGate.withLock { reference(accountIdentity) }
 
     private fun reference(accountIdentity: String): AccountLifetime {
         require(accountIdentity.isNotBlank())
