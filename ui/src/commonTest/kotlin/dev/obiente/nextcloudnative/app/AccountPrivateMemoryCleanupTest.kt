@@ -4,14 +4,16 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class AccountPrivateMemoryCleanupTest {
     @Test
-    fun `removal purges one account from shared workspace memory`() {
+    fun `removal purges one account from shared workspace memory`(): Unit = kotlinx.coroutines.runBlocking {
         val removed = session("removed")
         val retained = session("retained")
         val removedKey = removed.accountId.storageKey
@@ -112,6 +114,66 @@ class AccountPrivateMemoryCleanupTest {
                 carryover,
                 retainedProducer,
             )
+            val removedMemoriesIndex = assertIs<
+                MemoriesMainTimelineLoadResult.Loaded<MemoriesMainTimelineCachedIndex>
+            >(
+                sharedMemoriesMainTimelineIndexCache.load(
+                    removed.accountId,
+                    removedCarryoverScope,
+                    true,
+                    removedProducer,
+                ) {
+                    MemoriesMainTimelineLoadResult.Loaded(
+                        MemoriesMainTimelineDayIndex(listOf(NativeMediaDay(30L, 1))),
+                    )
+                },
+            ).value
+            val retainedMemoriesIndex = assertIs<
+                MemoriesMainTimelineLoadResult.Loaded<MemoriesMainTimelineCachedIndex>
+            >(
+                sharedMemoriesMainTimelineIndexCache.load(
+                    retained.accountId,
+                    retainedCarryoverScope,
+                    true,
+                    retainedProducer,
+                ) {
+                    MemoriesMainTimelineLoadResult.Loaded(
+                        MemoriesMainTimelineDayIndex(listOf(NativeMediaDay(29L, 1))),
+                    )
+                },
+            ).value
+            assertTrue(
+                sharedMemoriesMainTimelineIndexCache.markMemoriesActive(
+                    removed.accountId,
+                    removedCarryoverScope,
+                    removedMemoriesIndex.sourceGeneration,
+                    removedProducer,
+                ),
+            )
+            assertTrue(
+                sharedMemoriesMainTimelineIndexCache.markMemoriesActive(
+                    retained.accountId,
+                    retainedCarryoverScope,
+                    retainedMemoriesIndex.sourceGeneration,
+                    retainedProducer,
+                ),
+            )
+            val removedViewerRoute = assertNotNull(
+                sharedMediaViewerNavigationRepository.register(
+                    removed.accountId,
+                    listOf(mediaFile(30L)),
+                    mediaFile(30L),
+                    producer = removedProducer,
+                ),
+            )
+            val retainedViewerRoute = assertNotNull(
+                sharedMediaViewerNavigationRepository.register(
+                    retained.accountId,
+                    listOf(mediaFile(29L)),
+                    mediaFile(29L),
+                    producer = retainedProducer,
+                ),
+            )
 
             AccountPrivateMemoryCleanup.removeAccount(removedKey)
 
@@ -139,6 +201,36 @@ class AccountPrivateMemoryCleanupTest {
             assertEquals("retained", TalkWorkspaceMemoryCache.rooms(retained)?.single()?.token)
             assertNull(TalkWorkspaceMemoryCache.messages(removed, "removed"))
             assertNotNull(TalkWorkspaceMemoryCache.messages(retained, "retained"))
+            assertNull(
+                sharedMemoriesMainTimelineIndexCache.activeMemoriesIndex(
+                    removed.accountId,
+                    removedCarryoverScope,
+                ),
+            )
+            assertEquals(
+                listOf(29L),
+                assertNotNull(
+                    sharedMemoriesMainTimelineIndexCache.activeMemoriesIndex(
+                        retained.accountId,
+                        retainedCarryoverScope,
+                    ),
+                ).index.days.map(NativeMediaDay::id),
+            )
+            assertNull(
+                sharedMediaViewerNavigationRepository.resolve(
+                    removed.accountId,
+                    removedViewerRoute,
+                ),
+            )
+            assertEquals(
+                29L,
+                assertNotNull(
+                    sharedMediaViewerNavigationRepository.resolve(
+                        retained.accountId,
+                        retainedViewerRoute,
+                    ),
+                ).selected.fileId,
+            )
             assertFalse(removedPhotoState.initialLoadCompleted.value)
             assertNotSame(removedPhotoState, PhotoTimelineUiStateRepository.stateFor(removed))
             assertSame(retainedPhotoState, PhotoTimelineUiStateRepository.stateFor(retained))
@@ -356,6 +448,17 @@ class AccountPrivateMemoryCleanupTest {
                     remoteCursorAfterFetched = null,
                 ),
         ),
+    )
+
+    private fun mediaFile(id: Long) = NextcloudFile(
+        path = "Photos/$id.jpg",
+        name = "$id.jpg",
+        isDirectory = false,
+        mimeType = "image/jpeg",
+        size = 1L,
+        lastModified = "private",
+        fileId = id,
+        hasPreview = true,
     )
 
     private companion object {

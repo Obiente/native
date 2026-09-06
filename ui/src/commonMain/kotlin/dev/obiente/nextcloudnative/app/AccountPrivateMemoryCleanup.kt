@@ -15,6 +15,8 @@ object AccountPrivateMemoryCleanup {
         sharedDocumentEditingCapabilitiesCache.purgeRetiredAccount(accountStorageKey)
         SupportSettingsDraftRegistry.purgeRetiredAccount(accountStorageKey)
         sharedMediaTimelineDavCarryoverStore.purgeRetiredAccount(accountStorageKey)
+        sharedMemoriesMainTimelineIndexCache.purgeRetiredAccount(accountStorageKey)
+        sharedMediaViewerNavigationRepository.purgeRetiredAccount(accountStorageKey)
         removeCalendarWorkspaceMemory(accountStorageKey)
         removeUserStatusWorkspaceMemory(accountStorageKey)
         removeNextcloudNativeWorkspaceMemory(accountStorageKey)
