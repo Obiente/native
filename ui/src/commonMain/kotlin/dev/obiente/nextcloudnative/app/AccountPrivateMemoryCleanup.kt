@@ -6,13 +6,13 @@ object AccountPrivateMemoryCleanup {
 
     internal fun purgeRetiredAccount(accountStorageKey: String) {
         require(accountStorageKey.length == 64 && accountStorageKey.all { it in '0'..'9' || it in 'a'..'f' })
-        PreviewMemoryCache.removeAccount(accountStorageKey)
+        PreviewMemoryCache.purgeRetiredAccount(accountStorageKey)
         sharedNextcloudNotesCache.purgeRetiredAccount(accountStorageKey)
         sharedDynamicNativeMemoryCache.retireAccount(accountStorageKey)
-        sharedDashboardStatusMemoryCache.removeAccount(accountStorageKey)
-        ContactsWorkspaceMemoryCache.removeAccount(accountStorageKey)
+        sharedDashboardStatusMemoryCache.purgeRetiredAccount(accountStorageKey)
+        ContactsWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
         DeckWorkspaceMemoryCache.removeAccount(accountStorageKey)
-        sharedDocumentEditingCapabilitiesCache.removeAccount(accountStorageKey)
+        sharedDocumentEditingCapabilitiesCache.purgeRetiredAccount(accountStorageKey)
         SupportSettingsDraftRegistry.removeAccount(accountStorageKey)
         removeCalendarWorkspaceMemory(accountStorageKey)
         removeUserStatusWorkspaceMemory(accountStorageKey)

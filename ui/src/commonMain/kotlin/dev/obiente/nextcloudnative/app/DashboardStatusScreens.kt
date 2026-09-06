@@ -444,6 +444,7 @@ internal fun rememberNativeDashboardState(
         val cached = sharedDashboardStatusMemoryCache.get(session, now)
         val previousSnapshot = retainedDashboardRefreshSnapshot(cached, displayed?.snapshot)
         val previousStatus = cached?.status ?: displayed?.status
+        val cacheProducer = sharedDashboardStatusMemoryCache.producer(session)
         val cachePolicy = if (refreshAttempt > 0 || recoveryAttempt > 0) {
             NextcloudApiCachePolicy.RefreshNetwork
         } else {
@@ -510,7 +511,6 @@ internal fun rememberNativeDashboardState(
                     loadingWidgetIds = pendingWidgetIds,
                 )
                 state = DashboardSurfaceState.Available(snapshot, previousStatus)
-
                 val completedResults = Channel<DashboardItemsFetchResult>(capacity = plans.size)
                 val requestLimiter = Semaphore(MAX_CONCURRENT_DASHBOARD_ITEM_REQUESTS)
                 val responseBudget = DashboardResponseBudget()
@@ -625,6 +625,7 @@ internal fun rememberNativeDashboardState(
                     dashboard = result.snapshot,
                     status = result.status,
                     nowEpochSeconds = currentDashboardEpochSeconds(),
+                    producer = cacheProducer,
                 )
             }
             state = DashboardSurfaceState.Available(
@@ -1430,8 +1431,8 @@ internal fun NativeUserStatusScreen(
     var mutationInProgress by remember(session) { mutableStateOf(false) }
     var mutationError by remember(session) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-
     LaunchedEffect(session, refreshAttempt) {
+        val cacheProducer = UserStatusWorkspaceMemoryCache.producer(session)
         val cached = UserStatusWorkspaceMemoryCache.get(session)
         if (cached != null) state = cached
         val retained = cached ?: state as? UserStatusSurfaceState.Available
@@ -1465,7 +1466,7 @@ internal fun NativeUserStatusScreen(
             }
         }.onSuccess { loaded ->
             state = loaded
-            UserStatusWorkspaceMemoryCache.store(session, loaded)
+            UserStatusWorkspaceMemoryCache.store(session, loaded, cacheProducer)
             if (!draftInitialized) {
                 customMessage = loaded.status.message.orEmpty()
                 customIcon = loaded.status.icon.orEmpty().takeIf {
@@ -1483,7 +1484,6 @@ internal fun NativeUserStatusScreen(
         }
         refreshing = false
     }
-
     Column(modifier = Modifier.fillMaxSize()) {
         DashboardHeader(
             title = "User Status",

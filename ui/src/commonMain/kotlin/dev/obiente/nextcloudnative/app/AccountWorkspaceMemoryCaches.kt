@@ -95,21 +95,32 @@ internal sealed interface UserStatusSurfaceState {
 }
 
 internal object UserStatusWorkspaceMemoryCache {
+    private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<NextcloudAccountId, UserStatusSurfaceState.Available>()
 
-    fun get(session: NextcloudSession): UserStatusSurfaceState.Available? {
-        val key = session.accountId
-        return entries.remove(key)?.also { entries[key] = it }
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
+        gate.producer(session.accountId.storageKey)
+
+    fun get(session: NextcloudSession): UserStatusSurfaceState.Available? =
+        gate.read(session.accountId.storageKey, null) {
+            val key = session.accountId
+            entries.remove(key)?.also { entries[key] = it }
+        }
+
+    fun store(
+        session: NextcloudSession,
+        value: UserStatusSurfaceState.Available,
+        producer: AccountPrivateMemoryProducer?,
+    ) {
+        gate.mutate(session.accountId.storageKey, producer) {
+            val key = session.accountId
+            entries.remove(key)
+            entries[key] = value
+            while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
+        }
     }
 
-    fun store(session: NextcloudSession, value: UserStatusSurfaceState.Available) {
-        val key = session.accountId
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_STATUS_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         entries.keys.removeAll { account -> account.storageKey == accountStorageKey }
     }
 }
@@ -201,7 +212,7 @@ internal fun removeCalendarWorkspaceMemory(accountStorageKey: String) =
     CalendarWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 
 internal fun removeUserStatusWorkspaceMemory(accountStorageKey: String) =
-    UserStatusWorkspaceMemoryCache.removeAccount(accountStorageKey)
+    UserStatusWorkspaceMemoryCache.purgeRetiredAccount(accountStorageKey)
 
 internal fun removeNextcloudNativeWorkspaceMemory(accountStorageKey: String) {
     PhotoTimelineUiStateRepository.removeAccount(accountStorageKey)

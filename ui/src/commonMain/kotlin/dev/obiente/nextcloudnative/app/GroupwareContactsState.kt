@@ -10,21 +10,33 @@ internal sealed interface ContactsLoadState {
 }
 
 internal object ContactsWorkspaceMemoryCache {
+    private val gate = sharedAccountPrivateMemoryGate
     private val entries = linkedMapOf<Pair<NextcloudAccountId, String>, ContactsLoadState.Ready>()
 
-    fun get(session: NextcloudSession, userId: String): ContactsLoadState.Ready? {
-        val key = session.accountId to userId
-        return entries.remove(key)?.also { entries[key] = it }
+    fun producer(session: NextcloudSession): AccountPrivateMemoryProducer? =
+        gate.producer(session.accountId.storageKey)
+
+    fun get(session: NextcloudSession, userId: String): ContactsLoadState.Ready? =
+        gate.read(session.accountId.storageKey, null) {
+            val key = session.accountId to userId
+            entries.remove(key)?.also { entries[key] = it }
+        }
+
+    fun store(
+        session: NextcloudSession,
+        userId: String,
+        value: ContactsLoadState.Ready,
+        producer: AccountPrivateMemoryProducer?,
+    ) {
+        gate.mutate(session.accountId.storageKey, producer) {
+            val key = session.accountId to userId
+            entries.remove(key)
+            entries[key] = value
+            while (entries.size > MAXIMUM_RETAINED_CONTACT_ACCOUNTS) entries.remove(entries.keys.first())
+        }
     }
 
-    fun store(session: NextcloudSession, userId: String, value: ContactsLoadState.Ready) {
-        val key = session.accountId to userId
-        entries.remove(key)
-        entries[key] = value
-        while (entries.size > MAXIMUM_RETAINED_CONTACT_ACCOUNTS) entries.remove(entries.keys.first())
-    }
-
-    fun removeAccount(accountStorageKey: String) {
+    internal fun purgeRetiredAccount(accountStorageKey: String) {
         entries.keys.removeAll { (account) -> account.storageKey == accountStorageKey }
     }
 }
