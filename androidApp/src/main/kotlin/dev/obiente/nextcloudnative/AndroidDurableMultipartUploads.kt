@@ -195,7 +195,11 @@ internal suspend fun keepRetryingQueuedDurableUploadScheduling(
             retryQueuedDurableUploadScheduling(retryDelaysMillis, reconcile, wait)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: AndroidDurableMultipartUploadRecoveryException) {
+        } catch (failure: AndroidDurableMultipartUploadRecoveryException) {
+            if (failure.disposition == DurableUploadQueueRecoveryDisposition.Quarantine) {
+                if (!recoveryFailureReported) runCatching(recordRecoveryFailure)
+                return
+            }
             false
         }
         if (recovered) return
@@ -406,11 +410,30 @@ internal class AndroidDurableMultipartUploadStore(
     private fun readAll(): List<AndroidDurableMultipartUploadJob> {
         val encrypted = try {
             storage.read()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
-            throw AndroidDurableMultipartUploadRecoveryException(failure)
+            throw AndroidDurableMultipartUploadRecoveryException(
+                failure,
+                if (failure is ClassCastException) {
+                    DurableUploadQueueRecoveryDisposition.Quarantine
+                } else {
+                    DurableUploadQueueRecoveryDisposition.Retry
+                },
+            )
         } ?: return emptyList()
+        val decrypted = try {
+            cipher.decrypt(encrypted)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw AndroidDurableMultipartUploadRecoveryException(
+                failure,
+                DurableUploadQueueRecoveryDisposition.Quarantine,
+            )
+        }
         return try {
-            val array = JSONArray(cipher.decrypt(encrypted))
+            val array = JSONArray(decrypted)
             check(array.length() <= MAX_STORED_UPLOADS) {
                 "The durable upload queue contains too many rows."
             }
@@ -423,8 +446,13 @@ internal class AndroidDurableMultipartUploadStore(
                 "The durable upload queue contains duplicate rows."
             }
             jobs
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
-            throw AndroidDurableMultipartUploadRecoveryException(failure)
+            throw AndroidDurableMultipartUploadRecoveryException(
+                failure,
+                DurableUploadQueueRecoveryDisposition.Quarantine,
+            )
         }
     }
 
@@ -465,8 +493,14 @@ internal interface AndroidDurableMultipartUploadCipher {
     fun decrypt(value: String): String
 }
 
+internal enum class DurableUploadQueueRecoveryDisposition {
+    Retry,
+    Quarantine,
+}
+
 internal class AndroidDurableMultipartUploadRecoveryException(
     cause: Exception,
+    val disposition: DurableUploadQueueRecoveryDisposition = DurableUploadQueueRecoveryDisposition.Retry,
 ) : IllegalStateException(
     "The saved background upload queue is unavailable. Its recovery data was left unchanged.",
     cause,

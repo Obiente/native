@@ -78,17 +78,26 @@ class AndroidDurableMultipartUploadPolicyTest {
 
     @Test
     fun `encrypted queue read and decryption failures preserve recoverable jobs`() {
-        listOf("read", "decrypt").forEach { failureMode ->
+        listOf("read", "read-type", "decrypt").forEach { failureMode ->
             val storage = FakeDurableUploadEncryptedStorage()
             val cipher = FakeDurableUploadCipher()
             val recoverable = fixtureJob(index = 1, account = ACCOUNT_A, cardId = 42)
             AndroidDurableMultipartUploadStore(storage, cipher).add(recoverable)
             val encryptedBeforeFailure = storage.value
             if (failureMode == "read") storage.readFailure = IOException("synthetic read failure")
+            if (failureMode == "read-type") storage.readFailure = ClassCastException("synthetic stored type")
             if (failureMode == "decrypt") cipher.decryptFailure = IOException("synthetic decrypt failure")
 
             val restarted = AndroidDurableMultipartUploadStore(storage, cipher)
-            assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+            val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> { restarted.list() }
+            assertEquals(
+                if (failureMode == "read") {
+                    DurableUploadQueueRecoveryDisposition.Retry
+                } else {
+                    DurableUploadQueueRecoveryDisposition.Quarantine
+                },
+                failure.disposition,
+            )
             assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
                 restarted.add(fixtureJob(index = 2, account = ACCOUNT_A, cardId = 43))
             }
@@ -597,6 +606,27 @@ class AndroidDurableMultipartUploadPolicyTest {
     }
 
     @Test
+    fun `permanently unreadable queue is quarantined without background polling`() = runBlocking {
+        var attempts = 0
+        var diagnostics = 0
+
+        keepRetryingQueuedDurableUploadScheduling(
+            reconcile = {
+                attempts += 1
+                throw AndroidDurableMultipartUploadRecoveryException(
+                    IOException("synthetic invalid ciphertext"),
+                    DurableUploadQueueRecoveryDisposition.Quarantine,
+                )
+            },
+            wait = { error("a quarantined queue must not schedule another poll") },
+            recordRecoveryFailure = { diagnostics += 1 },
+        )
+
+        assertEquals(1, attempts)
+        assertEquals(1, diagnostics)
+    }
+
+    @Test
     fun `startup recovery contains uploader construction failures`() = runBlocking {
         val failure = assertFailsWith<AndroidDurableMultipartUploadRecoveryException> {
             constructAndReconcileQueuedDurableUploads {
@@ -733,7 +763,7 @@ class AndroidDurableMultipartUploadPolicyTest {
 private class FakeDurableUploadEncryptedStorage(
     var value: String? = null,
 ) : AndroidDurableMultipartUploadEncryptedStorage {
-    var readFailure: IOException? = null
+    var readFailure: Exception? = null
     var failWrites: Boolean = false
 
     override fun read(): String? {
