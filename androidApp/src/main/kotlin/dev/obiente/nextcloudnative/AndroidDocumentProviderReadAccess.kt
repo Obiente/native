@@ -41,6 +41,18 @@ internal fun acquireAndroidDocumentProviderReadLease(
     }
 }
 
+internal inline fun <Descriptor> openAndroidTrackedRangeDescriptor(
+    accountLease: AndroidAccountOperationLease,
+    onOpenFailure: () -> Unit,
+    openDescriptor: () -> Descriptor,
+): Descriptor = try {
+    openDescriptor().also { accountLease.close() }
+} catch (failure: Throwable) {
+    runCatching(onOpenFailure).exceptionOrNull()?.let(failure::addSuppressed)
+    accountLease.close()
+    throw failure
+}
+
 internal inline fun <Result> withAndroidDocumentProviderReadAccess(
     expectedSession: NextcloudSession,
     expectedIncarnation: NextcloudDocumentIncarnation,

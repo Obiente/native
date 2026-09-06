@@ -259,7 +259,6 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
                         .getOrDefault(false)
                 },
                 discardIncompleteHydration = virtualFiles::discardHydrationStagingFile,
-                onReleased = accountLease::close,
             )
         } catch (failure: Throwable) {
             rangeSession.close()
@@ -267,12 +266,9 @@ class NextcloudDocumentsProvider : DocumentsProvider() {
             throw failure
         }
         signal?.setOnCancelListener(callback::cancel)
-        return try {
+        return openAndroidTrackedRangeDescriptor(accountLease, callback::onRelease) {
             requireNotNull(context?.getSystemService(StorageManager::class.java))
                 .openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, callback, nextProxyHandler())
-        } catch (failure: Throwable) {
-            callback.onRelease()
-            throw failure
         }
     }
     private fun openExternalHandoffDocument(

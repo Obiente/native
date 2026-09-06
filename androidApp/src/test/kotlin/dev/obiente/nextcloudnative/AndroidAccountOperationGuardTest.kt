@@ -10,6 +10,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
@@ -555,6 +556,38 @@ class AndroidAccountOperationGuardTest {
                 androidAccountOperationIdentities(equivalent), unavailable = { false }, action = { true },
             ),
         )
+    }
+
+    @Test
+    fun replacedSessionCanonicalIdentityBlocksCredentialPublication() = runBlocking {
+        val guard = AndroidAccountOperationGuard()
+        val lifetimeGuard = AndroidAccountRemovalLifetimeGuard()
+        val coordinator = AndroidFileRangeSessionCoordinator()
+        val original = NextcloudSession("https://cloud.example.test", "alice", "old-password")
+        val replaced = original.copy(serverUrl = "HTTPS://CLOUD.EXAMPLE.TEST:443///")
+        val replacement = replaced.copy(appPassword = "new-password")
+        val replacementState = AndroidAccountCredentialState.Empty.upsertAndSelect(replacement)
+        val mutationLease = acquireAndroidDocumentMutationAccountLease(
+            original, { original }, guard, lifetimeGuard,
+        )
+        var published = false
+
+        val transition = async(Dispatchers.Default) {
+            replaceAndroidActiveStateWithAccountLeases(
+                replacement = replacementState,
+                previousSession = null,
+                replacedSession = replaced,
+                suspectEncrypted = null,
+                guard = guard,
+                coordinator = coordinator,
+            ) { _, _, _, _ -> published = true }
+        }
+        yield()
+        assertFalse(published)
+
+        mutationLease.close()
+        withTimeout(1_000L) { transition.await() }
+        assertTrue(published)
     }
 
     @Test

@@ -1,14 +1,16 @@
 package dev.obiente.nextcloudnative
 
+import android.content.Context
 import android.content.SharedPreferences
 import dev.obiente.nextcloudnative.app.NextcloudSession
 
 internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
+    context: Context,
     preferences: SharedPreferences,
     sessionCipher: SessionCipher,
     cleanupJournal: AndroidAccountRemovalCleanupJournal,
     suspectEncrypted: String?,
-    prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
+    prepareAccountRemoval: suspend (NextcloudSession) -> AndroidDocumentProviderIncarnationRetirement,
     removeAccountOwnedState: suspend (NextcloudSession) -> Unit,
     commitPreferences: (SharedPreferences.Editor) -> Unit,
     recordCleanupFailure: (Exception) -> Unit,
@@ -35,6 +37,10 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
             )
         },
         prepareAccountRemoval = prepareAccountRemoval,
+        rollbackPreparedRemoval = { retirement -> rollbackAndroidAccountRemoval(context, retirement) },
+        completePreparedRemoval = { retirement, accountStorageKey ->
+            cleanupJournal.completeDocumentRetirement(context, retirement, accountStorageKey)
+        },
         commitSlotRemoval = { slot, cleanup ->
             commitPreferences(
                 cleanupJournal.prepareEdit(preferences.edit().remove(slot.preferenceKey), cleanup),
@@ -50,12 +56,15 @@ internal suspend fun clearUnregisteredAndroidAccountCredentialSlots(
     clearInvalidStore(suspectEncrypted)
 }
 
-internal suspend fun retireUnregisteredAndroidAccountCredentialSlots(
+internal suspend fun <Retirement : Any> retireUnregisteredAndroidAccountCredentialSlots(
     slots: List<AndroidIndependentCredentialSlotReset>,
     preexistingCleanupAccountStorageKeys: Set<String> = emptySet(),
     retryPreexistingCleanup: suspend (AndroidIndependentCredentialSlotReset) -> Unit = {},
     guard: AndroidAccountOperationGuard = ANDROID_ACCOUNT_OPERATION_GUARD,
-    prepareAccountRemoval: suspend (NextcloudSession) -> Unit,
+    lifetimeGuard: AndroidAccountRemovalLifetimeGuard = ANDROID_ACCOUNT_REMOVAL_LIFETIME_GUARD,
+    prepareAccountRemoval: suspend (NextcloudSession) -> Retirement,
+    rollbackPreparedRemoval: suspend (Retirement) -> Unit,
+    completePreparedRemoval: suspend (Retirement, String) -> Unit,
     commitSlotRemoval: suspend (AndroidIndependentCredentialSlotReset, AndroidPendingAccountRemovalCleanup) -> Unit,
     rollbackSlotRemoval: suspend (AndroidIndependentCredentialSlotReset) -> Unit,
     removeAccountOwnedState: suspend (NextcloudSession) -> Unit,
@@ -68,16 +77,20 @@ internal suspend fun retireUnregisteredAndroidAccountCredentialSlots(
             retryPreexistingCleanup(slot)
         }
         val pendingCleanup = pendingAndroidAccountRemovalCleanup(session)
-        withAndroidAccountRemovalLease(NextcloudDocumentIds.accountKey(session), guard) {
+        withAndroidAccountRemovalLease(session, guard, lifetimeGuard) {
+            var retirement: Retirement? = null
             removeRecoveredAndroidAccountCredentialData(
-                prepareAccountRemoval = { prepareAccountRemoval(session) },
+                prepareAccountRemoval = { retirement = prepareAccountRemoval(session) },
                 removeQueuedUploads = { removeAccountOwnedState(session) },
                 clearRecoveredAccount = { commitSlotRemoval(slot, pendingCleanup) },
                 rollbackRecoveredAccount = {
                     rollbackSlotRemoval(slot)
+                    rollbackPreparedRemoval(requireNotNull(retirement))
                     clearCleanup(session.accountId.storageKey)
                 },
-                completeCommittedCleanup = { clearCleanup(session.accountId.storageKey) },
+                completeCommittedCleanup = {
+                    completePreparedRemoval(requireNotNull(retirement), session.accountId.storageKey)
+                },
                 recordCommittedCleanupFailure = recordCleanupFailure,
             )
         }
